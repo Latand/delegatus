@@ -12,6 +12,18 @@ export const PROTOTYPE_LIMITS = {
   taskRounds: 30, taskMetadataBytes: 1024 * 1024,
 } as const;
 const localPath = z.string().min(1).max(4096).refine(value => !/[\0\r\n]/.test(value));
+export const prototypeQuestionsSchema = z.array(z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/),
+  text: z.string().trim().min(1).max(300),
+  options: z.array(z.object({ label: z.string().trim().min(1).max(120), recommended: z.boolean().optional() }).strict()).min(2).max(6),
+  multiple: z.boolean().optional(), other: z.boolean().optional(),
+}).strict()).min(3).max(7).superRefine((questions, ctx) => {
+  if (new Set(questions.map(q => q.id)).size !== questions.length) ctx.addIssue({ code: "custom", message: "question ids must be unique" });
+  questions.forEach((q, i) => {
+    if (q.options.filter(o => o.recommended).length !== 1) ctx.addIssue({ code: "custom", path: [i, "options"], message: `${q.id}: exactly one recommended option is required` });
+    if (new Set(q.options.map(o => o.label)).size !== q.options.length) ctx.addIssue({ code: "custom", path: [i, "options"], message: `${q.id}: option labels must be unique` });
+  });
+});
 export const prototypePublishSchema = z.object({
   clientRequestId: z.string().min(1).max(160), taskId: z.string().min(1).optional(),
   title: z.string().trim().min(1).max(120), dir: localPath.optional(),
@@ -22,7 +34,8 @@ export const prototypePublishSchema = z.object({
       width: z.number().int().min(240).max(3840).optional(), lang: z.enum(["en", "uk"]).optional(),
     })).max(240).optional(),
     videos: z.array(z.object({ path: localPath, caption: z.string().max(200) })).max(240).optional(),
-  })).min(1).max(9),
+  })).max(9).optional(),
+  questions: prototypeQuestionsSchema.optional(),
 }).strict();
 
 export class PrototypeError extends Error {
@@ -31,8 +44,10 @@ export class PrototypeError extends Error {
 export function parsePrototypeInput(raw: unknown): PublishPrototypeInput {
   const parsed = prototypePublishSchema.safeParse(raw);
   if (!parsed.success) throw new PrototypeError(`invalid prototype publication: ${parsed.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);
-  if (new Set(parsed.data.variants.map(v => v.number)).size !== parsed.data.variants.length) throw new PrototypeError("variant numbers must be unique");
-  if (parsed.data.dir && parsed.data.variants.some(v => v.frames?.length || v.videos?.length)) throw new PrototypeError("use dir or explicit frames and videos in variants");
+  if (new Set((parsed.data.variants ?? []).map(v => v.number)).size !== (parsed.data.variants ?? []).length) throw new PrototypeError("variant numbers must be unique");
+  if (parsed.data.dir && (parsed.data.variants ?? []).some(v => v.frames?.length || v.videos?.length)) throw new PrototypeError("use dir or explicit frames and videos in variants");
+  if (!parsed.data.variants?.length && !parsed.data.questions?.length) throw new PrototypeError("publish variants or questions");
+  if (parsed.data.dir && !parsed.data.variants?.length) throw new PrototypeError("dir requires variants");
   return parsed.data;
 }
 function quote(value: string) { return `'${value.replaceAll("'", "'\\''")}'`; }
@@ -59,7 +74,7 @@ export async function expandPrototypeInput(input: PublishPrototypeInput): Promis
   const dir = await admittedSource(input.dir);
   let entries;
   try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { throw unreadableSource(input.dir); }
-  const variants = input.variants.map(v => ({ ...v, frames: [...v.frames ?? []], videos: [...v.videos ?? []] }));
+  const variants = (input.variants ?? []).map(v => ({ ...v, frames: [...v.frames ?? []], videos: [...v.videos ?? []] }));
   const names = new Set(entries.filter(file => !file.isDirectory()).map(file => file.name));
   for (const file of entries.sort((a,b) => a.name.localeCompare(b.name, "en", { numeric: true }))) {
     if (file.isDirectory() || !/\.(png|jpe?g|webp|mp4|webm)$/i.test(file.name)) continue;

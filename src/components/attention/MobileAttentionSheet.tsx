@@ -1,6 +1,6 @@
 "use client";
 
-import { Filter, GalleryHorizontalEnd } from "lucide-react";
+import { Filter, MessageCircleQuestionMark, GalleryHorizontalEnd } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ChevronDown, ChevronRight, X } from "@/components/icons";
@@ -384,10 +384,11 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
 
 function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; age: number | null; onOpen?: () => void }) {
   const { t } = useLocale();
+  const Mark = notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
   const Tag = onOpen ? "button" : "div";
   return (
     <Tag
-      {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t("proto.notice.openAria", { title: notice.title }) } : {})}
+      {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t(notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title }) } : {})}
       data-needs-you-row={notice.id}
       data-attention-row={notice.id}
       data-mobile2-row="prototype"
@@ -398,9 +399,9 @@ function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; 
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span data-attention-decision className="inline-flex min-w-0 items-center gap-[5px] whitespace-nowrap text-caption font-bold uppercase leading-none tracking-[0.06em] text-accent">
           <span aria-hidden className="inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] bg-accent text-white">
-            <GalleryHorizontalEnd className="h-[11px] w-[11px]" />
+            <Mark className="h-[11px] w-[11px]" />
           </span>
-          <span className="min-w-0 truncate">{t("proto.notice.ready")}</span>
+          <span className="min-w-0 truncate">{t(notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
         </span>
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{notice.title}</span>
         {age === null ? null : (

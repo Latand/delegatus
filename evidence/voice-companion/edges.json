@@ -1,0 +1,890 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion&surface=underlay&script=edge",
+  "rule": "the lane faces the middle of the screen and flips to the other side at an edge; bubbles rise unless the lane would leave the top, and then run downward",
+  "surface": "a field of plain cells that count the clicks reaching them, so the character stays where it is dropped",
+  "cases": [
+    {
+      "viewport": "1440x900",
+      "pass": 1,
+      "scheme": "light",
+      "lang": "en",
+      "position": "top-left",
+      "side": "right",
+      "direction": "down",
+      "block": {
+        "x": 16,
+        "y": 16,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 37,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 1,
+      "scheme": "light",
+      "lang": "en",
+      "position": "right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 1292,
+        "y": 376,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 1002,
+        "y": 164,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 40,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 1,
+      "scheme": "light",
+      "lang": "en",
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 1292,
+        "y": 736,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 1002,
+        "y": 524,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 54,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 1,
+      "scheme": "light",
+      "lang": "en",
+      "position": "bottom-left",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 16,
+        "y": 736,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 524,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 51,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 2,
+      "scheme": "dark",
+      "lang": "en",
+      "position": "top-right",
+      "side": "left",
+      "direction": "down",
+      "block": {
+        "x": 1292,
+        "y": 16,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 1002,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 33,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 2,
+      "scheme": "dark",
+      "lang": "en",
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 1292,
+        "y": 736,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 1002,
+        "y": 524,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 54,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 2,
+      "scheme": "dark",
+      "lang": "en",
+      "position": "bottom",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 654,
+        "y": 736,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 364,
+        "y": 524,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 51,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 3,
+      "scheme": "light",
+      "lang": "uk",
+      "position": "top",
+      "side": "left",
+      "direction": "down",
+      "block": {
+        "x": 654,
+        "y": 16,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 364,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 37,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 246,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 3,
+      "scheme": "light",
+      "lang": "uk",
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 1292,
+        "y": 736,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 1002,
+        "y": 524,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 60,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 246,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "pass": 3,
+      "scheme": "light",
+      "lang": "uk",
+      "position": "left",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 16,
+        "y": 376,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 164,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 38,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 246,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 1,
+      "scheme": "light",
+      "lang": "en",
+      "position": "top-left",
+      "side": "right",
+      "direction": "down",
+      "block": {
+        "x": 16,
+        "y": 16,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 44,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 1,
+      "scheme": "light",
+      "lang": "en",
+      "position": "right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 852,
+        "y": 326,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 562,
+        "y": 114,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 47,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 1,
+      "scheme": "light",
+      "lang": "en",
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 852,
+        "y": 636,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 562,
+        "y": 424,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 64,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 1,
+      "scheme": "light",
+      "lang": "en",
+      "position": "bottom-left",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 16,
+        "y": 636,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 424,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 66,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 2,
+      "scheme": "dark",
+      "lang": "en",
+      "position": "top-right",
+      "side": "left",
+      "direction": "down",
+      "block": {
+        "x": 852,
+        "y": 16,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 562,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 44,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 2,
+      "scheme": "dark",
+      "lang": "en",
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 852,
+        "y": 636,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 562,
+        "y": 424,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 69,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 2,
+      "scheme": "dark",
+      "lang": "en",
+      "position": "bottom",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 434,
+        "y": 636,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 144,
+        "y": 424,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 64,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 3,
+      "scheme": "light",
+      "lang": "uk",
+      "position": "top",
+      "side": "left",
+      "direction": "down",
+      "block": {
+        "x": 434,
+        "y": 16,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 144,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 42,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 246,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 3,
+      "scheme": "light",
+      "lang": "uk",
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 852,
+        "y": 636,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 562,
+        "y": 424,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 66,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 246,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "pass": 3,
+      "scheme": "light",
+      "lang": "uk",
+      "position": "left",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 16,
+        "y": 326,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 114,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 50,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 246,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
+      }
+    }
+  ],
+  "clicks": [
+    {
+      "viewport": 1440,
+      "point": {
+        "x": 1006,
+        "y": 528
+      },
+      "where": "lane, outside every element",
+      "cell": "493",
+      "onElement": false,
+      "reachedPage": true
+    },
+    {
+      "viewport": 1440,
+      "point": {
+        "x": 1129,
+        "y": 528
+      },
+      "where": "lane, outside every element",
+      "cell": "496",
+      "onElement": false,
+      "reachedPage": true
+    },
+    {
+      "viewport": 1440,
+      "point": {
+        "x": 1252,
+        "y": 528
+      },
+      "where": "lane, outside every element",
+      "cell": "499",
+      "onElement": false,
+      "reachedPage": true
+    },
+    {
+      "viewport": 1440,
+      "where": "on a bubble",
+      "cell": null,
+      "onElement": true,
+      "reachedPage": false
+    },
+    {
+      "viewport": 1000,
+      "point": {
+        "x": 566,
+        "y": 428
+      },
+      "where": "lane, outside every element",
+      "cell": "264",
+      "onElement": false,
+      "reachedPage": true
+    },
+    {
+      "viewport": 1000,
+      "point": {
+        "x": 689,
+        "y": 428
+      },
+      "where": "lane, outside every element",
+      "cell": "267",
+      "onElement": false,
+      "reachedPage": true
+    },
+    {
+      "viewport": 1000,
+      "point": {
+        "x": 812,
+        "y": 428
+      },
+      "where": "lane, outside every element",
+      "cell": "270",
+      "onElement": false,
+      "reachedPage": true
+    },
+    {
+      "viewport": 1000,
+      "where": "on a bubble",
+      "cell": null,
+      "onElement": true,
+      "reachedPage": false
+    }
+  ]
+}

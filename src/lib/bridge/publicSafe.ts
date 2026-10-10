@@ -1,3 +1,4 @@
+import { lessonPattern } from "@/lib/memory/roleConsolidate";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 /*
@@ -31,7 +32,8 @@ export type PrivateClass =
   | "person"
   | "project"
   | "host"
-  | "secret";
+  | "secret"
+  | "lesson";
 
 const CLASS_LABELS: Record<PrivateClass, string> = {
   path: "a local path",
@@ -48,6 +50,7 @@ const CLASS_LABELS: Record<PrivateClass, string> = {
   project: "another project",
   host: "a host name",
   secret: "a secret",
+  lesson: "a learned rule",
 };
 
 export function privateClassLabel(value: PrivateClass): string {
@@ -63,6 +66,8 @@ export interface PublicDenyList {
   local: readonly string[];
   /** Other projects: their `owner/repo` and their repository or folder names. */
   projects: readonly { repository: string | null; names: readonly string[] }[];
+  /** Role memory's stored rules and whys (src/lib/memory/roleStore.ts), which stay on this machine. */
+  lessons?: readonly string[];
 }
 
 export const EMPTY_DENY_LIST: PublicDenyList = { accounts: [], people: [], local: [], projects: [] };
@@ -176,6 +181,10 @@ export function privateMatches(text: string, deny: PublicDenyList = EMPTY_DENY_L
   for (const project of deny.projects) {
     if (project.repository?.includes("/")) scan("project", new RegExp(escape(project.repository), "i"));
     names("project", project.names.filter(repositoryShaped));
+  }
+  for (const lesson of deny.lessons ?? []) {
+    const pattern = lessonPattern(lesson);
+    if (pattern) scan("lesson", pattern);
   }
   return found;
 }

@@ -97,7 +97,7 @@ test("no account leaves one blocked visible card, success summarizes, hides and 
   await h.controller.launchIfDue(input()); const blocked = tasks()[0]; expect(blocked.status).toBe("blocked"); expect(blocked.board).toBe("shown");
   h.now(NOW + 3 * 3600000); h.respond({ status: 202, body: { state: "starting", conversationId: ["conversation", "fixture-worker"].join("_"), path: "/fixtures/worker.jsonl" } }); await h.controller.launchIfDue(input());
   const run = h.run(); recordMaintenanceChange(run.runId, { at: run.claimedAt, taskId: "aabbccdd", tool: "update_task", fields: ["status"], statusFrom: "assigned", statusTo: "inbox" });
-  h.observe({ state: "ended", finalText: "attention: aabbccdd | Choose | keep | split\nleft: ddeeffaa | open pipeline\nVerdict: pass" }); await h.controller.reconcile(PROJECT);
+  h.observe({ state: "ended", finalText: "attention: aabbccdd | Choose | keep | split | waits: start implementation\nleft: ddeeffaa | open pipeline\nVerdict: pass" }); await h.controller.reconcile(PROJECT);
   const done = tasks().find(t => t.id === run.taskId)!; expect(done).toMatchObject({ status: "done", board: "hidden" }); expect(done.text).toContain("змінено 1 задач"); expect(done.text).toContain("Choose"); expect(h.archived).toEqual([run.runId]); expect(tasks().find(t => t.id === blocked.id)?.status).toBe("done");
   const ended = readMaintenanceRun(run.runId)!; expect(ended.log.leftAlone).toHaveLength(1);
   const snapshot = JSON.stringify(tasks()); await h.controller.reconcile(PROJECT); expect(JSON.stringify(tasks())).toBe(snapshot);

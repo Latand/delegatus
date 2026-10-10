@@ -1033,3 +1033,146 @@ test("every handoff digest groups under one project, live or deleted, never a lo
   fs.mkdirSync(plain, { recursive: true });
   expect(projectInfoFromCwd(plain, "handoff-digest")?.project).not.toBe(infos[0]!.project);
 });
+
+test("first scan of a sibling worktree descendant records it before outside deletion", () => {
+  const state = useStateDirectory("outside-removal-state");
+  const repo = path.join(SANDBOX, "outside-repository");
+  const identity = createRepository(repo);
+  const checkout = repo + "-lane-12";
+  const cwd = path.join(checkout, "src", "nested");
+  fs.mkdirSync(cwd, { recursive: true });
+  /* A cached negative result must not hide a newly-linked checkout. */
+  expect(projectInfoFromCwd(cwd)?.project.startsWith("dir-")).toBe(true);
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-12")}\n`);
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName, worktree: "lane-12" });
+  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: "lane-12" });
+  fs.rmSync(checkout, { recursive: true });
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName, worktree: "lane-12" });
+});
+
+test.each(["ordinary", "separate", "refreshed"])("a real linked sibling with %s Git ownership survives removal in a fresh resolver", layout => {
+  const separate = layout !== "ordinary";
+  const mapOnly = layout === "refreshed";
+  const state = useStateDirectory(`git-outside-removal-state-${layout}`);
+  const repo = path.join(SANDBOX, `git-outside-repository-${layout}`);
+  const checkout = repo + "-review";
+  fs.mkdirSync(repo);
+  const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", ["-c", "core.hooksPath=", "-C", repo, ...args], { env, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  git("init", ...(separate ? ["--separate-git-dir=" + repo + "-git-data"] : []));
+  git("commit", "--allow-empty", "-m", "fixture");
+  git("remote", "add", "origin", "https://example.invalid/team/widgets.git");
+  const identity = projectIdentityFromRepositoryRoot(repo)!;
+  if (!mapOnly) expect(projectInfoFromCwd(repo)).toMatchObject({ project: identity.project, repo });
+  // A second checkout with the same remote cannot establish common-directory ownership.
+  const clone = path.join(SANDBOX, `git-unrelated-clone-${layout}`);
+  createRepository(clone, "https://example.invalid/team/widgets.git");
+  expect(projectInfoFromCwd(clone)?.project).toBe(identity.project);
+  expect(fs.existsSync(path.join(state, "worktree-map.json"))).toBe(false);
+  git("worktree", "add", "--detach", checkout);
+  const previous = repo + "-lane-1";
+  if (mapOnly) {
+    // This process loaded the map before another observer knew the repository.
+    projectInfoFromCwd(path.join(state, "absent"));
+    git("worktree", "add", "--detach", previous);
+    const writerScript = `const { projectInfoFromCwd, recordWorktreeResolution } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
+      + `projectInfoFromCwd(${JSON.stringify(repo)});`
+      + `if (!recordWorktreeResolution(${JSON.stringify(previous)})) throw Error("fixture observation failed");`;
+    const writer = spawnSync(process.execPath, ["-e", writerScript], { cwd: path.resolve(import.meta.dir, "../../.."), env, encoding: "utf8" });
+    expect(writer.status).toBe(0);
+    git("worktree", "remove", previous);
+  }
+  const cwd = path.join(checkout, "src"); fs.mkdirSync(cwd);
+  const transcript = path.join(state, "session.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cwd } }) + "\n");
+  expect(describe("codex-sessions", state, transcript, fs.statSync(transcript))).toMatchObject({
+    project: identity.project, projectName: identity.displayName, projectRoot: repo, worktree: path.basename(checkout),
+  });
+  const map = JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"));
+  expect(map[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
+  if (mapOnly) expect(map[previous]).toEqual({ repo, worktree: path.basename(previous) });
+  fs.rmdirSync(cwd);
+  git("worktree", "remove", checkout);
+  const script = `const { projectInfoFromCwd } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
+    + `console.log(JSON.stringify(projectInfoFromCwd(${JSON.stringify(cwd)})));`;
+  const result = spawnSync(process.execPath, ["-e", script], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...env, LLV_STATE_DIR: state }, encoding: "utf8" });
+  expect(result.status).toBe(0);
+  expect(JSON.parse(result.stdout.trim())).toMatchObject({ project: identity.project, displayName: identity.displayName });
+});
+
+test.each(["direct", "container"])("a removed sibling inside an enclosing repository keeps its saved owner (%s)", layout => {
+  const state = useStateDirectory(`enclosing-repository-${layout}`);
+  const outer = path.join(SANDBOX, `enclosing-${layout}`);
+  const parent = layout === "direct" ? outer : path.join(outer, "checkouts");
+  const repo = path.join(parent, "widgets");
+  const checkout = repo + "-review";
+  const cwd = path.join(checkout, "src");
+  fs.mkdirSync(repo, { recursive: true });
+  const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
+  const git = (root: string, ...args: string[]) => {
+    const result = spawnSync("git", ["-c", "core.hooksPath=", "-C", root, ...args], { env, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  for (const [root, name] of [[outer, "outer"], [repo, "widgets"]]) {
+    git(root, "init");
+    git(root, "commit", "--allow-empty", "-m", "fixture");
+    git(root, "remote", "add", "origin", `https://example.invalid/team/${name}.git`);
+  }
+  const identity = projectIdentityFromRepositoryRoot(repo)!;
+  expect(projectIdentityFromRepositoryRoot(outer)?.project).not.toBe(identity.project);
+  git(repo, "worktree", "add", "--detach", checkout);
+  fs.mkdirSync(cwd);
+  const script = `const { projectInfoFromCwd, projectRootForCwd } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
+    + `console.log(JSON.stringify({ info: projectInfoFromCwd(${JSON.stringify(cwd)}), root: projectRootForCwd(${JSON.stringify(cwd)}) }));`;
+  const resolveFresh = () => {
+    const result = spawnSync(process.execPath, ["-e", script], { cwd: path.resolve(import.meta.dir, "../../.."), env, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return JSON.parse(result.stdout.trim());
+  };
+  const live = resolveFresh();
+  expect(live).toMatchObject({ info: { project: identity.project, displayName: identity.displayName, repo }, root: repo });
+  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
+  fs.rmdirSync(cwd);
+  git(repo, "worktree", "remove", checkout);
+  expect(fs.existsSync(checkout)).toBe(false);
+  expect(resolveFresh()).toEqual(live);
+});
+
+test("a remembered sibling cannot claim descendants of an independent nested repository", () => {
+  useStateDirectory("nested-repository-memory");
+  const repo = path.join(SANDBOX, "memory-parent");
+  const parent = createRepository(repo);
+  const checkout = repo + "-review";
+  fs.mkdirSync(checkout);
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "review")}\n`);
+  expect(projectInfoFromCwd(checkout)?.project).toBe(parent.project);
+  const nested = path.join(checkout, "foreign");
+  const cwd = path.join(nested, "src"); fs.mkdirSync(cwd, { recursive: true });
+  expect(projectInfoFromCwd(cwd)?.project).toBe(parent.project); // Warm the overlay before the nested repository appears.
+  const foreign = createRepository(nested, "https://example.invalid/team/foreign.git");
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: foreign.project, repo: nested });
+  expect(projectRootForCwd(cwd)).toBe(nested);
+  globalCache("project-info-cwd-v2").clear();
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: foreign.project, repo: nested });
+});
+
+test("a path-recognized live checkout is recorded on its first observation", () => {
+  const state = useStateDirectory("pure-recognizer-first-observation");
+  const repo = path.join(SANDBOX, "pure-observation-repository");
+  const identity = createRepository(repo);
+  const checkout = path.join(repo, ".claude", "worktrees", "lane-14");
+  const cwd = path.join(checkout, "src");
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-14")}\n`);
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
+  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: "lane-14" });
+  fs.rmSync(checkout, { recursive: true });
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
+});

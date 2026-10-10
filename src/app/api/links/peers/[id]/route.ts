@@ -11,7 +11,7 @@ export async function POST(req: NextRequest, context: Context) {
   if (denied) return denied;
   if (accessKeyWithheld(req)) return NextResponse.json({ error: "owner-required" }, { status: 403 });
   try {
-    const result = await syncPeer((await context.params).id);
+    const result = await syncPeer((await context.params).id, { recover: true });
     const { token: _token, ...peer } = result.peer;
     return NextResponse.json({ peer, states: projectLinkStates() });
   } catch (error) { return NextResponse.json({ error: error instanceof LinkError ? error.code : "unreachable", states: projectLinkStates() }, { status: 409 }); }

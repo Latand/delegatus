@@ -88,6 +88,14 @@ launcher's kernel start time). SHA observations come from identity-checked live
 processes and their actual release HEADs; HTTP and the runtime socket must agree
 with those processes. Publishing a pointer alone cannot pass verification.
 
+The shared serving-health probe reads `/api/tasks?project=`. An empty project
+cannot own tasks, so this loads the task store and answers a bounded
+`tasks` list even when the full board exceeds 4 MiB. A non-200 response,
+invalid JSON or missing task list still refuses health. Every HTTP read keeps
+the 4 MiB body cap. This check applies to deploy and restart preflight,
+detached-worker health samples, and the serving-health preflight that also
+checks `/api/self-update` for automatic-update conflicts and serving identity.
+
 Every read of an old PID tolerates its disappearance, including exit between
 reading its stat, command line and cwd. A reused PID counts as gone. HTTP, MCP,
 registry and serving readiness reads retry within a 180 second bound per

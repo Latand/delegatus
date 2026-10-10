@@ -250,7 +250,8 @@ function encodeComment(comment: string): Uint8Array {
   return encoder.encode(`: ${comment}\n\n`);
 }
 
-export function createLogTailEventStream(subs: LogStreamSub[], signal?: AbortSignal): ReadableStream<Uint8Array> {
+/** `allowed` is the request's own admission of paths beyond the scanner's roots (see `readTailChunk`). */
+export function createLogTailEventStream(subs: LogStreamSub[], signal?: AbortSignal, allowed?: (pathname: string) => boolean): ReadableStream<Uint8Array> {
   let session: LogTailStreamSession | null = null;
   let stopped = false;
   return new ReadableStream<Uint8Array>({
@@ -276,6 +277,7 @@ export function createLogTailEventStream(subs: LogStreamSub[], signal?: AbortSig
       };
       session = new LogTailStreamSession(subs, {
         signal,
+        ...(allowed ? { readTailChunk: (pathname, offset, budget) => defaultReadTailChunk(pathname, offset, budget, allowed) } : {}),
         onEvent: (event) => enqueue(encodeChunk(event)),
         onComment: (comment) => enqueue(encodeComment(comment)),
       });

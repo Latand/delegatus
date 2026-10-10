@@ -1,19 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { checkFixtureParent } from "@/lib/testing/fixtureLifetime";
 
 // Longer than the longest parent race test; still finite if the runner hangs.
 export const FIXTURE_BARRIER_TIMEOUT_MS = 120_000;
-const parentPid = Number(process.env.LLV_FIXTURE_PARENT_PID) || process.ppid;
-
-// Covers an idle HTTP fixture too; its request handler may have no active barrier.
-setInterval(() => {
-  if (process.ppid !== parentPid) process.exit(86);
-  try { process.kill(parentPid, 0); } catch { process.exit(86); }
-}, 50).unref();
 
 function checkBarrier(filename: string, deadline: number): void {
-  if (process.ppid !== parentPid) process.exit(86);
-  try { process.kill(parentPid, 0); } catch { process.exit(86); }
+  checkFixtureParent();
   if (!fs.existsSync(path.dirname(filename))) process.exit(87);
   if (Date.now() >= deadline) process.exit(88);
 }

@@ -30,7 +30,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const fields = body as Record<string, unknown>;
     const target = parseDismissalTarget(fields.target, { allowSubjects: true });
     const surface = fields.surface === "phone" ? "phone" : "desktop";
-    const outcome = await dismissAttention(target, { kind: "operator", surface }, { undo: fields.undo === true });
+    const outcome = await dismissAttention(target, { kind: "operator", surface }, { undo: fields.undo === true, reason: fields.reason as string | undefined });
     return NextResponse.json({ ok: true, ...outcome }, { headers });
   } catch (error) {
     if (error instanceof DismissalError) {

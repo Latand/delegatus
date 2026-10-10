@@ -74,6 +74,49 @@ afterEach(async () => {
   dom.document.body.innerHTML = "";
 });
 
+test.each([false, true])("Hide and history Undo share dismissal identity and keep a real choice available (phone: %s)", async (phone) => {
+  phoneLayout = phone;
+  const calls: unknown[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (String(url) === "/api/attention/dismissals") {
+      const body = JSON.parse(String(init?.body)); calls.push(body);
+      return new Response(JSON.stringify({ ok: true, dismissed: [body.target], alreadyClear: [], changed: [], undo: body.undo,
+        at: "2026-10-09T12:00:00Z", by: { kind: "operator", surface: phone ? "phone" : "desktop" } }));
+    }
+    return new Response(JSON.stringify(reviewRead()));
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-hide]")).not.toBeNull();
+  expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-hide]")!.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-hidden]")).not.toBeNull();
+  expect(document.querySelector("[data-prototype-save]")).toBeNull();
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-undo-hide]")!.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
+  expect(calls).toEqual([false, true].map(undo => ({ target: { kind: "prototype", taskId: "task-1", reviewId: `pr_${"a".repeat(32)}` }, undo, surface: phone ? "phone" : "desktop" })));
+});
+
+test.each(["rec", "busy"] as const)("Hide keeps the voice controls available while dictation is %s", async phase => {
+  heldPhase = phase;
+  const writes: unknown[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") writes.push(url);
+    return new Response(JSON.stringify(reviewRead()));
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout" onClose={() => {}} />); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  const hide = document.querySelector<HTMLButtonElement>("[data-prototype-hide]")!;
+  expect(hide.disabled).toBe(true);
+  await act(async () => { hide.click(); });
+  expect(writes).toEqual([]);
+  expect(document.querySelector("[data-prototype-hidden]")).toBeNull();
+});
+
 test("the comment is saved as it was written: edge spaces and line breaks reach the save request", async () => {
   const written = "  Keep the spacing.\nAdd a button.  \n";
   const posted: Array<{ reviewId: string; chosen: number[]; comment: string }> = [];
@@ -529,5 +572,123 @@ describe("the full-screen viewer", () => {
     /* A video plays in the stage at its whole width. */
     await press('[data-prototype-step="next"]');
     expect(document.querySelector<HTMLElement>("[data-prototype-video]")!.className).toContain("w-full");
+  });
+});
+
+
+describe("short questionnaire", () => {
+  const questions = [
+    { id: "place", text: "Where?", options: [{ label: "Here", recommended: true }, { label: "There" }] },
+    { id: "scope", text: "Which surfaces?", multiple: true, options: [{ label: "Desktop", recommended: true }, { label: "Phone" }] },
+    { id: "timing", text: "When?", other: true, options: [{ label: "Now", recommended: true }, { label: "Later" }] },
+  ];
+  async function mountQuestions(phone = false, answered = false) {
+    phoneLayout = phone;
+    const data = reviewRead(); data.rounds[0]!.variants = []; data.rounds[0]!.questions = questions;
+    if (answered) data.rounds[0]!.decision = { chosen: [], answers: questions.map(q => ({ questionId: q.id, options: [0] })), skipped: true, comment: "", at: data.rounds[0]!.createdAt, delivery: { state: "sent", retryable: false } };
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body)); posted.push(body);
+        data.rounds[0]!.decision = { chosen: [], answers: body.answers ?? questions.map(q => ({ questionId: q.id, options: [0] })), ...(body.skip ? { skipped: true as const } : {}), comment: body.comment, at: data.rounds[0]!.createdAt, delivery: { state: "sent", retryable: false } };
+      }
+      return new Response(JSON.stringify(data), { status: 200 });
+    }) as typeof fetch;
+    const host = document.createElement("div"); document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); await new Promise(r => setTimeout(r,20)); });
+    return posted;
+  }
+  const click = async (selector: string) => act(async () => { document.querySelector<HTMLElement>(selector)!.click(); });
+  test("questions only preselect recommendations, single and multiple choices and shared other save once", async () => {
+    const posted = await mountQuestions();
+    expect(Boolean(document.querySelector("[data-prototype-variants]"))).toBe(false);
+    expect(Boolean(document.querySelector("[data-prototype-stage]"))).toBe(false);
+    expect(document.querySelectorAll("[data-prototype-recommended]")).toHaveLength(3);
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.getAttribute("aria-checked")).toBe("true");
+    await click('[data-prototype-option="place:1"]');
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.getAttribute("aria-checked")).toBe("false");
+    await click('[data-prototype-option="scope:1"]');
+    await click('[data-prototype-other="timing"]');
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(true);
+    const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+    const props = (field as unknown as Record<string, { onChange: (e: { target: { value: string } }) => void }>)[Object.keys(field).find(k => k.startsWith("__reactProps$"))!]!;
+    await act(async () => props.onChange({ target: { value: "  Start after lunch.\nKeep this.  " } }));
+    await click("[data-prototype-save]");
+    expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [], comment: "  Start after lunch.\nKeep this.  ", answers: [{ questionId: "place", options: [1] }, { questionId: "scope", options: [0,1] }, { questionId: "timing", options: [], other: true }] }]);
+  });
+  test("images accompanying questions keep variant choices optional", async () => {
+    const read = reviewRead();
+    read.rounds[0]!.questions = questions;
+    await mountReview(read);
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(false);
+    expect(document.querySelector("[data-prototype-decide]")?.textContent).not.toContain("Choose one or more");
+  });
+  test("the Questions section label shows over the list only beside images", async () => {
+    await mountQuestions();
+    expect(document.querySelector("[data-prototype-questions-label]")).toBeNull();
+    await mountReview((() => { const read = reviewRead(); read.rounds[0]!.questions = questions; return read; })());
+    expect(document.querySelector("[data-prototype-questions-label]")?.textContent).toBe("Questions");
+  });
+  test("a question's number sits in its own column so wrapped text keeps one left edge", async () => {
+    await mountQuestions();
+    const number = document.querySelector("[data-prototype-question] [data-prototype-question-number]")!;
+    expect(number.nextElementSibling?.tagName).toBe("P");
+    expect(number.parentElement?.className).toContain("flex");
+  });
+  test("phone skip posts only skip and leaves read-only recommended answers", async () => {
+    const posted = await mountQuestions(true);
+    expect(document.querySelector("[data-prototype-actions]")?.contains(document.querySelector("[data-prototype-skip]"))).toBe(true);
+    await click("[data-prototype-skip]");
+    expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [], comment: "", skip: true }]);
+    expect(document.querySelector("[data-prototype-skipped]")).not.toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[data-prototype-option="place:0"]')?.disabled).toBe(true);
+  });
+  test("marks carry no letters and the recommended pill sits beside the words", async () => {
+    await mountQuestions();
+    for (const mark of document.querySelectorAll("[data-prototype-mark]")) expect(mark.textContent).toBe("");
+    for (const pill of document.querySelectorAll("[data-prototype-recommended]")) expect(pill.parentElement?.tagName).toBe("BUTTON");
+  });
+  test("a questions-only review is titled Questions, not Prototype review", async () => {
+    await mountQuestions();
+    expect(document.querySelector("[role=dialog] header p")?.textContent).toBe("Questions · Layout task");
+    expect(document.body.textContent).not.toContain("Prototype review");
+  });
+  test("an answered questionnaire fades unpicked options, drops the hint and shows one status line", async () => {
+    await mountQuestions(false, true);
+    expect(document.querySelector('[data-prototype-option="place:1"]')?.className).toContain("opacity-60");
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.className).not.toContain("opacity-60");
+    expect(document.body.textContent).not.toContain("Choose any");
+    const footer = document.querySelector("[data-prototype-decision]")!;
+    expect(footer.textContent).toContain("Skipped, recommended answers taken");
+    expect(footer.textContent).not.toMatch(/answered|No comment/i);
+  });
+  const escape = async () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  const typeComment = async (value: string) => {
+    const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+    const props = (field as unknown as Record<string, { onChange: (e: { target: { value: string } }) => void }>)[Object.keys(field).find(k => k.startsWith("__reactProps$"))!]!;
+    await act(async () => props.onChange({ target: { value } }));
+  };
+  test("closing after only an answer changed asks about the answers, not a comment", async () => {
+    await mountQuestions();
+    await escape();
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+    await click('[data-prototype-option="place:1"]');
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("");
+    await escape();
+    const guard = document.querySelector("[data-prototype-guard]")!;
+    expect(guard.textContent).toContain("Discard the unsaved answers?");
+    expect(guard.textContent).not.toMatch(/comment/i);
+  });
+  test("closing an images-only review with a comment keeps the comment wording", async () => {
+    await mountReview(reviewRead());
+    await typeComment("Tighter spacing.");
+    await escape();
+    expect(document.querySelector("[data-prototype-guard]")!.textContent).toContain("Discard the unsaved comment?");
+  });
+  test("an open questionnaire keeps the hint and unfaded options", async () => {
+    await mountQuestions();
+    expect(document.body.textContent).toContain("Choose any");
+    expect(document.querySelector('[data-prototype-option="place:1"]')?.className).not.toContain("opacity-60");
   });
 });

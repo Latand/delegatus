@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
-import { x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
+import { ownerRequest, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
+import { relayClaimCapabilities } from "./poller";
+import { setRelaySwitch } from "./switches";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -1063,6 +1065,7 @@ async function runLoopCase(options: {
   relayId?: string;
   reverseReadArrival?: boolean;
   heartbeatResponse?: (seq: number) => { status?: number; body?: unknown };
+  features?: string[];
 }) {
   const request = options.request ?? { ...x1Request(options.role ?? "member"), request_id: `loop_${crypto.randomUUID()}` };
   const calls: WireCall[] = [];
@@ -1104,6 +1107,7 @@ async function runLoopCase(options: {
     return { body: { status: "ok" } };
   });
   const paired = relay(`${server.origin}/v1`);
+  if (options.features) paired.features = options.features;
   paired.id = options.relayId ?? `loop_${crypto.randomUUID()}`;
   paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null };
   const previousSelection = accountManager.resolveHeadlessSpawn;
@@ -1508,6 +1512,179 @@ const actionPlan = (tool: string, final = "reply") =>
   `return round===1?{action:'call',text:'',reply_to:null,calls:[call('${tool}',{})]}:${final};`;
 const projectionsOf = (run: Awaited<ReturnType<typeof runLoopCase>>, round = 1) =>
   JSON.parse(run.rounds[round].prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)[1]);
+
+test("N1 owner switch OFF preserves pre-amendment v3 runner and claim bytes", async () => {
+  const hashes: Record<string, unknown> = {};
+  setRelaySwitch("relay:owner_tools:enabled", false);
+  for (const role of ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin"]) {
+    const run = await runLoopCase({ request: x1Request(role) });
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+    hashes[role] = { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))),
+      calls: run.calls.map((call) => hash(JSON.stringify(call))) };
+  }
+  hashes.claim = JSON.stringify(relayClaimCapabilities({ features: ["relay_owner_tools"] }));
+  const output = JSON.stringify(hashes, null, 2) + "\n";
+  if (process.env.LLV_RELAY_CAPTURE_OWNER_N1) fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_OWNER_N1, output);
+  else expect(output).toBe(fs.readFileSync(path.join(x1Dir, "owner-tools-off-runner-hashes.json"), "utf8"));
+});
+
+const ownerFeatures = ["requester_context", "relay_tool_calls", "relay_tool_actions", "relay_owner_tools"];
+const ownerRateLimit = (seconds = 7) => ({ status: 429,
+  body: { error: { code: "rate_limited", message: "rate limited", retry_after_s: seconds } } });
+const ownerResponse = (body: WireCall, overrides: Partial<ToolCallResult> = {}) => ({ body: {
+  call_id: body.call_id, tool: "tool" in body ? body.tool : "owner_list_grid_chats", status: "ok", output: "[]",
+  truncated: false, effect: "tool" in body && ["owner_list_grids", "owner_list_grid_chats"].includes(body.tool!) ? "read" : "action",
+  delivered: false, replayed: false, calls_remaining: 15, audience: "owner", ...overrides,
+} });
+
+test("E3 owner pure 429 ceiling refunds its debit and permits completion with handoff", async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    const run = await runLoopCase({ request: ownerRequest("owner_refund_regression"), features: ownerFeatures,
+      plan: `if(round<=2)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+      response: () => ownerRateLimit(), runtime: { sleep: async () => {} } });
+    expect(run.completion).toMatchObject({ outcome: "declined", reason: "handoff" });
+    expect(run.calls).toHaveLength(4); expect(run.rounds[1].prompt.includes("16 calls are left.")).toBe(true);
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+for (const refusal of ["malformed", "too_large"]) test(`E3 owner ${refusal} refusal followed by a pure 429 ceiling permits handoff`, async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    const run = await runLoopCase({ request: ownerRequest(`owner_refusal_${refusal}`), features: ownerFeatures,
+      plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};
+        if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'00000000-0000-0000-0000-000000000000',body:{}})]};
+        return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+      response: (_body, attempt) => attempt === 1 ? x1Errors[refusal]! : ownerRateLimit(), runtime: { sleep: async () => {} } });
+    expect(run.completion).toMatchObject({ outcome: "declined", reason: "handoff" });
+    expect(run.calls).toHaveLength(5); expect(run.rounds).toHaveLength(3);
+    expect(new Set(run.calls.slice(1).map((call) => JSON.stringify(call))).size).toBe(1);
+    expect(run.rounds[2].prompt).toContain("15 calls are left.");
+    expect(run.rounds[2].schema.properties.action.enum).toContain("handoff");
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+for (const status of ["ok", "error"] as const) test(`E3 owner admitted ${status} followed by a pure 429 ceiling keeps handoff blocked`, async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    const run = await runLoopCase({ request: ownerRequest(`owner_admitted_${status}`), features: ownerFeatures,
+      plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};
+        if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'00000000-0000-0000-0000-000000000000',body:{}})]};
+        return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+      response: (body, attempt) => attempt === 1 ? ownerResponse(body, { status }) : ownerRateLimit(), runtime: { sleep: async () => {} } });
+    expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(run.calls).toHaveLength(5); expect(run.rounds[2].prompt).toContain("15 calls are left.");
+    expect(run.rounds[2].schema.properties.action.enum).not.toContain("handoff");
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+test("X4 six owner runs extend the existing X2 capture format", async () => {
+  const capture: { name: string; x1: unknown; calls: unknown[]; completion: unknown }[] = [];
+  const grid = "00000000-0000-0000-0000-000000000000";
+  const page = "p".repeat(43);
+  const plans: Record<string, string> = {
+    reads: `if(round===1||round===3)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{grid_id:'${grid}',cursor:'public-query-cursor',limit:2})]};
+      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{},'${page}')]};return reply;`,
+    writes: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}}),call('owner_list_grids',{})]};
+      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid B'}})]};
+      if(round===3)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'${grid}',body:{owned:[101]}})]};
+      if(round===4)return {action:'call',text:'',reply_to:null,calls:[call('owner_activate_clone',{bot_id:42})]};return reply;`,
+    retry_ceiling: `if(round<=2)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+    inner_404: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_get_grid',{grid_id:'${grid}'})]};
+      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grids',{})]};return reply;`,
+    lease_lost: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('owner_list_grids',{})]}:reply;`,
+    confirmation: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('owner_deactivate_clone',{bot_id:42})]}:reply;`,
+  };
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    for (const [name, plan] of Object.entries(plans)) {
+      const calls: { body: WireCall; attempts: { request: WireCall; x1_sample: string; response?: unknown; status?: number; body?: unknown }[] }[] = [];
+      const admitted = new Set<string>();
+      const waits: number[] = [];
+      const run = await runLoopCase({ request: ownerRequest(`owner_x4_${name}`), plan, features: ownerFeatures,
+        runtime: { now: () => Date.parse("2026-10-10T00:00:00Z"), sleep: async (ms) => { waits.push(ms); } },
+        response: (body) => {
+          let entry = calls.find((call) => call.body.call_id === body.call_id);
+          if (!entry) { entry = { body, attempts: [] }; calls.push(entry); }
+          const attempt = entry.attempts.length + 1;
+          const tool = "tool" in body ? body.tool : "owner_list_grid_chats";
+          const refused = name === "retry_ceiling" || name === "writes" && tool === "owner_activate_clone" && attempt === 1;
+          if (refused || name === "lease_lost") {
+            const response = name === "lease_lost" ? x1Errors.lease_lost! : ownerRateLimit();
+            entry.attempts.push({ request: body, x1_sample: refused ? "owner_rate_limited" : "lease_lost", ...response });
+            return response;
+          }
+          const replayed = admitted.has(body.call_id);
+          admitted.add(body.call_id);
+          let result: Partial<ToolCallResult> = { tool, calls_remaining: 16 - admitted.size, replayed };
+          let sample = "owner_ok";
+          if (name === "reads") {
+            result = { ...result, effect: "read", output: "[101,102]" };
+            if ("tool" in body && attempt === 1) { sample = "owner_pending"; result = { ...result, status: "pending", output: "", retry_after_s: 1 }; }
+            else if ("tool" in body) { sample = "owner_cursor_replayed"; result = { ...result, truncated: true, cursor: page }; }
+            else sample = "owner_last_page";
+          } else if (name === "inner_404") {
+            result = { ...result, effect: "read", ...(tool === "owner_get_grid" ? { status: "error", output: '{"http_status":404,"message":"Grid not found"}' } : {}) };
+            sample = tool === "owner_get_grid" ? "owner_inner_404" : "owner_ok";
+          } else if (name === "confirmation") {
+            sample = "owner_confirmation_pending";
+            result = { ...result, status: "confirmation_pending", output: "", delivered: true, calls_remaining: 0,
+              confirmation_id: "confirmation_owner_x4", summary: "Deactivate the named clone?", expires_at: "2026-10-10T00:10:00Z" };
+          } else if (tool === "owner_attach_grid_chats") { sample = "owner_204"; result.output = ""; }
+          else if (tool === "owner_create_grid") {
+            const name = (body.arguments!.body as { name: string }).name;
+            result.output = JSON.stringify({ grid_id: name === "Grid A" ? grid : "00000000-0000-0000-0000-000000000001", kind: "settings", name });
+          }
+          const response = ownerResponse(body, result);
+          entry.attempts.push({ request: body, x1_sample: sample, response: response.body });
+          return response;
+        } });
+      if (name === "lease_lost") {
+        expect(run.completion).toBeNull(); expect(run.completions).toEqual([]); expect(run.record?.outcome).toBe("lease_lost");
+      } else expect(run.completion?.outcome).toBe(name === "retry_ceiling" ? "declined" : "answered");
+      if (name === "reads") {
+        expect(run.calls).toHaveLength(3); expect(run.calls[1]).toEqual(run.calls[0]);
+        expect(run.calls[2]).toEqual(callBody(run.request, { cursor: page }));
+        expect(projectionsOf(run, 3)).toHaveLength(2); // cached repetition grows no prompt
+      }
+      if (name === "writes") {
+        expect(run.calls.map((call) => "tool" in call && call.tool)).toEqual([
+          "owner_list_grids", "owner_create_grid", "owner_create_grid", "owner_attach_grid_chats", "owner_activate_clone", "owner_activate_clone"]);
+        expect(run.calls[4]).toEqual(run.calls[5]); expect(waits).toEqual([7000]);
+        expect(run.rounds[1].prompt).toContain("further distinct owner writes requested");
+        expect(projectionsOf(run, 3).at(-1).output).toBe("");
+        expect(run.rounds[4].prompt).toContain("11 calls are left.");
+      }
+      if (name === "retry_ceiling") {
+        expect(run.calls).toHaveLength(4); expect(new Set(run.calls.map((call) => JSON.stringify(call))).size).toBe(1);
+        expect(waits).toEqual([7000, 7000, 7000]); expect(run.rounds[1].prompt).toContain("16 calls are left.");
+        expect(run.rounds[2].schema.properties.action.enum).toContain("handoff");
+        expect(run.completion).toMatchObject({ outcome: "declined", reason: "handoff" });
+      }
+      if (name === "inner_404") {
+        expect(run.calls).toHaveLength(2); expect(projectionsOf(run)[0]).toMatchObject({ status: "error", output: '{"http_status":404,"message":"Grid not found"}' });
+      }
+      if (name === "confirmation") {
+        const projection = projectionsOf(run)[0];
+        expect(projection).toMatchObject({ status: "confirmation_pending", summary: "Deactivate the named clone?", expires_in_s: 600, delivered: true });
+        expect(projection).not.toHaveProperty("confirmation_id"); expect(projection).not.toHaveProperty("expires_at");
+        expect(run.rounds[1].prompt).not.toContain("confirmation_owner_x4");
+        expect(run.rounds[1].prompt).not.toContain("2026-10-10T00:10:00Z");
+        expect(run.rounds[1].prompt).toContain("nothing you can call confirms it");
+        expect(run.rounds[1].schema).toEqual(answerSchema);
+      }
+      capture.push({ name, x1: { amendment_revision: "03de6455", amendment_sha256: "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
+        claim: "claimed_tools_owner_tools.json", claim_source: "local I10 owner index over unchanged X1 2b claim", index: "owner-tools-index.json" }, calls,
+        completion: run.completion ? { ...run.completion, duration_ms: 0 } : null });
+    }
+    const [reads, ...actions] = capture;
+    const output = JSON.stringify({ x1: reads!.x1, claim_body: { wait_s: 25, ...relayClaimCapabilities({ features: ownerFeatures }),
+      slots: [{ target_id: ownerRequest().target_id, free: 1 }] }, calls: reads!.calls, completion: reads!.completion, actions }, null, 2) + "\n";
+    const file = path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop_owner.json");
+    if (process.env.LLV_RELAY_WIRE_OUTPUT_OWNER) fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT_OWNER, output);
+    else expect(output).toBe(fs.readFileSync(file, "utf8"));
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
 const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
@@ -1921,3 +2098,32 @@ test("a read effect returned for an indexed action never restores handoff", asyn
   expect(run.rounds[1].schema.properties.action.enum).not.toContain("handoff");
   expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
 });
+
+// Captured by replaying the accepted slice 2b runner before enabling any slice 3 path.
+test("slice 3 dark and ineligible paths preserve the slice 2b wire and records", async () => {
+  const fixtureFile = path.join(x1Dir, "switches-off-2b-hashes.json");
+  const snapshot = JSON.parse(fs.readFileSync(fixtureFile, "utf8"));
+  const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
+  const surfaces: Record<string, unknown> = {};
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  async function replay(role: string) {
+    const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
+    const run = await runLoopCase({ request, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
+    const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
+    const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
+    return { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))), calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
+  }
+  for (const role of cases) surfaces[role] = await replay(role);
+  if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }
+  expect(surfaces).toEqual(snapshot.surfaces);
+  const { setRelaySwitch } = await import("./switches");
+  const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
+  try {
+    for (const raw of [JSON.stringify({ v: 1, chat_conversations: false, compact: false }), "{", JSON.stringify({ v: 2, chat_conversations: true })]) {
+      fs.writeFileSync(switchFile, raw);
+      for (const role of cases) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
+    }
+    setRelaySwitch("chat_conversations", true);
+    for (const role of ["admin", "anonymous_admin", "actions_admin"]) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
+  } finally { fs.rmSync(switchFile, { force: true }); }
+}, 30000);

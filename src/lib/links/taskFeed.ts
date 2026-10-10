@@ -14,6 +14,7 @@ import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
+import { withoutStoredLessonsIn } from "@/lib/memory/roleStore";
 
 import { encodeTask, type WireRow } from "./taskWire";
 import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
@@ -42,6 +43,7 @@ export type FeedFilter = {
   /** Older peers reject the board preference added in task wire v3. */
   includeBoard?: boolean;
   includePrototypeReview?: boolean;
+  peerTaskWireVersion?: number;
   filePath?: string;
 };
 
@@ -62,8 +64,17 @@ class Page {
 }
 
 function encoded(task: BoardTask, filter: FeedFilter) {
-  const { row, bytes } = encodeTask(task, filter.self, { includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview });
+  const { row, bytes } = encodeTask(outboundTask(task), filter.self, { includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview, peerTaskWireVersion: filter.peerTaskWireVersion });
   return { row, bytes, stub: "withheld" in row };
+}
+
+/** A task as it leaves this machine: a role-memory lesson any of its texts
+    quotes (its text, details, prototype review titles, variants and decision
+    comments, an original record or a replica) is withheld
+    (src/lib/memory/roleStore.ts); the local task keeps it. A role memory that
+    cannot be read throws, and the page is not sent. */
+export function outboundTask(task: BoardTask): BoardTask {
+  return withoutStoredLessonsIn(task);
 }
 
 type OmittedTask = { id: string; project: string };

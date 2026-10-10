@@ -138,6 +138,8 @@ test("a rotation handoff opens as a second section of the same card", () => {
   expect(container.textContent).not.toContain("You are replacing orchestrator conversation");
   expand(container, 1);
   expect(container.textContent).toContain("You are replacing orchestrator conversation");
+  /* The section's label names it; its body does not say so a second time. */
+  expect(container.textContent).not.toContain("Handoff from your predecessor");
   /* The handoff is its own section: opening it does not unfold the mandate. */
   expect(container.textContent).not.toContain(MANDATE_BODY);
 });

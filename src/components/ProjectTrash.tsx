@@ -98,11 +98,14 @@ export function QuietFileRow({
   file,
   activeSubtree,
   showProject = false,
+  deletable = true,
   onOpen,
 }: {
   file: FileEntry;
   activeSubtree: boolean;
   showProject?: boolean;
+  /** False for a conversation the operator may read and never delete (a relay chat's). */
+  deletable?: boolean;
   onOpen: (file: FileEntry) => void;
 }) {
   const { t } = useLocale();
@@ -154,7 +157,7 @@ export function QuietFileRow({
           </>
         )}
       </button>
-      <DeleteFileButton file={file} onDeleted={() => setGone(true)} />
+      {deletable ? <DeleteFileButton file={file} onDeleted={() => setGone(true)} /> : null}
     </div>
   );
 }

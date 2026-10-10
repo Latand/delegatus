@@ -368,3 +368,11 @@ test("a waiting prototype review is a row of the sheet's one list: counted, open
   click(row);
   expect(opened).toEqual(["task-layout"]);
 });
+
+
+test("a questionnaire phone row asks the operator to answer", () => {
+  const notice = { id: "prototype:questions", project: PROJECT, taskId: "task-layout", reviewId: "questions", title: "Before work", asks: "questions" as const, createdAt: new Date().toISOString(), target: { kind: "prototype-review" as const, taskId: "task-layout", reviewId: "questions" } };
+  const host = mount(<MobileAttentionSheet entries={[{ kind: "prototype", id: notice.id, notice }]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} onOpenPrototype={() => {}} screen={{ kind: "board" }} />);
+  expect(host.textContent).toContain("Questions for you");
+  expect(q(host, "[data-attention-prototype]")?.getAttribute("aria-label")).toBe("Answer the questions for «Before work»");
+});

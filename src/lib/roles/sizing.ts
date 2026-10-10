@@ -27,6 +27,14 @@ export const LIGHT_DENIED_ROLE_IDS: readonly RoleId[] = ["orchestrator", "archit
 export const LIGHT_DENIED_ROLE_MESSAGE =
   "Sonnet does not run orchestrator, architect or a reviewer above size=trivial, and Haiku runs none of orchestrator, architect, reviewer or verifier; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.";
 
+/** A stage that judges another stage's work, which R1 reads as reviewer work
+    whatever role it names: a review-loop stage, or the stage a conversion
+    made of one, which carries the fail edge to its fix stage. Role memory
+    reads the same classification to keep such a stage clean. */
+export function isReviewGate(stage: { kind: string; onFail?: unknown }): boolean {
+  return stage.kind === "review-loop" || Boolean(stage.onFail);
+}
+
 /** A stage that judges another stage's work (a review-loop stage, or a stage
     whose fail verdict routes to a fix stage) is reviewer work under R1,
     whatever role it names. */

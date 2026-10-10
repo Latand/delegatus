@@ -1,0 +1,671 @@
+{
+  "x1": {
+    "amendment_revision": "03de6455",
+    "amendment_sha256": "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
+    "claim": "claimed_tools_owner_tools.json",
+    "claim_source": "local I10 owner index over unchanged X1 2b claim",
+    "index": "owner-tools-index.json"
+  },
+  "claim_body": {
+    "wait_s": 25,
+    "kinds": [
+      "answer"
+    ],
+    "features": [
+      "requester_context",
+      "relay_tool_calls",
+      "relay_tool_actions",
+      "relay_owner_tools"
+    ],
+    "slots": [
+      {
+        "target_id": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+        "free": 1
+      }
+    ]
+  },
+  "calls": [
+    {
+      "body": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "call_id": "MtwwzoHZg9iYoxwItT4WjmUj5y0EEhaDK6jnb1zKdPc",
+        "tool": "owner_list_grid_chats",
+        "arguments": {
+          "cursor": "public-query-cursor",
+          "grid_id": "00000000-0000-0000-0000-000000000000",
+          "limit": 2
+        }
+      },
+      "attempts": [
+        {
+          "request": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "MtwwzoHZg9iYoxwItT4WjmUj5y0EEhaDK6jnb1zKdPc",
+            "tool": "owner_list_grid_chats",
+            "arguments": {
+              "cursor": "public-query-cursor",
+              "grid_id": "00000000-0000-0000-0000-000000000000",
+              "limit": 2
+            }
+          },
+          "x1_sample": "owner_pending",
+          "response": {
+            "call_id": "MtwwzoHZg9iYoxwItT4WjmUj5y0EEhaDK6jnb1zKdPc",
+            "tool": "owner_list_grid_chats",
+            "status": "pending",
+            "output": "",
+            "truncated": false,
+            "effect": "read",
+            "delivered": false,
+            "replayed": false,
+            "calls_remaining": 15,
+            "audience": "owner",
+            "retry_after_s": 1
+          }
+        },
+        {
+          "request": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "MtwwzoHZg9iYoxwItT4WjmUj5y0EEhaDK6jnb1zKdPc",
+            "tool": "owner_list_grid_chats",
+            "arguments": {
+              "cursor": "public-query-cursor",
+              "grid_id": "00000000-0000-0000-0000-000000000000",
+              "limit": 2
+            }
+          },
+          "x1_sample": "owner_cursor_replayed",
+          "response": {
+            "call_id": "MtwwzoHZg9iYoxwItT4WjmUj5y0EEhaDK6jnb1zKdPc",
+            "tool": "owner_list_grid_chats",
+            "status": "ok",
+            "output": "[101,102]",
+            "truncated": true,
+            "effect": "read",
+            "delivered": false,
+            "replayed": true,
+            "calls_remaining": 15,
+            "audience": "owner",
+            "cursor": "ppppppppppppppppppppppppppppppppppppppppppp"
+          }
+        }
+      ]
+    },
+    {
+      "body": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "call_id": "Nh-I7MxxncP9Ks2cQqMx9XZQ-DDyZq2YuAEliqoi-Lg",
+        "cursor": "ppppppppppppppppppppppppppppppppppppppppppp"
+      },
+      "attempts": [
+        {
+          "request": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "Nh-I7MxxncP9Ks2cQqMx9XZQ-DDyZq2YuAEliqoi-Lg",
+            "cursor": "ppppppppppppppppppppppppppppppppppppppppppp"
+          },
+          "x1_sample": "owner_last_page",
+          "response": {
+            "call_id": "Nh-I7MxxncP9Ks2cQqMx9XZQ-DDyZq2YuAEliqoi-Lg",
+            "tool": "owner_list_grid_chats",
+            "status": "ok",
+            "output": "[101,102]",
+            "truncated": false,
+            "effect": "read",
+            "delivered": false,
+            "replayed": false,
+            "calls_remaining": 14,
+            "audience": "owner"
+          }
+        }
+      ]
+    }
+  ],
+  "completion": {
+    "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+    "outcome": "answered",
+    "answer": {
+      "action": "reply",
+      "text": "The meetup is Friday.",
+      "reply_to": "m_b40b71a0a9d43622ee0e2e6a"
+    },
+    "duration_ms": 0
+  },
+  "actions": [
+    {
+      "name": "writes",
+      "x1": {
+        "amendment_revision": "03de6455",
+        "amendment_sha256": "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
+        "claim": "claimed_tools_owner_tools.json",
+        "claim_source": "local I10 owner index over unchanged X1 2b claim",
+        "index": "owner-tools-index.json"
+      },
+      "calls": [
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "kp6OcPcS5bkFp5piqvFvR5FqOMULQK0bo8rfl4EHWzY",
+            "tool": "owner_list_grids",
+            "arguments": {}
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "kp6OcPcS5bkFp5piqvFvR5FqOMULQK0bo8rfl4EHWzY",
+                "tool": "owner_list_grids",
+                "arguments": {}
+              },
+              "x1_sample": "owner_ok",
+              "response": {
+                "call_id": "kp6OcPcS5bkFp5piqvFvR5FqOMULQK0bo8rfl4EHWzY",
+                "tool": "owner_list_grids",
+                "status": "ok",
+                "output": "[]",
+                "truncated": false,
+                "effect": "read",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 15,
+                "audience": "owner"
+              }
+            }
+          ]
+        },
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "LeLfw5eMOo1m_1cL3N6wGjaeANQRKN1q7uax4bBs0xo",
+            "tool": "owner_create_grid",
+            "arguments": {
+              "body": {
+                "name": "Grid A"
+              }
+            }
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "LeLfw5eMOo1m_1cL3N6wGjaeANQRKN1q7uax4bBs0xo",
+                "tool": "owner_create_grid",
+                "arguments": {
+                  "body": {
+                    "name": "Grid A"
+                  }
+                }
+              },
+              "x1_sample": "owner_ok",
+              "response": {
+                "call_id": "LeLfw5eMOo1m_1cL3N6wGjaeANQRKN1q7uax4bBs0xo",
+                "tool": "owner_create_grid",
+                "status": "ok",
+                "output": "{\"grid_id\":\"00000000-0000-0000-0000-000000000000\",\"kind\":\"settings\",\"name\":\"Grid A\"}",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 14,
+                "audience": "owner"
+              }
+            }
+          ]
+        },
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "cdm3kqoE2rYZJdr9i-7Xq_Z1Uka0af6-bpAsuKaZDSw",
+            "tool": "owner_create_grid",
+            "arguments": {
+              "body": {
+                "name": "Grid B"
+              }
+            }
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "cdm3kqoE2rYZJdr9i-7Xq_Z1Uka0af6-bpAsuKaZDSw",
+                "tool": "owner_create_grid",
+                "arguments": {
+                  "body": {
+                    "name": "Grid B"
+                  }
+                }
+              },
+              "x1_sample": "owner_ok",
+              "response": {
+                "call_id": "cdm3kqoE2rYZJdr9i-7Xq_Z1Uka0af6-bpAsuKaZDSw",
+                "tool": "owner_create_grid",
+                "status": "ok",
+                "output": "{\"grid_id\":\"00000000-0000-0000-0000-000000000001\",\"kind\":\"settings\",\"name\":\"Grid B\"}",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 13,
+                "audience": "owner"
+              }
+            }
+          ]
+        },
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "OoJrRjEA1Ki23EWUEHGpjYpehs2affMoGPY8z7zEsUg",
+            "tool": "owner_attach_grid_chats",
+            "arguments": {
+              "body": {
+                "owned": [
+                  101
+                ]
+              },
+              "grid_id": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "OoJrRjEA1Ki23EWUEHGpjYpehs2affMoGPY8z7zEsUg",
+                "tool": "owner_attach_grid_chats",
+                "arguments": {
+                  "body": {
+                    "owned": [
+                      101
+                    ]
+                  },
+                  "grid_id": "00000000-0000-0000-0000-000000000000"
+                }
+              },
+              "x1_sample": "owner_204",
+              "response": {
+                "call_id": "OoJrRjEA1Ki23EWUEHGpjYpehs2affMoGPY8z7zEsUg",
+                "tool": "owner_attach_grid_chats",
+                "status": "ok",
+                "output": "",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 12,
+                "audience": "owner"
+              }
+            }
+          ]
+        },
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "yTktaEyFfZWPRWRCCpDjYeHgb7d-p3Lu4XAz1fDDJLc",
+            "tool": "owner_activate_clone",
+            "arguments": {
+              "bot_id": 42
+            }
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "yTktaEyFfZWPRWRCCpDjYeHgb7d-p3Lu4XAz1fDDJLc",
+                "tool": "owner_activate_clone",
+                "arguments": {
+                  "bot_id": 42
+                }
+              },
+              "x1_sample": "owner_rate_limited",
+              "status": 429,
+              "body": {
+                "error": {
+                  "code": "rate_limited",
+                  "message": "rate limited",
+                  "retry_after_s": 7
+                }
+              }
+            },
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "yTktaEyFfZWPRWRCCpDjYeHgb7d-p3Lu4XAz1fDDJLc",
+                "tool": "owner_activate_clone",
+                "arguments": {
+                  "bot_id": 42
+                }
+              },
+              "x1_sample": "owner_ok",
+              "response": {
+                "call_id": "yTktaEyFfZWPRWRCCpDjYeHgb7d-p3Lu4XAz1fDDJLc",
+                "tool": "owner_activate_clone",
+                "status": "ok",
+                "output": "[]",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 11,
+                "audience": "owner"
+              }
+            }
+          ]
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "answered",
+        "answer": {
+          "action": "reply",
+          "text": "The meetup is Friday.",
+          "reply_to": "m_b40b71a0a9d43622ee0e2e6a"
+        },
+        "duration_ms": 0
+      }
+    },
+    {
+      "name": "retry_ceiling",
+      "x1": {
+        "amendment_revision": "03de6455",
+        "amendment_sha256": "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
+        "claim": "claimed_tools_owner_tools.json",
+        "claim_source": "local I10 owner index over unchanged X1 2b claim",
+        "index": "owner-tools-index.json"
+      },
+      "calls": [
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "fZVoTkYggWA2_3_rNlGADxOite87KuClAlgosVX_ZVE",
+            "tool": "owner_create_grid",
+            "arguments": {
+              "body": {
+                "name": "Grid A"
+              }
+            }
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "fZVoTkYggWA2_3_rNlGADxOite87KuClAlgosVX_ZVE",
+                "tool": "owner_create_grid",
+                "arguments": {
+                  "body": {
+                    "name": "Grid A"
+                  }
+                }
+              },
+              "x1_sample": "owner_rate_limited",
+              "status": 429,
+              "body": {
+                "error": {
+                  "code": "rate_limited",
+                  "message": "rate limited",
+                  "retry_after_s": 7
+                }
+              }
+            },
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "fZVoTkYggWA2_3_rNlGADxOite87KuClAlgosVX_ZVE",
+                "tool": "owner_create_grid",
+                "arguments": {
+                  "body": {
+                    "name": "Grid A"
+                  }
+                }
+              },
+              "x1_sample": "owner_rate_limited",
+              "status": 429,
+              "body": {
+                "error": {
+                  "code": "rate_limited",
+                  "message": "rate limited",
+                  "retry_after_s": 7
+                }
+              }
+            },
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "fZVoTkYggWA2_3_rNlGADxOite87KuClAlgosVX_ZVE",
+                "tool": "owner_create_grid",
+                "arguments": {
+                  "body": {
+                    "name": "Grid A"
+                  }
+                }
+              },
+              "x1_sample": "owner_rate_limited",
+              "status": 429,
+              "body": {
+                "error": {
+                  "code": "rate_limited",
+                  "message": "rate limited",
+                  "retry_after_s": 7
+                }
+              }
+            },
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "fZVoTkYggWA2_3_rNlGADxOite87KuClAlgosVX_ZVE",
+                "tool": "owner_create_grid",
+                "arguments": {
+                  "body": {
+                    "name": "Grid A"
+                  }
+                }
+              },
+              "x1_sample": "owner_rate_limited",
+              "status": 429,
+              "body": {
+                "error": {
+                  "code": "rate_limited",
+                  "message": "rate limited",
+                  "retry_after_s": 7
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "declined",
+        "reason": "handoff",
+        "detail": "The agent handed this request to the service's own assistant.",
+        "retry_after_s": null,
+        "duration_ms": 0
+      }
+    },
+    {
+      "name": "inner_404",
+      "x1": {
+        "amendment_revision": "03de6455",
+        "amendment_sha256": "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
+        "claim": "claimed_tools_owner_tools.json",
+        "claim_source": "local I10 owner index over unchanged X1 2b claim",
+        "index": "owner-tools-index.json"
+      },
+      "calls": [
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "-zid4bmcrlDJNAUlg2r6d74Ln291SVXrpQ_9yXp1Tjo",
+            "tool": "owner_get_grid",
+            "arguments": {
+              "grid_id": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "-zid4bmcrlDJNAUlg2r6d74Ln291SVXrpQ_9yXp1Tjo",
+                "tool": "owner_get_grid",
+                "arguments": {
+                  "grid_id": "00000000-0000-0000-0000-000000000000"
+                }
+              },
+              "x1_sample": "owner_inner_404",
+              "response": {
+                "call_id": "-zid4bmcrlDJNAUlg2r6d74Ln291SVXrpQ_9yXp1Tjo",
+                "tool": "owner_get_grid",
+                "status": "error",
+                "output": "{\"http_status\":404,\"message\":\"Grid not found\"}",
+                "truncated": false,
+                "effect": "read",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 15,
+                "audience": "owner"
+              }
+            }
+          ]
+        },
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "SNNFnUaJCsjHDOJURxQQRvmrH8CZoDw15hBqZHYZO1o",
+            "tool": "owner_list_grids",
+            "arguments": {}
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "SNNFnUaJCsjHDOJURxQQRvmrH8CZoDw15hBqZHYZO1o",
+                "tool": "owner_list_grids",
+                "arguments": {}
+              },
+              "x1_sample": "owner_ok",
+              "response": {
+                "call_id": "SNNFnUaJCsjHDOJURxQQRvmrH8CZoDw15hBqZHYZO1o",
+                "tool": "owner_list_grids",
+                "status": "ok",
+                "output": "[]",
+                "truncated": false,
+                "effect": "read",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 14,
+                "audience": "owner"
+              }
+            }
+          ]
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "answered",
+        "answer": {
+          "action": "reply",
+          "text": "The meetup is Friday.",
+          "reply_to": "m_b40b71a0a9d43622ee0e2e6a"
+        },
+        "duration_ms": 0
+      }
+    },
+    {
+      "name": "lease_lost",
+      "x1": {
+        "amendment_revision": "03de6455",
+        "amendment_sha256": "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
+        "claim": "claimed_tools_owner_tools.json",
+        "claim_source": "local I10 owner index over unchanged X1 2b claim",
+        "index": "owner-tools-index.json"
+      },
+      "calls": [
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "6AF-2gcdO6Qor6YNy_1m5MKPPM3kc73FpkVg-x49pZY",
+            "tool": "owner_list_grids",
+            "arguments": {}
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "6AF-2gcdO6Qor6YNy_1m5MKPPM3kc73FpkVg-x49pZY",
+                "tool": "owner_list_grids",
+                "arguments": {}
+              },
+              "x1_sample": "lease_lost",
+              "status": 409,
+              "body": {
+                "error": {
+                  "code": "lease_lost",
+                  "message": "lease lost"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "completion": null
+    },
+    {
+      "name": "confirmation",
+      "x1": {
+        "amendment_revision": "03de6455",
+        "amendment_sha256": "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
+        "claim": "claimed_tools_owner_tools.json",
+        "claim_source": "local I10 owner index over unchanged X1 2b claim",
+        "index": "owner-tools-index.json"
+      },
+      "calls": [
+        {
+          "body": {
+            "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+            "call_id": "lGcBFyMZXvRa2spn2tNGM19aw18sA00hlNpMXxBK4kA",
+            "tool": "owner_deactivate_clone",
+            "arguments": {
+              "bot_id": 42
+            }
+          },
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "lGcBFyMZXvRa2spn2tNGM19aw18sA00hlNpMXxBK4kA",
+                "tool": "owner_deactivate_clone",
+                "arguments": {
+                  "bot_id": 42
+                }
+              },
+              "x1_sample": "owner_confirmation_pending",
+              "response": {
+                "call_id": "lGcBFyMZXvRa2spn2tNGM19aw18sA00hlNpMXxBK4kA",
+                "tool": "owner_deactivate_clone",
+                "status": "confirmation_pending",
+                "output": "",
+                "truncated": false,
+                "effect": "action",
+                "delivered": true,
+                "replayed": false,
+                "calls_remaining": 0,
+                "audience": "owner",
+                "confirmation_id": "confirmation_owner_x4",
+                "summary": "Deactivate the named clone?",
+                "expires_at": "2026-10-10T00:10:00Z"
+              }
+            }
+          ]
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "answered",
+        "answer": {
+          "action": "reply",
+          "text": "The meetup is Friday.",
+          "reply_to": "m_b40b71a0a9d43622ee0e2e6a"
+        },
+        "duration_ms": 0
+      }
+    }
+  ]
+}

@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { readWorktreeRecoveries } from "@/lib/projects/worktreeRecoveryStore";
+
 import { stateDir } from "@/lib/configDir";
 import { readStateCollectionRevisions, readStateCollectionsRows } from "@/lib/state/sqliteStateStore";
 
@@ -12,7 +14,8 @@ import { readStateCollectionRevisions, readStateCollectionsRows } from "@/lib/st
    project of its own named `cwd`.
    9: deleted worktrees retain a trusted parent alias after the parent
    checkout is also gone. */
-export const PROJECT_RESOLUTION_VERSION = 9;
+/* 10: catalog passes observe linked checkout ancestors before cache reuse. */
+export const PROJECT_RESOLUTION_VERSION = 10;
 
 /* Project summaries depend on the attribution facts consumed by
    persistedProjects(). Hashing these stable projections keeps controller
@@ -106,6 +109,7 @@ function stateKeySignature(dir: string): string {
     parts.push(revision === null ? fileSignature(dir, legacy) : `${collection}:sqlite:${revision}`);
   }
   for (const name of STATE_KEY_FILES) parts.push(fileSignature(dir, name));
+  parts.push(JSON.stringify(readWorktreeRecoveries().map(({ source, target, cwd, repo, worktree }) => [source, target, cwd, repo, worktree])));
   return parts.join("|");
 }
 
@@ -142,5 +146,6 @@ function computeProjectResolutionStateKey(dir: string): string {
   } catch {
     hash.update("<missing>");
   }
+  hash.update(JSON.stringify(readWorktreeRecoveries().map(({ source, target, cwd, repo, worktree }) => [source, target, cwd, repo, worktree])));
   return hash.digest("hex");
 }

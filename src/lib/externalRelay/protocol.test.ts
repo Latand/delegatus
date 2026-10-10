@@ -1,4 +1,7 @@
-import { x1Claim, x1Request, x1Results } from "./toolLoop.fixture";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { ownerIndex, ownerRequest, x1Claim, x1Request, x1Results } from "./toolLoop.fixture";
 import { expect, test } from "bun:test";
 import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
@@ -25,6 +28,27 @@ test("request limits and additive fields", () => {
       },
     }).success,
   ).toBe(false);
+});
+
+test("F4 descriptor features survive parsing and owner I10 schemas survive unchanged", () => {
+  const descriptor = { protocol: "delegatus-relay", versions: [1], name: "Test", description: "Test",
+    api_base: "https://relay.example/v1", kinds: ["answer"], liveness: sampleRequest.liveness,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "relay_owner_tools"] };
+  expect(descriptorSchema.parse(descriptor).features).toEqual(descriptor.features);
+  const parsed = requestSchema.parse(ownerRequest());
+  expect(parsed.input.tools!.filter((tool) => tool.name.startsWith("owner_"))).toEqual(ownerIndex);
+  expect(ownerIndex).toHaveLength(14);
+  expect(ownerIndex.filter((tool) => tool.effect === "read")).toHaveLength(6);
+  expect(ownerIndex.reduce((bytes, tool) => bytes + Buffer.byteLength(JSON.stringify(tool.parameters)), 0)).toBe(4903);
+  expect(ownerIndex.find((tool) => tool.name === "owner_attach_grid_chats")!.parameters).toHaveProperty("$defs.AttachSettingsGridChatsRequest");
+  expect(ownerIndex.some((tool) => tool.name === "owner_me")).toBe(false);
+});
+
+test("N1 preserves every pre-amendment v3 answer, compact, completion and X2 capture byte", () => {
+  const pins = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1/owner-tools-off-v3-hashes.json"), "utf8"));
+  for (const [name, sha] of Object.entries(pins))
+    expect(createHash("sha256").update(fs.readFileSync(path.resolve(name))).digest("hex")).toBe(String(sha));
 });
 test("answer checks", () => {
   const request = requestSchema.parse(sampleRequest);
@@ -188,4 +212,15 @@ test("X1 tool indexes keep their compact wire bytes and every result parses", ()
   expect(checkedAnswer(call, request)).toBeNull();
   expect(checkedRound({ action: "reply", text: "Done", reply_to: null, calls: [] }, request))
     .toEqual(checkedAnswer({ action: "reply", text: "Done", reply_to: null }, request));
+});
+
+test("all earlier fixtures and wire evidence retain their slice 2b hashes; X3 copies match the manifest", () => {
+  const pins = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1/switches-off-2b-hashes.json"), "utf8"));
+  for (const [name, sha] of Object.entries(pins)) if (name.startsWith("src/") || name.startsWith("evidence/"))
+    expect(createHash("sha256").update(fs.readFileSync(path.resolve(name))).digest("hex")).toBe(String(sha));
+  const readme = fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1/README.md"), "utf8");
+  for (const row of readme.matchAll(/\| `([^`]+\.json)` \| (\d+) \| `([a-f0-9]{64})` \|/g)) {
+    const bytes = fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1", row[1]!));
+    expect(bytes.length).toBe(Number(row[2])); expect(createHash("sha256").update(bytes).digest("hex")).toBe(row[3]);
+  }
 });

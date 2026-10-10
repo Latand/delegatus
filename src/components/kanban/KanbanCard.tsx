@@ -413,7 +413,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   /* A card that waits with no reason of its own waits on its prototype
      review: its review button says so in words, and the card's label names
      it for assistive tech. The choice clears it, so there is no dismissal. */
-  const reasons = !card.needsYou ? "" : card.reasons.length ? reasonsText(t, card.reasons) : t("proto.notice.ready");
+  const reasons = !card.needsYou ? "" : card.reasons.length ? reasonsText(t, card.reasons) : t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready");
   const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
   const remote = card.task ? props.remote ?? null : null;
   const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : "", remote ? t("kanban.remote.hint", { host: remote.host }) : ""]
@@ -631,7 +631,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           ) : null}
         </div>
       </div>
-      <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs}
+      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs}
         taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
         onOpenTask={card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined}
         referenceUrl={card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind)

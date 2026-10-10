@@ -340,7 +340,7 @@ test("the actual state is the tick's own record and the journal, with the dispat
     lastCheckAt: "2026-09-18T09:00:00.000Z",
     lastWakeAt: "2026-09-18T08:00:00.000Z",
     lastWakeReasons: ["interval", "stalled"],
-    wakesWithoutChange: { interval: 3, stalled: 1 },
+    wakesWithoutChange: { interval: 3, stalled: 3 },
     eventsThrough: 3,
     outstandingWake: {
       clientMessageId: "seat-tick:viewer:7:k:interval:fp",
@@ -362,7 +362,7 @@ test("the actual state is the tick's own record and the journal, with the dispat
     lastWakeAt: "2026-09-18T08:00:00.000Z",
     lastWakeReasons: ["interval", "stalled"],
     outstandingWake: { preparedAt: "2026-09-18T08:00:01.000Z", dispatch: "refused" },
-    retryGuard: [{ kind: "interval", wakes: 3 }],
+    retryGuard: [{ kind: "stalled", wakes: 3 }],
     sourceGap: { source: "pull-requests", gap: "command-failed", since: "2026-09-17T08:00:00.000Z" },
   });
   /* The newest CHECK, and separately the newest check that sent something:
@@ -385,8 +385,8 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
   }, settingsFile);
 
   const body = await (await get(`?project=${PROJECT}`)).json() as SeatTickSettingsAnswer;
-  const bindings = viewerMcpBindings({
-    attribution: () => ({ kind: "gateway", conversationId: null }),
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }),
     authorizedSeats: () => [],
     callerProject: () => PROJECT,
     readTickSettings: (project: string) => readSeatTickSettings(project, settingsFile),
@@ -434,4 +434,12 @@ test("maintenance-only write needs no reason and exposes the same run records th
   const same = { ...http.maintenance };
   delete same.nextRunAt;
   expect(tool.maintenance).toMatchObject({ ...same, lastRunLog: { leftAlone: [{ taskId: "aabbccdd", reason: "open lane" }] } });
+});
+
+test("the browser can enable automatic rotation without a why and records gateway attribution", async () => {
+  const response = await put({ project: PROJECT, autoRotate: { enabled: true, thresholdPercent: 60 } });
+  expect(response.status).toBe(200);
+  const answer = await response.json() as SeatTickSettingsAnswer;
+  expect(answer.autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, defaultPercent: 50, minPercent: 50, maxPercent: 90, why: null, setBy: { kind: "gateway" } });
+  expect(readSeatTickSettings(PROJECT).autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, why: null, setBy: { kind: "gateway" } });
 });

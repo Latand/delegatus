@@ -464,6 +464,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (path === "/api/tts/backend") return json({ error: "no speech in the demo" }, 503);
   if (path === "/api/accounts/copilot") return json({ active: null, accounts: [] });
+  if (path === "/api/external-relay/conversations") return json({ relays: [], chats: [], answers: [], retentionDays: 30 });
   if (path === "/api/search/transcripts") return json(search(url.searchParams.get("q") ?? "", url.searchParams.get("speaker")));
   if (path === "/api/tmux/targets") return json({ targets: {} });
   if (path === "/api/staging") return json({ staging: false });
@@ -538,6 +539,14 @@ async function closeOverlays() {
   // Let React unmount Search before reopening it. A close and open in one
   // batch preserves the failed query, so typing it again cannot retry fetch.
   if (searchWasOpen) await waitFor(() => !document.querySelector("[data-search-input]"));
+  // The accounts flyout answers Escape only from inside itself, so the
+  // Escape above leaves it docked over the next view; press its own close.
+  const accountsDialog = () => document.querySelector<HTMLElement>(`[role="dialog"][aria-label="${CSS.escape(label("accounts.titleFor", { engine: "Claude" }))}"]`);
+  const accountsClose = accountsDialog()?.querySelector<HTMLElement>(`button[aria-label="${CSS.escape(label("accounts.close"))}"]`);
+  if (accountsClose) {
+    accountsClose.click();
+    await waitFor(() => !accountsDialog());
+  }
 }
 /** The send control's hint stays up while the pointer or focus rests on it;
     once the request is on its way, the chat is what the visitor reads. Hints

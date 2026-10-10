@@ -20,13 +20,20 @@ const HANDOFF_HEADINGS = ["## Handoff from your predecessor", "## Rotation histo
     the next begins. */
 const SECTION_HEADING = /^#{1,2} /;
 
+/** The one directive delivery appends WITHOUT a heading
+    (`ORCHESTRATOR_PROTOTYPE_DIRECTIVE` in `prompt.ts`, #2658). It is the
+    mandate's, and it lands right after a bespoke rotation's handoff, so it
+    closes the handoff the way a heading does. */
+const DELIVERED_PARAGRAPH = "Prototype review: ";
+
 export interface MandateMessage {
   /** Lines of the WHOLE delivered message, sections included — the size the
       card is standing in for. */
   lines: number;
   /** The mandate proper, without the rotation handoff. */
   mandate: string;
-  /** The rotation handoff, when this delivery carried one. */
+  /** The rotation handoff, when this delivery carried one — without its
+      opening heading, which the card's own section label already says. */
   handoff: string | null;
 }
 
@@ -49,7 +56,7 @@ function handoffSpan(text: string): { start: number; end: number } | null {
     const isHandoff = HANDOFF_HEADINGS.some((heading) => line.startsWith(heading));
     if (start < 0) {
       if (isHandoff) start = offset;
-    } else if (!isHandoff && SECTION_HEADING.test(line)) {
+    } else if (!isHandoff && (SECTION_HEADING.test(line) || line.startsWith(DELIVERED_PARAGRAPH))) {
       return { start, end: offset };
     }
     offset += line.length + 1;
@@ -63,5 +70,11 @@ export function mandateMessage(text: string): MandateMessage {
   if (!span) return { lines, mandate: text.trim(), handoff: null };
   /* Whatever the handoff interrupted is one mandate again. */
   const mandate = [text.slice(0, span.start).trim(), text.slice(span.end).trim()].filter(Boolean).join("\n\n");
-  return { lines, mandate, handoff: text.slice(span.start, span.end).trim() };
+  /* The span opens on its heading by construction. Under the card's «Rotation
+     handoff» label it said the same thing a second time, so the body starts
+     with the handoff's own words; a stacked handoff's later headings stay, as
+     the separators between rotations. */
+  const body = text.slice(span.start, span.end);
+  const heading = body.indexOf("\n");
+  return { lines, mandate, handoff: heading < 0 ? "" : body.slice(heading + 1).trim() };
 }

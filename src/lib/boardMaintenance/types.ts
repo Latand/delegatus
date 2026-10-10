@@ -18,7 +18,7 @@ export interface MaintenanceChange {
   titleTo?: string;
   textBefore?: string;
 }
-export interface MaintenanceAttention { taskId: string; text: string; options: string[] }
+export interface MaintenanceAttention { taskId: string; text: string; options: string[]; nextStep?: string }
 export interface MaintenanceLeftAlone { taskId: string; reason: string }
 export interface MaintenanceRunLog {
   changes: MaintenanceChange[];

@@ -1,3 +1,4 @@
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -44,7 +45,7 @@ const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineIdentity, pipelineRevision } = await import("./store");
 const { durableStageTurnEvidence } = await import("./durableEvidence");
 const { projectPipelineEvents } = await import("@/lib/lifecycle/projector");
-const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed } = await import("./failEdgeBudget");
+const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed, pipelineCompletedUnreviewed } = await import("./failEdgeBudget");
 const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
 const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
 const { interruptionObligationDirectory, interruptionObligationStore } = await import("@/lib/runtime/interruptionObligations");
@@ -4948,7 +4949,8 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   expect(again.dismissedBy).toEqual({ kind: "agent", conversationId: "conversation_seat", role: "orchestrator" });
 
   /* The dismissal service's own write carries the attribution it derived. */
-  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports);
+  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports, undefined, "The merger already holds this work");
+  expect(loadPipelines()[0]!.dismissedNote).toBe("The merger already holds this work");
   expect(serviced.pipeline!.dismissedBy).toEqual({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" });
 
   /* A card drawn before the lane's last movement clears nothing: that
@@ -4973,6 +4975,7 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
   expect(shown.pipeline!.dismissedAt).toBeNull();
   expect(shown.pipeline!.dismissedBy).toBeUndefined();
+  expect(shown.pipeline!.dismissedNote).toBeUndefined();
   expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
 
   const closed = await closeAndDrain(created.id, { action: "close" }, h.ports);
@@ -12557,19 +12560,19 @@ test("onExhausted: park keeps today's park once the review budget is spent (#186
   expect(current.stages.find((stage) => stage.id === "critique")!.onFail).toEqual({ to: "build", maxRounds: 2, onExhausted: "park" });
 });
 
-test("a spent review budget on the last stage parks after a failed final check (#1868)", async () => {
+test("a spent review budget on the last stage completes after its final fix (#1868)", async () => {
   const h = harness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 1);
 
   const current = loadPipelines()[0]!;
-  expect(current.state).toBe("needs_decision");
-  expect(current.cursor?.stageId).toBe("critique");
-  expect(current.stateDetail).toContain("budget spent: 1 findings left");
+  expect(current.state).toBe("completed");
+  expect(current.cursor).toBeNull();
+  expect(current.reviewPending).toBeUndefined();
   expect(current.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
   const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
-  expect(critiques).toHaveLength(2);
+  expect(critiques).toHaveLength(1);
   expect(critiques[0]).toMatchObject({ state: "failed", budgetSpent: true, verdict: { findings: ["P2 evidence gap 1"] } });
 });
 
@@ -12616,8 +12619,7 @@ test("onExhausted is validated and edited with the fail edge, and freezes with i
 /* A spent review budget whose last fix wrote a NEW head, on an edge that asked
    for `stop-after-fix` (#1938, #2187): the lane ends in needs_review, never
    completed, and never takes the reviewer's pass edge for a head nobody
-   reviewed. continue-review grants explicit extra rounds and reviews the
-   current head in the same pipeline. Under the default the lane completes
+   reviewed. The operator can accept that head explicitly. Under the default the lane completes
    instead (below). */
 const STOP_AFTER_FIX = { onExhausted: "stop-after-fix" } as const;
 const REVIEW_HEADS = ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40), "5".repeat(40), "6".repeat(40)];
@@ -12741,68 +12743,46 @@ test("stop-after-fix: a budget handoff recorded before reviewed heads existed is
   }
 });
 
-test("continue-review resumes review of the current head with an explicit added budget, replays by clientRequestId and refuses a competing continuation (#1938)", async () => {
+test.each(["advance", "stop-after-fix", "park"] as const)("continue-review refuses new rounds for %s without changing the lane", async (policy) => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, onExhausted: policy }, null) as never);
+  await driveWithController(h);
+  const lane = loadPipelines()[0]!;
+  const revision = pipelineRevision(lane);
+  const spawned = h.spawnInputs.length;
+  for (const rounds of [1, 2, 9]) {
+    const refused = await continueReview(lane, "refused-" + rounds, rounds);
+    expect(refused.status).toBe(409);
+    expect(refused.field).toBe("addRounds");
+    expect(refused.error).toContain("Review budget is fixed");
+    expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+  }
+  expect(loadPipelines()[0]!.reviewGrants).toBeUndefined();
+  expect(h.spawnInputs).toHaveLength(spawned);
+  expect((await continueReview(lane, "bad-shape", 0)).status).toBe(400);
+  const stranger = await patchPipeline(lane.id, { action: "continue-review", clientRequestId: "stranger", addRounds: 1, expectedRevision: revision }, h.ports,
+    { kind: "agent", role: "orchestrator", conversationId: "conversation_other" });
+  expect(stranger.status).toBe(403);
+});
+
+test("an accepted historical continue-review receipt replays without extending or launching work", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
-  await tickPipelines([], h.ports);
-  await failEveryCritique(h, 1, h.beforeBuildPass);
-  const parked = loadPipelines()[0]!;
-  const revision = pipelineRevision(parked);
-
-  /* The budget has to be explicit. */
-  expect((await continueReview(parked, "grant-0", 0)).status).toBe(400);
-  expect((await continueReview(parked, "grant-0", undefined)).status).toBe(400);
-  expect((await continueReview(parked, "grant-0", 10)).status).toBe(400);
-  expect((await patchPipeline(parked.id, { action: "continue-review", addRounds: 1, expectedRevision: revision }, h.ports)).status).toBe(400);
-  expect((await continueReview(parked, "grant-stale", 1, "0".repeat(64))).code).toBe("STAGE_CHANGED");
-  expect(loadPipelines()[0]!.state).toBe("needs_review");
-
-  /* Rollback switch: admission off, the parked record untouched. */
-  process.env.LLV_PIPELINE_CONTINUE_REVIEW = "0";
-  try {
-    expect((await continueReview(parked, "grant-1", 1, revision)).error).toBe("continue-review is disabled");
-  } finally {
-    delete process.env.LLV_PIPELINE_CONTINUE_REVIEW;
-  }
+  await driveWithController(h);
+  const lane = loadPipelines()[0]!;
+  const acceptedRevision = pipelineRevision(lane);
+  lane.reviewGrants = [{ clientRequestId: "historical-grant", expectedRevision: acceptedRevision, stageId: "critique", rounds: 1,
+    reviewedHead: REVIEW_HEADS[0], currentHead: REVIEW_HEADS[1]!, actor: { kind: "operator" }, at: h.ports.now() }];
+  savePipelines([lane]);
+  const revision = pipelineRevision(loadPipelines()[0]!);
+  const spawned = h.spawnInputs.length;
+  expect((await continueReview(lane, "historical-grant", 1, acceptedRevision)).replayed).toBe(true);
+  expect((await continueReview(lane, "historical-grant", 2, acceptedRevision)).status).toBe(409);
+  expect((await continueReview(lane, "another-grant", 1)).status).toBe(409);
   expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
-
-  const accepted = await continueReview(parked, "grant-1", 1, revision);
-  expect(accepted.error).toBeUndefined();
-  expect(accepted.replayed).toBe(false);
-  expect(accepted.reviewContinuation).toMatchObject({
-    clientRequestId: "grant-1",
-    stageId: "critique",
-    rounds: 1,
-    reviewedHead: REVIEW_HEADS[0],
-    currentHead: REVIEW_HEADS[1],
-  });
-  let current = loadPipelines()[0]!;
-  expect(current.state).toBe("running");
-  expect(current.reviewPending).toBeUndefined();
-  expect(current.cursor).toMatchObject({ stageId: "critique", state: "pending", activatedBy: { stageId: "build", attempt: 2, edge: "pass" } });
-  expect(current.cursor!.input).toContain("built v2");
-  expect(failEdgeMaxRounds(current, current.stages.find((stage) => stage.id === "critique")!)).toBe(2);
-
-  /* The same request replays its receipt and changes nothing; a competing one
-     read against the same revision is refused. */
-  const replay = await continueReview(parked, "grant-1", 1, revision);
-  expect(replay.replayed).toBe(true);
-  expect(replay.reviewContinuation?.clientRequestId).toBe("grant-1");
-  expect(pipelineRevision(loadPipelines()[0]!)).toBe(pipelineRevision(current));
-  const competing = await continueReview(parked, "grant-2", 1, revision);
-  expect(competing.status).toBe(409);
-  expect((await continueReview(current, "grant-3", 1)).status).toBe(409);
-  expect(loadPipelines()[0]!.reviewGrants).toHaveLength(1);
-
-  /* The fresh review of the current head passes, and only then does the lane complete. */
-  await critiqueRound(h, "pass", "approved v2");
-  current = loadPipelines()[0]!;
-  expect(current.state).toBe("completed");
-  expect(current.stateDetail).toBeNull();
-  const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
-  expect(critiques.map((attempt) => attempt.state)).toEqual(["failed", "passed"]);
-  expect(current.lastPassedCommit).toBe(REVIEW_HEADS[1]);
+  expect(h.spawnInputs).toHaveLength(spawned);
 });
 
 function acceptHead(pipeline: Pipeline, clientRequestId: string, expectedRevision = pipelineRevision(pipeline)) {
@@ -12886,92 +12866,13 @@ test("accept-head follows the review stage's pass edge to the next stage with th
   expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "ship")?.attempts).toHaveLength(1);
 });
 
-test("stop-after-fix, maxRounds 2: added rounds run bounded fix loops, park again in needs_review on a new unreviewed head, and the review activation count stays exact across a retry (#1938)", async () => {
-  const h = movingHeadHarness();
-  movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2, ...STOP_AFTER_FIX }) as never);
-  await tickPipelines([], h.ports);
-  await failEveryCritique(h, 2, h.beforeBuildPass);
 
-  let current = loadPipelines()[0]!;
-  const critiqueStage = () => current.stages.find((stage) => stage.id === "critique")!;
-  const reviewActivations = () => edgeRoundsUsed(current, { from: "build", to: "critique", kind: "pass" });
-  expect(current.state).toBe("needs_review");
-  expect(current.reviewPending).toMatchObject({ attempt: 2, fixAttempt: 3, reviewedHead: REVIEW_HEADS[1], currentHead: REVIEW_HEADS[2] });
-  /* The reviewer's pass successor never ran for the unreviewed head. */
-  expect(current.runs.find((run) => run.stageId === "ship")!.attempts).toHaveLength(0);
-  expect(failEdgeRoundsUsed(current, critiqueStage())).toBe(2);
-  expect(reviewActivations()).toBe(2);
-
-  expect((await continueReview(current, "grant-a", 2)).error).toBeUndefined();
-  current = loadPipelines()[0]!;
-  expect(failEdgeMaxRounds(current, critiqueStage())).toBe(4);
-
-  /* The continued review's first spawn dies and the stage is retried: a fresh
-     attempt with the same activation, which is the same review, not another. */
-  await tickPipelines([], h.ports);
-  current = loadPipelines()[0]!;
-  const reviewThree = current.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
-  expect(reviewThree.n).toBe(3);
-  reviewThree.state = "failed";
-  reviewThree.completedAt = h.ports.now();
-  reviewThree.error = "pipeline structured runtime host is unavailable";
-  current.runs.find((run) => run.stageId === "critique")!.attempts.push({
-    ...structuredClone(reviewThree),
-    n: 4, state: "running", completedAt: null, error: null,
-    launchId: "launch-review-retry", conversationId: "conversation_review_retry", sessionId: "session-review-retry",
-    agentPath: "/codex/review-retry.jsonl", paneId: null,
-  });
-  current.cursor = { stageId: "critique", state: "running", input: reviewThree.input, activatedBy: reviewThree.activatedBy };
-  savePipelines([current]);
-  current = loadPipelines()[0]!;
-  expect(reviewActivations()).toBe(3);
-  expect(failEdgeRoundsUsed(current, critiqueStage())).toBe(2);
-
-  /* That review fails: one granted loop is left, so the fix runs and is reviewed again. */
-  h.messages.set("/codex/review-retry.jsonl", { text: "round 3\n\n```json\n{\"status\":\"fail\",\"findings\":[\"P1 round 3\"]}\n```", ts: Date.now() + 100_000_000 });
-  await tickPipelines([entry("/codex/review-retry.jsonl")], h.ports);
-  current = loadPipelines()[0]!;
-  expect(current.cursor).toMatchObject({ stageId: "build", activatedBy: { stageId: "critique", attempt: 4, edge: "fail" } });
-  expect(current.cursor!.activatedBy!.budgetSpent).toBeUndefined();
-  await buildRound(h, "built v4");
-  await critiqueRound(h, "fail", "round 4");
-  current = loadPipelines()[0]!;
-  /* The grant's last review failed: its findings go to the fix once more. */
-  expect(current.cursor).toMatchObject({ stageId: "build", activatedBy: { stageId: "critique", attempt: 5, edge: "fail", budgetSpent: true } });
-  await buildRound(h, "built v5");
-  current = loadPipelines()[0]!;
-  expect(current.state).toBe("needs_review");
-  expect(current.reviewPending).toMatchObject({ attempt: 5, fixAttempt: 5, reviewedHead: REVIEW_HEADS[3], currentHead: REVIEW_HEADS[4] });
-  expect(failEdgeRoundsUsed(current, critiqueStage())).toBe(4);
-  expect(reviewActivations()).toBe(4);
-  expect(current.runs.find((run) => run.stageId === "ship")!.attempts).toHaveLength(0);
-
-  /* One more round, approved: the reviewer's own pass edge finally runs. */
-  expect((await continueReview(current, "grant-b", 1)).error).toBeUndefined();
-  await critiqueRound(h, "pass", "approved v5");
-  current = loadPipelines()[0]!;
-  expect(current.state).toBe("running");
-  expect(current.cursor).toMatchObject({ stageId: "ship", activatedBy: { stageId: "critique", attempt: 6, edge: "pass" } });
-  expect(current.reviewGrants?.map((grant) => grant.rounds)).toEqual([2, 1]);
-  expect(reviewActivations()).toBe(5);
-});
-
-/* #2187 S1: after the last review the builder fixes, and the lane completes.
-   These run the production controller (`FlowPipelineController`, the loop the
-   Viewer runs) over the production engine tick. The test only plays the
-   stage agents: it answers each attempt the controller launched, and every
-   routing, handoff and completion decision is the engine's own. */
-const { FlowPipelineController } = await import("./controller");
-const { pipelineCompletedUnreviewed } = await import("./failEdgeBudget");
-
-/** Runs the controller until the lane leaves running, answering each launched
-    attempt: a stage in `failing` fails with one numbered finding, every other
-    stage passes, and a read-write pass moves the worktree head first. */
 async function driveWithController(
   h: ReturnType<typeof movingHeadHarness>,
   failing: ReadonlySet<string> | ((stageId: string, attempt: number) => boolean) = new Set(["critique"]),
+  initialReviews = 0,
 ): Promise<{ pipeline: Pipeline; reviews: number }> {
+  const { FlowPipelineController } = await import("./controller");
   const answered: FileEntry[] = [];
   const controller = new FlowPipelineController({
     scan: async () => ({ files: [...answered], complete: true }),
@@ -12984,7 +12885,7 @@ async function driveWithController(
     log: () => {},
   });
   const seen = new Set<string>();
-  let reviews = 0;
+  let reviews = initialReviews;
   for (let cycle = 0; cycle < 120; cycle += 1) {
     await controller.tick("test");
     const pipeline = loadPipelines()[0]!;
@@ -13008,6 +12909,46 @@ async function driveWithController(
   throw new Error(`the controller left the lane ${loadPipelines()[0]!.state}`);
 }
 
+/** Reconstruct the stored cursor written by the former automatic terminal
+    re-check. The current advance policy never creates this cursor; recovery
+    tests still need to exercise old records and their explicit grants. */
+function seedLegacyTerminalRecheck(): void {
+  const lane = loadPipelines()[0]!;
+  expect(lane.state).toBe("completed");
+  const fixRun = lane.runs.find(run => run.attempts.at(-1)?.activatedBy?.budgetSpent);
+  const fix = fixRun?.attempts.at(-1);
+  const gateId = fix?.activatedBy?.stageId;
+  expect(gateId).toBeDefined();
+  lane.state = "running";
+  lane.closedAt = null;
+  lane.stateDetail = null;
+  if (lane.delivery) { lane.delivery.active = true; lane.delivery.publish = "enabled"; }
+  lane.cursor = { stageId: gateId!, state: "pending", input: fix!.output,
+    activatedBy: { stageId: fixRun!.stageId, attempt: fix!.n, edge: "pass", budgetRecheck: true } };
+  savePipelines([lane]);
+}
+
+async function driveLegacyTerminalRecheck(
+  h: ReturnType<typeof movingHeadHarness>,
+  failing: ReadonlySet<string> | ((stageId: string, attempt: number) => boolean) = new Set(["critique"]),
+) {
+  const prior = await driveWithController(h, failing);
+  seedLegacyTerminalRecheck();
+  // Preserve the historical park until it is written, then restore its
+  // default policy so the next owner tick exercises restart reconciliation.
+  const seeded = loadPipelines()[0]!;
+  const review = seeded.stages.find(stage => stage.id === seeded.cursor!.stageId)!;
+  const exhaustion = review.onFail!.onExhausted;
+  review.onFail!.onExhausted = "stop-after-fix";
+  savePipelines([seeded]);
+  const result = await driveWithController(h, failing, prior.reviews);
+  const restored = result.pipeline.stages.find(stage => stage.id === review.id)!;
+  if (exhaustion === undefined) delete restored.onFail!.onExhausted;
+  else restored.onFail!.onExhausted = exhaustion;
+  savePipelines([result.pipeline]);
+  return result;
+}
+
 test("another gate's fail loop gives a spent gate a fresh bounded check cycle (#2247)", async () => {
   const h = movingHeadHarness();
   await create(h.ports, [
@@ -13020,142 +12961,28 @@ test("another gate's fail loop gives a spent gate a fresh bounded check cycle (#
   expect(pipeline.state).toBe("completed");
   expect(pipeline.runs.find((run) => run.stageId === "review")!.attempts).toHaveLength(2);
   expect(pipeline.runs.find((run) => run.stageId === "fix")!.attempts).toHaveLength(4);
-  expect(pipeline.runs.find((run) => run.stageId === "ui-check")!.attempts.map((attempt) => attempt.verdict!.status)).toEqual(["fail", "fail", "pass"]);
+  expect(pipeline.runs.find((run) => run.stageId === "ui-check")!.attempts.map((attempt) => attempt.verdict!.status)).toEqual(["fail", "fail"]);
 });
 
-test("a failed final budget re-check parks with the remaining findings and never fixes again (#2247)", async () => {
+test.each([1, 3, 5])("terminal advance budget %s completes after its N reviews and final fix", async (reviews) => {
   const h = movingHeadHarness();
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  const { pipeline } = await driveWithController(h);
-  expect(pipeline.state).toBe("needs_decision");
-  expect(pipeline.stateDetail).toContain("budget spent: 1 findings left");
-  expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
-  const gate = pipeline.runs.find((run) => run.stageId === "critique")!.attempts;
-  expect(gate).toHaveLength(2);
-  expect(gate.at(-1)!.verdict).toEqual({ status: "fail", findings: ["P2 evidence gap 2"] });
-  expect(gate.at(-1)!.activatedBy).toMatchObject({ budgetRecheck: true });
-  await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
-});
-
-test("a terminal spent gate re-checks the last fix and completes only on pass (#2247)", async () => {
-  const h = movingHeadHarness();
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await buildRound(h, "initial build");
-  await critiqueRound(h, "fail", "finding");
-  await buildRound(h, "last fix");
-  let lane = loadPipelines()[0]!;
-  expect(lane.state).toBe("running");
-  expect(lane.cursor).toMatchObject({ stageId: "critique", state: "pending" });
-  await critiqueRound(h, "pass", "final fix verified");
-  lane = loadPipelines()[0]!;
-  expect(lane.state).toBe("completed");
-  expect(lane.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(2);
-  expect(lane.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
-  expect(pipelineCompletedUnreviewed(lane)).toBeNull();
-});
-
-test.each([
-  { reviews: 1, newHead: true },
-  { reviews: 3, newHead: true },
-  { reviews: 3, newHead: false },
-])("under the default the controller drives $reviews failed review(s): the fixer runs one more time and the final gate re-check fails and parks (new head: $newHead) (#2187)", async ({ reviews, newHead }) => {
-  const h = movingHeadHarness(newHead ? undefined : () => REVIEW_HEADS[0]!);
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: reviews }, null) as never);
   const { pipeline } = await driveWithController(h);
-
-  const builds = pipeline.runs.find((run) => run.stageId === "build")!.attempts;
-  const critiques = pipeline.runs.find((run) => run.stageId === "critique")!.attempts;
+  const builds = pipeline.runs.find(run => run.stageId === "build")!.attempts;
+  const critiques = pipeline.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.cursor).toBeNull();
+  expect(pipeline.reviewPending).toBeUndefined();
+  expect(critiques).toHaveLength(reviews);
   expect(builds).toHaveLength(reviews + 1);
-  expect(critiques).toHaveLength(reviews + 1);
-  expect(builds.every((attempt) => attempt.state === "passed")).toBe(true);
-  expect(critiques.every((attempt) => attempt.state === "failed")).toBe(true);
-  /* The last fix took the last review's findings. */
-  expect(builds[reviews]!.activatedBy).toEqual({ stageId: "critique", attempt: reviews, edge: "fail", budgetSpent: true });
-  expect(builds[reviews]!.input).toContain(`P2 evidence gap ${reviews}`);
-  /* The failed final re-check parks without another fix. */
-  expect(pipeline.state).toBe("needs_decision");
-  expect(pipeline.cursor?.stageId).toBe("critique");
-  expect(pipeline.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1 });
-  expect(pipeline.stateDetail).toContain("budget spent: 1 findings left");
-  /* The unreviewed findings stay on the record, and the record names the heads. */
-  expect(critiques[reviews - 1]).toMatchObject({ budgetSpent: true, reviewedHead: newHead ? REVIEW_HEADS[reviews - 1] : REVIEW_HEADS[0], verdict: { status: "fail", findings: [`P2 evidence gap ${reviews}`] } });
-  const currentHead = newHead ? REVIEW_HEADS[reviews]! : REVIEW_HEADS[0]!;
-  expect(pipeline.lastPassedCommit).toBe(currentHead);
-  expect(pipelineCompletedUnreviewed(pipeline)).toBeNull();
-});
-
-test.each([{ rounds: 1, decision: false }, { rounds: 2, decision: false }, { rounds: 2, decision: true }])("terminal budget re-check continuation grants exactly $rounds fresh reviews on the same lane (decision: $decision)", async ({ rounds, decision }) => {
-  const h = movingHeadHarness();
-  movingHeadPorts = h.ports;
-  const stages = BUDGET_STAGES({ to: "build", maxRounds: 2 }, null);
-  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
-  await create(h.ports, stages as never);
-  const lane = loadPipelines()[0]!;
-  saveTasks([{ id: "budget-note-task", project: lane.project, text: "Continue reviewed change", status: "assigned", placement: "unplaced", assignments: [], createdAt: lane.createdAt, updatedAt: lane.createdAt }]);
-  expect((await patchPipeline(lane.id, { action: "link-task", taskId: "budget-note-task" }, h.ports)).error).toBeUndefined();
+  expect(builds.at(-1)!.input).toContain(`P2 evidence gap ${reviews}`);
+  expect(builds.at(-1)!.state).toBe("passed");
+  expect(critiques.every(a => !a.activatedBy?.budgetRecheck)).toBe(true);
+  expect(pipelineCompletedUnreviewed(pipeline)?.stageId).toBe("critique");
   await tickPipelines([], h.ports);
-  await buildRound(h, "first head");
-  await critiqueRound(h, "fail", "first finding");
-  await buildRound(h, "second head");
-  await critiqueRound(h, "fail", "second finding");
-  await buildRound(h, "last budget fix");
-  if (decision) {
-    await tickPipelines([], h.ports);
-    const review = loadPipelines()[0]!.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
-    h.messages.set(review.agentPath!, { text: 'Remaining finding\n\n```json\n{"status":"needs_decision","findings":["P1 remaining finding"]}\n```', ts: Date.now() + 100_000_000 });
-    await tickPipelines([entry(review.agentPath!)], h.ports);
-  } else {
-    await critiqueRound(h, "fail", "remaining finding");
-  }
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  const revision = pipelineRevision(parked);
-  expect(parked.reviewPending).toMatchObject({ terminalRecheck: true, attempt: 3, findings: 1, currentHead: REVIEW_HEADS[2] });
-  expect(parked.stateDetail).toContain("continue-review");
-  expect(loadTasks()[0]!.note?.text).toContain("continue-review");
-  expect(loadTasks()[0]!.note?.text).toContain("addRounds");
-  const grantRequest = { action: "continue-review" as const, clientRequestId: "actor-grant", addRounds: rounds, expectedRevision: revision };
-  expect((await patchPipeline(parked.id, grantRequest, h.ports, { kind: "agent", role: "orchestrator", conversationId: "conversation_other" })).status).toBe(403);
-  expect((await acceptHead(parked, "reject-failed-head")).status).toBe(409);
-  expect((await continueReview(parked, "bad-rounds", 0)).status).toBe(400);
-  expect((await continueReview(parked, "stale-grant", rounds, "a".repeat(64))).status).toBe(409);
-  expect((await continueReview(parked, "terminal-grant", rounds, revision)).error).toBeUndefined();
-  let current = loadPipelines()[0]!;
-  expect(current.id).toBe(parked.id);
-  expect(current.cursor).toMatchObject({ stageId: "build", activatedBy: { stageId: "critique", attempt: 3, edge: "fail" } });
-  expect(current.cursor!.input).toContain("P1 remaining finding");
-  expect(current.reviewGrants).toHaveLength(1);
-  expect(current.reviewGrants![0]).toMatchObject({ rounds, expectedRevision: revision });
-  expect((await continueReview(parked, "terminal-grant", rounds, revision)).replayed).toBe(true);
-  expect((await continueReview(parked, "competing-grant", rounds, revision)).status).toBe(409);
-  for (let n = 0; n < rounds; n++) {
-    await buildRound(h, `continued fix ${n}`);
-    current = loadPipelines()[0]!;
-    expect(current.cursor!.stageId).toBe("critique");
-
-    expect(current.lastPassedCommit).toBe(REVIEW_HEADS[3 + n]);
-    await critiqueRound(h, "fail", `retained finding ${n}`);
-    expect(h.spawnInputs.at(-1)!.role.roleId).toBe("reviewer");
-    expect(h.spawnInputs.at(-1)!.cwd).toBe(current.worktreeDir!);
-    expect(h.spawnInputs.at(-1)!.prompt).toContain(`continued fix ${n}`);
-  }
-  current = loadPipelines()[0]!;
-  expect(current.state).toBe("needs_decision");
-  expect(current.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1 });
-  const reviews = current.runs.find((run) => run.stageId === "critique")!.attempts;
-  expect(reviews).toHaveLength(3 + rounds);
-  expect(new Set(reviews.map((attempt) => attempt.conversationId)).size).toBe(3 + rounds);
-  expect(reviews.every((attempt) => attempt.state === "failed" || decision && attempt.state === "needs_decision")).toBe(true);
-  expect(current.lastPassedCommit).toBe(REVIEW_HEADS[2 + rounds]);
-  // A later explicit grant still requires a fix and an independent passing review.
-  expect((await continueReview(current, "final-grant", 1)).error).toBeUndefined();
-  await buildRound(h, "final fix");
-  await critiqueRound(h, "pass", "fresh approval");
-  expect(loadPipelines()[0]!.state).toBe("completed");
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(reviews);
 });
+
 
 test("under the default a last fix with a new head takes the reviewer's pass edge, and the next stage reads the unreviewed findings (#2187)", async () => {
   const h = movingHeadHarness();
@@ -13244,7 +13071,7 @@ test("create_pipeline stores a review-loop as a read-only reviewer, a fix stage 
   expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["build", "review", "review-fix"]);
 });
 
-test("add-stage on a draft converts a review-loop, and that draft started and failed on every round parks after the final re-check (#2187)", async () => {
+test("add-stage on a draft converts a review-loop, and that draft completes after fixing its final review (#2187)", async () => {
   const h = movingHeadHarness();
   savePipelines([]);
   const created = await createPipelineFromRequest({ task: "Draft with review", repoDir: "/repo", stages: BUILD_ONLY as never, autoStart: false, publication: "internal" }, h.ports);
@@ -13257,14 +13084,13 @@ test("add-stage on a draft converts a review-loop, and that draft started and fa
 
   expect((await patchPipeline(id, { action: "start" }, h.ports)).error).toBeUndefined();
   const { pipeline, reviews } = await driveWithController(h, new Set(["review"]));
-  expect(reviews).toBe(4);
-  expect(pipeline.state).toBe("needs_decision");
-  expect(pipeline.stateDetail).toContain("budget spent: 1 findings left");
+  expect(reviews).toBe(3);
+  expect(pipeline.state).toBe("completed");
   const fixes = pipeline.runs.find((run) => run.stageId === "review-fix")!.attempts;
   expect(fixes).toHaveLength(3);
   expect(fixes.at(-1)!.activatedBy).toEqual({ stageId: "review", attempt: 3, edge: "fail", budgetSpent: true });
   expect(fixes.at(-1)!.input).toContain("P2 evidence gap 3");
-  expect(pipelineCompletedUnreviewed(pipeline)).toBeNull();
+  expect(pipelineCompletedUnreviewed(pipeline)?.stageId).toBe("review");
   expect(h.calls.some((call) => call.startsWith("flow:"))).toBe(false);
 });
 
@@ -13404,6 +13230,24 @@ test("set-edge rewires future edges and freezes traversed evidence (#353)", asyn
   expect(stillEditable.pipeline?.stages[2]?.onFail).toEqual({ to: "build", maxRounds: 1 });
 });
 
+test("review budgets can be set and lowered before the first review, then cannot grow after traversal", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2 }, null) as never);
+  const id = loadPipelines()[0]!.id;
+  const edit = (maxRounds: number) => patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds }, h.ports);
+  expect((await edit(4)).pipeline?.stages[1]?.onFail?.maxRounds).toBe(4);
+  expect((await edit(2)).pipeline?.stages[1]?.onFail?.maxRounds).toBe(2);
+  await tickPipelines([], h.ports);
+  await buildRound(h, "first build");
+  await critiqueRound(h, "fail", "first findings");
+  const revision = pipelineRevision(loadPipelines()[0]!);
+  const refused = await edit(3);
+  expect(refused.status).toBe(409);
+  expect(refused.error).toContain("Review budget cannot increase");
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+  expect(loadPipelines()[0]!.stages[1]!.onFail?.maxRounds).toBe(2);
+});
+
 test("a fail edge freezes the instant it routes, before the target attempt materializes, and the freeze survives restart (#353)", async () => {
   const h = harness();
   const { ports } = h;
@@ -13432,6 +13276,7 @@ test("a fail edge freezes the instant it routes, before the target attempt mater
      proves the freeze survives a process restart. */
   const afterRestart = await patchPipeline(inflight.id, { action: "set-edge", stageId: "verify", edge: "fail", to: "build", maxRounds: 4 }, ports);
   expect(afterRestart.status).toBe(409);
+  expect(afterRestart.error).toContain("Review budget cannot increase");
   expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "verify")?.onFail).toEqual({ to: "build", maxRounds: 1 });
 });
 
@@ -18051,12 +17896,12 @@ test.each([undefined, 7])("pipeline review default and explicit higher budget %s
   expect(patched.pipeline!.stages[1]!.onFail!.maxRounds).toBe(maxRounds ?? 3);
 });
 
-test("an omitted pipeline review budget runs three reviews and a final re-check", async () => {
+test("an omitted pipeline review budget runs three reviews and completes after the final fix", async () => {
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build" }, null) as never);
   const { pipeline } = await driveWithController(h);
-  expect(pipeline.state).toBe("needs_decision");
-  expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(4);
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
   expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(4);
 });
 
@@ -19120,11 +18965,11 @@ async function idleStageHostFixture(h: ReturnType<typeof harness>) {
     { conversationId: begun.receipt.conversationId, host: "alive", turn: "idle", attentionIds: [] },
   ] });
   return {
-    registry, key, claimOwner, transcriptPath, attempt, host, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,
+    registry, key, claimOwner, transcriptPath, attempt, host, child, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,
     bind: (cursorDebounceMs: number) => bindClaudeHostPersistence(registry, key, host as never, claimOwner, 1, "unhosted", { cursorDebounceMs }),
-    end: () => {
+    end: async () => {
       setAgentRegistryForTests(null);
-      try { process.kill(child.pid!, "SIGKILL"); } catch { /* already gone */ }
+      await stopFixtureProcess(child);
     },
   };
 }
@@ -19197,7 +19042,7 @@ test("a stage that keeps working after its turn ended keeps its host through the
     stop();
   } finally {
     globalThis.setTimeout = realSetTimeout;
-    f.end();
+    await f.end();
   }
 });
 
@@ -19229,7 +19074,7 @@ test("an automatic stop withdrawn after it captured the tree leaves the registry
     expect(f.registry.setStructuredHostClaimed(f.key, { ...before.structuredHost!, eventCursor: 173 }, "idle", f.claimOwner, 1))
       .toMatchObject({ structuredHost: { eventCursor: 173 } });
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19257,7 +19102,7 @@ test("a really interrupted idle turn is stopped by the product's own stop and re
     expect(attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
     expect(attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "engine-stop" });
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19270,7 +19115,7 @@ function runtimeReleaseOf(f: Awaited<ReturnType<typeof idleStageHostFixture>>, o
     retired,
     terminateOwnedHost: async (key: Parameters<typeof f.registry.terminateStructuredHost>[0], expected: Parameters<typeof f.registry.terminateStructuredHost>[1]) => {
       // The fixture's own child, by the pid it recorded; its process probes then answer "gone".
-      process.kill(f.hostPid, "SIGKILL");
+      f.child.kill("SIGKILL");
       f.termination.signal(f.hostPid, "SIGKILL");
       onReleased();
       f.host.emit({ status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
@@ -19311,7 +19156,7 @@ test("an automatic stop whose first step is the runtime's own release still reti
     expect(lane.runs[0]!.attempts).toHaveLength(2);
     expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19353,7 +19198,7 @@ test("a descendant that outlives the runtime's release is still signalled, and t
     expect(lane.state).toBe("running");
     expect(lane.runs[0]!.attempts.map((item) => item.state)).toEqual(["failed", "pending"]);
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19374,7 +19219,7 @@ test("a stop still withdraws when the host resumes before the runtime released a
     expect(f.row()).toEqual(before);
     expect(f.journal().map((line) => line.event)).toEqual(["captured", "withdrawn"]);
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19563,7 +19408,7 @@ test("a host Delegatus stopped is recorded as stopped by Delegatus although its 
     expect(h.spawnInputs.at(-1)!.prompt).toContain("stage attempt 1 was stopped by Delegatus after its turn went silent.");
     expect(`${lane.runs[0]!.attempts[0]!.error} ${h.spawnInputs.at(-1)!.prompt}`).not.toContain("lost");
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -21457,7 +21302,12 @@ test("a failed staged read-write receipt that settled before retry is never stop
 test.each([false, true])("refused provider continuations keep their delivery key and exhaust a bounded transport wait, throws=%s", async (throws) => {
   const f = await providerRecoveryHarness("claude", "server_error", "Failed to refresh OAuth token: retry in a minute");
   const keys: string[] = [];
-  f.h.ports.resumeSeveredTurn = async (input) => { keys.push(input.clientMessageId); if (throws) throw new Error("transport unavailable"); return false; };
+  f.h.ports.resumeSeveredTurn = async (input) => {
+    keys.push(input.clientMessageId);
+    if (throws) throw new Error("transport unavailable");
+    input.onRefused?.("recipient host is unhosted and has no writer claim");
+    return false;
+  };
   await tickPipelines([], f.h.ports);
   f.advance(60_000);
   await tickPipelines([], f.h.ports);
@@ -21470,7 +21320,7 @@ test.each([false, true])("refused provider continuations keep their delivery key
   await tickPipelines([], f.h.ports);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   expect(loadPipelines()[0]!.stateDetail).toContain("auth refresh race");
-  expect(loadPipelines()[0]!.stateDetail).toContain("continuation refused");
+  expect(loadPipelines()[0]!.stateDetail).toContain(throws ? "continuation transport failed: Error: transport unavailable" : "recipient host is unhosted and has no writer claim");
   expectProviderParkAt(loadPipelines()[0]!, f.h.ports.now());
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.tries).toBe(0);
 });
@@ -21716,322 +21566,32 @@ test.each(["codex", "claude"] as const)("an open scan keeps a provider continuat
 });
 
 
-test("resumable review budget notes name the same-lane grant action in both languages", async () => {
+test("review budget notes explain the fixed budget in both languages", async () => {
   const { parkedTaskNote } = await import("./taskStatusNote");
   for (const locale of ["en", "uk"] as const) {
     const note = parkedTaskNote("private diagnostics", locale, true, { kind: "review-budget" });
-    expect(note).toContain("continue-review");
-    expect(note).toContain("addRounds");
+    expect(note).not.toContain("continue-review");
+    expect(note).not.toContain("addRounds");
     expect(note).not.toContain("private diagnostics");
   }
 });
 
-test("terminal review continuation returns each fix to review even when the fix has a terminal pass edge", async () => {
-  const h = movingHeadHarness();
-  movingHeadPorts = h.ports;
-  await create(h.ports, [
-    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[0] },
-    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1], role: { roleId: "reviewer" }, access: "read-only" },
-    { ...BUILD_ONLY[0], id: "fix", next: null },
-  ] as never);
-  const { pipeline: parked } = await driveWithController(h);
-  expect(parked.state).toBe("needs_decision");
-  const actor = { kind: "agent" as const, role: "orchestrator" as const, conversationId: parked.srcConversationId! };
-  const request = { action: "continue-review" as const, clientRequestId: "terminal-fix-grant", addRounds: 2, expectedRevision: pipelineRevision(parked) };
-  expect((await patchPipeline(parked.id, request, h.ports, actor)).error).toBeUndefined();
-  expect((await patchPipeline(parked.id, request, h.ports, actor)).replayed).toBe(true);
-  for (let n = 0; n < 2; n++) {
-    await tickPipelines([], h.ports);
-    const fix = loadPipelines()[0]!.runs.find(run => run.stageId === "fix")!.attempts.at(-1)!;
-    expect(fix.input).toContain(n === 0 ? "P2 evidence gap 2" : "P1 unresolved");
-    h.beforeBuildPass();
-    await tickPipelines([h.finish(fix.agentPath!, "pass", `fix ${n}`)], h.ports);
-    expect(loadPipelines()[0]!.cursor?.stageId).toBe("critique");
-    await critiqueRound(h, "fail", "unresolved");
-  }
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
-  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
-});
-
-test.each([1, 2] as const)("terminal review continuation carries its reviewer return and final budget through a nested terminal repair (%i granted rounds)", async (rounds) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, [
-    { ...BUILD_ONLY[0]!, next: "critique" },
-    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, id: "critique", role: { roleId: "reviewer" }, access: "read-only" },
-    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
-    { ...BUILD_ONLY[0]!, id: "repair", next: null },
-  ] as never);
-  const parked = (await driveWithController(h, (stageId) => stageId === "critique")).pipeline;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1, currentHead: ORIGIN_MAIN_SHA });
-
-  const actor = { kind: "agent" as const, role: "orchestrator" as const, conversationId: parked.srcConversationId! };
-  const grant = await patchPipeline(parked.id, {
-    action: "continue-review", clientRequestId: `nested-repair-grant-${rounds}`, addRounds: rounds,
-    expectedRevision: pipelineRevision(parked),
-  }, h.ports, actor);
-  expect(grant.error).toBeUndefined();
-
-  const continued = (await driveWithController(h, (stageId, attempt) =>
-    stageId === "critique" || stageId === "fix" && attempt === 2)).pipeline;
-  const fixes = continued.runs.find((run) => run.stageId === "fix")!.attempts;
-  const repairs = continued.runs.find((run) => run.stageId === "repair")!.attempts;
-  const reviews = continued.runs.find((run) => run.stageId === "critique")!.attempts;
-  expect(fixes[1]!.state).toBe("failed");
-  expect(repairs[0]!.state).toBe("passed");
-  expect(reviews).toHaveLength(2 + rounds);
-  expect(reviews[2]!.activatedBy?.edge).toBe("pass");
-  expect(reviews.slice(2).every((attempt) => attempt.state === "failed")).toBe(true);
-  expect(continued.state).toBe("needs_decision");
-  expect(continued.lastPassedCommit).toBe(parked.reviewPending!.currentHead);
-  expect(continued.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1, currentHead: ORIGIN_MAIN_SHA });
-  expect(reviews.at(-1)!.activatedBy).toMatchObject({ budgetRecheck: true });
-  expect(continued.reviewGrants).toMatchObject([{ rounds }]);
-});
-
-
-test.each(["retry-stage", "skip-stage"] as const)("a failed terminal budget park refuses %s until a bounded grant", async (action) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  const parked = (await driveWithController(h)).pipeline;
-  expect(parked.reviewPending?.terminalRecheck).toBe(true);
-  const revision = pipelineRevision(parked);
-  const spawned = h.spawnInputs.length;
-  for (let n = 0; n < 3; n++) {
-    expect(await patchPipeline(parked.id, { action }, h.ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
-    await tickPipelines([], h.ports);
-    expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
-  }
-  expect(h.spawnInputs).toHaveLength(spawned);
-  expect(loadPipelines()[0]!.reviewGrants).toBeUndefined();
-  expect((await continueReview(parked, `fenced-${action}`, 1)).error).toBeUndefined();
-  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
-  await buildRound(h, "granted fix");
-  await critiqueRound(h, "pass", "independent approval");
-  expect(loadPipelines()[0]!.state).toBe("completed");
-});
-
-test("a budget park with a failed fix publication requires a grant before fix and fresh review", async () => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  const parked = (await driveWithController(h)).pipeline;
-  const reviews = parked.runs.find(run => run.stageId === "critique")!.attempts.length;
-  const box = publishHarness(h);
-  box.setLocalHead(ORIGIN_MAIN_SHA); box.setDirty(false); box.setPushFails(true);
-  parked.publication = "remote-branch";
-  parked.delivery!.publish = "enabled";
-  parked.publishedCommit = null;
-  savePipelines([parked]);
-  expect((await patchPipeline(parked.id, { action: "publish" }, h.ports)).status).toBe(409);
-  await tickPipelines([], h.ports);
-  const failed = loadPipelines()[0]!;
-  expect(failed).toMatchObject({ state: "needs_decision", publishedCommit: null,
-    reviewPending: parked.reviewPending, delivery: { operation: { state: "settled", result: { ok: false } } } });
-  for (const action of ["retry-stage", "skip-stage"] as const) {
-    expect(await patchPipeline(parked.id, { action }, h.ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
-  }
-  box.setPushFails(false);
-  expect((await continueReview(failed, "unpublished-budget-grant", 1)).error).toBeUndefined();
-  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "build", input: expect.stringContaining("evidence gap 2") });
-  await buildRound(h, "granted fix after publication failure");
-  await critiqueRound(h, "pass", "fresh independent approval after granted fix");
-  const completed = loadPipelines()[0]!;
-  expect(completed).toMatchObject({ state: "completed", publishedCommit: ORIGIN_MAIN_SHA, reviewGrants: [{ rounds: 1 }] });
-  expect(completed.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(reviews + 1);
-  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-2)!.verdict!.status).toBe("fail");
-  expect(box.order).toContain("push-rejected");
-  expect(box.order).toContain(`push:${ORIGIN_MAIN_SHA}`);
-});
-
-test.each([false, true])("board actions admit only a bounded terminal continuation (legacy park: %s)", async (legacy) => {
-  const { pipelineActionOptions, actionObserved } = await import("@/components/kanban/stagesModel");
+test.each([false, true])("board actions refuse terminal budget extensions (legacy park: %s)", async (legacy) => {
+  const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
   const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
   const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
   movingHeadPorts = h.ports;
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  const parked = (await driveWithController(h)).pipeline;
-  if (legacy) {
-    delete parked.reviewPending;
-    savePipelines([parked]);
-  }
-  const options = pipelineActionOptions(parked);
-  expect(options.find((option) => option.action === "continue-review")?.refusal).toBeNull();
-  for (const action of ["retry-stage", "skip-stage", "accept-head"] as const) {
-    expect(options.find((option) => option.action === action)?.refusal).not.toBeNull();
-  }
-  expect(actionObserved("continue-review", null, parked)).toBe(false);
-  expect(pipelineAnswers(parked, (stage) => stage.id)?.choices.map((choice) => choice.action)).toEqual(["continue-review"]);
-  expect((await continueReview(parked, `board-grant-${legacy}`, 2)).error).toBeUndefined();
-  expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
-  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
-  await buildRound(h, "first board fix");
-  await critiqueRound(h, "fail", "retained defect");
-  await buildRound(h, "second board fix");
-  await critiqueRound(h, "pass", "fresh independent approval");
-  expect(loadPipelines()[0]!.state).toBe("completed");
+  const parked = (await driveLegacyTerminalRecheck(h)).pipeline;
+  if (legacy) { delete parked.reviewPending; savePipelines([parked]); }
+  expect(pipelineActionOptions(parked).find(option => option.action === "continue-review")?.refusal).toBe("budget-fixed");
+  expect(pipelineAnswers(parked, stage => stage.id)).toBeNull();
+  const revision = pipelineRevision(loadPipelines()[0]!);
+  expect((await continueReview(parked, "legacy-extension", 2)).status).toBe(409);
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
 });
 
-test("terminal continuation refuses stale budget metadata after a newer review blocks", async () => {
-  const h = movingHeadHarness();
-  movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  const { pipeline: parked } = await driveWithController(h);
-  expect(parked.reviewPending?.terminalRecheck).toBe(true);
-  expect((await continueReview(parked, "granted-before-block", 2)).error).toBeUndefined();
-  await buildRound(h, "fix before blocked review");
-  await tickPipelines([], h.ports);
-  // Old persisted metadata must not authorize a newer attempt.
-  const newer = loadPipelines()[0]!;
-  newer.reviewPending = parked.reviewPending;
-  savePipelines([newer]);
-  const review = newer.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
-  h.messages.set(review.agentPath!, { text: 'Blocked review\n\n```json\n{"status":"fail","findings":["P1 review blocked"],"blocked":true,"blockedReason":"Review environment unavailable"}\n```', ts: Date.now() + 100_000_000 });
-  await tickPipelines([entry(review.agentPath!)], h.ports);
-  const blocked = loadPipelines()[0]!;
-  expect(blocked.stateDetail).toBe("Review environment unavailable");
-  const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
-  expect(pipelineActionOptions(blocked).find((option) => option.action === "continue-review")?.refusal).toBe("no-review");
-  expect((await continueReview(blocked, "stale-budget", 2)).status).toBe(409);
-  expect(loadPipelines()[0]!.reviewGrants).toHaveLength(1);
-  await patchPipeline(blocked.id, { action: "pause" }, h.ports);
-  const resumed = await patchPipeline(blocked.id, { action: "resume" }, h.ports);
-  expect(resumed.pipeline!.stateDetail).not.toContain("continue-review");
-});
-
-
-test.each([false, true])("consecutive terminal grants each buy two reviews on unchanged heads (nested repairs: %s)", async (nested) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, [
-    { ...BUILD_ONLY[0]!, next: "critique" },
-    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
-    { ...BUILD_ONLY[0]!, id: "fix", next: null, ...(nested ? { onFail: { to: "repair", maxRounds: 3 } } : {}) },
-    ...(nested ? [{ ...BUILD_ONLY[0]!, id: "repair", next: null }] : []),
-  ] as never);
-  let parked = (await driveWithController(h)).pipeline;
-  expect(parked.reviewPending?.terminalRecheck).toBe(true);
-  for (let grant = 0; grant < 2; grant++) {
-    expect((await continueReview(parked, `successive-${grant}`, 2)).error).toBeUndefined();
-    parked = (await driveWithController(h, (stageId, n) => stageId === "critique" || nested && stageId === "fix" && (n === 2 || n === 4))).pipeline;
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4 + grant * 2);
-    expect(parked.reviewGrants).toHaveLength(grant + 1);
-    expect(parked.reviewPending?.currentHead).toBe(ORIGIN_MAIN_SHA);
-  }
-});
-
-
-test.each([{ rounds: 1, nested: false }, { rounds: 2, nested: false }, { rounds: 1, nested: true }, { rounds: 2, nested: true }])("a terminal continuation retains validation through all $rounds reviews (nested repair: $nested)", async ({ rounds, nested }) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, [
-    { ...BUILD_ONLY[0]!, next: "critique" },
-    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
-    { ...BUILD_ONLY[0]!, id: "fix", next: "validate", ...(nested ? { onFail: { to: "repair", maxRounds: 1 } } : {}) },
-    ...(nested ? [{ ...BUILD_ONLY[0]!, id: "repair", next: null }] : []),
-    { ...BUILD_ONLY[0]!, id: "validate", next: "critique" },
-  ] as never);
-  const parked = (await driveWithController(h)).pipeline;
-  const validations = parked.runs.find((run) => run.stageId === "validate")?.attempts.length ?? 0;
-  expect((await continueReview(parked, "validation-grant", rounds)).error).toBeUndefined();
-  const continued = (await driveWithController(h, (stageId, n) => stageId === "critique" || nested && stageId === "fix" && n === 2)).pipeline;
-  expect(continued.state).toBe("needs_decision");
-  expect(continued.runs.find((run) => run.stageId === "validate")!.attempts).toHaveLength(validations + rounds);
-  const review = continued.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
-  expect(review.activatedBy?.stageId).toBe("validate");
-  expect(review.activatedBy?.budgetRecheck).toBe(true);
-  expect((await continueReview(continued, "validation-resume", 1)).error).toBeUndefined();
-  expect(loadPipelines()[0]!.cursor?.stageId).toBe("fix");
-  expect(loadPipelines()[0]!.cursor?.input).toContain(review.verdict!.findings![0]!);
-  const completed = (await driveWithController(h, new Set())).pipeline;
-  expect(completed.state).toBe("completed");
-  expect(completed.runs.find((run) => run.stageId === "validate")!.attempts).toHaveLength(validations + rounds + 1);
-});
-
-test.each([1, 2] as const)("a final granted fix repaired inside its budget remains resumable (%i rounds)", async (rounds) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, [
-    { ...BUILD_ONLY[0]!, next: "critique" },
-    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
-    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 2 } },
-    { ...BUILD_ONLY[0]!, id: "repair", next: null },
-  ] as never);
-  const parked = (await driveWithController(h)).pipeline;
-  expect((await continueReview(parked, "before-final-repair", rounds)).error).toBeUndefined();
-  const repaired = (await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && n === rounds + 1)).pipeline;
-  const repair = repaired.runs.find(run => run.stageId === "repair")!.attempts[0]!;
-  expect(repair.state).toBe("passed");
-  expect(repair.activatedBy?.budgetSpent).toBeUndefined();
-  expect(repaired.reviewPending).toMatchObject({ terminalRecheck: true, fixStageId: "repair", fixAttempt: repair.n, currentHead: ORIGIN_MAIN_SHA });
-  const lastReview = repaired.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
-  expect(lastReview.activatedBy).toMatchObject({ stageId: "repair", attempt: repair.n, budgetRecheck: true });
-  expect((await continueReview(repaired, "after-final-repair", 1)).error).toBeUndefined();
-  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "fix", input: expect.stringContaining("P2 evidence gap") });
-  const completed = (await driveWithController(h, new Set())).pipeline;
-  expect(completed.state).toBe("completed");
-  expect(completed.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(3 + rounds);
-  expect(completed.runs.find(run => run.stageId === "fix")!.attempts.at(-1)!.input).toContain(lastReview.verdict!.findings![0]!);
-});
-
-
-test.each([
-  { failure: "host", retryRound: 0 }, { failure: "spawn", retryRound: 0 },
-  { failure: "host", retryRound: 2 }, { failure: "spawn", retryRound: 2 },
-] as const)("reviewer $failure retries spend no extra granted round (round $retryRound)", async ({ failure, retryRound }) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  const parked = (await driveWithController(h)).pipeline;
-  expect((await continueReview(parked, `retry-${failure}-grant`, 3)).error).toBeUndefined();
-  for (let round = 0; round < retryRound; round++) {
-    await buildRound(h, `granted fix ${round + 1}`);
-    await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
-  }
-  await buildRound(h, "fix before reviewer retry");
-  const spawn = h.ports.spawnAgent;
-  if (failure === "spawn") {
-    h.ports.spawnAgent = async () => { throw new Error("runtime host request timed out"); };
-    h.ports.sleep = async () => {};
-  } else {
-    h.ports.spawnAgent = async (input, reserve) => ({ ...await spawn(input, reserve), paneId: null });
-  }
-  await tickPipelines([], h.ports);
-  const interruptedLane = loadPipelines()[0]!;
-  const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
-  expect(interrupted.verdict).toBeNull();
-  expect(interrupted.activatedBy?.budgetRecheck === true).toBe(retryRound === 2);
-  if (failure === "host") {
-    h.durableTurns.set(interrupted.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(interrupted.startedAt!) + 1 });
-    h.ports.conversationTurnInterrupted = async () => "stalled";
-    h.ports.spawnReceipt = () => ({ state: "completed", launchId: interrupted.launchId!, conversationId: interrupted.conversationId!, transcript: interrupted.agentPath, sessionId: interrupted.sessionId, paneId: null });
-  } else {
-    expect(interruptedLane.state).toBe("needs_decision");
-  }
-  expect((await patchPipeline(parked.id, { action: "retry-stage", expectedStageId: "critique", expectedAttempt: interrupted.n }, h.ports)).error).toBeUndefined();
-  h.ports.spawnAgent = spawn;
-  delete h.ports.conversationTurnInterrupted;
-  await critiqueRound(h, "fail", "first completed granted review");
-  const retried = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
-  expect(retried.activatedBy).toEqual(interrupted.activatedBy);
-  expect(loadPipelines()[0]!.state).toBe(retryRound === 2 ? "needs_decision" : "running");
-  for (let round = retryRound + 1; round < 3; round++) {
-    await buildRound(h, `granted fix ${round + 1}`);
-    await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
-    expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
-  }
-  const final = loadPipelines()[0]!;
-  const reviews = final.runs.find(run => run.stageId === "critique")!.attempts;
-  expect(reviews).toHaveLength(6);
-  expect(reviews.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
-  expect(final.reviewPending?.terminalRecheck).toBe(true);
-});
-
-
-test("a terminal budget decision with findings requires a grant rather than a decision answer", async () => {
+test("a blocked historical terminal reviewer retries its unspent activation", async () => {
   const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
   movingHeadPorts = h.ports;
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
@@ -22039,42 +21599,7 @@ test("a terminal budget decision with findings requires a grant rather than a de
   await buildRound(h, "initial build");
   await critiqueRound(h, "fail", "initial finding");
   await buildRound(h, "last budget fix");
-  await tickPipelines([], h.ports);
-  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
-  h.messages.set(review.agentPath!, { text: 'Review still has findings\n\n```json\n{"status":"needs_decision","findings":["P1 retained defect"]}\n```', ts: Date.now() + 100_000_000 });
-  await tickPipelines([entry(review.agentPath!)], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(parked.reviewPending?.terminalRecheck).toBe(true);
-  const revision = pipelineRevision(parked);
-  const result = await patchPipeline(parked.id, {
-    action: "resolve-decision", clientRequestId: "budget-decision-answer", answer: "Review this head again",
-    expectedRevision: revision, expectedStageId: "critique", expectedAttempt: review.n,
-  }, h.ports, { kind: "operator" });
-  expect(result).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
-  expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
-  expect(loadPipelines()[0]!.decisionAnswers).toBeUndefined();
-  expect((await continueReview(parked, "budget-decision-grant", 1)).error).toBeUndefined();
-  expect(loadPipelines()[0]!.cursor?.input).toContain("P1 retained defect");
-  await buildRound(h, "granted defect fix");
-  await critiqueRound(h, "pass", "fresh review passes");
-  expect(loadPipelines()[0]!.state).toBe("completed");
-});
-
-
-test.each([false, true])("a blocked terminal reviewer retries its unspent activation (granted: %s)", async (granted) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  if (granted) {
-    const parked = (await driveWithController(h)).pipeline;
-    expect((await continueReview(parked, "blocked-final-grant", 1)).error).toBeUndefined();
-    await buildRound(h, "granted fix");
-  } else {
-    await tickPipelines([], h.ports);
-    await buildRound(h, "initial build");
-    await critiqueRound(h, "fail", "initial finding");
-    await buildRound(h, "last budget fix");
-  }
+  seedLegacyTerminalRecheck();
   await tickPipelines([], h.ports);
   const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
   expect(review.activatedBy?.budgetRecheck).toBe(true);
@@ -22095,134 +21620,6 @@ test.each([false, true])("a blocked terminal reviewer retries its unspent activa
   expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.activatedBy).toEqual(review.activatedBy);
 });
 
-
-test.each(["tick", "direct"] as const)("an older failed terminal park regains same-lane continuation metadata (%s)", async (recovery) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  const legacy = (await driveWithController(h)).pipeline;
-  delete legacy.reviewPending;
-  legacy.stateDetail = "budget spent: 1 findings left (critique): retained finding";
-  savePipelines([legacy]);
-  if (recovery === "tick") {
-    await tickPipelines([], h.ports);
-    expect(loadPipelines()[0]!.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "critique", fixStageId: "build" });
-    expect(loadPipelines()[0]!.stateDetail).toContain("continue-review");
-  }
-  const parked = loadPipelines()[0]!;
-  expect((await continueReview(parked, `legacy-${recovery}-grant`, 2)).error).toBeUndefined();
-  expect(loadPipelines()[0]!.id).toBe(legacy.id);
-  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
-  const continued = (await driveWithController(h)).pipeline;
-  expect(continued.state).toBe("needs_decision");
-  expect(continued.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
-});
-
-
-test.each([1, 2] as const)("an inner terminal grant retains the outer review obligation (%i outer rounds)", async (rounds) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  await create(h.ports, [
-    { ...BUILD_ONLY[0]!, next: "critique" },
-    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
-    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
-    { ...BUILD_ONLY[0]!, id: "repair", next: null },
-  ] as never);
-  const parked = (await driveWithController(h)).pipeline;
-  expect((await continueReview(parked, "outer-grant", rounds)).error).toBeUndefined();
-  const innerPark = (await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && (n === 2 || n === 3))).pipeline;
-  expect(innerPark.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "fix", fixStageId: "repair" });
-  expect((await continueReview(innerPark, "inner-grant", 1)).error).toBeUndefined();
-  const returned = (await driveWithController(h)).pipeline;
-  expect(returned.state).toBe("needs_decision");
-  expect(returned.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "critique" });
-  const reviews = returned.runs.find(run => run.stageId === "critique")!.attempts;
-  expect(reviews).toHaveLength(2 + rounds);
-  expect(reviews[2]!.activatedBy).toMatchObject({ stageId: "fix", attempt: 4, edge: "pass" });
-  expect(returned.reviewGrants).toMatchObject([{ stageId: "critique", rounds }, { stageId: "fix", rounds: 1 }]);
-  expect((await continueReview(returned, "outer-final-grant", 1)).error).toBeUndefined();
-  const completed = (await driveWithController(h, new Set())).pipeline;
-  expect(completed.state).toBe("completed");
-  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.verdict?.status).toBe("pass");
-});
-
-
-test.each([0, 2] as const)("automatic reviewer host retries preserve a three-round grant (round %i)", async (retryRound) => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
-  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
-  await create(h.ports, stages as never);
-  const parked = (await driveWithController(h)).pipeline;
-  expect((await continueReview(parked, "automatic-retry-grant", 3)).error).toBeUndefined();
-  for (let round = 0; round < retryRound; round++) {
-    await buildRound(h, `fix ${round + 1}`);
-    await critiqueRound(h, "fail", `completed review ${round + 1}`);
-  }
-  await buildRound(h, "fix before automatic host retries");
-  await tickPipelines([], h.ports);
-  const activation = loadPipelines()[0]!.cursor!.activatedBy;
-  for (let lost = 0; lost < 3; lost++) {
-    structuredLatest(1);
-    h.setConversationActive(false);
-    const lostAt = h.ports.now();
-    h.ports.conversationHostUnavailableSince = async () => lostAt;
-    h.advanceWallClock(5 * 60_000);
-    await tickPipelines([], h.ports);
-    if (lost < 2) await tickPipelines([], h.ports);
-  }
-  const interruptedLane = loadPipelines()[0]!;
-  expect(interruptedLane.state).toBe("needs_decision");
-  expect(interruptedLane.cursor).toMatchObject({ stageId: "critique", activatedBy: activation });
-  const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
-  expect(interrupted.verdict).toBeNull();
-  h.ports.conversationHostUnavailableSince = async () => null;
-  h.setConversationActive(null);
-  h.ports.spawnReceipt = () => ({ state: "completed", launchId: interrupted.launchId!, conversationId: interrupted.conversationId!, transcript: interrupted.agentPath, sessionId: interrupted.sessionId, paneId: null });
-  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
-  await critiqueRound(h, "fail", "review completes after host recovery");
-  expect(loadPipelines()[0]!.state).toBe(retryRound === 2 ? "needs_decision" : "running");
-  for (let round = retryRound + 1; round < 3; round++) {
-    await buildRound(h, `fix ${round + 1}`);
-    await critiqueRound(h, "fail", `completed review ${round + 1}`);
-    expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
-  }
-  const final = loadPipelines()[0]!;
-  expect(final.runs.find(run => run.stageId === "critique")!.attempts.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
-  expect(final.reviewPending?.terminalRecheck).toBe(true);
-});
-
-
-test("transport traversals before a terminal park cannot shorten a later grant", async () => {
-  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
-  movingHeadPorts = h.ports;
-  const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
-  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
-  await create(h.ports, stages as never);
-  await tickPipelines([], h.ports);
-  await buildRound(h, "initial build");
-  await tickPipelines([], h.ports);
-  for (let lost = 0; lost < 3; lost++) {
-    structuredLatest(1);
-    h.setConversationActive(false);
-    const lostAt = h.ports.now();
-    h.ports.conversationHostUnavailableSince = async () => lostAt;
-    h.advanceWallClock(5 * 60_000);
-    await tickPipelines([], h.ports);
-    if (lost < 2) await tickPipelines([], h.ports);
-  }
-  expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
-  h.ports.conversationHostUnavailableSince = async () => null;
-  h.setConversationActive(null);
-  const parked = (await driveWithController(h)).pipeline;
-  expect(parked.reviewPending?.terminalRecheck).toBe(true);
-  expect(failEdgeRoundsUsed(parked, parked.stages[1]!)).toBe(2);
-  const completedBefore = parked.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict).length;
-  expect((await continueReview(parked, "after-transport-grant", 3)).error).toBeUndefined();
-  const continued = (await driveWithController(h)).pipeline;
-  expect(continued.state).toBe("needs_decision");
-  expect(continued.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict)).toHaveLength(completedBefore + 3);
-});
 
 test.each(["en", "uk"] as const)("provider retry card gives operator-local time in %s", async locale => {
   const { parkedTaskNote } = await import("./taskStatusNote");
@@ -24361,4 +23758,199 @@ test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandb
     expect(h.calls.some(call => call.includes("worktree add"))).toBeFalse();
     expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("1.00 GiB free") });
   }
+});
+
+
+test.each([false, true])("stored default-advance terminal budget park fixes retained findings once across restart (metadata: %s)", async (metadata) => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveLegacyTerminalRecheck(h)).pipeline;
+  const { needsYouEntries } = await import("@/lib/attention/needsYouRead");
+  expect(needsYouEntries({ files: [], pipelines: [parked], tasks: [] }, null, Date.now() / 1000, parked.project)).toHaveLength(1);
+  if (!metadata) delete parked.reviewPending;
+  if (metadata) parked.reviewGrants = [{ clientRequestId: "historical-grant", expectedRevision: pipelineRevision(parked), stageId: "critique", terminalAttempt: 1,
+    rounds: 1, reviewedHead: REVIEW_HEADS[0], currentHead: parked.lastPassedCommit, actor: { kind: "operator" }, at: parked.createdAt }];
+  const task = { ...boardTask("task-budget-restart"), project: parked.project,
+    note: { text: "Budget wait", author: { kind: "orchestrator" as const }, updatedAt: parked.createdAt } };
+  saveTasks([task]);
+  parked.taskIds = [task.id];
+  savePipelines([parked]);
+  await tickPipelines([], h.ports);
+  expect(loadTasks().find(row => row.id === task.id)?.note ?? null).toBeNull();
+  const resumed = loadPipelines()[0]!;
+  expect(resumed.state).toBe("running");
+  expect(resumed.reviewPending).toBeUndefined();
+  expect(needsYouEntries({ files: [], pipelines: [resumed], tasks: loadTasks() }, null, Date.now() / 1000, resumed.project)).toEqual([]);
+  const { pipeline } = await driveWithController(h);
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(2);
+  const fixes = pipeline.runs.find(run => run.stageId === "build")!.attempts;
+  expect(fixes).toHaveLength(3);
+  expect(fixes.at(-1)!.input).toContain("P2 evidence gap 2");
+  expect(pipelineCompletedUnreviewed(pipeline)?.findings).toBe(1);
+  expect(needsYouEntries({ files: [], pipelines: [pipeline], tasks: loadTasks() }, null, Date.now() / 1000, pipeline.project)).toEqual([]);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("completed");
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(3);
+});
+
+
+test.each(["park", "stop-after-fix", "operator-choice"])("stored terminal budget recovery preserves %s", async (policy) => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveLegacyTerminalRecheck(h)).pipeline;
+  if (policy === "operator-choice") {
+    const attempt = parked.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+    attempt.state = "needs_decision";
+    attempt.verdict = { status: "needs_decision", findings: [] };
+    attempt.output = "Select the release window";
+    delete parked.reviewPending;
+  } else parked.stages.find(stage => stage.id === "critique")!.onFail!.onExhausted = policy as "park" | "stop-after-fix";
+  savePipelines([parked]);
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_decision");
+  expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
+});
+
+test("stored default-advance needs_review resumes after its already passed final fix", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, onExhausted: "stop-after-fix" }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect(parked.state).toBe("needs_review");
+  delete parked.stages.find(stage => stage.id === "critique")!.onFail!.onExhausted;
+  savePipelines([parked]);
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("completed");
+  expect(current.reviewPending).toBeUndefined();
+  expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
+});
+
+test("a restart-cut stage continues the same conversation after a second native abort leaves its host unhosted", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+  const f = await providerRecoveryHarness("codex", "turn_aborted", "stage turn aborted before completion");
+  const initial = f.now();
+  const file = stageTranscript("restart-continuation", [
+    { type: "event_msg", timestamp: new Date(initial - 2000).toISOString(), payload: { type: "agent_message", message: "Working on the stage" } },
+    { type: "event_msg", timestamp: new Date(initial).toISOString(), payload: { type: "turn_aborted", reason: "interrupted" } },
+  ]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "restart-continuation-registry.json"));
+  registry.reconcileConversations([{ engine: "codex", path: file, accountId: LIMITED_ACCOUNT,
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: loadPipelines()[0]!.project }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: f.h.ports.now() }, observedAt: f.h.ports.now() }]);
+  const conversation = registry.conversationForPath(file)!;
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath: file, cwd: "/repo", accountId: LIMITED_ACCOUNT,
+    launchProfile: generation.launchProfile, status: "idle", host: null, pendingAction: null, claimEpoch: 1, claimOwner: "fixture:1",
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:fixture", process: null, eventCursor: 1, protocolVersion: "v2",
+      writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.conversationId = conversation.id;
+  savePipelines([lane]);
+  f.h.ports.pathForConversation = () => "/codex/stage-1.jsonl";
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "restart-continuation.sqlite"), { structuredHosts: true });
+  const session = { conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id },
+    artifactPath: file, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+    writerClaim: "fixture:1" as string | null, attentionIds: [], capabilities: { steer: true, structuredAttention: true } };
+  const publish = () => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  publish();
+  let recoveries = 0;
+  let deliveries = 0;
+  let available = true;
+  const client = {
+    readSession: async () => journal.readSession({ conversationId: conversation.id }),
+    operationStatus: async (id: string) => journal.operationResult(id),
+    command: async (command: Parameters<import("@/lib/runtime/client").RuntimeHostClient["command"]>[0]) => {
+      let result = journal.executeOperation(command);
+      if (result.receipt.status === "queued") {
+        result = journal.transitionOperation(result.operationId, "delivering");
+        expect(result.receipt.status).toBe("delivering");
+        deliveries++;
+        f.h.setConversationActive(true);
+        result = journal.transitionOperation(result.operationId, "delivered");
+      }
+      return result;
+    },
+  } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+  f.h.ports.resumeSeveredTurn = async input => {
+    const result = await enqueueStructuredMessage({ path: file, conversationId: input.conversationId,
+      clientMessageId: input.clientMessageId, text: input.text, origin: { kind: "agent", role: "pipeline" } }, {
+      enabled: () => true, client: () => available ? client : null, registry: () => registry,
+      idleContinuationAllowed: input.continuationAllowed, kick: () => {}, republish: async () => false,
+      recover: async () => {
+        recoveries++;
+        session.host = "hosted"; session.writerClaim = "fixture:2"; publish();
+        return { target: null, path: file, conversationId: conversation.id, spawned: true };
+      },
+    });
+    if (result?.ok !== true) input.onRefused?.(result?.error ?? "delivery unavailable");
+    return result?.ok === true;
+  };
+  f.h.ports.conversationDeliveryCompleted = (_id, key) => registry.deliveryAdmissionForKey(conversation.id, key).outcome === "admitted";
+  try {
+    await tickPipelines([], f.h.ports);
+    f.advance(30_000);
+    await tickPipelines([], f.h.ports);
+    expect(deliveries).toBe(1);
+    // A continuation produced output, then the next Viewer release cut it.
+    f.advance(5000);
+    fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "agent_message", message: "Continuing the stage" } }) + "\n");
+    f.advance(1000);
+    fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "turn_aborted", reason: "interrupted" } }) + "\n");
+    session.host = "unhosted"; session.writerClaim = null; publish();
+    f.h.setConversationActive(false);
+    await tickPipelines([], { ...f.h.ports });
+    available = false;
+    f.advance(30_000);
+    await tickPipelines([], { ...f.h.ports });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait).toBeDefined();
+    expect(recoveries).toBe(0);
+    available = true;
+    f.advance(60_000);
+    await tickPipelines([], { ...f.h.ports });
+    await tickPipelines([], { ...f.h.ports });
+    const after = loadPipelines()[0]!;
+    expect(after.state).toBe("running");
+    expect(after.runs[0]!.attempts).toHaveLength(1);
+    expect(after.runs[0]!.attempts[0]!.conversationId).toBe(conversation.id);
+    expect(after.runs[0]!.attempts[0]!.providerWait?.actionAt).toBeDefined();
+    expect(after.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+    expect(recoveries).toBe(1);
+    expect(deliveries).toBe(2);
+    expect(f.h.spawnInputs).toHaveLength(1);
+  } finally { journal.close(); registry.close(); }
+});
+
+
+test.each([
+  ["unreadable", "stage transcript evidence could not be read"],
+  ["history", "delivered prompt history is incomplete"],
+  ["busy", "stage turn is busy"],
+  ["different-cut", "terminal provider record no longer matches the cut"],
+  ["external", "newer external stage activity was recorded"],
+] as const)("provider continuation records the guard that changed during admission: %s", async (change, reason) => {
+  const f = await providerRecoveryHarness("codex", "turn_aborted", "stage turn aborted before completion");
+  const cutAt = f.now();
+  await tickPipelines([], f.h.ports);
+  f.advance(30_000);
+  f.h.ports.resumeSeveredTurn = async input => {
+    if (change === "unreadable") f.h.durableTurns.delete("/codex/stage-1.jsonl");
+    else {
+      const latest = f.h.durableTurns.get("/codex/stage-1.jsonl")!;
+      if (change === "history") latest.promptHistoryComplete = false;
+      if (change === "busy") latest.turn = "busy";
+      if (change === "different-cut") latest.terminalProviderMessage!.ts++;
+      if (change === "external") latest.prompts = [{ ts: cutAt + 1, origin: "external" }];
+    }
+    expect(await input.continuationAllowed!()).toBe(false);
+    input.onRefused?.("stage eligibility changed");
+    return false;
+  };
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain(reason);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(0);
 });

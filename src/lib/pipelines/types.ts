@@ -704,8 +704,8 @@ export type PipelineReviewPending = {
   at: string;
 };
 
-/** One accepted `continue-review` (#1938), append-only. `rounds` adds to the
-    review stage's fail-edge `maxRounds`, which itself stays frozen evidence. */
+/** Historical accepted budget extension, append-only. New extensions are
+    refused; existing records remain readable and their receipts replayable. */
 export type PipelineReviewGrant = {
   clientRequestId: string;
   expectedRevision: string;
@@ -1028,6 +1028,7 @@ export type Pipeline = {
   /** Who cleared the lane off the queue at `dismissedAt`, attributed on the
       server (docs/design/needs-attention.md §5). Absent on a dismissal written
       before attribution existed. */
+  dismissedNote?: string;
   dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined

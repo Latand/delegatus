@@ -66,7 +66,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: TaskP
   }
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; task: BoardTask; notes?: string[] } | ApiError>> {
+export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; task: BoardTask; matched?: boolean; notes?: string[] } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
     const persist = outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined;
     return { state: persist, result: outcome };
   });
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+  if (!result.ok) return NextResponse.json({ error: result.error, ...(body.findingKey !== undefined && result.code ? { code: result.code, field: result.field } : {}) }, { status: result.status });
   /* Best-effort GC of stale, unreferenced staged uploads. A dangling reference
      is impossible by construction: `createTask` re-checks `attachmentExists`
      inside the same synchronous `mutateTasksFile` block that persists the task,
@@ -110,12 +110,12 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
   if (!result.replay) {
     recordTeamEvent({
       actor,
-      action: "task.created",
+      action: result.matched ? "task.changed" : "task.created",
       project: result.task.project,
       subject: { kind: "task", id: result.task.id, title: result.task.text.split("\n")[0] ?? null },
     });
   }
   /* An icon that names no lucide icon, or a colour that is no task colour, was
      clamped to none, and says so (#2102). */
-  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task), ...(result.notes ? { notes: result.notes } : {}) });
+  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task), ...(result.matched !== undefined ? { matched: result.matched } : {}), ...(result.notes ? { notes: result.notes } : {}) });
 }

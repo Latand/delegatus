@@ -235,6 +235,8 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  /** Journal identity of a merge this visible line announces on delivery. */
+  mergeEventSeq?: number;
   diskPressureEpisode?: string;
   /** Version credited only by delivery of this visible item. */
   itemVersion?: string;
@@ -329,6 +331,8 @@ export type SeatTickVerdict =
     kind: "wake";
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
+    /** All owed merges in this page, including those the item bound cut. */
+    pendingMergeSeqs?: number[];
     deferred: number;
     /** Terminal children this wake deliberately did NOT list (#1749, #1783),
         by reason and as counts of CHILDREN rather than of owed outcomes.
@@ -601,6 +605,7 @@ export interface SeatTickEventInput {
    * seat had closed itself earlier in the same session. Events that name no
    * pipeline at all (a deploy outcome, a held delivery) are never terminal by
    * this field: nothing about them has finished.
+   * A recent pipeline_merged event remains owed after its lane is terminal.
    */
   pipelineTerminal: boolean;
 }
@@ -1066,6 +1071,7 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  autoRotation?: import("./seatAutoRotation").SeatAutoRotationState;
   authIncident?: SeatAuthIncident;
   /** Recovered credential scopes still owe their original operator notice. */
   authNoticesOwed?: SeatAuthIncident[];
@@ -1344,7 +1350,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable" | "auth-failed";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable" | "auth-failed" | "auto-rotation";
   detail: string;
   /**
    * Whether the condition still holds.
@@ -1385,6 +1391,11 @@ export interface SeatTickCard {
       project, so this is what tells a newer attempt from the one it already
       names, and what the card's attempt count moves on. */
   attempt?: string;
+  /** The agent-facing account of an `auto-rotation` card (conversation ids,
+      token counts, the engine's error). It goes to the task's collapsed
+      `details` with the card's `monitor-ref:` line, so the card itself reads
+      as `detail` alone. */
+  record?: string;
 }
 
 export interface SeatTickDecision {

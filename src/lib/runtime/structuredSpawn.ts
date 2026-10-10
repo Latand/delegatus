@@ -1674,6 +1674,7 @@ export function claudeStructuredHostOptions(
     ...claudeHostLaunchPaths(input.account),
     providerAccount: Boolean(input.account.claudeProvider),
     allowSubagents: profile.allowSubagents,
+    cleanMemory: profile.cleanMemory === true,
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
     readOnly: launchProfileEngineReadOnly(profile),
@@ -1742,6 +1743,7 @@ export async function defaultStartHost(
       model: profile.model ?? undefined,
       effort: profile.effort ?? undefined,
       allowSubagents: profile.allowSubagents,
+      cleanMemory: profile.cleanMemory === true,
       mcpServers: profile.mcpServers,
       validateTelegramGrant,
       /* Plugin grant from the durable profile (issue #687): present only for

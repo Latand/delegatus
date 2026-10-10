@@ -12,6 +12,7 @@ import { OPEN_EXTERNAL_RELAY_SETTINGS_EVENT } from "./openExternalRelaySettings"
 /** The external relay's settings (docs/design/relay.md §B.9), in the shell the linked-installs settings use. */
 export function ExternalRelaySettingsDialog({ onClose }: { onClose: () => void }) {
   const { t } = useLocale();
+  const [relays, setRelays] = useState<number | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -25,8 +26,9 @@ export function ExternalRelaySettingsDialog({ onClose }: { onClose: () => void }
           <button type="button" aria-label={t("common.close")} onClick={onClose} className="flex h-11 w-11 items-center justify-center rounded-[8px] text-muted hover:bg-sunken"><X className="h-5 w-5" /></button>
         </header>
         <div className="space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
-          <p className="text-ui text-muted">{t("externalRelay.intro")}</p>
-          <ExternalRelaySection />
+          {/* What a relay is matters before the first pairing; once one is paired the dialog opens on it. */}
+          {relays === 0 ? <p data-external-relay-intro="" className="text-ui text-muted">{t("externalRelay.intro")}</p> : null}
+          <ExternalRelaySection onRelays={setRelays} />
         </div>
       </section>
     </div>

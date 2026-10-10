@@ -1,3 +1,5 @@
+import { sweepConversations } from "./conversations";
+import { readRunLedger } from "./store";
 import { randomUUID } from "node:crypto";
 import { forgetRelayActivity } from "./activity";
 import { discoverRelay, ExternalRelayError, relayCall } from "./client";
@@ -31,6 +33,7 @@ export async function startRelayPairing(url: string, label?: string) {
     api_base: descriptor.api_base,
     name: descriptor.name,
     description: descriptor.description,
+    ...(descriptor.features !== undefined ? { features: descriptor.features } : {}),
     limits: descriptor.limits,
     ...started,
   };
@@ -103,6 +106,7 @@ export async function confirmRelayPairing(
     api_base: pending.api_base,
     name: pending.name,
     description: pending.description,
+    ...(pending.features !== undefined ? { features: pending.features } : {}),
     credential: confirmed.credential,
     owner: confirmed.owner,
     pairedAt: new Date().toISOString(),
@@ -158,6 +162,7 @@ export async function unpairRelay(id: string): Promise<{ warned: boolean }> {
     ...store,
     relays: store.relays.filter((item) => item.id !== id),
   }));
+  sweepConversations(readRelayStore().relays, readRunLedger().runs, Date.now(), id);
   forgetRelayActivity(id);
   return { warned };
 }

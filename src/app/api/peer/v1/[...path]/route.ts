@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { authorizePeer, incomingSync, markGrantSync, pairIncoming, probePair, revokeGrant } from "@/lib/links/protocol";
+import { authorizePeer, incomingSync, markGrantSync, pairIncoming, probePair, revokeGrant, sharedDigest } from "@/lib/links/protocol";
+import { drainSeatMessages, seatMessagesPart, SeatMessageRefusal } from "@/lib/links/seatMessages";
+import { linkedPeer } from "@/lib/links/linked";
 import { readSelf } from "@/lib/links/self";
-import { usedGrant } from "@/lib/links/state";
+import { sharedProjects, usedGrant } from "@/lib/links/state";
 import { unauthorizedPeer } from "@/lib/links/peerResponse";
 
 export const runtime = "nodejs";
@@ -51,9 +53,31 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
     if (malformed) { markGrantSync(current, "malformed"); return answer({ error: "malformed" }, 400); }
     try {
       const result = incomingSync(current, input);
+      const link = linkedPeer("grant", current.id);
+      if (result.status === 200 && link) {
+        if (result.agreed) await drainSeatMessages(link);
+        // A revocation while the delivery awaited a host never sends more data.
+        if (authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync")?.id !== current.id) return unauthorized();
+        const freshLink = linkedPeer("grant", current.id);
+        if (!freshLink || freshLink.install !== link.install) return unauthorized();
+        const local = sharedProjects();
+        const digest = sharedDigest(local);
+        const body = result.body as Record<string, unknown>;
+        if (body.s !== digest || link.projects.size !== freshLink.projects.size || [...link.projects].some(project => !freshLink.projects.has(project))) {
+          // Every project-bearing part was built before delivery awaited. A
+          // changed boundary starts a fresh handshake; no old page is exported.
+          result.agreed = false;
+          result.body = { v: 1, now: Date.now(), store: body.store, s: digest, taskWireVersion: body.taskWireVersion,
+            shared: local.slice(0, 100), index: 0, total: local.length, need: true, tasks: { wait: true } };
+        }
+        (result.body as Record<string, unknown>).sm = result.agreed ? seatMessagesPart(freshLink) : { v: 1 };
+      }
       markGrantSync(current, result.status === 200 ? null : String((result.body as { error?: string }).error ?? "unavailable"));
       return answer(result.body, result.status);
-    } catch { markGrantSync(current, "malformed"); return answer({ error: "malformed" }, 400); }
+    } catch (error) {
+      const code = error instanceof SeatMessageRefusal ? error.code : "malformed";
+      markGrantSync(current, code); return answer({ error: code }, code === "quota" ? 429 : 400);
+    }
   }
   usedGrant(grant, false);
   return answer({ error: "not found" }, 404);

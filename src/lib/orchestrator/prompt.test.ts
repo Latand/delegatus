@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 41, and a v40 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(41);
+test("the default mandate is at version 45, and a v44 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(45);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -110,7 +110,9 @@ test("the default mandate is at version 41, and a v40 seat reads as stale", () =
      risk-based review budgets and the default of three rounds. v40 (#2518)
      adds the ask-first bug report and the seat-to-seat rule for another
      project's work. v41 points the operator to a task's prototype review
-     instead of describing variants in prose. */
+     instead of describing variants in prose. v42 clears waiting rows that ask
+     nothing. v43 adds the questionnaire before ambiguous work. v44 combines
+     both with linked-seat coordination. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -122,7 +124,11 @@ test("the default mandate is at version 41, and a v40 seat reads as stale", () =
   expect(orchestratorMandateStale(38)).toBe(true);
   expect(orchestratorMandateStale(39)).toBe(true);
   expect(orchestratorMandateStale(40)).toBe(true);
-  expect(orchestratorMandateStale(41)).toBe(false);
+  expect(orchestratorMandateStale(41)).toBe(true);
+  expect(orchestratorMandateStale(42)).toBe(true);
+  expect(orchestratorMandateStale(43)).toBe(true);
+  expect(orchestratorMandateStale(44)).toBe(true);
+  expect(orchestratorMandateStale(45)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -170,6 +176,10 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
   40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
   41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
+  42: "87da100ab11b67c8309e22764c89bc37c8b81922eb358e4c2adb2eef8ce82688",
+  43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
+  44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
+  45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -448,9 +458,10 @@ test("the mandate names every attention target and uses the tool schema for shap
 /* #1026 — a fresh seat composed its first pipeline through seven sequential
    validation errors because nothing it had read named the stage shape. The
    mandate now prints that shape as the schema declares it. */
-test("the mandate names explicit graph insertion and verified terminal exhaustion (#2247)", () => {
+test("the mandate names explicit graph insertion and final-fix completion (#2247)", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("add-stage preserves edges; after:<stageId>");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('fail parks with "budget spent: N findings left"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("runs exactly N reviews and the fix of the N-th review");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("It creates no terminal re-check and no budget follow-up task");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Another gate's fail loop permits a fresh handoff; rounds stay cumulative");
 });
 
@@ -592,9 +603,9 @@ test("the mandate asks before a bug report is filed, publishes only an approved 
   expect(section).toContain("A no or an edit returns to the reporter and needs a new yes.");
   expect(section).toContain("Never file one another way.");
   /* Rule 2: seat to seat by default, and what lifts it. */
-  expect(section).toContain("Another project's work goes to its orchestrator: send_message_to_orchestrator with the task context.");
-  expect(section).toContain("Never create tasks or pipelines on its board, spawn agents there or message its workers");
-  expect(section).toContain("only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them");
+  expect(section).toContain("Other projects: send_message_to_orchestrator;");
+  expect(section).toContain("tasks, pipelines, spawns and worker messages need an explicit operator request");
+  expect(section).toContain("quoted in crossProjectRequest");
 
   /* A bespoke mandate receives both required rules once. A retained heading
      cannot suppress them when its body was edited or removed. */
@@ -775,8 +786,8 @@ test("the role table keeps the delivered default inside the structured envelope"
      (#2518) takes 1 100 more: the bug report and other-project section and
      the issue-reporter row. The visual-critic row and the UI-lane step that
      ends on it take 150 more. The prototype-review pointer adds 47 bytes;
-     the merged delivered default measures 29 363 bytes. The applyNow
-     pointer on the override-stage line adds 16 more, 29 379 in all.
+     the delivered default includes the questionnaire, board cleanup and
+     linked-seat coordination alongside the applyNow pointer: 29 367 bytes.
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
   expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
@@ -840,13 +851,13 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   /* A GitHub issue is attached when one exists and never waited for. */
   expect(delivered).toContain("no step waits for an issue");
   /* Recommended when the project has GitHub, never mandatory (operator, 2026-09-27). */
-  expect(delivered).toContain("When the project has a GitHub remote, open or reuse an issue where it helps tracking and attach it to the lane (pipeline_action attach-link)");
+  expect(delivered).toContain("Attach a useful GitHub issue with pipeline_action attach-link");
   /* Review of #2301: the merge bar names the lanes Delegatus merges
      (forge/autoMerge.ts mergeEligible): reviews passed, or budget spent with
      the last fix passed, whose kept findings the seat reads. */
-  expect(delivered).toContain("or spent their budget with the last fix passed and you have read the findings they kept");
+  expect(delivered).toContain("the last budget fix passed");
   expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed");
-  expect(delivered).toContain("and nobody reads a spent budget's kept findings first;");
+  expect(delivered).toContain("continue-review cannot add rounds; traversed budgets cannot grow");
   /* One condition for stop-after-fix, stated once (review of #2301). */
   expect(delivered.match(/stop-after-fix only when|use stop-after-fix when/g)).toEqual(["stop-after-fix only when"]);
   expect(delivered).not.toContain("kept for you to read before you merge");
@@ -938,4 +949,30 @@ test("the mandate directs prototype review to the task", () => {
     expect(mandate).toContain("Prototype review: point to the task's review.");
     expect(mandate.split("Prototype review:")).toHaveLength(2);
   }
+});
+
+
+test("the mandate names linked seats and requires coordination before a shared release", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_orchestrator lists linkedSeats");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("send_message_to_orchestrator with machine named");
+});
+
+test("questionnaire mandate upgrades the shipped pointer once and preserves bespoke wording", () => {
+  const directive = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
+  for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review."]) {
+    const delivered = orchestratorMandateForDelivery(input);
+    expect(delivered).toContain(directive);
+    expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+    expect(delivered.split(directive)).toHaveLength(2);
+  }
+  expect(orchestratorMandateForDelivery("Prototype review: our own wording.")).toContain("Prototype review: our own wording.");
+});
+
+test("the board walk clears only rows that ask nothing and replaces the shipped paragraph exactly", () => {
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("clear Waiting-for-you rows that ask nothing with dismiss_attention");
+  const previous = `## Reading the board maintenance report\nEach time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
+  // Use the current heading; only the paragraph has changed between releases.
+  const shipped = previous.replace(previous.split("\n")[0]!, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE.split("\n")[0]!);
+  expect(orchestratorMandateForDelivery(shipped)).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
+  expect(orchestratorMandateForDelivery(shipped.replace("Take its sections", "Walk its sections"))).toContain("Walk its sections");
 });

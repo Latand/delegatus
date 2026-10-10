@@ -1,3 +1,5 @@
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureProcess, signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { afterAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
@@ -20,7 +22,8 @@ const { reviewerPrompt } = await import("./prompts");
 const { outputPathFor, stdoutPathFor } = await import("./store");
 const { registerPipelineTick } = await import("../pipelines/controllerSignal");
 
-afterAll(() => {
+afterAll(async () => {
+  for (const child of sleepers) await stopFixtureProcess(child);
   restorePolicyReader();
   restoreFeatures();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
@@ -78,7 +81,7 @@ test.each([
       .toEqual([name, email, name, email]);
     if (engine === "claude") {
       const settings = JSON.parse(built.args[built.args.indexOf("--settings") + 1]!);
-      expect(settings.env).toEqual(agentPublicationIdentityEnv(process.env));
+      expect(settings.env).toEqual({ ...agentPublicationIdentityEnv(process.env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" });
     } else {
       expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
     }
@@ -220,11 +223,13 @@ test("reviewer group cleanup kills a real descendant after its detached leader e
     env: { ...process.env, CHILD_PID_FILE: childPidPath },
   });
   const leaderPid = leader.pid!;
+  let orphanIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
   const leaderClosed = new Promise<void>((resolve) => { leader.once("close", () => resolve()); });
 
   try {
     await waitForFile(childPidPath);
     const childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+    orphanIdentity = captureProcessIdentity(childPid);
     await leaderClosed;
     expect(process.kill(childPid, 0)).toBeTrue();
 
@@ -236,7 +241,8 @@ test("reviewer group cleanup kills a real descendant after its detached leader e
 
     await waitForDeath(childPid);
   } finally {
-    try { process.kill(-leaderPid, "SIGKILL"); } catch { /* group cleanup completed */ }
+    if (orphanIdentity) signalFixtureIdentity(orphanIdentity, "SIGKILL");
+    if (leader.exitCode === null && leader.signalCode === null) leader.kill("SIGKILL");
   }
 });
 
@@ -248,10 +254,12 @@ function writeArtifacts(flowId: string, round: number, stdout: string, lastMessa
 }
 
 /** A real detached process, as startHeadlessReview would leave behind. */
-function spawnSleeper(): number {
+const sleepers: ReturnType<typeof spawn>[] = [];
+function spawnSleeper(): ReturnType<typeof spawn> {
   const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  sleepers.push(child);
   child.unref();
-  return child.pid!;
+  return child;
 }
 
 async function waitForDeath(pid: number): Promise<void> {
@@ -477,7 +485,8 @@ test("a persisted launch marker without a process or artifacts reports lost trac
 });
 
 test("restart reconstruction: alive pid reports running, dead pid yields the artifact verdict", async () => {
-  const pid = spawnSleeper();
+  const sleeper = spawnSleeper();
+  const pid = sleeper.pid!;
   writeArtifacts("flow-b", 1, EVENTS);
   const round = { reviewerPid: pid, reviewerIdentity: procBackend.processIdentity(pid), spawnStartedAt: new Date().toISOString() };
 
@@ -485,7 +494,7 @@ test("restart reconstruction: alive pid reports running, dead pid yields the art
   expect(running?.status).toBe("running");
   expect(running?.sessionId).toBe("11111111-2222-3333-4444-555555555555");
 
-  process.kill(pid, "SIGKILL");
+  sleeper.kill("SIGKILL");
   await waitForDeath(pid);
   fs.writeFileSync(outputPathFor("flow-b", 1), "VERDICT: APPROVE\n\nShip it.");
   const done = headlessReviewStatus("flow-b", 1, round, "codex");
@@ -494,7 +503,8 @@ test("restart reconstruction: alive pid reports running, dead pid yields the art
 });
 
 test("restart reconstruction parks a live persisted pid whose identity was never checkpointed", () => {
-  const pid = spawnSleeper();
+  const sleeper = spawnSleeper();
+  const pid = sleeper.pid!;
   try {
     writeArtifacts("flow-restart-missing-identity", 1, JSON.stringify({
       type: "item.completed",
@@ -510,12 +520,13 @@ test("restart reconstruction parks a live persisted pid whose identity was never
     expect(status?.finalOutput).toBe("Reviewer is still investigating.");
     expect(() => process.kill(pid, 0)).not.toThrow();
   } finally {
-    process.kill(pid, "SIGKILL");
+    sleeper.kill("SIGKILL");
   }
 });
 
 test("restart reconstruction rejects a live pid whose process identity changed", () => {
-  const pid = spawnSleeper();
+  const sleeper = spawnSleeper();
+  const pid = sleeper.pid!;
   try {
     const status = headlessReviewStatus("flow-reused", 1, {
       reviewerPid: pid,
@@ -524,24 +535,26 @@ test("restart reconstruction rejects a live pid whose process identity changed",
     }, "codex");
     expect(status?.status).not.toBe("running");
   } finally {
-    process.kill(pid, "SIGKILL");
+    sleeper.kill("SIGKILL");
   }
 });
 
 test("cancel leaves a reused persisted reviewer pid untouched", () => {
-  const pid = spawnSleeper();
+  const sleeper = spawnSleeper();
+  const pid = sleeper.pid!;
   try {
     forgetHeadlessReview("flow-cancel-reused", 1, { reviewerPid: pid, reviewerIdentity: `${pid}:stale` });
     expect(() => process.kill(pid, 0)).not.toThrow();
   } finally {
-    process.kill(pid, "SIGKILL");
+    sleeper.kill("SIGKILL");
   }
 });
 
 test("restart reconstruction: dead codex run without artifact falls back to the event-stream message", async () => {
-  const pid = spawnSleeper();
+  const sleeper = spawnSleeper();
+  const pid = sleeper.pid!;
   writeArtifacts("flow-c", 2, EVENTS);
-  process.kill(pid, "SIGKILL");
+  sleeper.kill("SIGKILL");
   await waitForDeath(pid);
   const status = headlessReviewStatus("flow-c", 2, { reviewerPid: pid, reviewerIdentity: procBackend.processIdentity(pid), spawnStartedAt: new Date().toISOString() }, "codex");
   expect(status?.status).toBe("done");
@@ -564,6 +577,35 @@ test("restart reconstruction: dead run with no output at all times out past the 
 
 /* Issue #1067: the one-shot summarizer the orchestrator rotation runs shares
    this runner's account, process-group and artifact discipline. */
+
+test("a headless Claude reviewer is a clean launch on every account path: auto memory off and no shared-memory hook", () => {
+  const settingsOf = (built: ReturnType<typeof reviewerCommand>) => {
+    const value = built.args[built.args.indexOf("--settings") + 1]!;
+    return JSON.parse(value.startsWith("{") ? value : fs.readFileSync(value, "utf8")) as { autoMemoryEnabled?: boolean; env: Record<string, string>; hooks?: { UserPromptSubmit?: unknown[] } };
+  };
+  /* The hook would install for a launch holding a capability; the port is closed. */
+  const saved = { capability: process.env.LLV_SPAWN_CAPABILITY, port: process.env.LLV_VIEWER_PORT };
+  process.env.LLV_SPAWN_CAPABILITY = "synthetic-capability";
+  process.env.LLV_VIEWER_PORT = "9";
+  try {
+    const launches = [null, false, true].map((managed) => {
+      if (managed === null) return reviewerCommand({ engine: "claude", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", null, null, "synthetic-capability");
+      const home = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "clean-reviewer-"));
+      return reviewerCommand({ engine: "claude", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", null, { home, projectsDir: path.join(home, "projects"), managed }, "synthetic-capability");
+    });
+    for (const built of launches) {
+      const settings = settingsOf(built);
+      expect(settings.autoMemoryEnabled).toBe(false);
+      expect(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+      expect(JSON.stringify(settings.hooks?.UserPromptSubmit ?? [])).not.toContain("shared-memory-");
+      expect(built.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+    }
+  } finally {
+    for (const [name, value] of [["LLV_SPAWN_CAPABILITY", saved.capability], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});
 
 test("a read-only one-shot command drops the sandbox bypass and keeps the empty MCP server table", () => {
   const built = reviewerCommand(

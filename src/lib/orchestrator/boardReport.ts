@@ -2,6 +2,7 @@ import { redactMonitorText } from "@/lib/monitor/redact";
 import type { IssueRanking, OpenPullRequest, OpenPullRequestsUnavailable, RankedIssue } from "@/lib/monitor/githubEvidence";
 import type { PipelineState } from "@/lib/pipelines/types";
 import type { TaskStatus } from "@/lib/tasks/types";
+import type { NeedsYouRow } from "@/lib/attention/needsYouRead";
 
 /**
  * The board maintenance report (docs/design/board-maintenance-report.md §3, §6).
@@ -105,6 +106,7 @@ export type ReportGithub =
   | { kind: "ranked"; ranking: IssueRanking };
 
 export interface BoardReportFacts {
+  needsYou?: import("@/lib/attention/needsYouRead").NeedsYouAnswer | null;
   projectName: string;
   seatEpoch: number;
   seatConversationId: string;
@@ -128,6 +130,8 @@ export interface BoardReportFacts {
 }
 
 export interface BoardReportCounts {
+  waiting: number;
+  waitingStale: number;
   decisions: number;
   ready: number;
   stuck: number;
@@ -177,6 +181,28 @@ function title(text: string): string {
 /** Credentials and paths out first, then the line bound, as a wake does. */
 function row(text: string): string {
   return `- ${clip(redactMonitorText(text), LINE_LIMIT - 2)}`;
+}
+
+/** Full targets and evidence get space before optional title/age context. */
+function waitingRow(item: NeedsYouRow, now: number): string {
+  const subject = item.subject.reviewId ?? item.subject.pipelineId ?? item.subject.reportSeq ?? item.subject.conversationId ?? item.subject.decisionId ?? item.id;
+  const identity = oneLine(redactMonitorText(`${item.kind} ${subject}${item.taskId ? ` on task ${item.taskId}` : ""}`));
+  const hints = item.evidence.slice(0, 2).map(e => oneLine(redactMonitorText(typeof e === "string" ? e : `${e.code}: ${e.detail}`)));
+  const evidenceLimit = Math.min(REASON_LIMIT, LINE_LIMIT - 2 - identity.length - 2);
+  let evidence = hints[0] ?? "no evidence";
+  if (hints.length === 2) {
+    // Share the budget, returning unused space from a short hint to the other.
+    const shared = evidenceLimit - 2;
+    const firstLimit = Math.max(Math.floor(shared / 2), shared - hints[1].length);
+    const secondLimit = shared - Math.min(hints[0].length, firstLimit);
+    evidence = `${clip(hints[0], firstLimit)}; ${clip(hints[1], secondLimit)}`;
+  } else evidence = clip(evidence, evidenceLimit);
+  const remaining = LINE_LIMIT - 2 - identity.length - 2 - evidence.length;
+  const waited = item.since ? `, ${age(now - Date.parse(item.since))}` : "";
+  const ageContext = waited.length <= remaining ? waited : "";
+  const titleLimit = Math.min(TITLE_LIMIT, remaining - ageContext.length - 3);
+  const titleContext = titleLimit >= 8 ? ` «${clip(redactMonitorText(item.title), titleLimit) || "untitled"}»` : "";
+  return row(`${identity}${titleContext}${ageContext}: ${evidence}`);
 }
 
 /** The longest prefix of whole code points within `maxBytes` of UTF-8. */
@@ -447,7 +473,10 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
     .map((request) => row(`pull request #${request.number} ${title(request.title)}, updated ${since(now, request.updatedAt ?? request.createdAt) ?? "unknown"} ago`));
 
   const github = githubLines(facts.github, now);
+  const waiting = [...(facts.needsYou?.rows ?? [])].sort((a,b) => Number(b.stale) - Number(a.stale)).map(item => waitingRow(item, now));
   const counts: BoardReportCounts = {
+    waiting: facts.needsYou?.count ?? 0,
+    waitingStale: facts.needsYou?.staleCount ?? 0,
     decisions: decisions.length,
     ready: ready.length,
     stuck: stuck.length,
@@ -458,7 +487,7 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
     suggestions: github.suggestions.length,
   };
   const empty = Object.entries(counts).every(([key, value]) => key === "suggestions" || value === 0)
-    && facts.github.kind === "not-configured";
+    && facts.github.kind === "not-configured" && facts.needsYou !== null;
 
   /* ── header ── */
   const tasks = facts.tasks;
@@ -497,6 +526,7 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
       optional: hiddenGroups === 0,
       footer: hiddenGroups ? `(${hiddenGroups} task groups hidden by the operator are not listed.)` : null,
     },
+    waiting: { heading: "9. Waiting for you", rows: waiting, cap: 10, optional: false, note: facts.needsYou === null ? `unavailable (${facts.gaps.find(g => g.source === "needs-you")?.reason ?? "unreadable"})` : null },
     pullRequests: { heading: "7. Open pull requests no lane here carries", rows: orphanRequests, cap: CAPS.pullRequests, optional: true },
   };
   /* Rows each section shows; the byte bound cuts them in the §6 order. */
@@ -505,14 +535,15 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
 
   const renderSection = (key: string): string[] => {
     const section = sections[key]!;
+    if (key === "waiting" && facts.needsYou === null) return [`9. Waiting for you: ${section.note}.`];
     const note = section.note ? ` (${section.note})` : "";
     if (!section.rows.length) {
       if (section.optional) return [];
       return [`${section.heading}: none${note}.`, ...(section.footer ? [section.footer] : [])];
     }
     const count = shown[key]!;
-    const more = section.rows.length - count;
-    const label = key === "close"
+    const more = (key === "waiting" ? counts.waiting : section.rows.length) - count;
+    const label = key === "waiting" ? `9. Waiting for you (${counts.waiting}; ${counts.waitingStale} with evidence they no longer ask) — the operator's «Чекають на вас» for this project. Read again with dismiss_attention (no target) before clearing; each row carries its target.` : key === "close"
       ? `${section.heading} (${section.rows.length}), each with the rule that matched`
       : `${section.heading} (${section.rows.length})${note}`;
     return [label, ...section.rows.slice(0, count), ...(more > 0 ? [`(${more} more)`] : []), ...(section.footer ? [section.footer] : [])];
@@ -526,7 +557,7 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
       ...(showNext && github.next ? [github.next] : []),
       ...(github.newest ? [github.newest] : []),
     ];
-    return [...header, "", ...body, ...githubBlock].join("\n");
+    return [...header, "", ...body, ...githubBlock, ...renderSection("waiting")].join("\n");
   };
 
   let text = render();
@@ -537,9 +568,9 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
      section keeps its heading and "(k more)", so each heading and the GitHub
      block stay; the hard cut below is left to the header alone. */
   const order: [string | "next", number][] = [
-    ["running", 0], ["pullRequests", 0], ["close", 0], ["next", 0], ["idle", 0],
+    ["running", 0], ["pullRequests", 0], ["close", 0], ["next", 0], ["idle", 0], ["waiting", 3],
     ["stuck", 1], ["ready", 1], ["decisions", 1],
-    ["stuck", 0], ["ready", 0], ["decisions", 0],
+    ["waiting", 0], ["stuck", 0], ["ready", 0], ["decisions", 0],
   ];
   for (const [key, floor] of order) {
     while (Buffer.byteLength(text, "utf8") > BOARD_REPORT_CAP_BYTES) {

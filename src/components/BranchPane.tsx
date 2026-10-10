@@ -131,6 +131,9 @@ interface Props {
   dragHandle?: React.HTMLAttributes<HTMLElement>;
   /** Hides the tmux composer: headless runs and finished review rounds take no input. */
   noComposer?: boolean;
+  /** A conversation the operator reads and nobody here acts on (a relay
+      chat's, which only the relay writes): no control strip and no composer. */
+  readOnly?: boolean;
   /** Slim context bar pinned under the header (e.g. «Round 2 · ✖ REQUEST_CHANGES»). */
   banner?: React.ReactNode;
   /** Owner-provided controls that belong beside the pane's native header actions. */
@@ -184,6 +187,12 @@ interface Props {
       replaces the pane's card frame. Everything below the header — banners,
       feed, control strip and composer — stays the pane's own. */
   chrome?: { header: React.ReactNode; className: string; attributes?: Record<string, string> };
+  /** This pane is the operator's conversation window (the agent window's
+      reader), so the one hoisted composer renders here even while another
+      surface of the same conversation, the orchestrator seat, is mounted. */
+  composerPrimary?: boolean;
+  /** The composer's placeholder in place of its default (the orchestrator's own words). */
+  composerPlaceholder?: string;
   /** The phone's conversation screen: the related-task strip, its launch
       placeholder and the background-task rows leave the column — they are rows
       of the screen's `⋯` menu — so the feed starts directly under the bar. */
@@ -200,8 +209,9 @@ export function BranchPane(props: Props) {
   );
 }
 
-function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, chromeInMenu }: Props) {
+function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: hideComposer, readOnly = false, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, composerPrimary, composerPlaceholder, chromeInMenu }: Props) {
   const neverStarted = file.path.startsWith("spawn:") && file.spawn?.state === "failed";
+  const noComposer = hideComposer || readOnly;
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const paneRef = useRef<HTMLElement | null>(null);
@@ -514,10 +524,10 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer, 
             no control applies. Dormant far-zoom board nodes suppress it entirely
             (the dormant-node contract): the strip returns on activation, and
             active review panes keep it regardless of `noComposer`. */}
-        {dormant || isMobile || neverStarted ? null : <AgentControlStrip file={file} />}
+        {dormant || isMobile || neverStarted || readOnly ? null : <AgentControlStrip file={file} />}
         {dormant || neverStarted ? null : <div ref={setStepsMount} className="contents" />}
-        {composerMount && !superseded && !neverStarted ? <div ref={composerMount} className="contents" /> : null}
-        {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} />}
+        {composerMount && !superseded && !neverStarted && !readOnly ? <div ref={composerMount} className="contents" /> : null}
+        {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} />}
       </section>
     </div>
   );

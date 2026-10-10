@@ -4,11 +4,17 @@ import path from "node:path";
 
 import { afterAll, expect, spyOn, test } from "bun:test";
 
-import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { emptyLaunchProfile, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { linkedPeer } from "@/lib/links/linked";
+import { updateRemoteProjects } from "@/lib/links/boardLinks";
+import { atomicWrite, setShared, writePeers, type Link } from "@/lib/links/state";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { recordProjectRemote } from "@/lib/projects/aliases";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 import type { RuntimeHostClient } from "./client";
-import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
+import { advanceConversationMigration, drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
 import { longestLoopGap, registryLockHolder, sqliteRegistryFixture } from "@/lib/agent/registryLockHolderFixture";
 import { DeliveryProgressStore } from "./deliveryProgress";
 import { runtimeImageCapability } from "./runtimeImageStore";
@@ -17,6 +23,275 @@ import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./struct
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-message-sqlite-"));
 
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+for (const syncing of [false, true]) {
+  for (const reseating of [false, true]) {
+    for (const refusal of ["project_not_linked", "link_revoked"] as const) {
+      test(`linked admission refuses ${reseating ? "a new account reseat" : "a reservation"} after the registry writer wait (${syncing ? "synchronizing" : "live"}, ${refusal})`, async () => {
+        const fixture = sqliteRegistryFixture("llv-link-admission-wait");
+        const { registry, sqliteFilename } = fixture;
+        const artifactPath = "/sessions/link-admission.jsonl";
+        const conversation = registry.ensureConversation("codex", artifactPath, "default");
+        const generation = conversation.generations.at(-1)!;
+        registry.upsert({
+          key: { engine: "codex", sessionId: generation.id }, artifactPath,
+          cwd: generation.launchProfile.cwd, accountId: generation.accountId, status: "idle", host: null,
+          structuredHost: { kind: "codex-app-server", endpoint: "stdio:link-fixture",
+            process: { pid: 101, startIdentity: "link-fixture" }, eventCursor: 1, protocolVersion: "v2",
+            writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+          claimEpoch: 1, claimOwner: "structured-host:link-fixture", pendingAction: null,
+        });
+        if (reseating) registry.setEngineRouting("codex", "seat-active");
+        const before = registry.snapshot();
+        expect(conversation.migration).toBeNull();
+        const holder = registryLockHolder(sqliteFilename);
+        let authorized = true;
+        let commands = 0;
+        let guardReads = 0;
+        let successorCreates = 0;
+        let migrationTicks = 0;
+        const provider: SuccessorProviderPort = {
+          virtualSource: true,
+          async create(input) {
+            successorCreates++;
+            return {
+              operationId: input.operationId, nativeId: "link-successor",
+              path: "/sessions/link-successor.jsonl", continuityPaths: [], historyHash: "fixture-history",
+              host: { kind: "codex-app-server", identity: "link-successor", epoch: 1,
+                verifiedAt: "2026-10-09T00:00:00.000Z" },
+            };
+          },
+          async verify() {},
+        };
+        const client = {
+          readSession: async () => ({ conversationId: conversation.id, artifactPath,
+            sessionKey: { engine: "codex", sessionId: generation.id },
+            hostKind: "codex-app-server", host: "hosted", turn: "busy",
+            capabilities: { steer: true, structuredAttention: true } }),
+          command: async () => { commands++; throw new Error("revoked message reached the host"); },
+        } as unknown as RuntimeHostClient;
+        try {
+          await holder.hold(5_000);
+          const sending = enqueueStructuredMessage({
+            path: artifactPath, conversationId: conversation.id, policy: "queue",
+            text: "Linked words awaiting authorization.", clientMessageId: "linked-writer-wait",
+            admissionGuard: () => {
+              guardReads++;
+              if (!authorized) throw new DeliveryAdmissionRefusedError(refusal);
+            },
+          }, { enabled: () => true, client: () => syncing ? null : client, registry: () => registry,
+            kick: () => {}, requestMigrationTick: () => { migrationTicks++; }, startupFailed: () => false, progress: null });
+          // The preliminary check has passed, while the other process owns the writer.
+          for (let tries = 0; tries < 100 && guardReads === 0; tries++) await Bun.sleep(5);
+          expect(guardReads).toBeGreaterThan(0);
+          await Bun.sleep(30);
+          authorized = false;
+          await holder.release();
+          expect(await sending).toMatchObject({ ok: false, status: 409, error: refusal });
+          expect(Object.values(registry.snapshot().heldDeliveries)).toHaveLength(0);
+          expect(Object.values(registry.snapshot().deliveryOperationOwners)).toHaveLength(0);
+          // A requested migration can run independently of the refused reservation.
+          if (registry.conversation(conversation.id)!.migration) {
+            await advanceConversationMigration(conversation.id, registry, provider);
+          }
+          const after = registry.snapshot();
+          expect(successorCreates).toBe(0);
+          expect(after.migrationIntents).toEqual(before.migrationIntents);
+          expect(registry.conversation(conversation.id)!.migration).toBeNull();
+          expect(registry.conversation(conversation.id)!.generations).toEqual(conversation.generations);
+          expect(after.engineRouting).toEqual(before.engineRouting);
+          expect(migrationTicks).toBe(0);
+          expect(commands).toBe(0);
+        } finally {
+          await holder.close(); registry.close(); fixture.cleanup();
+        }
+      });
+    }
+  }
+}
+
+
+for (const syncing of [false, true]) {
+  for (const admitted of [false, true]) {
+    for (const refusal of ["project_not_linked", "link_revoked"] as const) {
+      test(`linked reseat ${admitted ? "recovers an admitted operation" : "leaves no migration when reservation admission refuses"} (${syncing ? "synchronizing" : "live"}, ${refusal})`, async () => {
+        const fixture = sqliteRegistryFixture("llv-link-reservation-wait");
+        const { registry, sqliteFilename, root } = fixture;
+        const previousState = process.env.LLV_STATE_DIR;
+        process.env.LLV_STATE_DIR = path.join(root, "link-state");
+        const holder = registryLockHolder(sqliteFilename);
+        const artifactPath = "/sessions/link-reservation.jsonl";
+        const conversation = registry.ensureConversation("codex", artifactPath, "default");
+        const generation = conversation.generations.at(-1)!;
+        const project = projectIdentityFromRemote("https://code.example.test/acme/reservation", root)!;
+        const peer: Link = { id: "fixture-peer", install: crypto.randomUUID(), label: "Other", grantId: crypto.randomUUID(),
+          token: "fixture", state: "active", lastCall: null, error: null, url: "http://127.0.0.1:1", store: crypto.randomUUID() };
+        recordProjectRemote(project);
+        setShared({ v: 1, all: false, projects: [project.project] });
+        atomicWrite(path.join(process.env.LLV_STATE_DIR, "links/self.json"), { v: 1, installId: crypto.randomUUID() });
+        writePeers({ v: 1, peers: [peer] });
+        updateRemoteProjects(peer.id, [{ key: project.project, name: "reservation" }], peer.store);
+        const guard = () => {
+          const live = linkedPeer("peer", peer.id);
+          if (!live) throw new DeliveryAdmissionRefusedError("link_revoked");
+          if (!live.projects.has(project.project)) throw new DeliveryAdmissionRefusedError("project_not_linked");
+        };
+        guard();
+        registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath,
+          cwd: generation.launchProfile.cwd, accountId: generation.accountId, status: "idle", host: null,
+          structuredHost: { kind: "codex-app-server", endpoint: "stdio:link-fixture",
+            process: { pid: 101, startIdentity: "link-fixture" }, eventCursor: 1, protocolVersion: "v2",
+            writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+          claimEpoch: 1, claimOwner: "structured-host:link-fixture", pendingAction: null });
+        registry.setEngineRouting("codex", "seat-active");
+        const original = admitted ? registry.holdDelivery(conversation.id,
+          "Words waiting for a durable reservation.", "linked-reservation-wait", "text", [], null, { policy: "queue" }) : null;
+        const before = registry.snapshot();
+        let commands = 0;
+        let successorCreates = 0;
+        let ticks = 0;
+        let waiting = false;
+        let guardDuringWait = false;
+        const originalHold = registry.holdDeliveryOffLoop.bind(registry);
+        const hold = spyOn(registry, "holdDeliveryOffLoop").mockImplementation(async (...args) => {
+          if (!waiting) {
+            await holder.hold(5_000);
+            waiting = true;
+          }
+          return originalHold(...args);
+        });
+        const provider: SuccessorProviderPort = { virtualSource: true,
+          async create(input) { successorCreates++; return { operationId: input.operationId, nativeId: "link-successor",
+            path: "/sessions/link-successor.jsonl", continuityPaths: [], historyHash: "fixture-history",
+            host: { kind: "codex-app-server", identity: "link-successor", epoch: 1, verifiedAt: "2026-10-09T00:00:00.000Z" } }; },
+          async verify() {} };
+        const client = { readSession: async () => ({ conversationId: conversation.id, artifactPath,
+          sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server", host: "hosted", turn: "busy",
+          capabilities: { steer: true, structuredAttention: true } }),
+          command: async () => { commands++; throw new Error("refused message reached the host"); } } as unknown as RuntimeHostClient;
+        try {
+          const sending = enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id, policy: "queue",
+            text: "Words waiting for a durable reservation.", clientMessageId: "linked-reservation-wait",
+            admissionGuard: () => { if (waiting) guardDuringWait = true; guard(); } },
+          { enabled: () => true, client: () => syncing ? null : client, registry: () => registry,
+            kick: () => {}, requestMigrationTick: () => { ticks++; }, startupFailed: () => false, progress: null });
+          for (let tries = 0; tries < 200 && !waiting; tries++) await Bun.sleep(5);
+          expect(waiting).toBe(true);
+          if (refusal === "project_not_linked") setShared({ v: 1, all: false, projects: [] });
+          else writePeers({ v: 1, peers: [{ ...peer, state: "revoked" }] });
+          await holder.release();
+          const result = await sending;
+          if (original) {
+            expect(result).toMatchObject({ ok: true, outcome: "held", operationId: original.command.operationId });
+            await advanceConversationMigration(conversation.id, registry, provider);
+            const delivered: string[] = [];
+            const delivery = { async deliver(input: { delivery: { command: { operationId: string } }; path: string }) {
+              expect(input.path).toBe("/sessions/link-successor.jsonl");
+              delivered.push(input.delivery.command.operationId);
+              return "delivered" as const;
+            } };
+            await drainHeldDeliveries(conversation.id, delivery, registry);
+            await drainHeldDeliveries(conversation.id, delivery, registry);
+            expect(delivered).toEqual([original.command.operationId]);
+            expect(successorCreates).toBe(1);
+            expect(registry.conversation(conversation.id)!.migration?.phase).toBe("committed");
+            expect(commands).toBe(0);
+            return;
+          }
+          expect(result).toMatchObject({ ok: false, status: 409, error: refusal, admission: "refused" });
+          expect(guardDuringWait).toBe(true);
+          if (registry.conversation(conversation.id)!.migration) await advanceConversationMigration(conversation.id, registry, provider);
+          const after = registry.snapshot();
+          expect(successorCreates).toBe(0);
+          expect(after.migrationIntents).toEqual(before.migrationIntents);
+          expect(registry.conversation(conversation.id)!.migration).toBeNull();
+          expect(registry.conversation(conversation.id)!.generations).toEqual(conversation.generations);
+          expect(after.heldDeliveries).toEqual(before.heldDeliveries);
+          expect(after.deliveryOperationOwners).toEqual(before.deliveryOperationOwners);
+          expect(after.engineRouting).toEqual(before.engineRouting);
+          expect(commands).toBe(0);
+          expect(ticks).toBe(0);
+        } finally {
+          hold.mockRestore(); await holder.close(); registry.close();
+          if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+          else process.env.LLV_STATE_DIR = previousState;
+          fixture.cleanup();
+        }
+      });
+    }
+  }
+}
+
+
+for (const syncing of [false, true]) {
+  test(`a full reservation queue rolls back its account reseat (${syncing ? "synchronizing" : "live"})`, async () => {
+    const fixture = sqliteRegistryFixture("llv-link-full-reservation");
+    const { registry } = fixture;
+    const artifactPath = "/sessions/full-reservation.jsonl";
+    try {
+      const conversation = registry.ensureConversation("codex", artifactPath, "default");
+      const generation = conversation.generations.at(-1)!;
+      for (let n = 0; n < 100; n++) registry.holdDelivery(conversation.id, "Admitted words.", `admitted-${n}`);
+      registry.setEngineRouting("codex", "seat-active");
+      const before = registry.snapshot();
+      const client = { readSession: async () => ({ conversationId: conversation.id, artifactPath,
+        sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server", host: "hosted", turn: "busy",
+        capabilities: { steer: true, structuredAttention: true } }),
+        command: async () => { throw new Error("full queue reached the host"); } } as unknown as RuntimeHostClient;
+      const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+        text: "Words exceeding the queue limit.", clientMessageId: "full-reservation", admissionGuard: () => {} },
+      { enabled: () => true, client: () => syncing ? null : client, registry: () => registry,
+        kick: () => {}, requestMigrationTick: () => {}, startupFailed: () => false, progress: null });
+      expect(result).toMatchObject({ ok: false, error: "held delivery limit reached for conversation" });
+      expect(registry.snapshot()).toEqual(before);
+    } finally {
+      registry.close(); fixture.cleanup();
+    }
+  });
+}
+
+
+for (const syncing of [false, true]) {
+  test(`an admitted linked operation keeps its terminal recovery after revocation (${syncing ? "synchronizing" : "live"})`, async () => {
+    const fixture = sqliteRegistryFixture("llv-link-admitted-recovery");
+    const { registry } = fixture;
+    const artifactPath = "/sessions/link-recovery.jsonl";
+    try {
+      const conversation = registry.ensureConversation("codex", artifactPath, "default");
+      const generation = conversation.generations.at(-1)!;
+      const original = registry.holdDelivery(conversation.id, "Already admitted words.", "link-recovery");
+      registry.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
+      registry.setEngineRouting("codex", "seat-active");
+      const before = registry.snapshot();
+      let guardReads = 0;
+      let commands = 0;
+      const client = {
+        readSession: async () => ({ conversationId: conversation.id, artifactPath,
+          sessionKey: { engine: "codex", sessionId: generation.id },
+          hostKind: "codex-app-server", host: "hosted", turn: "idle",
+          capabilities: { steer: true, structuredAttention: true } }),
+        command: async () => { commands++; throw new Error("terminal replay reached the host"); },
+      } as unknown as RuntimeHostClient;
+      const result = await enqueueStructuredMessage({
+        path: artifactPath, conversationId: conversation.id,
+        text: original.text, clientMessageId: original.clientMessageId!,
+        admissionGuard: () => { guardReads++; throw new DeliveryAdmissionRefusedError("link_revoked"); },
+      }, { enabled: () => true, client: () => syncing ? null : client, registry: () => registry,
+        kick: () => {}, requestMigrationTick: () => {}, startupFailed: () => false, progress: null });
+      expect(result).toMatchObject({ ok: true, outcome: "delivered", operationId: original.command.operationId });
+      expect(guardReads).toBe(0);
+      expect(commands).toBe(0);
+      const after = registry.snapshot();
+      expect(after.heldDeliveries).toEqual(before.heldDeliveries);
+      expect(after.deliveryOperationOwners).toEqual(before.deliveryOperationOwners);
+      expect(after.migrationIntents).toEqual(before.migrationIntents);
+      expect(registry.conversation(conversation.id)!.migration).toBeNull();
+      expect(registry.conversation(conversation.id)!.generations).toEqual(conversation.generations);
+    } finally {
+      registry.close(); fixture.cleanup();
+    }
+  });
+}
 
 test("exact-key replay after SQLite compaction and reopen never publishes another command", async () => {
   const filename = path.join(sandbox, "compacted-replay.json");

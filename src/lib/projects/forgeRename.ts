@@ -5,11 +5,13 @@ import {
   canonicalProject,
   isRemoteRepositoryIdentity,
   recordedProjectRemote,
+  recordProjectRemote,
   type RemoteProjectMove,
 } from "@/lib/projects/aliases";
 import {
   isRepositoryProjectId,
   projectIdentityFromRepositoryRoot,
+  projectIdentityFromRemote,
   type RepositoryProjectIdentity,
 } from "@/lib/projects/identity";
 import { recordProjectSuccessions, type ProjectSuccession } from "@/lib/projects/succession";
@@ -47,7 +49,7 @@ export interface ForgeRenameCandidate {
 }
 
 export type ForgeRepositoryLookup =
-  | { status: "found"; id: number }
+  | { status: "found"; id: number; fullName?: string }
   | { status: "missing" }
   | { status: "unreachable" };
 
@@ -103,14 +105,23 @@ export function forgeRenameCandidatesFromMoves(moves: readonly RemoteProjectMove
     .filter((candidate): candidate is ForgeRenameCandidate => candidate !== null);
 }
 
+function repositoryAnswer(body: { id?: unknown; full_name?: unknown }): ForgeRepositoryLookup | null {
+  if (typeof body.id !== "number" || !Number.isSafeInteger(body.id) || body.id <= 0) return null;
+  return { status: "found", id: body.id,
+    ...(typeof body.full_name === "string" && githubFullName(`github.com/${body.full_name}`)
+      ? { fullName: body.full_name } : {}) };
+}
+
 const LOOKUP_TIMEOUT_MS = 10_000;
 
 function ghLookup(fullName: string): Promise<ForgeRepositoryLookup | null> {
   return new Promise((resolve) => {
-    execFile("gh", ["api", `repos/${fullName}`, "--jq", ".id"], { timeout: LOOKUP_TIMEOUT_MS }, (error, stdout, stderr) => {
+    execFile("gh", ["api", `repos/${fullName}`, "--jq", "{id, full_name}"], { timeout: LOOKUP_TIMEOUT_MS }, (error, stdout, stderr) => {
       if (!error) {
-        const id = Number(String(stdout).trim());
-        resolve(Number.isSafeInteger(id) && id > 0 ? { status: "found", id } : null);
+        try {
+          const body = JSON.parse(String(stdout)) as { id?: unknown; full_name?: unknown };
+          resolve(repositoryAnswer(body));
+        } catch { resolve(null); }
         return;
       }
       /* A 404 from an authenticated `gh` is an answer; anything else (no `gh`,
@@ -129,10 +140,8 @@ async function restLookup(fullName: string): Promise<ForgeRepositoryLookup> {
     });
     if (response.status === 404) return { status: "missing" };
     if (!response.ok) return { status: "unreachable" };
-    const body = await response.json() as { id?: unknown };
-    return typeof body.id === "number" && Number.isSafeInteger(body.id) && body.id > 0
-      ? { status: "found", id: body.id }
-      : { status: "unreachable" };
+    const body = await response.json() as { id?: unknown; full_name?: unknown };
+    return repositoryAnswer(body) ?? { status: "unreachable" };
   } catch {
     return { status: "unreachable" };
   }
@@ -224,4 +233,51 @@ export async function forgeRenamesSettledForTests(): Promise<void> {
 /** Test seam: forget the per-process forge decisions. */
 export function resetForgeRenameDecisionsForTests(): void {
   decisions.clear();
+  sharedChecks.clear();
+}
+
+const sharedChecks = new Map<string, number>();
+const SHARED_CHECK_TTL_MS = 86_400_000;
+
+/** Discover a forge rename even when the checkout still uses its former
+ * origin. Reserve the TTL before queuing, so repeated exchange reads share
+ * one detached check. Unanswered checks retry after the same bounded TTL. */
+export function scheduleSharedForgeRenames(projects: readonly string[]): void {
+  const now = Date.now();
+  const pending: Array<{ source: string; remote: string }> = [];
+  for (const source of new Set(projects.map(canonicalProject))) {
+    const remote = recordedProjectRemote(source);
+    if (!remote || !githubFullName(remote)) continue;
+    const held = sharedChecks.get(source);
+    if (held !== undefined && now - held < SHARED_CHECK_TTL_MS) continue;
+    sharedChecks.set(source, now);
+    pending.push({ source, remote });
+  }
+  if (!pending.length) return;
+  queue = queue.then(async () => {
+    for (const { source, remote } of pending) {
+      if (canonicalProject(source) !== source) continue;
+      try {
+        const answer = await activeLookup(githubFullName(remote)!);
+        if (answer.status !== "found" || !answer.fullName || !githubFullName(`github.com/${answer.fullName}`)) continue;
+        const target = projectIdentityFromRemote(`https://github.com/${answer.fullName}`, "/");
+        if (!target || target.project === source) continue;
+        const candidate: ForgeRenameCandidate = {
+          source, sourceRemote: remote, target: target.project,
+          targetRemote: target.canonicalRemote, displayName: target.displayName,
+        };
+        // A detached check must re-prove both names on each TTL, including a
+        // previously refused pair whose old name now redirects correctly.
+        decisions.delete(decisionKey(candidate));
+        if (await decideForgeRename(candidate) !== "proven") continue;
+        recordProjectRemote(target);
+        if (recordedProjectRemote(target.project) !== target.canonicalRemote) continue;
+        await recordForgeRenames([candidate]);
+      } catch {
+        // A failed lookup or persistence never blocks the shared-list read.
+      }
+    }
+  }).catch(() => {
+    console.error("[project catalog] shared forge rename check deferred");
+  });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, LogIn, PanelLeft, PanelTop, RefreshCw, RotateCcw, ScrollText, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, LogIn, Maximize2, PanelLeft, PanelTop, RefreshCw, RotateCcw, ScrollText, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -181,6 +181,7 @@ export function OrchestratorPanel({
   collapsed = false,
   placement = "top",
   onTogglePlacement,
+  onOpenWindow,
   onSeatSignal,
   seatTasks,
   seatRead,
@@ -201,6 +202,9 @@ export function OrchestratorPanel({
   placement?: "top" | "side";
   /** The seat head's placement switch; absent draws none. */
   onTogglePlacement?: () => void;
+  /** Opens the seat's conversation in the board's agent window (#2612), from
+      the head's expand button; `from` is that button. Absent draws none. */
+  onOpenWindow?: (file: FileEntry, from: HTMLElement, placeholder: string) => void;
   /** The seat's state word and unread marker, for the header toggle's dot. */
   onSeatSignal?: (signal: SeatSignal) => void;
   /** The project's tasks as the page carries them: the titles and notes of
@@ -488,6 +492,8 @@ export function OrchestratorPanel({
   };
 
   const reportsAvailable = state.kind === "live" && !rotating && Boolean(file) && !collapsed;
+  /* The conversation the expand button opens: the live seat's, outside a rotation. */
+  const windowFile = state.kind === "live" && !rotating ? file : null;
   const reportsToggle = reportsAvailable ? (
     <button
       type="button"
@@ -602,6 +608,21 @@ export function OrchestratorPanel({
               title={t(placement === "side" ? "orchPanel.dockTop" : "orchPanel.dockSide")}
             >
               {placement === "side" ? <PanelTop aria-hidden /> : <PanelLeft aria-hidden />}
+            </button>
+          ) : null}
+          {/* The expand button: the seat's conversation in the agent window,
+              like any agent, in the glyph the reader's «Open as a full pane»
+              button wore before #2612 removed it. */}
+          {windowFile && onOpenWindow ? (
+            <button
+              type="button"
+              className="icon-btn seat-dock seat-window"
+              data-seat-window=""
+              onClick={(event) => onOpenWindow(windowFile, event.currentTarget, t("composer.placeholderOrchestrator", { project: projectName }))}
+              aria-label={t("orchPanel.seatOpenWindow")}
+              title={t("orchPanel.seatOpenWindow")}
+            >
+              <Maximize2 aria-hidden />
             </button>
           ) : null}
           {/* The fold is the control the operator reaches for before a stream,
@@ -1365,9 +1386,8 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
 
 /**
  * The advisory, and NOTHING else. It says what the server recommends and why;
- * the Rotate button in the header above is the only thing that acts, and only
- * when the operator presses it. Reaching a threshold has never rotated anything
- * and does not start here.
+ * the Rotate button acts when the operator presses it. Automatic rotation
+ * belongs to the opted-in seat tick controller.
  */
 function RotationBanner({ rotation }: { rotation: RotationHint }) {
   const { t, locale } = useLocale();
