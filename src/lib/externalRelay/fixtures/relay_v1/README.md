@@ -58,7 +58,10 @@ list; the fixture has no role in production negotiation or execution.
 
 `owner-tools-off-v3-hashes.json` pins all 35 existing fixture and evidence
 JSON files, including K/P compact claims and completions. The earlier X1,
-X2 and X3 files retain their bytes. `owner-tools-off-runner-hashes.json`
+X2 and X3 files retain their bytes. The owner-tier merge updates only the
+`card.json` pin to the reviewed owner-switch settings capture from #2677;
+the other 34 artifacts and all wire captures retain their original pins.
+`owner-tools-off-runner-hashes.json`
 was captured from the original Delegatus revision `39f654248666faa6e5deb01d59eeae305e64573f`
 through the existing runner test, under isolated state. It pins each role's
 prompts, schemas and calls, plus the OFF claim capabilities.
@@ -88,7 +91,7 @@ pointing at a closed loopback port. No service fixture generator is added here.
 | File | Bytes | SHA-256 |
 |---|---:|---|
 | `owner-tools-index.json` | 6730 | `13ffb1c99fde7ce1e74f3c7127f870b2a2c56dfc9e08a05984ae729dc926b93f` |
-| `owner-tools-off-v3-hashes.json` | 4760 | `a6605093b4b1cffc7ef56b4cdc73979a376bfde686f3f6ac904de51e18372fde` |
+| `owner-tools-off-v3-hashes.json` | 4760 | `bff586d8e1b96c2e3225d19b3227035c8da2c650d6c838dcc8ffa5814b4bde38` |
 | `owner-tools-off-runner-hashes.json` | 2879 | `709baf921762e4e9fdab4ab70eafd6141b0f7da7bac342d65ea7741374f9e9e2` |
 
 Install X4 capture: 22956 bytes, SHA-256 `791d1c97d8da0359927fb909dca6cc05839ff88e772ac2c65fd591695599367b`.

@@ -1055,3 +1055,45 @@ test.each([
   expect(posts).toEqual([]);
   expect(JSON.stringify(orchestratorSeatFor("proj-a"))).toBe(snapshot);
 });
+
+
+test("owner relay admits orchestrator messages only while its recorded run and switch are live", async () => {
+  const { procBackend } = await import("@/lib/proc");
+  const { writeRelayFile, externalRelayFile } = await import("@/lib/externalRelay/store");
+  seatActive("proj-a", SEATED_ID, "seat.jsonl");
+  const { control, posts } = controlStub();
+  const caller = "conversation_relay_owner";
+  const domain = {
+    registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
+    callerAttribution: () => ({ kind: "agent", conversationId: caller, role: null }),
+    attentionAuthority: () => ({ kind: "worker", conversationId: caller, role: null }),
+    authorizedSeats: () => [],
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }], complete: true } }),
+  } as never;
+  const service = createMcpToolService(viewerMcpBindings(undefined, control, domain), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  let sequence = 0;
+  const send = () => service.callTool("send_message_to_orchestrator", { clientRequestId: `owner-send-${++sequence}`, project: "proj-a", text: "Start the requested work" });
+  const run = { requestId: "owner_request", relayId: "relay", targetId: "target", conversationId: caller,
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null };
+  const store = { v: 1, relays: [{ id: "relay", paused: false, targets: [{ id: "target", enabled: true, ownerTier: true }] }] };
+  const ledger = (runs: unknown[]) => writeRelayFile(externalRelayFile("runs"), { v: 1, runs });
+  writeRelayFile(externalRelayFile("relays"), store);
+  ledger([]);
+  expect(await send()).toMatchObject({ ok: false, code: "orchestrator_relay_refused" });
+  ledger([run]);
+  expect(await send()).toMatchObject({ ok: true });
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.body).toMatchObject({ conversationId: SEATED_ID, origin: { kind: "agent", role: "agent", conversationId: caller } });
+  store.relays[0]!.targets[0]!.ownerTier = false;
+  writeRelayFile(externalRelayFile("relays"), store);
+  expect(await send()).toMatchObject({ ok: false, code: "orchestrator_relay_refused" });
+  store.relays[0]!.targets[0]!.ownerTier = true;
+  writeRelayFile(externalRelayFile("relays"), store);
+  ledger([{ ...run, conversationId: "conversation_someone_else" }]);
+  expect(await send()).toMatchObject({ ok: false, code: "orchestrator_relay_refused" });
+  ledger([{ ...run, ownerIdentity: "stale" }]);
+  expect(await send()).toMatchObject({ ok: false, code: "orchestrator_relay_refused" });
+  ledger([]);
+  expect(await send()).toMatchObject({ ok: false, code: "orchestrator_relay_refused" });
+  expect(posts).toHaveLength(1);
+});

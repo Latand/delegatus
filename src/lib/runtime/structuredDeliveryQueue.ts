@@ -99,6 +99,10 @@ export interface StructuredDeliveryQueuePort {
       The journal cannot answer that during the outage in which it is written,
       which is exactly when it has to be honoured. */
   settled?(operationId: string): boolean | Promise<boolean>;
+  /** Synchronous live cutoff at the engine call, after all journal/health waits. */
+  authorizeDispatch?(operationId: string): void;
+  /** Durable caller attribution for background queue diagnostics. */
+  diagnosticError?(...args: unknown[]): void;
   /** The writer claim that currently owns this conversation's structured host —
       the durable answer to "who may write to the engine right now" (#1131).
       Recorded when a send enters delivery and compared when one is found still
@@ -761,10 +765,11 @@ function isThreadReadTimeout(error: unknown): boolean {
   return /thread\/read.*timed out|request timed out:\s*thread\/read/i.test(failureReason(error));
 }
 
-async function sendWithReadRetry(host: EngineHost, entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
+async function sendWithReadRetry(host: EngineHost, entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorize?: () => void): Promise<DeliveryReceipt> {
   for (let attempt = 1; attempt <= THREAD_READ_ATTEMPTS; attempt += 1) {
     try {
-      return await (attempt === 1 && firstDispatch ? host.send(entry, firstDispatch) : host.send(entry));
+      authorize?.();
+      return await (attempt === 1 && firstDispatch ? host.send(entry, firstDispatch, authorize) : host.send(entry, undefined, authorize));
     } catch (error) {
       if (attempt === THREAD_READ_ATTEMPTS || !isThreadReadTimeout(error)) throw error;
     }
@@ -1113,6 +1118,11 @@ export class StructuredDeliveryQueue {
     return rawEffects;
   }
 
+  private diagnosticError(...args: unknown[]): void {
+    if (this.port.diagnosticError) this.port.diagnosticError(...args);
+    else console.error(...args);
+  }
+
   /**
    * A pass that could not list the journal reached no message, so every open
    * record says so, with the moment the next pass will try (incident
@@ -1136,7 +1146,7 @@ export class StructuredDeliveryQueue {
         progress.note(record.operationId, record.conversationId, note);
       }
     } catch (noteError) {
-      console.error("[structured delivery] progress record failed", { error: failureReason(noteError) });
+      this.diagnosticError("[structured delivery] progress record failed", { error: failureReason(noteError) });
     }
   }
 
@@ -1154,7 +1164,7 @@ export class StructuredDeliveryQueue {
         return blocked;
       } catch (error) {
         this.targetErrors.set(conversationId, failureReason(error));
-        console.error("[structured delivery] conversation drain failed", {
+        this.diagnosticError("[structured delivery] conversation drain failed", {
           conversationId,
           error: failureReason(error),
         });
@@ -1278,14 +1288,14 @@ export class StructuredDeliveryQueue {
       ...(options.sinceMs !== undefined ? { sinceMs: options.sinceMs } : {}),
     };
     try { progress.note(effect.operationId, effect.conversationId, note); }
-    catch (error) { console.error("[structured delivery] progress record failed", { error: failureReason(error) }); }
+    catch (error) { this.diagnosticError("[structured delivery] progress record failed", { error: failureReason(error) }); }
   }
 
   private settleProgress(operationId: string, status: string, reason: string | null | undefined): void {
     const progress = this.port.progress;
     if (!progress || !TERMINAL_DELIVERY_STATUSES.has(status)) return;
     try { progress.settle(operationId, progressTerminalState(status), reason ?? null); }
-    catch (error) { console.error("[structured delivery] progress record failed", { error: failureReason(error) }); }
+    catch (error) { this.diagnosticError("[structured delivery] progress record failed", { error: failureReason(error) }); }
   }
 
   /**
@@ -1365,7 +1375,7 @@ export class StructuredDeliveryQueue {
       const quietSince = Math.max(Date.parse(record.phaseSince), Date.parse(record.lastProgressAt));
       if (!(now - quietSince >= this.timing.stallMs)) continue;
       try { progress?.stalled(record.operationId); }
-      catch (error) { console.error("[structured delivery] progress record failed", { error: failureReason(error) }); }
+      catch (error) { this.diagnosticError("[structured delivery] progress record failed", { error: failureReason(error) }); }
     }
     if (this.lastListed) this.settleUnlistedProgress(this.lastListed);
     let wake = now - this.lastPassStartedAt >= this.timing.safetyPassMs;
@@ -1383,7 +1393,7 @@ export class StructuredDeliveryQueue {
     }
     if (unlistedDue.length > 0) {
       try { this.port.unlistedWakeDue?.(unlistedDue); }
-      catch (error) { console.error("[structured delivery] unlisted wake failed", { error: failureReason(error) }); }
+      catch (error) { this.diagnosticError("[structured delivery] unlisted wake failed", { error: failureReason(error) }); }
     }
     if (wake && !this.activeDrain) await this.drain({ safety: true }).catch(() => undefined);
   }
@@ -1414,7 +1424,7 @@ export class StructuredDeliveryQueue {
       /* The lane moved on: its record says what it waits on now. */
       if (lane.current?.operationId !== operationId || lane.current.phase !== phase) return;
       try { this.port.progress?.note(operationId, lane.conversationId, { waitReason: phase, detail, attempted }); }
-      catch (error) { console.error("[structured delivery] progress record failed", { error: failureReason(error) }); }
+      catch (error) { this.diagnosticError("[structured delivery] progress record failed", { error: failureReason(error) }); }
     };
     const release = () => { if (lane.reconciling === fence) lane.reconciling = null; };
     let overdue = false;
@@ -1436,7 +1446,7 @@ export class StructuredDeliveryQueue {
         }
       })
       .catch((error) => {
-        console.error("[structured delivery] lane reconciliation failed", { operationId, error: failureReason(error) });
+        this.diagnosticError("[structured delivery] lane reconciliation failed", { operationId, error: failureReason(error) });
       })
       .finally(() => { clearTimeout(bound); release(); });
   }
@@ -2095,7 +2105,8 @@ export class StructuredDeliveryQueue {
         // later queued retry must establish its own canonical evidence.
         this.firstDispatches.delete(effect.operationId);
         if (steersIntoTurn && host.steer) {
-          const outcome = await host.steer(entry, firstDispatch);
+          this.port.authorizeDispatch?.(effect.operationId);
+          const outcome = await host.steer(entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId));
           const settling = this.settleObservedSteer(effect, outcome).finally(() => {
             this.activeSteers.delete(effect.operationId);
             this.retrySoon();
@@ -2107,7 +2118,7 @@ export class StructuredDeliveryQueue {
           void settling.catch(() => undefined);
           continue;
         }
-        receipt = await sendWithReadRetry(host, entry, firstDispatch);
+        receipt = await sendWithReadRetry(host, entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId));
       } catch (error) {
         const reason = failureReason(error);
         if (error instanceof StructuredSendRefusedError || error instanceof NativeQueueProtocolRefusal) {
@@ -2424,7 +2435,7 @@ export class StructuredDeliveryQueue {
       if (!oldest.done) {
         this.unprojectedTerminals.delete(oldest.value);
         this.projectingTerminals.delete(oldest.value);
-        console.error("[structured delivery] owed terminal projection released at the retry cap", { operationId: oldest.value });
+        this.diagnosticError("[structured delivery] owed terminal projection released at the retry cap", { operationId: oldest.value });
       }
     }
     this.unprojectedTerminals.add(operationId);
@@ -2444,7 +2455,7 @@ export class StructuredDeliveryQueue {
       try {
         established = await this.port.projectTerminal?.(operationId) ?? true;
       } catch (error) {
-        console.error("[structured delivery] terminal projection after a lost acknowledgement failed", {
+        this.diagnosticError("[structured delivery] terminal projection after a lost acknowledgement failed", {
           operationId,
           error: failureReason(error),
         });
@@ -2930,7 +2941,7 @@ export class StructuredDeliveryQueue {
   private deferContendedRecovery(effect: Pick<DeliveryEffect, "conversationId" | "operationId">, attempts: number): void {
     const spacingMs = Math.min(CONTENDED_RECOVERY_FIRST_SPACING_MS * 2 ** (attempts - 1), CONTENDED_RECOVERY_MAX_SPACING_MS);
     this.contendedRecoveries.set(effect.operationId, { attempts, nextAt: Date.now() + spacingMs });
-    console.error("[structured delivery] host recovery deferred by account mutation contention", {
+    this.diagnosticError("[structured delivery] host recovery deferred by account mutation contention", {
       conversationId: effect.conversationId,
       operationId: effect.operationId,
       attempts,

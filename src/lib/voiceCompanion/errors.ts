@@ -20,6 +20,7 @@ export const COMPANION_MESSAGES = {
   INVALID_SETTINGS: ["That value cannot be saved.", "Це значення не вдається зберегти."],
   NO_PROJECT: ["Open a project to talk about its work.", "Відкрийте проєкт, щоб говорити про його роботу."],
   COMPANION_UNAVAILABLE: ["Voice Delegatus is unavailable. Try again.", "Голосовий Delegatus недоступний. Спробуйте ще раз."],
+  CONTEXT_UNCONFIRMED: ["The selected project is not confirmed yet. Your microphone is paused while Delegatus retries.", "Вибраний проєкт ще не підтверджено. Мікрофон призупинено, поки Delegatus повторює запит."],
 } as const;
 export function companionErrorMessage(code: string, locale: Locale): string {
   if (code.startsWith("DELIVERY_REFUSED:")) {

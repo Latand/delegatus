@@ -3,8 +3,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { configFilePath, statePath } from "@/lib/configDir";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
-import { canonicalProject } from "@/lib/projects/aliases";
-import type { CompanionEvent, Delivery, Locale, Proposal } from "./contract";
+import type { CompanionEvent, CompanionUsage, Delivery, Locale, Proposal } from "./contract";
+import type { BackendTokens } from "./usage";
 import type { DelegationCode } from "./delegationOutcome";
 import type { OperatorInput } from "./gate";
 
@@ -20,6 +20,7 @@ export interface CompanionSettings {
   /** A mint whose answer was lost may have opened a provider session nobody
    * can name; no new voice session starts until the operator releases it. */
   uncertainSession: boolean;
+  lastSession?: { usd: number; seconds: number; endedAt: number; incomplete: boolean };
 }
 export interface StoredProposal {
   proposal: Proposal;
@@ -41,8 +42,17 @@ export interface StoredProposal {
   /** What admitted the send: no confirmation asked, a tap, or the operator's spoken answer. */
   via?: "auto" | "tap" | "speech";
   reports: string[];
+  retargetCount?: number;
+  /** Receipt publication survives the bounded event ring. */
+  publishedReceipt?: { clientMessageId: string; operationId: string };
 }
+export type SessionStarter = { memberId: string } | { operator: true };
 export interface StoredSession {
+  startedBy?: SessionStarter;
+  currentProject?: string | null;
+  reportWatermarks?: Record<string, number>;
+  spokenReports?: string[];
+  endedAt?: number;
   authority?: "live-model";
   providerId?: string;
   /** The provider session may still be open (and billing): set at mint, cleared
@@ -57,7 +67,7 @@ export interface StoredSession {
   mintRequestId?: string;
   mintDigest?: string;
   answerSdp?: string;
-  usage?: { seconds: number; responses: Record<string, { usd: number | null; complete: boolean }> };
+  usage?: { seconds: number; responses: Record<string, { usd: number | null; complete: boolean; tokens?: BackendTokens; responseId?: string }> };
   id: string;
   project: string;
   locale: Locale;
@@ -88,6 +98,13 @@ function sessionValid(key: string, session: unknown): boolean {
     || !Number.isSafeInteger(session.seq) || (session.seq as number) < 0 || !Array.isArray(session.inputs)
     || !Array.isArray(session.events) || session.events.length > 512 || !record(session.proposals)) return false;
   if (session.authority !== undefined && session.authority !== "live-model") return false;
+  if (session.currentProject !== undefined && session.currentProject !== null && !identifier(session.currentProject)) return false;
+  if (session.startedBy !== undefined && (!record(session.startedBy)
+    || !(Object.keys(session.startedBy).length === 1 && (identifier(session.startedBy.memberId) || session.startedBy.operator === true)))) return false;
+  if (session.endedAt !== undefined && !Number.isFinite(session.endedAt)) return false;
+  if (session.reportWatermarks !== undefined && (!record(session.reportWatermarks)
+    || Object.entries(session.reportWatermarks).some(([project, seq]) => !identifier(project) || !Number.isSafeInteger(seq) || (seq as number) < 0))) return false;
+  if (session.spokenReports !== undefined && (!Array.isArray(session.spokenReports) || session.spokenReports.length > 256 || !session.spokenReports.every(identifier))) return false;
   if (session.providerId !== undefined && !identifier(session.providerId)) return false;
   if (session.remoteOpen !== undefined && typeof session.remoteOpen !== "boolean") return false;
   if (session.mintUncertain !== undefined && typeof session.mintUncertain !== "boolean") return false;
@@ -97,7 +114,10 @@ function sessionValid(key: string, session: unknown): boolean {
   if (session.answerSdp !== undefined && (typeof session.answerSdp !== "string" || session.answerSdp.length > 96_000)) return false;
   if (session.usage !== undefined && (!record(session.usage) || typeof session.usage.seconds !== "number" || !Number.isFinite(session.usage.seconds)
     || session.usage.seconds < 0 || !record(session.usage.responses) || Object.values(session.usage.responses).some(row => !record(row)
-      || typeof row.complete !== "boolean" || (row.usd !== null && (typeof row.usd !== "number" || !Number.isFinite(row.usd) || row.usd < 0))))) return false;
+      || typeof row.complete !== "boolean" || (row.responseId !== undefined && !identifier(row.responseId))
+      || (row.tokens !== undefined && (!record(row.tokens) || ![row.tokens.input, row.tokens.cached, row.tokens.cacheWrite, row.tokens.output].every(n => Number.isSafeInteger(n) && (n as number) >= 0)
+        || (row.tokens.cached as number) + (row.tokens.cacheWrite as number) > (row.tokens.input as number)))
+      || (row.usd !== null && (typeof row.usd !== "number" || !Number.isFinite(row.usd) || row.usd < 0))))) return false;
   if (session.inputs.some(input => !record(input) || !identifier(input.itemId) || typeof input.text !== "string" || typeof input.final !== "boolean"
     || (input.turn !== undefined && (!Number.isSafeInteger(input.turn) || (input.turn as number) < 0)))) return false;
   if (session.events.some(event => !record(event) || event.sessionId !== key || event.version !== 1 || !identifier(event.eventId)
@@ -105,10 +125,13 @@ function sessionValid(key: string, session: unknown): boolean {
   return Object.entries(session.proposals).every(([id, held]) => {
     if (!record(held) || !record(held.proposal) || (held.proposal.authority !== undefined && held.proposal.authority !== "live-model") || held.proposal.proposalId !== id || !identifier(id)
       || !identifier(held.proposal.callId) || !identifier(held.proposal.sourceItemId) || typeof held.proposal.instruction !== "string"
-      || !recipientValid(held.proposal.recipient) || canonicalProject((held.proposal.recipient as { project: string }).project) !== canonicalProject(session.project as string)
+      || !recipientValid(held.proposal.recipient)
       || typeof held.sourceText !== "string" || !Number.isFinite(held.expiresAt) || !["pending", "cancelled", "admitted"].includes(held.state as string)
       || !Array.isArray(held.reports) || !held.reports.every(identifier)
       || (held.renewed !== undefined && typeof held.renewed !== "boolean")
+      || (held.retargetCount !== undefined && (!Number.isSafeInteger(held.retargetCount) || (held.retargetCount as number) < 0 || (held.retargetCount as number) > 1))
+      || (held.publishedReceipt !== undefined && (!record(held.publishedReceipt)
+        || !identifier(held.publishedReceipt.clientMessageId) || !identifier(held.publishedReceipt.operationId)))
       || (held.sourceTurn !== undefined && (!Number.isSafeInteger(held.sourceTurn) || (held.sourceTurn as number) < 0))) return false;
     if (held.state !== "admitted") return held.delivery === undefined && held.text === undefined && held.status === undefined;
     return record(held.delivery) && held.delivery.proposalId === id && held.delivery.callId === held.proposal.callId
@@ -176,11 +199,34 @@ export class CompanionStorage {
     const document = this.read();
     const month = new Date(this.now()).toISOString().slice(0, 7);
     const charges = Object.values(document.charges).filter(charge => charge.month === month);
+    const last = Object.values(document.sessions).filter(session => session.closed && document.charges[session.id])
+      .map(session => ({ session, endedAt: session.endedAt ?? (() => {
+        const closed = session.events.findLast(event => event.type === "session.closed");
+        return closed ? session.createdAt + closed.atMs : undefined;
+      })() })).filter((row): row is { session: StoredSession; endedAt: number } => row.endedAt !== undefined)
+      .sort((a, b) => b.endedAt - a.endedAt)[0];
+    const lastCharge = last ? document.charges[last.session.id] : undefined;
     return { ...document.settings, keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
       usageUsd: charges.reduce((sum, charge) => sum + (charge.reserved ? charge.observedUsd ?? 0 : charge.usd), 0),
       reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd - (charge.observedUsd ?? 0), 0),
       incomplete: charges.some(charge => charge.incomplete),
-      uncertainSession: Object.values(document.sessions).some(uncertainMint) };
+      uncertainSession: Object.values(document.sessions).some(uncertainMint),
+      ...(last && lastCharge ? { lastSession: { usd: lastCharge.reserved ? lastCharge.observedUsd ?? 0 : lastCharge.usd,
+        seconds: last.session.usage?.seconds ?? 0, endedAt: last.endedAt, incomplete: lastCharge.reserved || lastCharge.incomplete } } : {}) };
+  }
+  /** Observed spend excludes held reservations; settled incomplete spend keeps
+   * its conservative charge and never claims a final provider total. */
+  usageFor(id: string): CompanionUsage {
+    const document = this.read();
+    if (!document.sessions[id]) throw new Error("SESSION_UNAVAILABLE");
+    const charge = document.charges[id];
+    const month = new Date(this.now()).toISOString().slice(0, 7);
+    return { callUsd: charge ? charge.reserved ? charge.observedUsd ?? 0 : charge.usd : 0,
+      callFinal: !!charge && !charge.reserved && !charge.incomplete,
+      callIncomplete: !!charge?.incomplete, month,
+      monthUsd: Object.values(document.charges).filter(row => row.month === month)
+        .reduce((sum, row) => sum + (row.reserved ? row.observedUsd ?? 0 : row.usd), 0),
+      monthCapUsd: document.settings.monthlyCapUsd };
   }
   /** The operator's word that the provider session a lost mint answer may have
    * opened is closed: the operator can see the provider's own usage, this
