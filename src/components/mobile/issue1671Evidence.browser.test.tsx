@@ -7559,33 +7559,59 @@ describe("rotation retains the successor and mandate through adoption and reopen
     const browser = await launchChromium();
     const frames: unknown[] = [];
     try {
-      for (const mobile of [true, false]) for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
-        const label = `${mobile ? "phone" : "desktop"}-${locale}-${scheme}`;
+      for (const { mobile, width, height } of [{ mobile: true, width: 390, height: 844 }, { mobile: false, width: 1000, height: 700 }, { mobile: false, width: 1440, height: 900 }])
+      for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${mobile ? "phone" : "desktop"}-${width}-${locale}-${scheme}`;
         const { page, context, pageErrors } = await openFixture(browser, `${base}?kanban=1&seatless=seatonly&firstmessage=s&handover=answered&rotation=1#p=atlas`,
-          { width: mobile ? 390 : 1440, height: mobile ? 844 : 900 }, scheme, locale, "reduce", mobile);
+          { width, height }, scheme, locale, "reduce", mobile);
         try {
           if (mobile) {
             await page.locator("[data-mobile2-seat-open]").first().click();
             await page.locator('[data-mobile2-open="menu"]').click();
             await page.locator('[data-testid="mobile-menu-seat"]').click();
+          } else {
+            /* At 1000 px the board folds the seat; unfold it to reach Rotate. */
+            const fold = page.locator('[data-seat-collapse][aria-expanded="false"]').first();
+            await page.locator("[data-seat-collapse]").first().waitFor();
+            if (await fold.count()) await fold.click();
           }
           await page.locator("[data-orchestrator-rotate]").first().click();
           await page.locator("[data-orchestrator-confirm]").first().click();
           await page.locator("[data-mandate-card]").first().waitFor();
           await page.waitForFunction(() => document.querySelector("[data-mandate-card]")?.textContent?.includes("v44") && document.querySelectorAll("[data-mandate-card] summary").length === 2);
           const read = async (step: string, bubbles = 0) => {
+            /* A field unfolded from 0 px is re-measured on the next frame. */
+            await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
             const state = await page.evaluate(() => {
               const root = document.querySelector("[data-log-feed-scroller]")!;
               const card = root.querySelector<HTMLElement>("[data-mandate-card]");
               const clone = root.cloneNode(true) as HTMLElement; clone.querySelectorAll("[data-mandate-card], [data-user-bubble]").forEach((node) => node.remove());
               const rect = card?.getBoundingClientRect();
               const identity = document.querySelector('[data-mobile2-screen="chat"]')?.getAttribute("data-mobile2-conversation");
+              /* The card's head: the copy control rides the title's row, and a
+                 meta line of its own never opens on a separator. */
+              const head = card?.querySelector<HTMLElement>("[data-mandate-card-head]");
+              const middle = (node: Element | null | undefined) => { const box = node?.getBoundingClientRect(); return box ? box.top + box.height / 2 : NaN; };
+              const titleNode = head?.children[1]; const meta = head?.querySelector<HTMLElement>("[data-mandate-card-meta]");
+              const metaOwnLine = Boolean(meta && titleNode && meta.getBoundingClientRect().top >= titleNode.getBoundingClientRect().bottom - 1);
+              /* An empty composer is as tall as the placeholder it shows. */
+              const field = document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input-unit"] textarea');
+              const predecessor = document.querySelector<HTMLElement>(".seat-head [data-orchestrator-predecessor]");
+              const rotate = document.querySelector<HTMLElement>(".seat-head [data-orchestrator-rotate]");
               return { cards: root.querySelectorAll("[data-mandate-card]").length, title: card?.textContent, identity,
+                copyOffset: Math.abs(middle(head?.querySelector("button")) - middle(titleNode)), metaOwnLine,
+                metaLead: Boolean(metaOwnLine && meta?.innerText.trim().startsWith("·")), handoffHeading: Boolean(card?.textContent?.includes("Handoff from your predecessor")),
+                placeholderClipped: field && !field.value ? field.scrollHeight - field.clientHeight : null,
+                predecessorOffset: predecessor && rotate && predecessor.offsetParent ? Math.abs(middle(predecessor) - middle(rotate)) : null,
+                predecessorFramed: predecessor && predecessor.offsetParent ? getComputedStyle(predecessor).borderTopWidth !== "0px" : null,
                 outside: clone.textContent?.includes("Keep the project moving."), userBubbles: root.querySelectorAll("[data-user-bubble]").length,
                 overflow: document.documentElement.scrollWidth - innerWidth, width: rect?.width, left: rect?.left, right: rect?.right, hash: location.hash };
             });
             await page.screenshot({ path: path.join(out, `${label}-${step}.png`) });
             expect(state.cards).toBe(1); expect(state.title).toContain("v44"); expect(state.outside).toBe(false); expect(state.userBubbles).toBe(bubbles); expect(state.overflow).toBeLessThanOrEqual(1);
+            expect(state.copyOffset).toBeLessThanOrEqual(4); expect(state.metaLead).toBe(false); expect(state.handoffHeading).toBe(false);
+            if (state.placeholderClipped !== null) expect(state.placeholderClipped).toBeLessThanOrEqual(1);
+            if (state.predecessorOffset !== null) { expect(state.predecessorOffset).toBeLessThanOrEqual(1); expect(state.predecessorFramed).toBe(true); }
             if (mobile) expect(state.identity).toBe("conversation_first_message");
             frames.push({ label, step, ...state });
           };
@@ -7637,7 +7663,7 @@ describe("rotation retains the successor and mandate through adoption and reopen
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/first-message", { recursive: true });
-      fs.writeFileSync("evidence/first-message/rotation.json", JSON.stringify({ viewports: [{ width: 390, height: 844 }, { width: 1440, height: 900 }], frames }, null, 2) + "\n");
+      fs.writeFileSync("evidence/first-message/rotation.json", JSON.stringify({ viewports: [{ width: 390, height: 844 }, { width: 1000, height: 700 }, { width: 1440, height: 900 }], frames }, null, 2) + "\n");
     } finally { await browser.close(); stop(); fs.rmSync(ledgerRoot, { recursive: true, force: true }); }
   }, 240_000);
 });

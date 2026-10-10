@@ -1944,6 +1944,12 @@ test("the kanban seat's inline header draws the predecessor link as a glyph, wit
   expect(inline.getAttribute("aria-label")).toBe(label);
   expect(inline.getAttribute("title")).toContain(label);
   expect(inline.getAttribute("title")).toContain(translate("en", "orchPanel.predecessorTitle"));
+  /* It wears the row's button frame and sits on the row's centre line, so it
+     reads as an action beside Rotate rather than a stray glyph above it. */
+  expect(inline.className).toContain("border-border");
+  expect(inline.className).toContain("h-6");
+  expect(inline.className).toContain("self-center");
+  expect(inline.className).not.toContain("self-start");
 
   /* The dock, for contrast: the same link, with its label drawn. */
   incumbentStatus = incumbent({ conversationId: "conversation_successor", predecessorConversationId: "conversation_predecessor" });

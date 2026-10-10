@@ -1580,7 +1580,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = (fmTarget as { path: string }).path;
     if (url.searchParams.get("scope") === "all") return json({ all: { conversationIds: [FM_CONVERSATION_ID], paths: [path], previous: { conversationIds: [], paths: [] } } });
     return json({
-      seat: { project: PROJECT, seatEpoch: 1, conversationId: FM_CONVERSATION_ID, path, mandate: fmText(), promptVersion: ROTATION ? 44 : 1, state: "active", designatedAt: iso(30), intent: { clientRequestId: "seat-first-message", mode: "spawn", launchId: ROTATION ? FM_LAUNCH_ID : null, error: null } },
+      seat: { project: PROJECT, seatEpoch: 1, conversationId: FM_CONVERSATION_ID, path, mandate: fmText(), promptVersion: ROTATION ? 44 : 1, ...(ROTATION ? { predecessorConversationId: idOf(SEAT_PATH!) } : {}), state: "active", designatedAt: iso(30), intent: { clientRequestId: "seat-first-message", mode: "spawn", launchId: ROTATION ? FM_LAUNCH_ID : null, error: null } },
       pending: null, exists: true,
     });
   }
