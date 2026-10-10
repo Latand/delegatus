@@ -44,6 +44,7 @@ function board(options: { seat?: boolean; host?: Partial<WiresHost> } = {}) {
   document.body.append(root);
   const place = (selector: string, box: DOMRect) => { const node = root.querySelector<HTMLElement>(selector); if (node) node.getBoundingClientRect = () => box; };
   place("[data-kanban-seat]", rect(0, 60, 360, 820));
+  place(".board", rect(370, 70, 1070, 830));
   place(".column", rect(400, 80, 300, 800));
   place(".col-body", rect(400, 120, 300, 760));
   place('[data-id="task:a"]', rect(412, 130, 276, 120));
@@ -434,6 +435,27 @@ describe("a wire under the pointer and the keyboard, and riding its column's scr
     expect(root.querySelector("g[data-wire-end] .oa-port")!.getAttribute("cy")).toBe("152");
   });
 
+  test("the board scrolled sideways: a card out of its visible part has no wire, and the wires that stay are cut to that part", () => {
+    const { layer, root, drawn } = board();
+    /* The board shows from x 390: the column's gutter reaches 6 px past its edge, the cards stay in view. */
+    const boardNode = root.querySelector<HTMLElement>(".board")!;
+    for (const axis of ["overflow-x", "overflow-y"]) boardNode.style.setProperty(axis, "auto");
+    boardNode.getBoundingClientRect = () => rect(390, 70, 1050, 830);
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+    expect(drawn()).toEqual(["a"]);
+    const clip = root.querySelector<HTMLElement>("[data-oa-clip]")!;
+    expect([clip.style.left, clip.style.width]).toEqual(["390px", "310px"]);
+    /* The seat's piece is drawn from the seat's edge across the board's visible part, outside the column's box. */
+    const cut = root.querySelector(`${root.querySelector("g[data-wire]")!.getAttribute("clip-path")!.slice(4, -1)} path`)!.getAttribute("d")!;
+    expect(cut).toBe("M360,60 H1440 V900 H360 Z M390,120 H700 V880 H390 Z");
+    /* Scrolled on until the card's left edge is under the board's: its wire goes, and with it the layer's last wire. */
+    for (const id of ["a", "b"]) root.querySelector<HTMLElement>(`[data-id="task:${id}"]`)!.getBoundingClientRect = () => rect(392, id === "a" ? 130 : 262, 276, 120);
+    layer.sync();
+    layer.probe.advance(0);
+    expect(drawn()).toEqual([]);
+    expect(root.querySelectorAll("g[data-wire-end], .oa-stub").length).toBe(0);
+  });
+
   describe("with ScrollTimeline", () => {
     const timelines: { source: Element; axis: string }[] = [];
     const animations: { node: Element; frames: Keyframe[]; options: Omit<KeyframeAnimationOptions, "timeline"> & { timeline?: { source: Element; axis: string } } }[] = [];
@@ -495,6 +517,7 @@ describe("a wire under the pointer and the keyboard, and riding its column's scr
       const { layer, root } = board();
       const page = document.createElement("div");
       page.className = "kb-page";
+      page.getBoundingClientRect = () => rect(0, 0, 1440, 900);
       root.before(page);
       page.append(root);
       scroller(page, "y", 500, 60);
@@ -672,8 +695,26 @@ describe("route geometry across the board's layouts", () => {
   test("no hit stroke of the seat's pieces covers a column link", () => {
     const { act, spec } = layout({ ...SCROLL, placement: "top", cards: { a: ["assigned", [569, 840, 1023, 1150]] } });
     act("a");
-    const cut = document.querySelector(`${document.querySelector("g[data-wire]")!.getAttribute("clip-path")!.slice(4, -1)} path`)!.getAttribute("d")!;
+    const cut = document.querySelector(`${document.querySelector("g[data-wire] path.oa-hit")!.getAttribute("clip-path")!.slice(4, -1)} path`)!.getAttribute("d")!;
     for (const [left, top, right, bottom] of spec.links!) expect(cut).toContain(`M${left},${top} H${right} V${bottom} H${left} Z`);
+  });
+
+  /* The column tabs beside a 12 px hit stroke with the seat at the side and on the phone: routes take no
+     notice of them, as before, and only the hit strokes are cut there (1440-side, 390). */
+  const cuts = (root: ParentNode) => {
+    const of = (node: Element) => root.querySelector(`${node.getAttribute("clip-path")!.slice(4, -1)} path`)!.getAttribute("d")!;
+    const group = root.querySelector("g[data-wire]")!;
+    return { wire: of(group), hit: of(group.querySelector("path.oa-hit")!) };
+  };
+  test("seat at the side: the bus runs under the row of column tabs as before, and its hit stroke is cut at each tab", () => {
+    const { act, wire, spec } = layout({ ...SIDE, placement: "side", cards: { a: ["assigned", [735, 435, 1189, 702]] } });
+    act("a");
+    expect(wire("a")).toBe("M414,91 H707 Q713,91 713,97 V451 Q713,457 719,457 H731.5");
+    const cut = cuts(document);
+    for (const [left, top, right, bottom] of spec.links!) {
+      expect(cut.hit).toContain(`M${left},${top} H${right} V${bottom} H${left} Z`);
+      expect(cut.wire).not.toContain(`M${left},${top} H${right} V${bottom} H${left} Z`);
+    }
   });
 
   test("a row of column links clear of the gutter: one elbow", () => {
@@ -923,6 +964,26 @@ describe("route geometry across the board's layouts", () => {
     const d = wire("a")!;
     expect(bends(d)).toBe(2);
     expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("the phone: the margin's hit stroke is cut at the tabs, the wire itself is not", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<section data-mobile2-seat-card></section><nav>${["inbox", "assigned"].map((status) => `<button data-phone-kanban-tab="${status}"></button>`).join("")}</nav>
+      <div data-phone-kanban-column="assigned"><article data-phone-card="task:a"></article></div>`;
+    document.body.append(root);
+    const place = (selector: string, at: R) => { root.querySelector<HTMLElement>(selector)!.getBoundingClientRect = () => box(at); };
+    place("[data-mobile2-seat-card]", [12, 58, 378, 116]);
+    place('[data-phone-kanban-tab="inbox"]', [6, 124, 98, 168]);
+    place('[data-phone-kanban-tab="assigned"]', [102, 124, 193, 168]);
+    place("[data-phone-kanban-column]", [0, 169, 390, 787]);
+    place("[data-phone-card]", [12, 327, 378, 413]);
+    const layer = createOrchestratorWires({ root, phone: true });
+    layers.push(layer);
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p", at: Date.now() }]);
+    expect(root.querySelector("g[data-wire] path.oa-wire")!.getAttribute("d")).toBe("M12,102 H11 Q5,102 5,108 V343.5 Q5,347 8.5,347 H8.5");
+    const cut = cuts(root);
+    expect(cut.hit).toContain("M6,124 H98 V168 H6 Z");
+    expect(cut.wire).not.toContain("M6,124 H98 V168 H6 Z");
   });
 
   test("the phone: the last corner never runs past the card's port", () => {

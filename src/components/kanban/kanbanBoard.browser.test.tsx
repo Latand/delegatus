@@ -26608,7 +26608,9 @@ describe("orchestrator wires after a seat action", () => {
                 .filter((node) => (node as HTMLElement).tabIndex >= 0 && (node === hit || node.getClientRects().length > 0) && !node.closest("[inert]"));
               const index = tabbable.indexOf(hit);
               const previous = tabbable[index - 1] as HTMLElement | undefined;
-              previous?.focus();
+              /* The control before it is on the last column's card: focused with a scroll, it would carry the
+                 board right until the wired card is under the board's edge, where it has no wire. */
+              previous?.focus({ preventScroll: true });
               return { index, previous: !!previous, focused: document.activeElement === previous };
             });
             expect(before.index).toBeGreaterThan(0);
@@ -26677,6 +26679,102 @@ describe("orchestrator wires after a seat action", () => {
       }
       fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
       fs.writeFileSync("evidence/orchestrator-wires/hover-jump.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", frames }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); server = null; }
+  }, 300_000);
+
+  browserTest("a wire takes no pointer over a column tab, and none outside the board's visible part once it scrolls sideways: 1440 with the seat at the side and on top, and 390", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const runs: Record<string, unknown>[] = [];
+    /* Every point of every tab on a 2 px grid, inside its rounded corners: how many of them the tab does not take. */
+    const tabsTake = (page: Page, phone: boolean) => page.evaluate((phone) => [...document.querySelectorAll<HTMLElement>(phone ? "[data-phone-kanban-tab]" : "[data-kanban-board] .tabs-nav button")]
+      .filter((tab) => tab.getBoundingClientRect().width > 0).map((tab) => {
+        const box = tab.getBoundingClientRect();
+        const radius = parseFloat(getComputedStyle(tab).borderTopLeftRadius) || 0;
+        let points = 0, lost = 0;
+        for (let y = Math.ceil(box.top) + 1; y < box.bottom - 1; y += 2) {
+          for (let x = Math.ceil(box.left) + 1; x < box.right - 1; x += 2) {
+            /* Past a rounded corner the point is the row's, not the tab's. */
+            const [dx, dy] = [Math.max(box.left + radius - x, 0, x - box.right + radius), Math.max(box.top + radius - y, 0, y - box.bottom + radius)];
+            if (radius > 1 && Math.hypot(dx, dy) > radius - 1) continue;
+            points += 1;
+            if (!tab.contains(document.elementFromPoint(x, y))) lost += 1;
+          }
+        }
+        return { tab: tab.getAttribute("data-phone-kanban-tab") ?? tab.getAttribute("data-tab") ?? tab.textContent!.trim(), points, lost };
+      }), phone);
+    /* Left of the board's visible edge on a 2 px grid: the points the layer takes with its hit strokes, and
+       those its drawn wires would take were they as wide as the hit strokes (a stroke the layer draws there). */
+    const outside = (page: Page) => page.evaluate(() => {
+      const board = document.querySelector<HTMLElement>("[data-kanban-board] .board")!;
+      const edge = board.getBoundingClientRect().left;
+      const scan = () => {
+        const taken: Record<string, number> = {};
+        let points = 0, hits = 0;
+        for (let y = 1; y < innerHeight; y += 2) {
+          for (let x = 1; x < edge - 1; x += 2) {
+            points += 1;
+            const found = document.elementFromPoint(x, y);
+            if (!found?.closest("[data-orchestrator-wires]")) continue;
+            hits += 1;
+            const under = document.elementsFromPoint(x, y).find((node) => !node.closest("[data-orchestrator-wires]"));
+            const name = under?.closest("[data-kanban-seat]") ? "seat" : under?.closest("nav, aside") ? "sidebar" : under?.tagName.toLowerCase() ?? "?";
+            taken[name] = (taken[name] ?? 0) + 1;
+          }
+        }
+        return { points, hits, taken };
+      };
+      const hit = scan();
+      const style = document.createElement("style");
+      style.textContent = "[data-orchestrator-wires] :is(.oa-wire, .oa-flow) { pointer-events: stroke !important; stroke-width: 12px !important; }";
+      document.head.append(style);
+      const drawn = scan();
+      style.remove();
+      return { edge, scrollLeft: board.scrollLeft, hit, drawn };
+    });
+    const wiresShown = (page: Page) => page.evaluate(() => [...document.querySelectorAll<SVGGElement>("[data-orchestrator-wires] g[data-wire]")].map((group) => group.dataset.wire!).sort());
+    try {
+      for (const [form, placement] of [["desktop", "side"], ["desktop", "top"], ["phone", "side"]] as const) {
+        const phone = form === "phone";
+        const name = phone ? "390" : `1440-${placement}`;
+        const { context, page, pageErrors, tab, shoot } = await open(browser, form, "", "no-preference", placement);
+        try {
+          await tab("assigned");
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await act(page, { kind: "pipeline", taskId: "t-onboarding" });
+          await probe(page, "settle");
+          await probe(page, "freeze");
+          const shown = await wiresShown(page);
+          expect(shown).toEqual(phone ? ["t-upload"] : ["t-onboarding", "t-upload"]);
+          const tabs = await tabsTake(page, phone);
+          runs.push({ form: name, frame: "tabs", wires: shown, tabs });
+          expect(tabs.length).toBe(4);
+          expect(tabs.filter((reading) => reading.lost > 0)).toEqual([]);
+          if (!phone) {
+            /* The board scrolled all the way right: the cards it carried out under its left edge have no wire. */
+            await page.evaluate(() => {
+              const board = document.querySelector<HTMLElement>("[data-kanban-board] .board")!;
+              board.scrollLeft = board.scrollWidth;
+              return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            });
+            await page.waitForTimeout(300);
+            const reading = await outside(page);
+            const after = await wiresShown(page);
+            runs.push({ form: name, frame: "scrolled-right", wires: after, ...reading, tabs: await tabsTake(page, false) });
+            await shoot(`out-of-the-way-${name}-scrolled`);
+            expect(reading.scrollLeft).toBeGreaterThan(100);
+            expect(reading.hit.hits).toBe(0);
+            expect(reading.drawn.hits).toBe(0);
+            /* The wire into the column still in view stays. */
+            expect(after).toEqual(placement === "top" ? ["t-upload"] : []);
+            expect((runs.at(-1)!.tabs as { lost: number }[]).filter((tab) => tab.lost > 0)).toEqual([]);
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
+      fs.writeFileSync("evidence/orchestrator-wires/out-of-the-way.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", method: "elementFromPoint on a 2 px grid; the drawn wires made hit-testable at the hit stroke's width", runs }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); server = null; }
   }, 300_000);
 });

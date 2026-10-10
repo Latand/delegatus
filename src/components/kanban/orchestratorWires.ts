@@ -22,7 +22,10 @@ import { ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS, type LinkTone, ty
  * after each scroll, as before.
  *
  * Each piece has a transparent stroke wider than the wire to take the pointer:
- * hovering it names the task, a click, a tap or Enter goes to it.
+ * hovering it names the task, a click, a tap or Enter goes to it. A wire is
+ * drawn only inside the part of the board that shows (the boxes that clip the
+ * columns), so neither it nor its hit stroke lies over the seat or the app's
+ * sidebar once the board scrolls sideways, and no hit stroke covers a column tab.
  */
 
 /** The board's own card flight (`fly()` in KanbanBoard.tsx); a move's wire lands with the card. */
@@ -37,6 +40,8 @@ const PORT_GAP = 8;
 const CORNER = 6;
 /** How far a card's box reaches left of the column over the gutter: the hit stroke's half width past the trunk. */
 const GUTTER_REACH = 16;
+/** Half the hit stroke's width (`.oa-hit` in kanbanBoard.css). */
+const HIT_HALF = 6;
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 const SVG = "http://www.w3.org/2000/svg";
 /** Everything: a clip path is this square with holes cut in it. */
@@ -111,9 +116,10 @@ interface Wire {
 interface Pulse { nodes: Element[]; motions: Animation[]; paths: SVGPathElement[] }
 interface Point { x: number; y: number }
 type Box = Pick<DOMRect, "left" | "top" | "right" | "bottom" | "width" | "height">;
+/* `bounds` is the part of the board that shows: the viewport cut by every box that clips the columns. */
 type Spot =
-  | { wire: Wire; card: Box; column: Box; node: HTMLElement; view: Box; body: HTMLElement; box: Box; status: string }
-  | { wire: Wire; hidden: "above" | "below"; column: Box; view: Box; status: string }
+  | { wire: Wire; card: Box; column: Box; node: HTMLElement; view: Box; body: HTMLElement; box: Box; bounds: Box; status: string }
+  | { wire: Wire; hidden: "above" | "below"; column: Box; view: Box; bounds: Box; status: string }
   | { wire: Wire; hidden: "away"; status: string | null };
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
@@ -202,6 +208,22 @@ function div(attribute: string): HTMLDivElement {
 }
 
 const boxPath = (box: Pick<Box, "left" | "top" | "right" | "bottom">) => `M${box.left},${box.top} H${box.right} V${box.bottom} H${box.left} Z`;
+const boxOf = (left: number, top: number, right: number, bottom: number): Box => ({ left, top, right: Math.max(left, right), bottom: Math.max(top, bottom), width: Math.max(0, right - left), height: Math.max(0, bottom - top) });
+const meet = (a: Box, b: Box) => boxOf(Math.max(a.left, b.left), Math.max(a.top, b.top), Math.min(a.right, b.right), Math.min(a.bottom, b.bottom));
+const CLIPS = new Set(["hidden", "clip", "auto", "scroll", "overlay"]);
+
+/** The boxes round `from` (itself among them) that cut off what they hold, and on which axis. The
+    document's own overflow is the viewport's. */
+function clippingOf(from: Element): { node: Element; x: boolean; y: boolean }[] {
+  const out: { node: Element; x: boolean; y: boolean }[] = [];
+  for (let node: Element | null = from; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+    const style = window.getComputedStyle(node);
+    const paint = /paint|strict|content/.test(style.contain ?? "");
+    const x = paint || CLIPS.has(style.overflowX), y = paint || CLIPS.has(style.overflowY);
+    if (x || y) out.push({ node, x, y });
+  }
+  return out;
+}
 
 export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   const { root, phone } = host;
@@ -220,8 +242,11 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   let top: Ride | null = null;
   let canvas: SVGSVGElement | null = null;
   let defs: SVGDefsElement | null = null;
-  /* The cut every hit stroke of the seat's pieces takes: the row of column links and a strip's controls. */
+  /* The cut every hit stroke of the seat's pieces takes: the column tabs and a strip's controls, and
+     everything outside the board's visible part. */
   let blocksCut: SVGClipPathElement | null = null;
+  /* The cut a count's dashed wire takes: everything outside the board's visible part. */
+  let reachCut: SVGClipPathElement | null = null;
   let lines: SVGGElement | null = null;
   let shared: SVGGElement | null = null;
   let marks: HTMLDivElement | null = null;
@@ -244,6 +269,25 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       if (range > 0) out.push({ source, axis, range, offset: axis === "block" ? source.scrollTop : source.scrollLeft });
     }
     return out;
+  }
+  /* Which boxes clip the columns, kept as `scrollable` is; and where they stand, read once a pass. */
+  const clipping = new Map<Element, { node: Element; x: boolean; y: boolean }[]>();
+  const passBounds = new Map<Element, Box>();
+  /** The part of the board that shows round `column`: the viewport cut by the boxes that clip it. */
+  function boundsOf(column: HTMLElement): Box {
+    const from = column.parentElement ?? column;
+    let found = passBounds.get(from);
+    if (found) return found;
+    let list = clipping.get(from);
+    if (!list) clipping.set(from, list = clippingOf(from));
+    let left = 0, top = 0, right = window.innerWidth, bottom = window.innerHeight;
+    for (const { node, x, y } of list) {
+      const box = rect(node);
+      if (x) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+      if (y) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+    }
+    passBounds.set(from, found = boxOf(left, top, right, bottom));
+    return found;
   }
   const stubs = new Map<string, { chip: HTMLElement; wire: SVGPathElement; hit: SVGPathElement; hidden: Wire[]; exit: string; fade: Animation[] | null }>();
   /* The wire or count under the pointer or the keyboard, and what put it there. */
@@ -447,8 +491,8 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   };
 
   const schedule = () => { if (layer && !frame) frame = window.requestAnimationFrame(() => { frame = 0; update(); }); };
-  /* A render or a resize may have changed which boxes scroll. */
-  const relayout = () => { scrollable.clear(); schedule(); };
+  /* A render or a resize may have changed which boxes scroll or clip. */
+  const relayout = () => { scrollable.clear(); clipping.clear(); schedule(); };
   /* Reduced motion switched on while a wire shows: every pulse and fade stops where it is, the wires
      stay still, and a wire whose hold is over goes at once. */
   const onMotionPreference = () => {
@@ -483,7 +527,9 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     defs = svg("defs", {});
     blocksCut = svg("clipPath", { id: `${uid}-blocks`, clipPathUnits: "userSpaceOnUse" });
     blocksCut.append(svg("path", { "clip-rule": "evenodd", d: EVERYWHERE }));
-    defs.append(blocksCut);
+    reachCut = svg("clipPath", { id: `${uid}-reach`, clipPathUnits: "userSpaceOnUse" });
+    reachCut.append(svg("path", { d: EVERYWHERE }));
+    defs.append(blocksCut, reachCut);
     lines = svg("g", {});
     shared = svg("g", {});
     canvas.append(defs, lines, shared);
@@ -534,10 +580,11 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     for (const [key, piece] of pieces) dropPiece(key, piece);
     if (top) dropRide(top);
     layer.remove();
-    layer = canvas = defs = blocksCut = lines = shared = marks = pointer = top = null;
+    layer = canvas = defs = blocksCut = reachCut = lines = shared = marks = pointer = top = null;
     seatDots.length = 0;
     stubs.clear();
     scrollable.clear();
+    clipping.clear();
     counters.wires = counters.stubs = 0;
   }
 
@@ -552,17 +599,19 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     if (!card.width || !body) return { wire, hidden: "away", status };
     const view = rect(body);
     const columnRect = phone ? view : rect(column);
-    const top = Math.max(view.top, 0);
-    const bottom = Math.min(view.bottom, window.innerHeight);
-    if (card.right < 0 || card.left > window.innerWidth - 8 || view.right < 8 || view.left > window.innerWidth - 8) return { wire, hidden: "away", status };
-    const clip: Box = { left: columnRect.left, right: columnRect.right, width: columnRect.width, top, bottom, height: bottom - top };
+    const bounds = boundsOf(column);
+    const top = Math.max(view.top, bounds.top);
+    const bottom = Math.min(view.bottom, bounds.bottom);
+    /* A port the board has scrolled sideways out of view: a wire to it would cross the seat or the sidebar. */
+    if (card.left < bounds.left + PORT_CLEARANCE || card.left > bounds.right - 8) return { wire, hidden: "away", status };
+    const clip = boxOf(Math.max(columnRect.left, bounds.left), top, Math.min(columnRect.right, bounds.right), bottom);
     /* A port the column has scrolled out of view would be painted over the column's header or past its foot. */
     const port = portY(card);
     /* A scroller with no room for a count shows nothing of the column but its header. */
     if (bottom - top < MIN_VIEW) return { wire, hidden: "away", status };
-    if (port > bottom - PORT_CLEARANCE) return { wire, hidden: "below", column: columnRect, view: clip, status };
-    if (port < top + PORT_CLEARANCE) return { wire, hidden: "above", column: columnRect, view: clip, status };
-    return { wire, card, column: columnRect, node, view: clip, body, box: view, status };
+    if (port > bottom - PORT_CLEARANCE) return { wire, hidden: "below", column: columnRect, view: clip, bounds, status };
+    if (port < top + PORT_CLEARANCE) return { wire, hidden: "above", column: columnRect, view: clip, bounds, status };
+    return { wire, card, column: columnRect, node, view: clip, body, box: view, bounds, status };
   }
 
   /** Where a wire leaves the seat for the bus or the margin: its right edge at the bus when the seat
@@ -679,7 +728,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   }
 
   function update() {
-    if (!layer || !top || !canvas || !lines || !shared || !marks || !blocksCut) return;
+    if (!layer || !top || !canvas || !lines || !shared || !marks || !blocksCut || !reachCut) return;
     const started = performance.now();
     counters.updates += 1;
     const seatElement = seatNode();
@@ -689,12 +738,18 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     const still = reduced();
     let drawn = 0;
     const seenStubs = new Set<string>();
-    const counts = new Map<string, { column: Box; view: Box; above: Wire[]; below: Wire[] }>();
+    const counts = new Map<string, { column: Box; view: Box; bounds: Box; above: Wire[]; below: Wire[] }>();
     const side = !phone && seatElement?.dataset.placement === "side";
     const strip = seatElement && !side && !phone ? quietStrip(seatElement) : null;
     const seat = strip?.seat ?? (seatElement ? rect(seatElement) : null);
-    /* The row of column links or tabs a seat on top stands above, read once a pass, and a quiet strip's controls. */
-    const blocks: Box[] = side || phone ? [] : [...[...root.querySelectorAll<HTMLElement>(".tabs-nav button")].map(rect).filter((box) => box.width > 0), ...(strip?.blocks ?? [])];
+    /* The column links or tabs, read once a pass. Routes go round them and a quiet strip's controls only
+       under a seat on top; the hit strokes are cut at them in every placement, as a 12 px stroke beside
+       the row would otherwise take a tab's edge. */
+    const tabs = [...root.querySelectorAll<HTMLElement>(phone ? "[data-phone-kanban-tab]" : ".tabs-nav button")].map(rect).filter((box) => box.width > 0);
+    const blocks: Box[] = side || phone ? [] : [...tabs, ...(strip?.blocks ?? [])];
+    passBounds.clear();
+    /* The board's visible part round every column a wire or a count runs into. */
+    let reach: Box | null = null;
     /* Inside the layer every coordinate is the viewport's, whatever the board's root is placed by. The
        scrollers that hold the seat and the columns both carry everything; a page scrolled under a seat on
        top moves the whole wire. */
@@ -703,22 +758,23 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     const commonKeys = new Set(common.map((scroll) => rideKey([scroll])));
     /* Where the routes leave the seat: wires to one column leave at one point. */
     const exits = new Map<string, Point>();
-    const routeTo = (column: Box, y: number, into: number) => {
-      const routed = route(seat!, side, column, y, into, leftGutter(column), blocks);
+    const routeTo = (column: Box, bounds: Box, y: number, into: number) => {
+      const routed = route(seat!, side, column, y, into, leftGutter(column, bounds), blocks);
       const exit = `${routed.exit.x},${routed.exit.y}`;
       exits.set(exit, routed.exit);
       return { ...routed, exit };
     };
-    /* The board's left margin, read once a pass and only for a seat that is not at the side. */
+    /* The board's left margin, read once a pass and only for a seat that is not at the side. A first
+       column the board has scrolled out of view leaves the margin at the board's visible edge. */
     let margin: number | null = null;
-    const leftGutter = (column: Box) => {
+    const leftGutter = (column: Box, bounds: Box) => {
       if (side || phone) return column.left - 9;
       if (margin === null) {
         const first = root.querySelector<HTMLElement>("section.column[data-status]");
         const box = first ? rect(first) : null;
         margin = box && box.width ? box.left - 9 : column.left - 9;
       }
-      return Math.min(margin, column.left - 9);
+      return Math.min(Math.max(margin, bounds.left + HIT_HALF), column.left - 9);
     };
     /* A column's box rides the scrollers that hold its cards and not the seat; the card's piece in it
        rides the column's own scroll. Read once a pass for each column a wire runs into. */
@@ -731,13 +787,13 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       /* Read now, written once every card has been read. */
       const chain = riding ? scrollersOf(spot.body) : [];
       piece.scrolls = { outer: chain.filter((scroll) => scroll.source !== spot.body && !commonKeys.has(rideKey([scroll]))).reverse(), inner: chain.filter((scroll) => scroll.source === spot.body) };
-      const left = phone ? spot.box.left : spot.column.left - GUTTER_REACH;
-      piece.box = { left, top: spot.box.top, right: spot.box.right, bottom: spot.box.bottom, width: spot.box.right - left, height: spot.box.height };
+      piece.box = meet(boxOf(phone ? spot.box.left : spot.column.left - GUTTER_REACH, spot.box.top, spot.box.right, spot.box.bottom), spot.bounds);
       return piece;
     };
 
     for (const wire of wires.values()) {
       const spot = seat && clock >= wire.showFrom ? locate(wire) : null;
+      if (spot && "bounds" in spot) reach = reach ? boxOf(Math.min(reach.left, spot.bounds.left), Math.min(reach.top, spot.bounds.top), Math.max(reach.right, spot.bounds.right), Math.max(reach.bottom, spot.bounds.bottom)) : spot.bounds;
       if (!spot || "hidden" in spot) {
         wire.group?.remove();
         wire.group = null;
@@ -751,7 +807,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
         for (const fade of wire.fade ?? []) fade.cancel();
         wire.fade = null;
         if (spot && spot.hidden !== "away") {
-          const entry = counts.get(spot.status) ?? { column: spot.column, view: spot.view, above: [], below: [] };
+          const entry = counts.get(spot.status) ?? { column: spot.column, view: spot.view, bounds: spot.bounds, above: [], below: [] };
           entry[spot.hidden].push(wire);
           counts.set(spot.status, entry);
         }
@@ -765,21 +821,18 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       drawn += 1;
       const tone = tones.get(wire.taskId) ?? "idle";
       const port = { x: spot.card.left, y: portY(spot.card) };
-      const routed = routeTo(spot.column, port.y, port.x - 3.5);
+      const routed = routeTo(spot.column, spot.bounds, port.y, port.x - 3.5);
       const d = routed.d;
       const piece = pieceOf(spot);
       /* A straight wire from a seat beside the column rides with its card the whole way. */
-      if (routed.trunk === null) {
-        const left = Math.min(piece.box.left, seat!.right);
-        piece.box = { ...piece.box, left, width: piece.box.right - left };
-      }
+      if (routed.trunk === null) piece.box = boxOf(Math.max(spot.bounds.left, Math.min(piece.box.left, seat!.right)), piece.box.top, piece.box.right, piece.box.bottom);
       /* The card's piece runs down the gutter from the top of the column's content, so however far the
          column scrolls before the next pass, it reaches the box's top edge. */
       const end = routed.trunk === null ? d : `M${routed.trunk},${Math.min(spot.box.top - spot.body.scrollTop, port.y - CORNER)} ${routed.turn}`;
       let group = wire.group;
       if (!group) {
         group = wire.group = svg("g", { "data-wire": wire.taskId });
-        group.append(svg("path", { class: "oa-wire" }), svg("path", { class: "oa-flow" }), svg("path", { class: "oa-hit", "data-oa-hit": `wire:${wire.taskId}` }));
+        group.append(svg("path", { class: "oa-wire" }), svg("path", { class: "oa-flow" }), svg("path", { class: "oa-hit", "data-oa-hit": `wire:${wire.taskId}`, "clip-path": `url(#${blocksCut.id})` }));
         lines.append(group);
         (group.children[1] as SVGElement).style.animationDelay = `-${Math.round(performance.now() % 700)}ms`;
       }
@@ -842,7 +895,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
         if (!stub) {
           const chip = document.createElement("span");
           chip.className = "oa-stub";
-          const wire = svg("path", { class: "oa-wire", "data-stub": "" });
+          const wire = svg("path", { class: "oa-wire", "data-stub": "", "clip-path": `url(#${reachCut.id})` });
           const hit = svg("path", { class: "oa-hit", "data-oa-hit": `count:${key}`, "clip-path": `url(#${blocksCut.id})` });
           stub = { chip, wire, hit, hidden, exit: "", fade: null };
           stubs.set(key, stub);
@@ -859,19 +912,24 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
         const fading = hidden.every((wire) => wire.fading);
         if (fading && !stub.fade && !still) stub.fade = [fadeOut(stub.chip, fadedFor(hidden, clock)), fadeOut(stub.wire, fadedFor(hidden, clock))];
         else if (!fading && stub.fade) { for (const fade of stub.fade) fade.cancel(); stub.fade = null; }
-        const routed = routeTo(entry.column, y + 10, x);
+        const routed = routeTo(entry.column, entry.bounds, y + 10, x);
         stub.wire.setAttribute("d", routed.d);
         stub.exit = routed.exit;
         /* Its hit stroke stops in the column's padding, short of the cards. */
-        stub.hit.setAttribute("d", route(seat, side, entry.column, y + 10, entry.column.left + (phone ? 10 : 3), leftGutter(entry.column), blocks).d);
+        stub.hit.setAttribute("d", route(seat, side, entry.column, y + 10, entry.column.left + (phone ? 10 : 3), leftGutter(entry.column, entry.bounds), blocks).d);
         drawn += 1;
       }
     }
     for (const [key, stub] of stubs) if (!seenStubs.has(key)) { stub.chip.remove(); stub.wire.remove(); stub.hit.remove(); stubs.delete(key); unhover(`count:${key}`); }
 
-    /* Each column's box where it shows, and the seat's pieces cut there and at the links and controls. */
-    const holes = blocks.map(boxPath).join(" ");
-    blocksCut.firstElementChild!.setAttribute("d", holes ? `${EVERYWHERE} ${holes}` : EVERYWHERE);
+    /* Each column's box where it shows. The seat's pieces are drawn in the board's visible part (from the
+       seat's own edge) outside those boxes, and their hit strokes and the counts' also outside the column
+       tabs and a strip's controls. */
+    const region = reach && seat ? boxOf(side ? Math.min(reach.left, seat.right) : reach.left, Math.min(reach.top, seat.top), reach.right, reach.bottom) : null;
+    const within = region ? boxPath(region) : EVERYWHERE;
+    const holes = (side || phone ? tabs : blocks).map((box) => region ? meet(box, region) : box).filter((box) => box.width > 0 && box.height > 0).map(boxPath).join(" ");
+    blocksCut.firstElementChild!.setAttribute("d", holes ? `${within} ${holes}` : within);
+    reachCut.firstElementChild!.setAttribute("d", within);
     top = syncRide(top, common, () => {}, -origin.left, -origin.top);
     for (const [key, piece] of pieces) {
       if (!piece.seen) { dropPiece(key, piece); continue; }
@@ -880,7 +938,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       const { left, top: boxTop, right, bottom } = piece.box;
       Object.assign(piece.clip.style, { left: `${left}px`, top: `${boxTop}px`, width: `${Math.max(0, right - left)}px`, height: `${Math.max(0, bottom - boxTop)}px` });
       Object.assign(piece.origin.style, { left: `${-left}px`, top: `${-boxTop}px`, width: `${window.innerWidth}px`, height: `${window.innerHeight}px` });
-      piece.cut.firstElementChild!.setAttribute("d", `${EVERYWHERE} ${boxPath(piece.box)}${holes ? ` ${holes}` : ""}`);
+      piece.cut.firstElementChild!.setAttribute("d", `${within} ${boxPath(piece.box)}`);
     }
 
     /* A port on the seat where each route leaves it; the phone's seat card has none. */

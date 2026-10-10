@@ -8,14 +8,14 @@
       "lang": "en",
       "cpu": 4,
       "restGap": 19.5,
-      "samples": 55,
-      "measured": 43,
+      "samples": 83,
+      "measured": 65,
       "off": 0,
       "worst": 0,
       "byHow": {
-        "wheel": 39,
+        "wheel": 60,
         "touch": 0,
-        "script": 3,
+        "script": 4,
         "smooth": 1
       }
     },
@@ -42,14 +42,14 @@
       "lang": "uk",
       "cpu": 4,
       "restGap": 19.5,
-      "samples": 50,
-      "measured": 41,
+      "samples": 86,
+      "measured": 69,
       "off": 0,
       "worst": 0,
       "byHow": {
-        "wheel": 37,
+        "wheel": 63,
         "touch": 0,
-        "script": 3,
+        "script": 5,
         "smooth": 1
       }
     },
@@ -76,14 +76,14 @@
       "lang": "en",
       "cpu": 4,
       "restGap": 19,
-      "samples": 74,
-      "measured": 39,
+      "samples": 78,
+      "measured": 41,
       "off": 0,
-      "worst": 0.5,
+      "worst": 1,
       "byHow": {
         "wheel": 0,
         "touch": 32,
-        "script": 5,
+        "script": 7,
         "smooth": 2
       }
     },
@@ -93,14 +93,14 @@
       "lang": "uk",
       "cpu": 4,
       "restGap": 19,
-      "samples": 73,
-      "measured": 39,
+      "samples": 79,
+      "measured": 41,
       "off": 0,
-      "worst": 1,
+      "worst": 0.5,
       "byHow": {
         "wheel": 0,
         "touch": 32,
-        "script": 5,
+        "script": 7,
         "smooth": 2
       }
     }

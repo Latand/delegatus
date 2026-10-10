@@ -204,7 +204,7 @@ deferred (below).
   (`:284-285`).
 - Counts (`↑ +N` / `↓ +N`) take the same hit stroke on their dashed wire, and
   the chip itself takes the pointer too. Their target is the nearest hidden card
-  in that direction.
+  in that direction. (As built, the chip does not: see below.)
 
 ### Hover (desktop) and focus
 
@@ -378,12 +378,31 @@ Where the implementation differs from the design above, and what it measured:
   carry on across the cut.
 - **Which boxes scroll** is read once and again only after a render or a resize.
   A scroll changes only offsets and ranges. All rider writes come after every
-  read in a pass. On the hundred-card board, a pass costs 9.0 ms on the desktop
+  read in a pass. On the hundred-card board, a pass cost 9.0 ms on the desktop
   against 10.2 ms for the old layer on the same machine and run, and 1.8 ms on
-  the phone against 0.9 ms (`evidence/orchestrator-wires/cost.json`).
+  the phone against 0.9 ms. With the board's visible part and the tabs read as
+  well it measured 8.5 ms and 1.1 ms in a later run, 44 and 33 box reads a pass
+  (`evidence/orchestrator-wires/cost.json`).
 - **The phone's jump** lives in `SeatActionWires`: with no `onJump` from the
   board it scrolls the card into view, focuses it and calls `ring()`.
   `MobileKanban.tsx` is unchanged.
+- **Only inside the board's visible part.** A pass reads the boxes that clip the
+  columns (`.board`, `.kb-page`, the phone's pager) and keeps every wire inside
+  them. A card whose port the board has scrolled sideways under its left edge
+  counts as away, and the boxes of the card's piece, the seat piece's cut and a
+  count's dashed wire stop at that edge (at the seat's own edge for a seat at the
+  side). A margin that would fall under a scrolled-out first column stays at the
+  board's edge. Before this, a board scrolled fully right at 1440 left hit strokes
+  over 1295 points of the seat panel (side) and 1211 of the app's sidebar (top) on
+  a 2 px grid; now none (`evidence/orchestrator-wires/out-of-the-way.json`).
+- **The column tabs.** Routing goes round the tabs only under a seat on top, as
+  before. The hit strokes are cut at the tabs in every placement: a 12 px stroke
+  along the bus with the seat at the side, or down the phone's margin, took the
+  edge of a tab (at 1440 side up to 45 points of a tab, at 390 the left edge of
+  Inbox). The drawn wire is not cut there, so nothing moves.
+- **A count's chip takes no pointer.** It stands over the column's first visible
+  card, so a chip that took the pointer would take that card's clicks. Its dashed
+  wire's hit stroke leads to the nearest hidden card.
 - **Measured** with case 8 (`evidence/orchestrator-wires/scroll.json`, CPU ×4).
   This branch had 0 frames off in 23–30 measured frames for each of 1440 side (en),
   1440 top (uk), 390 (en) and 390 (uk). The old layer, run through the same case,
