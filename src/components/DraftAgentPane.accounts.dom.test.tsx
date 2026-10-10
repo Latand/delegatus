@@ -130,6 +130,26 @@ test("the pill's Account panel lists the engine's signed-in profiles, and the la
   expect(posts[0]!.accountId).toBe("bob");
 });
 
+test("a draft launched before the accounts answer still runs on the account the operator picked", async () => {
+  const posts: Record<string, unknown>[] = [];
+  installFetch(posts);
+  /* The catalog read waits and is never answered: a page whose requests queue behind its own streams,
+     a slow server, or a press in the moment after a reload. The pick is the one the draft kept. */
+  const serve = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => (String(input) === "/api/accounts" ? new Promise<Response>(() => {}) : serve(input, init))) as typeof fetch;
+  sessionStorage.setItem("llvDraftPane:pending-catalog-draft:accountId", "bob");
+  const host = mount("pending-catalog-draft");
+  await settle();
+
+  /* What the face names is what Send launches. */
+  expect(pill(host).querySelector("[data-runtime-pill-next-account]")!.textContent).toBe("→ bob");
+  await launch(host, "Run on the second profile");
+
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.engine).toBe("claude");
+  expect(posts[0]!.accountId).toBe("bob");
+});
+
 test("a model of another engine re-defaults the launch account to that engine's active profile", async () => {
   const posts: Record<string, unknown>[] = [];
   installFetch(posts);

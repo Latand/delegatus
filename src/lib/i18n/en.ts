@@ -1182,8 +1182,7 @@ export const en = {
   "draft.sourceFolderRemoved": "The working copy of the conversation this agent continues has been deleted, so the agent cannot start in it.",
   "draft.engineAria": "Agent engine",
   "draft.accountAria": "{engine} account for this launch",
-  "draft.accountDefault": "{label} · active",
-  "draft.accountNeedsLogin": "{label} · needs sign-in",
+  "draft.accountWeeklyLeft": "{percent}% of the weekly limit left",
 
   "dirPicker.empty": "no directory chosen",
   "dirPicker.searchAria": "Filter the known directories, or type a path",

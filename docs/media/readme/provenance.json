@@ -2,95 +2,130 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "bf75bb97ad0938fd039b283431c28bea5797d6d39c74e7c8b0659e8674a235f1",
+  "generatorSha256": "b99a0f9a40d12407e63e701e75b80b18ff4cae82bf4ff027edc99f25207a9d55",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "e85bd6d5891534fbd3362f7cd242c95840d6b200dd0f1a8256eaae9e2f379aa0",
+  "seedSha256": "c7795b8cf6788a4081d65e7647709a6b236c460e4927b6302d6d064899e9e28f",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
       "path": "board.svg",
       "description": "A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, and a card that names why it needs you; account limits in the sidebar.",
       "viewport": {
-        "width": 1280,
-        "height": 800
+        "width": 1728,
+        "height": 944
       },
       "colorScheme": "dark",
-      "rasterTiles": 13,
+      "rasterTiles": 20,
       "renderBack": {
-        "worstTileMean": 3.173,
-        "changedTileShare": 0,
-        "meanDifference": 0.205,
+        "worstTileMean": 12.771,
+        "changedTileShare": 0.009,
+        "meanDifference": 0.257,
         "ringsClipped": 0
       },
-      "sha256": "44620e94162135bff9c2acc034527838f7e846514e247f8dcf4acd80b23430b2"
+      "sha256": "51825c859540ac2f050bc0cfd00783e6fc23d5c724f73cd8e6afda3c21df682b"
     },
     {
       "path": "orchestrator.svg",
       "description": "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
       "viewport": {
-        "width": 1280,
+        "width": 1728,
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 12,
+      "rasterTiles": 13,
       "renderBack": {
-        "worstTileMean": 3.609,
-        "changedTileShare": 0,
-        "meanDifference": 0.314,
+        "worstTileMean": 12.771,
+        "changedTileShare": 0.012,
+        "meanDifference": 0.405,
         "ringsClipped": 1
       },
-      "sha256": "1655b1e8d2d500455a9cb3e0c6239cd191d2c7b0a6e83ff0ae2e4bb8023879d5"
+      "sha256": "e929b6dd2cfe5f7ab66b4ae857bc6a1828ad2ea1f302f96412e48fdd7c0296fd"
     },
     {
       "path": "conversation.svg",
       "description": "A Claude Code conversation read as a chat: an edit shown as a diff, a test run with its output, and the answer.",
       "viewport": {
-        "width": 1280,
-        "height": 960
+        "width": 1440,
+        "height": 1080
+      },
+      "crop": {
+        "x": 170,
+        "y": 24,
+        "width": 1100,
+        "height": 1032
       },
       "colorScheme": "dark",
-      "rasterTiles": 16,
+      "rasterTiles": 23,
       "renderBack": {
-        "worstTileMean": 3.591,
-        "changedTileShare": 0,
-        "meanDifference": 0.326,
+        "worstTileMean": 8.376,
+        "changedTileShare": 0.002,
+        "meanDifference": 0.259,
         "ringsClipped": 2
       },
-      "sha256": "4625e177227baf2326ceff0d6a2ee8347987453f9a9d083d1ca98058a6155d8d"
+      "sha256": "f3ab2b3d36ff992876ee90bff7ca1bbaa59592a3666b8451f32a05f7030ddfa4"
     },
     {
       "path": "pipeline.svg",
       "description": "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
       "viewport": {
-        "width": 1280,
-        "height": 800
+        "width": 1728,
+        "height": 944
+      },
+      "crop": {
+        "x": 124,
+        "y": 12,
+        "width": 1480,
+        "height": 920
       },
       "colorScheme": "dark",
-      "rasterTiles": 23,
+      "rasterTiles": 34,
       "renderBack": {
-        "worstTileMean": 4.015,
-        "changedTileShare": 0,
-        "meanDifference": 0.289,
+        "worstTileMean": 9.487,
+        "changedTileShare": 0.001,
+        "meanDifference": 0.265,
         "ringsClipped": 0
       },
-      "sha256": "59b9f7afc61e51a0f07516496e30779c686219c2ed17fd75fc8588d18c556b07"
+      "sha256": "7981532b0885be6c5668804cededa01546a26edaf1bb27ef43b9ba70004c5566"
+    },
+    {
+      "path": "card-menu.svg",
+      "description": "A task card's ⋯ menu: the columns in a row, icon actions with what hiding leaves running, the priorities, and the sections that open in place.",
+      "viewport": {
+        "width": 1728,
+        "height": 944
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 24,
+      "renderBack": {
+        "worstTileMean": 12.771,
+        "changedTileShare": 0.009,
+        "meanDifference": 0.269,
+        "ringsClipped": 0
+      },
+      "sha256": "8b7615cb7a66e97cedb7a208bc675a517fbf4e4a4bf48b18d2f5dae3e2aee49b"
     },
     {
       "path": "accounts.svg",
       "description": "Claude accounts with their five-hour, weekly and per-model limits; switch the active account or add one here.",
       "viewport": {
-        "width": 1280,
-        "height": 800
+        "width": 1440,
+        "height": 896
+      },
+      "crop": {
+        "x": 255,
+        "y": 356,
+        "width": 400,
+        "height": 478
       },
       "colorScheme": "dark",
-      "rasterTiles": 15,
+      "rasterTiles": 22,
       "renderBack": {
-        "worstTileMean": 2.931,
+        "worstTileMean": 3.062,
         "changedTileShare": 0,
-        "meanDifference": 0.239,
+        "meanDifference": 0.224,
         "ringsClipped": 0
       },
-      "sha256": "12e2ec1b4c8274679080d135dbaaaec44d525486b27f822f2c676eb9ac2ef74c"
+      "sha256": "1f33912fd206810d28a3476085ecc67a2a4cca8bd66f7c15fc3afb21708883b2"
     },
     {
       "path": "phone-conversation.svg",
@@ -100,14 +135,14 @@
         "height": 848
       },
       "colorScheme": "dark",
-      "rasterTiles": 2,
+      "rasterTiles": 1,
       "renderBack": {
-        "worstTileMean": 4.005,
-        "changedTileShare": 0,
-        "meanDifference": 0.453,
+        "worstTileMean": 11.912,
+        "changedTileShare": 0.014,
+        "meanDifference": 0.746,
         "ringsClipped": 0
       },
-      "sha256": "57132de490998c92e42312b231f0daeb43baec0199f3e2e4dd7fe12ce0354849"
+      "sha256": "79a9938123564363b8e0c40817554d7e1e1f789b6f095a0da0d4a66c6b18bd82"
     },
     {
       "path": "phone-board.svg",
@@ -117,14 +152,14 @@
         "height": 848
       },
       "colorScheme": "dark",
-      "rasterTiles": 4,
+      "rasterTiles": 10,
       "renderBack": {
-        "worstTileMean": 3.064,
-        "changedTileShare": 0,
-        "meanDifference": 0.163,
+        "worstTileMean": 12.37,
+        "changedTileShare": 0.02,
+        "meanDifference": 0.383,
         "ringsClipped": 0
       },
-      "sha256": "53d1fb281451156334f6a2c074b95edca4f651a5e54d82a76fda041360870606"
+      "sha256": "c8e1fc7e144f7b7c2e7011b6e914edc94c5548d1eb26f222f49ad6c01ec982d7"
     }
   ]
 }
