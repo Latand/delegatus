@@ -881,6 +881,8 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 process.on("SIGTERM", () => {});
 const viewer = process.ppid;
+/* Ready once it knows its Viewer: stopped any earlier, it would never notice. */
+writeFileSync(process.argv[4], String(viewer));
 const timer = setInterval(() => {
   if (process.ppid === viewer) return;
   clearInterval(timer);
@@ -896,7 +898,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const state = process.env.LLV_STATE_DIR;
 const identity = (pid) => { const stat = readFileSync("/proc/" + pid + "/stat", "utf8"); return pid + ":" + stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]; };
-const helper = spawn(process.execPath, [join(state, "generation-helper.mjs"), join(state, "generation-stuck.mjs"), join(state, "generation-late-" + process.pid)], { stdio: "ignore" });
+const helper = spawn(process.execPath, [join(state, "generation-helper.mjs"), join(state, "generation-stuck.mjs"), join(state, "generation-late-" + process.pid), join(state, "generation-ready-" + process.pid)], { stdio: "ignore" });
 const agent = spawn(process.execPath, [join(state, "generation-stuck.mjs")], { stdio: "ignore", detached: true });
 agent.unref();
 writeFileSync(join(state, "generation-" + process.pid + ".json"), JSON.stringify({ helper: identity(helper.pid), agent: identity(agent.pid) }));
@@ -916,7 +918,10 @@ test.if(process.platform === "linux")("every Viewer generation's non-agent proce
   const recordedProcesses: string[] = [];
   const generation = async (webPid: number) => {
     const report = await until(() => {
-      try { return JSON.parse(readFileSync(path.join(fixture.state, `generation-${webPid}.json`), "utf8")) as { helper: string; agent: string }; } catch { return null; }
+      try {
+        if (readFileSync(path.join(fixture.state, `generation-ready-${webPid}`), "utf8") !== String(webPid)) return null;
+        return JSON.parse(readFileSync(path.join(fixture.state, `generation-${webPid}.json`), "utf8")) as { helper: string; agent: string };
+      } catch { return null; }
     });
     recordedProcesses.push(report.helper, report.agent);
     return report;

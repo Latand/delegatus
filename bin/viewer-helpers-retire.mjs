@@ -127,13 +127,22 @@ function signalVerified(members, signal) {
   }
 }
 
-async function until(done, ms, pollMs) {
+/* True once `done` has held on every poll for `settleMs`: one read of /proc
+   that finds nothing can miss a process a member is starting at that moment. */
+async function until(done, ms, pollMs, settleMs = Math.max(4 * pollMs, 100)) {
   const deadline = Date.now() + ms;
-  while (!done()) {
-    if (Date.now() >= deadline) return false;
+  let since = null;
+  for (;;) {
+    const now = Date.now();
+    if (done()) {
+      since ??= now;
+      if (now - since >= settleMs) return true;
+    } else {
+      since = null;
+    }
+    if (now >= deadline) return false;
     await wait(pollMs);
   }
-  return true;
 }
 
 function guardianIsRunning(record) {
@@ -175,7 +184,8 @@ export async function retireViewerHelpers(stateDirectory, owners, options = {}) 
   } else {
     const remaining = owned.filter(({ record }) => guardianIsRunning(record) || groupMembers(record).length > 0);
     outcome.exited = owned.length - remaining.length;
-    const targets = () => remaining.flatMap(({ record }) => [
+    /* Every owned group, not only those that read as running just now. */
+    const targets = () => owned.flatMap(({ record }) => [
       ...(guardianIsRunning(record) ? [{ pid: record.pid, identity: record.identity }] : []),
       ...groupMembers(record),
     ]);
@@ -227,18 +237,23 @@ export async function retireViewerGroup(generation, options = {}) {
     for (const member of live) seen.add(member.identity);
     return live;
   };
-  /* Each poll signals the members it has not signalled yet, so a member
-     forked meanwhile gets the signal too. */
-  const signalEach = (signal, sent, again = false) => () => {
+  /* One loop over the whole bound: members first get `waitMs` to exit, then
+     SIGTERM, then SIGKILL on every poll, and whatever appears meanwhile is
+     signalled as the phase it appears in requires. It ends once the group
+     has stayed empty (until) or the bound is spent. */
+  const started = Date.now();
+  await until(() => {
     const live = members();
-    signalVerified(again ? live : live.filter((member) => !sent.has(member.identity)), signal);
-    for (const member of live) sent.add(member.identity);
+    const elapsed = Date.now() - started;
+    if (elapsed >= waitMs + termMs) {
+      signalVerified(live, "SIGKILL");
+      for (const member of live) killed.add(member.identity);
+    } else if (elapsed >= waitMs) {
+      signalVerified(live.filter((member) => !termed.has(member.identity)), "SIGTERM");
+      for (const member of live) termed.add(member.identity);
+    }
     return live.length === 0;
-  };
-  if (members().length > 0 && !await until(() => members().length === 0, waitMs, pollMs)
-    && !await until(signalEach("SIGTERM", termed), termMs, pollMs)) {
-    await until(signalEach("SIGKILL", killed, true), killMs, pollMs);
-  }
+  }, waitMs + termMs + killMs, pollMs);
   const survivors = members();
   const alive = new Set(survivors.map((member) => member.identity));
   for (const identity of seen) {
