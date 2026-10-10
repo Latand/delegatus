@@ -324,6 +324,13 @@ export interface SpawnReceipt {
   retryClaim?: { claimId: string; claimedAt: string };
 }
 
+interface StructuredSpawnFailureOptions {
+  retainRegisteredHost?: boolean;
+  startingRecovery?: { now: number; timeoutMs: number };
+  /** A recovery observation must still hold inside the failure transaction. */
+  recoveryFence?: (file: RegistryFile, receipt: SpawnReceipt) => boolean;
+}
+
 interface StructuredSpawnFailureClaim {
   claimed: boolean;
   receipt: SpawnReceipt | null;
@@ -6762,7 +6769,7 @@ export class AgentRegistry {
   failStructuredSpawn(
     launchId: string,
     error: string,
-    options: { retainRegisteredHost?: boolean } = {},
+    options: StructuredSpawnFailureOptions = {},
   ): StructuredSpawnFailureClaim {
     const claim = this.failStructuredSpawnInFile(launchId, error, options);
     if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
@@ -6774,7 +6781,7 @@ export class AgentRegistry {
   async failStructuredSpawnOffLoop(
     launchId: string,
     error: string,
-    options: { retainRegisteredHost?: boolean } = {},
+    options: StructuredSpawnFailureOptions = {},
   ): Promise<StructuredSpawnFailureClaim> {
     const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
       () => this.failStructuredSpawnInFile(launchId, error, options));
@@ -6789,13 +6796,27 @@ export class AgentRegistry {
   private failStructuredSpawnInFile(
     launchId: string,
     error: string,
-    options: { retainRegisteredHost?: boolean },
+    options: StructuredSpawnFailureOptions,
   ): StructuredSpawnFailureClaim {
     return this.mutate((file) => {
       const receipt = file.receipts[launchId];
       if (!receipt) return { claimed: false, receipt: null, cleanup: null };
       if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") {
         return { claimed: false, receipt: clone(receipt), cleanup: null };
+      }
+      if (options.recoveryFence && !options.recoveryFence(file, receipt)) {
+        return { claimed: false, receipt: clone(receipt), cleanup: null };
+      }
+      if (options.startingRecovery) {
+        // Recovery's journal read yielded. The current receipt and admission
+        // owner decide inside this mutation, before any runtime failure write.
+        const { now: recoveryNow, timeoutMs } = options.startingRecovery;
+        const createdAt = Date.parse(receipt.createdAt);
+        const withinSetupBound = !Number.isFinite(createdAt) || recoveryNow - createdAt < timeoutMs;
+        if (receipt.state !== "starting" || receipt.key || receipt.queuedPinnedSpawn
+          || (withinSetupBound && receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner))) {
+          return { claimed: false, receipt: clone(receipt), cleanup: null };
+        }
       }
       receipt.state = "failed";
       receipt.error = error;

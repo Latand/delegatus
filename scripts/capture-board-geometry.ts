@@ -53,6 +53,12 @@
  * its account id visible, the blocks stay inside the panel, and the phone's
  * targets are 44 px.
  *
+ * With BOARD_CAPTURE_CASE=claude-login it renders the accounts panel while a
+ * Claude sign-in waits for its code, answered by a network stub so no login
+ * runs: the typed code survives the panel's polls, and an expired operation
+ * says so with Retry in the same place — at 1440 × 900 and 390 × 844 in en and
+ * uk, light and dark.
+ *
  * With BOARD_CAPTURE_CASE=file-preview it opens the file links agents write
  * in the preview on a seeded home: the `#f=<report>%23<anchor>` link to a long
  * HTML report with relative CSS, an image and a script (which probes what the
@@ -3301,6 +3307,182 @@ async function accountRemovalMain(): Promise<void> {
     console.error(`account removal acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
     console.log("account removal acceptance passed at 1440 and 1280 (en, uk; light, dark) and 390 × 844 (en, uk; light, dark).");
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=claude-login: the Claude sign-in's code step           */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The accounts panel while a Claude sign-in waits for its code, on the same
+ * seeded accounts. The account list is answered with a live operation on
+ * a signed-out «Account B» (a stub at the network layer: no `claude auth login` runs), the
+ * operator types part of a code, and the field must keep its text through
+ * three of the panel's own 2.5 s polls. Then the operation is answered as
+ * timed out and the row must say so and offer Retry in the same place. At
+ * 1440 × 900 and 390 × 844, en and uk, light and dark.
+ */
+async function claudeLoginMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit() };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    const { project } = await waitForBoard(baseUrl, false);
+    await stop(server);
+    server = null;
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    seedState(project, tasks, reviewers);
+    await seedAccounts(project);
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, true);
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
+    await Bun.sleep(3_000);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+    for (const phone of [false, true]) for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) {
+      const tag = `${phone ? 390 : 1440}-${lang}-${colorScheme}`;
+      /* A page adopts the language the server keeps, so each context writes its own first. */
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`writing the ${lang} locale answered ${localeWrite.status}`);
+      const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 }, hasTouch: phone, colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      let phase: "awaiting_code" | "timed_out" = "awaiting_code";
+      let polls = 0;
+      /* A poll still in flight when the context closes is dropped, not raised. */
+      await context.route("**/api/accounts", async (route) => {
+        try {
+          const response = await route.fetch();
+          const body = await response.json() as { claude?: { accounts?: { label?: string; login?: unknown; loginPending?: boolean; authPresent?: boolean; authHealth?: string }[] } };
+          const row = body.claude?.accounts?.find((account) => account.label === "Account B");
+          if (row) {
+            polls += 1;
+            /* Signed out, as an account is when the operator signs it in. */
+            row.authPresent = false;
+            row.authHealth = "signed_out";
+            row.loginPending = phase === "awaiting_code";
+            row.login = {
+              operationId: "fixture-claude-login",
+              phase,
+              loginUrl: phase === "awaiting_code" ? "https://claude.ai/oauth/authorize?state=fixture" : null,
+              acceptsCode: phase === "awaiting_code",
+              deadlineAt: new Date(Date.now() + 9 * 60_000).toISOString(),
+              result: phase === "timed_out" ? { status: "failure", code: "timed_out", message: "Claude login timed out" } : null,
+            };
+          }
+          await route.fulfill({ response, json: body });
+        } catch {
+          /* the context is gone */
+        }
+      });
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      if (phone) {
+        await page.waitForSelector("[data-mobile2-bar]", { timeout: 120_000 });
+        await page.waitForTimeout(1_500);
+        await page.click('[data-mobile2-bar] [data-mobile2-open="menu"]');
+        await page.click('[data-mobile2-menu-row="accounts"]');
+        await page.waitForSelector("[data-mobile2-accounts]");
+      } else {
+        await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
+        await page.waitForTimeout(1_500);
+        await page.click("[data-bar-more]");
+        await page.waitForSelector("[data-bar-more-menu]");
+        await page.click('[data-bar-more-menu] [data-bar-menu-head="accounts"]');
+        await page.click('[data-bar-more-menu] [data-account-switch-engine="claude"] > button');
+        await page.waitForSelector('[role="dialog"] [data-account-row]');
+      }
+      const field = `input[aria-label="${translate(lang, "accounts.claudeLogin.codeLabel")}"]`;
+      if (!await page.waitForSelector(field, { timeout: 30_000 }).then(() => true, () => false)) {
+        must(false, `${tag}: the code field never appeared`);
+        await page.screenshot({ path: path.join(OUT_DIR, `claude-login-${tag}-missing.png`), fullPage: false });
+        await context.close();
+        continue;
+      }
+      await page.fill(field, "fixture-code#state");
+      const pollsBefore = polls;
+      await page.waitForTimeout(8_000);
+      const held = await page.evaluate((selector: string) => {
+        const input = document.querySelector<HTMLInputElement>(selector);
+        const group = input?.closest('[role="group"]');
+        const surface = group?.closest('[role="dialog"]') ?? group?.closest("[data-mobile2-accounts]") ?? null;
+        const box = (element: Element | null | undefined) => {
+          const r = element?.getBoundingClientRect();
+          return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null;
+        };
+        return {
+          value: input?.value ?? null,
+          focusable: input ? !input.disabled : false,
+          link: group?.querySelector("a[href]")?.getAttribute("href") ?? null,
+          group: box(group),
+          surface: box(surface),
+          targets: [...(group?.querySelectorAll("input, button, a[href]") ?? [])].map((element) => {
+            const r = element.getBoundingClientRect();
+            return { name: element.getAttribute("aria-label") || element.textContent?.trim() || "", w: r.width, h: r.height };
+          }),
+          text: group?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+        };
+      }, field);
+      must(polls - pollsBefore >= 3, `${tag}: the panel polled ${polls - pollsBefore} times while the code was typed`);
+      must(held.value === "fixture-code#state", `${tag}: the typed code reads ${JSON.stringify(held.value)} after the polls`);
+      must(held.focusable, `${tag}: the code field is disabled`);
+      must(held.link === "https://claude.ai/oauth/authorize?state=fixture", `${tag}: the sign-in link is ${JSON.stringify(held.link)}`);
+      must(held.text.includes(translate(lang, "accounts.claudeLogin.codeHint")), `${tag}: the hint is missing from «${held.text.slice(0, 160)}»`);
+      if (held.group && held.surface) must(held.group.x >= held.surface.x - 0.5 && held.group.x + held.group.w <= held.surface.x + held.surface.w + 0.5, `${tag}: the code step runs outside the panel`);
+      if (phone) for (const target of held.targets) must(target.h >= 44, `${tag}: «${target.name}» is ${target.w}×${target.h}`);
+      const shoot = async (name: string) => {
+        if (phone) {
+          await page.screenshot({ path: path.join(OUT_DIR, `claude-login-${tag}-${name}.png`), fullPage: false });
+          return;
+        }
+        const panel = await page.evaluate(() => {
+          const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) => /Claude/.test(element.getAttribute("aria-label") ?? ""));
+          const r = dialog?.getBoundingClientRect();
+          return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null;
+        });
+        if (panel) await page.screenshot({ path: path.join(OUT_DIR, `claude-login-${tag}-${name}.png`), clip: { x: Math.max(0, panel.x - 8), y: Math.max(0, panel.y - 8), width: panel.w + 16, height: panel.h + 16 } });
+        else must(false, `${tag} ${name}: no Claude accounts dialog to frame`);
+      };
+      await page.evaluate((selector: string) => document.querySelector(selector)?.scrollIntoView({ block: "center" }), field);
+      await shoot("code-step");
+
+      /* The operation really expired: the row says so and offers Retry where the field was. */
+      phase = "timed_out";
+      const expiredText = translate(lang, "accounts.claudeLogin.err.timed_out");
+      await page.waitForFunction((text: string) => [...document.querySelectorAll('[role="alert"]')].some((element) => element.textContent?.includes(text)), expiredText, { timeout: 15_000 }).catch(() => undefined);
+      const expired = await page.evaluate((text: string) => {
+        const alert = [...document.querySelectorAll('[role="alert"]')].find((element) => element.textContent?.includes(text));
+        return { shown: Boolean(alert), retry: alert?.querySelector("button")?.textContent?.trim() ?? null };
+      }, expiredText);
+      must(expired.shown, `${tag}: the timed-out row does not say «${expiredText}»`);
+      must(expired.retry === translate(lang, "accounts.retry"), `${tag}: the timed-out row offers ${JSON.stringify(expired.retry)}`);
+      await shoot("expired");
+      report[tag] = { polls: polls - pollsBefore, held, expired };
+      await context.close();
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "claude-login.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`claude login measurements: ${path.join(OUT_DIR, "claude-login.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`claude login acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("claude login acceptance passed at 1440 × 900 and 390 × 844 (en, uk; light, dark).");
   }
 }
 
@@ -7124,6 +7306,7 @@ else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
+else if (process.env.BOARD_CAPTURE_CASE === "claude-login") await claudeLoginMain();
 else if (process.env.BOARD_CAPTURE_CASE === "seat-creation") await seatCreationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "seat-composer") await seatComposerMain();
 else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);

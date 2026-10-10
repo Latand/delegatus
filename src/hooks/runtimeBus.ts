@@ -28,6 +28,7 @@ import {
 } from "@/components/runtime/runtimeModel";
 import { hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { rolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import { openEventStream } from "@/lib/streamMux/client";
 
 export const SNAPSHOT_URL = "/api/runtime/snapshot?view=summary";
 export const STREAM_URL = "/api/runtime/stream";
@@ -663,7 +664,7 @@ function browserDeps(): RuntimeBusDeps {
         return () => document.removeEventListener("visibilitychange", listener);
       },
     },
-    createEventSource: (url) => new EventSource(url) as unknown as EventSourceLike,
+    createEventSource: (url) => openEventStream(url) as unknown as EventSourceLike,
     now: () => Date.now(),
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (handle) => clearTimeout(handle),

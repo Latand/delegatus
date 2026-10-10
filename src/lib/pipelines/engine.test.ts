@@ -24830,3 +24830,275 @@ test.each([
   expect(loadPipelines()[0]!.stateDetail).toContain(reason);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(0);
 });
+
+const PREPUBLICATION_INTERRUPTION = "staged launch was released before publication completed";
+
+async function publicationInterruptedReview(access: "read-only" | "read-write", parked: boolean) {
+  const h = harness();
+  const advance = frozenWallClock(h);
+  const box = publishHarness(h);
+  await create(h.ports, [PUBLISH_STAGES[0], {
+    id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", access,
+    "prompt": "Review {{input}}", next: null,
+  }] as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "published work")], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  const stage = pipeline.stages.find((item) => item.id === "review")!;
+  const run = pipeline.runs.find((item) => item.stageId === "review")!;
+  const attempt = {
+    ...structuredClone(pipeline.runs[0]!.attempts[0]!), n: 2,
+    state: parked ? "needs_decision" : "pending", effectiveRole: stage.effectiveRole,
+    launchId: parked ? "launch-publication-cut" : null,
+    conversationId: parked ? "conversation_publication_cut" : null,
+    sessionId: null, agentPath: null, paneId: null, flowId: null,
+    verdict: null, output: null, completedAt: null, report: undefined,
+    startedAt: h.ports.now(), error: parked ? PREPUBLICATION_INTERRUPTION : null,
+    input: pipeline.cursor!.input, spawnCalls: parked ? 1 : 0,
+    definition: undefined,
+  } as typeof run.attempts[number];
+  run.attempts = [{ ...structuredClone(attempt), n: 1, state: "failed", completedAt: h.ports.now(), error: "interrupted by restart" }, attempt];
+  pipeline.cursor!.state = parked ? "spawning" : "pending";
+  pipeline.state = parked ? "needs_decision" : "running";
+  pipeline.stateDetail = parked ? PREPUBLICATION_INTERRUPTION : null;
+  savePipelines([pipeline]);
+  const baseSpawn = h.ports.spawnAgent;
+  const callIds: string[] = [];
+  let reservations = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    callIds.push(input.clientAttemptId);
+    if (!parked && ++reservations === 1) {
+      await onReserved({ launchId: "launch-publication-cut", conversationId: "conversation_publication_cut" });
+      throw new Error(PREPUBLICATION_INTERRUPTION);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  const originalReceipt = h.ports.spawnReceipt;
+  h.ports.spawnReceipt = (id) => id === "launch-publication-cut"
+    ? { ...failedReceipt(id, "conversation_publication_cut", "structured spawn interrupted before identity staging: launch-publication-cut"), staged: true }
+    : originalReceipt(id);
+  const claims: string[] = [];
+  const stops: string[] = [];
+  const evidence: string[] = [];
+  h.ports.claimSpawnRetry = (id) => { claims.push(id); return "claimed"; };
+  h.ports.stopStageAgent = async (target) => { stops.push(target.launchId!); return { outcome: "stopped" }; };
+  Object.assign(h.ports, {
+    unpublishedLaunchRetrySafe: async (id: string) => { evidence.push(id); return true; },
+    sleep: forbiddenSleep,
+  });
+  return { h, box, callIds, claims, stops, evidence, advance };
+}
+
+test.each([
+  ["read-only", false], ["read-only", true], ["read-write", false], ["read-write", true],
+] as const)("a pre-publication review replacement/2 retries once across ticks and reopen (%s, parked=%s)", async (access, parked) => {
+  const { h, box, callIds, claims, stops, evidence, advance } = await publicationInterruptedReview(access, parked);
+  const publication = [...box.order];
+  await tickPipelines([], h.ports);
+  let current = loadPipelines()[0]!;
+  expect(current.state).toBe("running");
+  expect(current.runs[1]!.attempts[1]).toMatchObject({ n: 2, state: "pending", launchId: null,
+    retiredLaunches: [{ launchId: "launch-publication-cut" }] });
+  expect(claims).toEqual(["launch-publication-cut"]);
+  expect(stops).toEqual(["launch-publication-cut"]);
+  expect(evidence.length).toBeGreaterThanOrEqual(2);
+  await tickPipelines([], h.ports);
+  savePipelines(loadPipelines());
+  advance(5_000);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  current = loadPipelines()[0]!;
+  expect(current.runs[1]!.attempts).toHaveLength(2);
+  expect(current.runs[1]!.attempts[1]).toMatchObject({ n: 2, state: "running", launchId: "launch-2" });
+  expect(h.spawnInputs).toHaveLength(2); // one builder prompt and one reviewer prompt
+  expect(callIds).toHaveLength(parked ? 1 : 2);
+  expect(new Set(callIds).size).toBe(callIds.length);
+  expect(callIds.at(-1)).toStartWith("handshake_retry_");
+  expect(claims).toHaveLength(1);
+  expect(box.order).toEqual(publication);
+});
+
+test.each([false, true])("pre-publication recovery retains uncertain delivery evidence (parked=%s)", async (parked) => {
+  const { h, box, claims, stops } = await publicationInterruptedReview("read-only", parked);
+  const publication = [...box.order];
+  Object.assign(h.ports, { unpublishedLaunchRetrySafe: async () => { throw new Error("runtime host request timed out"); } });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.runs[1]!.attempts[1]!.retiredLaunches).toBeUndefined();
+  expect(claims).toHaveLength(0);
+  expect(stops).toHaveLength(0);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(publication);
+});
+
+test.each([
+  [false, false], [false, true], [true, false], [true, true],
+] as const)("pre-publication journal outage is rechecked after reopen (parked=%s, safe=%s)", async (parked, safe) => {
+  const { h, box, claims, stops, callIds, advance } = await publicationInterruptedReview("read-only", parked);
+  const publication = [...box.order];
+  let available = false;
+  let reads = 0;
+  Object.assign(h.ports, { unpublishedLaunchRetrySafe: async () => {
+    reads++;
+    if (!available) throw new Error("runtime host request timed out");
+    return safe;
+  } });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  const outageReads = reads;
+  expect(outageReads).toBeGreaterThan(0);
+  expect(claims).toHaveLength(0);
+  expect(stops).toHaveLength(0);
+
+  available = true;
+  savePipelines(loadPipelines());
+  advance(5_000);
+  await tickPipelines([], h.ports);
+  expect(reads).toBeGreaterThan(outageReads);
+  if (safe) {
+    expect(loadPipelines()[0]!.runs[1]!.attempts[1]).toMatchObject({ state: "pending", launchId: null,
+      retiredLaunches: [{ launchId: "launch-publication-cut" }] });
+  }
+  advance(5_000);
+  await tickPipelines([], h.ports);
+  savePipelines(loadPipelines());
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  const attempt = current.runs[1]!.attempts[1]!;
+  expect(current.runs[1]!.attempts).toHaveLength(2);
+  if (safe) {
+    expect(current.state).toBe("running");
+    expect(attempt).toMatchObject({ n: 2, state: "running", launchId: "launch-2" });
+    expect(attempt.retiredLaunches).toHaveLength(1);
+    expect(claims).toEqual(["launch-publication-cut"]);
+    expect(stops).toEqual(["launch-publication-cut"]);
+    expect(h.spawnInputs).toHaveLength(2); // builder and exactly one replacement reviewer prompt
+    expect(callIds).toHaveLength(parked ? 1 : 2);
+    expect(new Set(callIds).size).toBe(callIds.length);
+    expect(callIds.at(-1)).toStartWith("handshake_retry_1_");
+  } else {
+    expect(current.state).toBe("needs_decision");
+    expect(attempt.launchId).toBe("launch-publication-cut");
+    expect(attempt.retiredLaunches).toBeUndefined();
+    expect(claims).toHaveLength(0);
+    expect(stops).toHaveLength(0);
+    expect(h.spawnInputs).toHaveLength(1);
+  }
+  expect(box.order).toEqual(publication);
+});
+
+test("a pre-publication reviewer whose identity-fenced stop failed is never replaced", async () => {
+  const { h, claims } = await publicationInterruptedReview("read-only", false);
+  h.ports.stopStageAgent = async () => ({ outcome: "failed", error: "recorded process could not be stopped" });
+  await tickPipelines([], h.ports);
+  const attempt = loadPipelines()[0]!.runs[1]!.attempts[1]!;
+  expect(attempt.launchId).toBe("launch-publication-cut");
+  expect(attempt.retiredLaunches).toBeUndefined();
+  expect(claims).toHaveLength(1);
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+test("pre-publication recovery rechecks the original message after stopping its host", async () => {
+  const { h, stops } = await publicationInterruptedReview("read-only", false);
+  let reads = 0;
+  Object.assign(h.ports, { unpublishedLaunchRetrySafe: async () => ++reads === 1 });
+  await tickPipelines([], h.ports);
+  expect(stops).toEqual(["launch-publication-cut"]);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.runs[1]!.attempts[1]!.retiredLaunches).toBeUndefined();
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+test("the production pre-publication retry gate requires original launch and message journal evidence", async () => {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "prepublication-evidence-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured",
+    launchProfile: emptyLaunchProfile({ cwd: root }) });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const { launchId, conversationId } = begun.receipt;
+  const reason = `structured spawn interrupted before identity staging: ${launchId}`;
+  journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
+    conversationId, engine: "codex", cwd: root, prompt: "Review" });
+  registry.failStructuredSpawn(launchId, reason);
+  let unavailable = false;
+  const reads: string[] = [];
+  const client = {
+    snapshot: async () => journal.snapshot(),
+    events: async (after: number) => journal.replay(after),
+    operationStatus: async (id: string) => {
+      reads.push(id);
+      if (unavailable) throw new Error("runtime host request timed out");
+      return journal.operationResult(id);
+    },
+  } as import("@/lib/runtime/client").RuntimeHostClient;
+  setAgentRegistryForTests(registry);
+  try {
+    const ports = defaultPipelinePorts({ spawnRecoveryClient: () => client });
+    expect(await ports.unpublishedLaunchRetrySafe!(launchId)).toBe(false); // queued original spawn
+    journal.transitionOperation(launchId, "failed", { reason }, { awaitProjection: true });
+    expect(await ports.unpublishedLaunchRetrySafe!(launchId)).toBe(true);
+    const replay = client.events;
+    client.events = async () => ({ reset: true, floorSeq: 1, events: [] });
+    expect(await ports.unpublishedLaunchRetrySafe!(launchId)).toBe(false);
+    client.events = replay;
+    expect(reads).toEqual(Array.from({ length: 3 }, () => [launchId, `spawn_message_${launchId}`]).flat());
+    unavailable = true;
+    await expect(ports.unpublishedLaunchRetrySafe!(launchId)).rejects.toThrow("timed out");
+    unavailable = false;
+    journal.executeOperation({ kind: "send", operationId: `spawn_message_${launchId}`,
+      idempotencyKey: `spawn_message_${launchId}`, conversationId, text: "Review", policy: "queue" });
+    expect(await ports.unpublishedLaunchRetrySafe!(launchId)).toBe(false);
+    for (let index = 0; index < 4; index += 1) {
+      journal.append({ scope: { type: "operation", id: "fixture-marker" }, kind: "fixture-marker", payload: { index } });
+    }
+    journal.compact(1);
+    expect(journal.operationResult(launchId)).not.toBeNull();
+    expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
+    expect(await ports.unpublishedLaunchRetrySafe!(launchId)).toBe(false); // compacted absence stays unknown
+  } finally {
+    setAgentRegistryForTests(null);
+    journal.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test.each([false, true])("pre-publication replacement persists one new activation across reopen (parked=%s)", async (parked) => {
+  const { h, box, advance, claims } = await publicationInterruptedReview("read-only", parked);
+  h.ports.deferStageGit = true;
+  const publication = [...box.order];
+  await tickPipelines([], h.ports);
+  await engineModule.drainStageActivations(h.ports);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[1]).toMatchObject({ state: "pending", launchId: null,
+    retiredLaunches: [{ launchId: "launch-publication-cut" }] });
+  let persistedActivations = 0;
+  const spawnAgent = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    const reserved = loadPipelines();
+    const attempt = reserved[0]!.runs[1]!.attempts[1]!;
+    expect(attempt.activation?.phase).toBe("reserving");
+    expect(typeof attempt.activation?.fence).toBe("string");
+    expect(attempt.activation?.clientAttemptId).toBe(input.clientAttemptId);
+    expect(attempt.spawnCalls).toBe(2);
+    persistedActivations += 1;
+    const reopened = loadPipelines()[0]!.runs[1]!.attempts[1]!;
+    expect(reopened.activation).toEqual(attempt.activation);
+    expect(reopened.spawnCalls).toBe(2);
+    return spawnAgent(input, onReserved);
+  };
+  advance(5_000);
+  await tickPipelines([], h.ports);
+  await engineModule.drainStageActivations(h.ports);
+  await engineModule.drainStageActivations(h.ports);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[1]).toMatchObject({ n: 2, state: "running", launchId: "launch-2", spawnCalls: 2 });
+  expect(claims).toEqual(["launch-publication-cut"]);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs.at(-1)!.clientAttemptId).toStartWith("handshake_retry_1_");
+  expect(persistedActivations).toBe(1);
+  expect(box.order).toEqual(publication);
+});

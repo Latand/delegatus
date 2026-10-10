@@ -1122,6 +1122,7 @@ async function projectDeadStructuredSpawn(
         runtimeSettings: runtimeSettingsCapability(key.engine),
       },
       activeTurnId: null,
+      writerClaim: null,
     },
   });
 }
@@ -1333,8 +1334,11 @@ export async function recoverPendingStructuredSpawns(
       });
     }
   }
-  for (const receipt of Object.values(snapshot.receipts)) {
+  for (const observed of Object.values(snapshot.receipts)) {
     assertActive();
+    const fresh = registry.readOnlySnapshot();
+    const receipt = fresh.receipts[observed.launchId];
+    if (!receipt) continue;
     const effect = spawnEffects.get(receipt.launchId);
     /* Re-validate before replay (#1071): a queued launch the previous
        generation accepted is not replayed verbatim by its successor. One whose
@@ -1344,9 +1348,14 @@ export async function recoverPendingStructuredSpawns(
        the generations, so the previous container is routinely still running,
        and its deferred execution beside the replacement IS the duplicate the
        issue reports. */
-    const supersededReason = supersededQueuedSpawnReason(snapshot, receipt);
+    const supersededReason = supersededQueuedSpawnReason(fresh, receipt);
     if (supersededReason) {
       const stale = await client.operationStatus(receipt.launchId);
+      assertActive();
+      const failure = await registry.failStructuredSpawnOffLoop(receipt.launchId, supersededReason, {
+        recoveryFence: (file, current) => supersededQueuedSpawnReason(file, current) === supersededReason,
+      });
+      if (!failure.claimed) continue;
       const staleStatus = stale?.receipt.status;
       if (staleStatus === "pending" || staleStatus === "queued" || staleStatus === "delivering") {
         await client.transitionOperation(receipt.launchId, "failed", { reason: supersededReason });
@@ -1355,7 +1364,6 @@ export async function recoverPendingStructuredSpawns(
       if (staged) {
         await projectDeadStructuredSpawn(client, receipt, staged, `structured-spawn-superseded:${receipt.launchId}`);
       }
-      await registry.failStructuredSpawnOffLoop(receipt.launchId, supersededReason);
       continue;
     }
     if (receipt.state === "failed" && receipt.transport !== "tmux") continue;
@@ -1366,23 +1374,30 @@ export async function recoverPendingStructuredSpawns(
       let reason: string;
       if (operation?.receipt.status === "queued" || operation?.receipt.status === "pending" || operation?.receipt.status === "delivering") {
         reason = `structured spawn interrupted before identity staging: ${receipt.launchId}`;
-        await client.transitionOperation(receipt.launchId, "failed", { reason });
       } else if (!operation) {
         reason = `structured spawn interrupted before runtime admission: ${receipt.launchId}`;
       } else {
         reason = operation.receipt.reason
           ?? `structured spawn operation ended as ${operation.receipt.status} before identity staging`;
       }
-      const identity = resumeIdentityForReceipt(registry, receipt);
+      assertActive();
+      const failure = await registry.failStructuredSpawnOffLoop(receipt.launchId, reason, {
+        startingRecovery: {
+          now: (options.now ?? Date.now)(),
+          timeoutMs: options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS,
+        },
+      });
+      if (!failure.claimed) continue;
+      if (operation?.receipt.status === "queued" || operation?.receipt.status === "pending" || operation?.receipt.status === "delivering") {
+        await client.transitionOperation(receipt.launchId, "failed", { reason });
+      }
+      const identity = resumeIdentityForReceipt(registry, failure.receipt ?? receipt);
       let claimed: AgentRegistryEntry | null = null;
       if (identity) {
         const entry = registry.readOnlySnapshot().entries[sessionKeyId(identity.key)];
         if (entry?.structuredHost) {
           claimed = registry.claimStructuredHost(identity.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
-          if (!claimed?.claimOwner) {
-            await registry.failStructuredSpawnOffLoop(receipt.launchId, reason);
-            continue;
-          }
+          if (!claimed?.claimOwner) continue;
         }
         try {
           await projectDeadStructuredSpawn(
@@ -1398,9 +1413,11 @@ export async function recoverPendingStructuredSpawns(
         }
         if (claimed) releaseAdoptionClaim(registry, claimed, true);
       }
-      await registry.failStructuredSpawnOffLoop(receipt.launchId, reason);
       continue;
     }
+    const createdAt = Date.parse(receipt.createdAt);
+    if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead"
+      && (!Number.isFinite(createdAt) || (options.now ?? Date.now)() - createdAt < (options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS))) continue;
     if (stagedLaunchRecovery(receipt)) {
       await recoverStagedStructuredLaunch(receipt.launchId, registry, client);
       continue;
@@ -2138,6 +2155,7 @@ export async function spawnStructuredConversation(
   const now = dependencies.now ?? Date.now;
   const admissionRetry = { now, ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}) };
   const operationId = input.receipt.launchId;
+  const foregroundAdmissionOwner = input.receipt.admissionOwner;
   const resumeSessionId = structuredResumeSessionId(input);
   const resumeKey = resumeSessionId ? sessionKey(input.engine, resumeSessionId) : null;
   const resumeIdentity = resumeIdentityForReceipt(input.registry, input.receipt);
@@ -2550,5 +2568,12 @@ export async function spawnStructuredConversation(
       });
     }
     throw error;
+  } finally {
+    // This call no longer advances setup, including when cleanup/projection
+    // failed. Hand recovery back without releasing a newer admission owner.
+    if (foregroundAdmissionOwner) {
+      await input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
+        () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner));
+    }
   }
 }

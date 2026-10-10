@@ -30,6 +30,9 @@ export default function RootLayout({
     <html lang="en" className="h-full antialiased" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: ROLE_FRAME_BOOT_SCRIPT }} />
+        {/* This document is the app itself, served by a Viewer that has the stream route: over plain HTTP
+            its live streams share one connection (src/lib/streamMux/protocol.ts). */}
+        <meta name="llv-stream-mux" content="1" />
       </head>
       <body className="h-dvh overflow-hidden font-sans text-[15px]">
         {children}

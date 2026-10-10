@@ -112,6 +112,7 @@ interface ViewerRuntimeActivationSteps {
   initializeOperatorCapability: () => Promise<void>;
   runIdentityMigration?: () => Promise<void> | void;
   runWorktreeRecovery?: () => Promise<void>;
+  runClaudeLoginRecovery?: () => Promise<void>;
   startStructuredHosts: (() => void) | null;
   startControllers: () => Promise<void>;
   publishHotStateActivation: () => void;
@@ -785,6 +786,7 @@ export async function completeViewerRuntimeActivation(
   await steps.initializeOperatorCapability();
   await steps.runIdentityMigration?.();
   steps.publishHotStateActivation();
+  await steps.runClaudeLoginRecovery?.();
   await steps.runWorktreeRecovery?.();
   steps.startStructuredHosts?.();
   await steps.startControllers();
@@ -889,6 +891,10 @@ export async function registerViewerRuntime(): Promise<void> {
       runWorktreeRecovery: async () => {
         const { runWorktreeRecoveryAtStartup } = await import("@/lib/projects/worktreeBackfill");
         await runWorktreeRecoveryAtStartup();
+      },
+      runClaudeLoginRecovery: async () => {
+        const { recoverClaudeLoginsAtStartup } = await import("@/lib/accounts/claudeLogin");
+        await recoverClaudeLoginsAtStartup();
       },
       runIdentityMigration: async () => {
         const { runIdentityWaveMigrationAtStartup } = await import("@/lib/agent/identityWaveStartup");
