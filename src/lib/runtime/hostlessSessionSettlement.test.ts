@@ -14,7 +14,7 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { RuntimeJournal } from "../../runtime-host/journal";
 import { RuntimeHost } from "../../runtime-host/host";
 import { serveRuntimeHost } from "../../runtime-host/socket";
-import { productionDeps } from "../selfUpdate/instance";
+import { ownerCensusReader, productionDeps } from "../selfUpdate/instance";
 import { probeQuiet, type QuietPorts } from "../selfUpdate/quiet";
 import type { Snapshot } from "../selfUpdate/types";
 import { UnixRuntimeHostClient, type RuntimeHostClient } from "./client";
@@ -302,6 +302,8 @@ for (const held of ["read", "write"] as const) {
       publish("new-running", { host: "hosted", turn: "running", activeTurnId: "new-turn", writerClaim: "new-writer:2" });
       const snapshot = { busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot;
       const ports = { ...productionDeps({ ...process.env }).quiet!, runtimeSnapshot: async () => journal.snapshot(), pipelines: () => [], flows: () => [],
+        owners: ownerCensusReader(undefined, { readEvents: async (after) => journal.replay(after),
+          readSession: async (query) => journal.readSession(query), readProducerCursor: async (kind, prefix) => journal.producerCursor(kind, prefix) }),
         seats: () => [], presence: () => [], registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 } as QuietPorts;
       expect(await probeQuiet(snapshot, ports, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
       release();
@@ -373,6 +375,8 @@ for (const incumbent of [true, false]) {
       publish("new-running", { host: "hosted", turn: "running", activeTurnId: "new-turn", writerClaim: "new-writer:2" });
       const snapshot = { busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot;
       const ports = { ...productionDeps({ ...process.env }).quiet!, runtimeSnapshot: () => real.snapshot(), pipelines: () => [], flows: () => [],
+        owners: ownerCensusReader(undefined, { readEvents: (after) => real.events(after),
+          readSession: (query) => real.readSession!(query), readProducerCursor: (kind, prefix) => real.producerCursor(kind, prefix) }),
         seats: () => [], presence: () => [], registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 } as QuietPorts;
       expect(await probeQuiet(snapshot, ports, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
       release();

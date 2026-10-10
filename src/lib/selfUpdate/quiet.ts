@@ -1,7 +1,7 @@
 /* Restart admission is read afresh for each role, including after web swaps. */
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
-import { STARTING_GRACE_MS, livenessRecordIsLive, type ConversationRegistryHost, type LivenessVerdict } from "@/lib/lifecycle/liveness";
-import type { HostState } from "@/lib/runtime/engineHost";
+import { STARTING_GRACE_MS } from "@/lib/lifecycle/liveness";
+import type { OwnerReference, OwnerRole } from "@/lib/lifecycle/owners";
 import type { RuntimeSession, RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { RegistryFile } from "@/lib/agent/registry";
@@ -16,17 +16,19 @@ import type { Snapshot } from "./types";
 export type BusyReason = "update" | "web" | "runtime-host" | "pipeline-controller" | "seat-tick";
 export interface BlockingTurn { conversationId: string; engine: string; project: string | null; stage: { pipelineId: string; stageId: string } | null; seat: boolean;
   /** Listed while nothing says whether a process owns it; see `unresolved`. */
-  unresolved?: true }
+  unresolved?: true;
+  /** Why the first owner of this entry holds (R11). */
+  reason?: OwnerReason }
 export interface BlockingStage { pipelineId: string; stageId: string; cursor: string; task: string; conversationId: string | null }
 export interface QuietBlockers {
   busyReason?: BusyReason | null;
   turnList?: BlockingTurn[];
   stageList?: BlockingStage[];
-  /** Journal rows that claim an open turn whose host is proven gone. */
+  /** Journal rows that claim an open turn while every owner they name is released. */
   discounted?: number;
-  /** Conversations a journal row or a running stage names that have neither a
-      liveness record nor a registry row, so nothing says whether a process
-      owns them. */
+  /** What nothing can say is working or finished (R8): a launch with no
+      recorded process and no proved work, a row that claims a host and records
+      no process, and a journal row or stage the registry knows nothing about. */
   unresolved?: number;
   /** The part of `unresolved` still inside `unresolvedGraceMs`; these are also
       counted in `turns`, or in `stages` when only a stage names them. */
@@ -60,28 +62,85 @@ export interface QuietBlockers {
  */
 export const UNRESOLVED_TURN_GRACE_MS = STARTING_GRACE_MS;
 
-/**
- * What one journal row is judged on (#2515).
- *
- * `record` is the row `agent_activity` answers for the conversation, and
- * `registryHost` is the host its registry row names when there is no record to
- * read. Both come from one liveness reading, so the drain and `agent_activity`
- * cannot disagree about a dead host. `headlessReviewerProcess` is the reviewer
- * process a flow round records, which the registry row does not hold and a
- * record finds only through a transcript. Its `unproven` verdict keeps a
- * recorded process protected until it is proven gone. `currentTurnIdle` is
- * what a host in this Viewer says about its own turn right now.
- */
-export interface TurnEvidence {
-  record: LivenessVerdict | null;
-  registryHost?: ConversationRegistryHost | null;
-  headlessReviewerProcess?: "alive" | "gone" | "unproven" | null;
-  currentTurnIdle?: boolean;
+/** Why an owner holds the drain, or why it is unknown (R7, R8). */
+export type OwnerReason = "setup" | "reviewer" | "host-turn" | "turn-claimed" | "turn-open"
+  | "turn-unattributed" | "turn-unread" | "launch-unproven" | "unresolved";
+
+/** The turn state of one transcript tail and its newest record. */
+export interface TailReading { turn: "busy" | "idle" | "unknown"; lastRecordAt: number | null }
+
+/** Where an owner is shown and found. It never chooses evidence. */
+interface OwnerPlace {
+  id: string;
+  binding: string | null;
+  /** The conversations of the receipts that record the same process (R1, R10). */
+  custody?: readonly string[];
+  artifactPath: string | null;
+  entryKey: string | null;
+  launchId?: string | null;
+  engine?: string | null;
+  cwd?: string | null;
 }
+
+/**
+ * One recorded process and the transcript its record names, with what its own
+ * records say (docs/design/update-drain-liveness.md, R1–R5). Turn sources are
+ * read for a live host only:
+ * - `handle`: the host this Viewer holds under the owner's session key;
+ * - `rowReference`: the active turn reference of the owner's own entry;
+ * - `journal`: the status mark of the journal row whose mark names the
+ *   owner's key and writer (`claimed` when it claims a turn, `idle` when that
+ *   writer reports idle), independently of the row's current fence,
+ *   or a row at the owner's fence that claims a turn and carries no mark
+ *   (`unattributed`);
+ * - `tail`: the owner's own transcript.
+ */
+export interface OwnerReading extends OwnerPlace {
+  role: OwnerRole;
+  process: "alive" | "gone";
+  handle?: "busy" | "idle" | null;
+  rowReference?: boolean;
+  /** Standalone admission newer than its own recorded completion. */
+  registryClaim?: boolean;
+  journal?: "claimed" | "idle" | "unattributed" | null;
+  tail?: TailReading | null;
+}
+
+/** A row that claims a host and records no process (R2, R8). */
+export interface OwnerlessReading extends OwnerPlace {
+  kind: "hosted-row" | "open-receipt";
+  /** When a hosted registry row was last written (R8 clock 1). */
+  updatedAt: number | null;
+  tail?: TailReading | null;
+}
+
+/** One probe's census of owners, and the lookups a stage, a flow and a
+    journal row are judged through. */
+export interface OwnerCensusReading {
+  /** Every owner the turn pass judges. */
+  owners: readonly OwnerReading[];
+  ownerless: readonly OwnerlessReading[];
+  /** Every owner and ownerless record bound to a reference (R10). */
+  bound(reference: OwnerReference): readonly (OwnerReading | OwnerlessReading)[];
+  /** Whether the registry holds anything the reference names (R9). */
+  names(reference: OwnerReference): boolean;
+  /** The reference's own transcript: its path, or its conversation's current
+      generation path when it names only an id (R10). */
+  tail(reference: OwnerReference): Promise<TailReading | null>;
+}
+
+/** An observational reader can time and yield between individual reads.
+    Admission leaves this unset and reads the same evidence directly. */
+export type OwnerRead = <T>(reference: OwnerReference, read: () => Promise<T>) => Promise<T>;
+
 export interface QuietPorts {
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
   dispatchVersion?(): string;
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
+  /** Every recorded owner with its own evidence. `probe` is one object per
+      probe, so a reader can share what it loads across one probe and no
+      further. A reading that throws holds admission through `unreadable`. */
+  owners?(sessions: readonly RuntimeSession[], probe: object, read?: OwnerRead): Promise<OwnerCensusReading>;
   pipelines(): readonly Pipeline[];
   flows?(): readonly Flow[];
   presence(now: number): readonly StoredViewSession[];
@@ -89,71 +148,46 @@ export interface QuietPorts {
   controllerIdle?(): Promise<boolean>;
   registryHealth?(): RegistryRecordIssue[];
   controllerBusyReason?(): Promise<BusyReason | null>;
-  /** `probe` is one object for every row a single probe asks about, so a
-      reader can share what it loads across them and no further. */
-  turnLiveness?(session: Pick<RuntimeSession, "conversationId" | "artifactPath">, probe: object): Promise<TurnEvidence>;
   /** The process a headless review round records, for a round that names no
       conversation: `gone` only on proof, as `headlessRoundProcess` gives it. */
   reviewerProcess?(round: Pick<Round, "reviewerPid" | "reviewerIdentity">): "alive" | "gone" | "unproven";
   seats?(): readonly { conversationId: string; project: string }[];
 }
-export function currentHostTurnIdle(current: Pick<HostState, "status" | "activeTurnRef"> | undefined): boolean | undefined {
-  if (!current || current.status === "dead" || current.status === "unhosted") return undefined;
-  return current.status === "idle" && current.activeTurnRef === null;
-}
 
-type TurnVerdict = "blocks" | "discounted" | "unresolved";
-
-function judgeTurn(evidence: TurnEvidence): TurnVerdict {
-  // Current host work wins over transcript and registry evidence read before
-  // a replacement host was admitted for this conversation.
-  if (evidence.currentTurnIdle === false || evidence.headlessReviewerProcess === "alive" || evidence.headlessReviewerProcess === "unproven") return "blocks";
-  const { record, registryHost } = evidence;
-  // A replacement host wins over proof that the recorded reviewer is gone.
-  if (registryHost?.processAlive || record?.host.state === "alive") {
-    if (record?.turnState === "idle" && evidence.currentTurnIdle === true) return "discounted";
-    return "blocks";
-  }
-  // The launch marker has no process of its own. Its grace cannot override
-  // proof that the bound reviewer died or its PID was reused.
-  if (evidence.headlessReviewerProcess === "gone") return "discounted";
-  if (!record) {
-    if (!registryHost) return "unresolved";
-    // A row that records no live process and is past its launch grace proves
-    // no process owns the conversation, with or without a transcript.
-    return registryHost.processAlive || registryHost.state !== "gone" ? "blocks" : "discounted";
-  }
-  // A settled transcript cannot hide a newly admitted turn. Only the host
-  // that would run it can say none was.
-  if (record.turnState === "idle" && evidence.currentTurnIdle === true) return "discounted";
-  // A status word can lag a process the row still records. The restart would
-  // land on that process, so it counts while it answers.
-  if (registryHost?.processAlive) return "blocks";
-  return livenessRecordIsLive(record) ? "blocks" : "discounted";
+/** A session row that says a host is working on a turn, or is about to. */
+export function sessionClaimsOpenTurn(session: Pick<RuntimeSession, "host" | "turn" | "activeTurnId">): boolean {
+  return session.turn === "running" || session.turn === "interrupt_requested" || !!session.activeTurnId
+    || session.host === "registering" || session.host === "recovering";
 }
 
 /**
- * What one conversation says about the stage it runs, on the same predicate a
- * turn is judged on. `released` is a turn no process owns that did not settle,
- * so nothing is left to finish the stage. `settled` is a turn no process owns
- * that did settle: the controller still has its verdict to read, so the stage
- * holds for a bounded time.
+ * The verdict table (R7), read top to bottom; the first matching row decides.
+ * Each answering process holds until its own newer completion/idle or proven
+ * death/reuse. Journal evidence is ordered before it reaches this table.
+ * An unordered positive source always holds. Missing evidence never expires
+ * a recorded process, including one whose saved start identity is null.
  */
-function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "settled" | "unresolved" {
-  if (evidence.currentTurnIdle === false || evidence.registryHost?.processAlive || evidence.headlessReviewerProcess === "alive" || evidence.headlessReviewerProcess === "unproven") return "blocks";
-  const { record, registryHost } = evidence;
-  if (record?.host.state === "alive") return "blocks";
-  if (evidence.headlessReviewerProcess === "gone") return "released";
-  if (record) {
-    if (livenessRecordIsLive(record)) return "blocks";
-    return record.turnState === "idle" ? "settled" : "released";
-  }
-  // No transcript to read. A host in this Viewer still answers for the
-  // conversation; otherwise the registry row is the evidence, as it is for a turn.
-  if (evidence.currentTurnIdle !== undefined) return "blocks";
-  if (!registryHost) return "unresolved";
-  return registryHost.state === "gone" ? "released" : "blocks";
+export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "handle" | "rowReference" | "registryClaim" | "journal" | "tail">):
+  { verdict: "released"; reason: "process-gone" | "turn-settled" } | { verdict: "holds"; reason: OwnerReason } {
+  if (owner.process === "gone") return { verdict: "released", reason: "process-gone" };
+  if (owner.role === "setup") return { verdict: "holds", reason: "setup" };
+  if (owner.role === "reviewer") return { verdict: "holds", reason: "reviewer" };
+  if (owner.handle === "busy") return { verdict: "holds", reason: "host-turn" };
+  if (owner.rowReference || owner.journal === "claimed") return { verdict: "holds", reason: "turn-claimed" };
+  if (owner.tail?.turn === "busy") return { verdict: "holds", reason: "turn-open" };
+  if (owner.registryClaim) return { verdict: "holds", reason: owner.tail?.turn === "idle" ? "turn-claimed" : "turn-unread" };
+  if (owner.journal === "unattributed") return { verdict: "holds", reason: "turn-unattributed" };
+  if (owner.handle === "idle" || owner.journal === "idle") return { verdict: "released", reason: "turn-settled" };
+  if (owner.tail?.turn === "idle") return { verdict: "released", reason: "turn-settled" };
+  return { verdict: "holds", reason: "turn-unread" };
 }
+
+/** The id an owner is grouped and shown under (R11). */
+function displayId(item: OwnerPlace): string {
+  return item.binding ?? item.entryKey ?? item.artifactPath ?? item.launchId ?? item.id;
+}
+
+const isOwner = (item: OwnerReading | OwnerlessReading): item is OwnerReading => "process" in item;
 
 /**
  * A reviewer a review stage's flow has launched, when the attempt may not name
@@ -221,6 +255,19 @@ function flowCustody(flow: Flow | undefined, attemptConversationId: string | nul
    make the bound restart on every probe and hold the drain for good. */
 const firstUnresolved = new WeakMap<QuietPorts, Map<string, number>>();
 
+/* The live host owners whose own sources have shown a turn, by owner id, which
+   names the process and its start identity, with the reason that showed it. A
+   proven turn holds through a later unreadable tail until the owner's own
+   sources say idle or its process is gone or reused (R8). Kept per set of
+   ports to retain observed proof and its display reason. Cold safety comes
+   independently from the durable host identity and retained writer statement
+   in OwnerReading (R8). */
+const provenTurns = new WeakMap<QuietPorts, Map<string, OwnerReason>>();
+
+const emptyCensus: OwnerCensusReading = {
+  owners: [], ownerless: [], bound: () => [], names: () => false, tail: async () => null,
+};
+
 export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number, draining = false): Promise<{ quiet: boolean; blockers: QuietBlockers; work: string[] }> {
   const busyReason: BusyReason | null = snapshot.busy === "update" ? "update"
     : snapshot.busy === "restart-web" || snapshot.processes.web.state !== "healthy" ? "web"
@@ -231,18 +278,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   // Every open turn and stage this probe saw, by identity. The lists in the
   // blockers are cut for display; an admission compares the whole set.
   const work: string[] = [];
-  const readings = new Map<string, Promise<TurnEvidence | null>>();
-  const journalPaths = new Map<string, string>();
   const probe = {};
-  const evidence = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">): Promise<TurnEvidence | null> => {
-    const artifactPath = session.artifactPath ?? journalPaths.get(session.conversationId) ?? null;
-    const key = JSON.stringify([session.conversationId, artifactPath]);
-    if (!readings.has(key)) readings.set(key, (async () => {
-      try { return await ports.turnLiveness?.({ ...session, artifactPath }, probe) ?? null; }
-      catch { return null; } // Evidence that could not be read always blocks admission.
-    })());
-    return readings.get(key)!;
-  };
   if (ports.memoryAvailableMb) {
     const mb = ports.memoryAvailableMb();
     if (mb < 4_096) blockers.memoryMb = mb;
@@ -252,11 +288,13 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const pipelines = ports.pipelines();
     const flows = ports.flows?.() ?? [];
     // A stage can predate its transcript binding. Read the journal before
-    // judging owners so its path protects both the stage and its turn in this
-    // probe; an earlier pathless reading must not hide that evidence.
+    // judging owners so its path protects the stage in this probe; an earlier
+    // pathless reading must not hide that evidence. The first row wins.
     const runtime = await ports.runtimeSnapshot();
+    const census = ports.owners ? await ports.owners(runtime.sessions, probe) : emptyCensus;
+    const journalPaths = new Map<string, string>();
     for (const session of runtime.sessions) {
-      if (session.artifactPath) journalPaths.set(session.conversationId, session.artifactPath);
+      if (session.artifactPath && !journalPaths.has(session.conversationId)) journalPaths.set(session.conversationId, session.artifactPath);
     }
     const stages: BlockingStage[] = [];
     const checkedFlows = new Set<string>();
@@ -266,16 +304,48 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const observed = new Set<string>();
     const memory = firstUnresolved.get(ports) ?? new Map<string, number>();
     firstUnresolved.set(ports, memory);
-    /* One bound for an id, whether a journal row or a stage names it. */
-    const pastBound = (id: string, kind: "unresolved" | "settled" = "unresolved"): boolean => {
-      const key = `${kind}:${id}`;
+    /* One bound per clock: an unproved ownerless launch has its own, keyed
+       by the record and transcript it names, and a reference a journal row
+       or a stage names has one by its id. It runs from the newest record of
+       the transcript the item names when one can be read, else from the first
+       probe that saw the item (R8). `shownAs` is the id the item is counted
+       under, which several owners can share (R11). */
+    const pastBound = (clock: string, kind: "unresolved" | "settled" = "unresolved", recordedAt: number | null = null, shownAs = clock): boolean => {
+      const key = `${kind}:${clock}`;
       observed.add(key);
-      (kind === "unresolved" ? unresolved : settled).add(id);
-      const since = memory.get(key) ?? now;
-      memory.set(key, since);
-      if (now - since >= UNRESOLVED_TURN_GRACE_MS) return true;
-      if (kind === "unresolved") held.add(id);
+      (kind === "unresolved" ? unresolved : settled).add(shownAs);
+      const first = memory.get(key) ?? now;
+      memory.set(key, first);
+      if (now - (recordedAt ?? first) >= UNRESOLVED_TURN_GRACE_MS) return true;
+      if (kind === "unresolved") held.add(shownAs);
       return false;
+    };
+    /* R8 clock 1: a hosted row with no process past its launch grace proves
+       nothing owns it. */
+    const expired = (record: OwnerlessReading): boolean => record.kind === "hosted-row"
+      && record.updatedAt !== null && now - record.updatedAt >= UNRESOLVED_TURN_GRACE_MS;
+    /* The clocks in R8's order: an expired hosted row's own write, then the
+       newest record of the transcript the item names, then the first probe.
+       Every item is counted in `unresolved`, whichever clock releases it. */
+    const launchPastBound = (item: OwnerlessReading): boolean =>
+      pastBound(`ownerless:${item.id}:${item.artifactPath ?? ""}`, "unresolved",
+        expired(item) ? item.updatedAt : item.tail?.lastRecordAt ?? null, displayId(item));
+    /* What a stage reference says, from the set of owners bound to it (R10). */
+    const judgeStageOwner = async (owner: StageOwner): Promise<{ verdict: "blocks" | "released" | "pending" | "settled" | "unresolved"; since: number | null }> => {
+      const reference = { conversationId: owner.conversationId, artifactPath: owner.artifactPath ?? journalPaths.get(owner.conversationId) ?? null };
+      const bound = census.bound(reference);
+      if (bound.some((item) => isOwner(item) && item.process === "alive")) return { verdict: "blocks", since: null };
+      if (bound.some((item) => !isOwner(item) && item.tail?.turn === "busy")) return { verdict: "blocks", since: null };
+      // A launch marker has no process of its own: proof that the reviewer
+      // the round records is gone releases its stage.
+      if (bound.some((item) => isOwner(item) && item.role === "reviewer")) return { verdict: "released", since: null };
+      // Each ownerless record keeps its own bound, so one seen earlier cannot
+      // age a record that has just appeared under the same reference.
+      const pending = bound.filter((item): item is OwnerlessReading => !isOwner(item) && !expired(item));
+      if (pending.length) return { verdict: pending.map(launchPastBound).every(Boolean) ? "released" : "pending", since: null };
+      const transcript = await census.tail(reference);
+      if (!bound.length && !census.names(reference)) return { verdict: "unresolved", since: transcript?.lastRecordAt ?? null };
+      return { verdict: transcript?.turn === "idle" ? "settled" : "released", since: null };
     };
     for (const pipeline of pipelines) {
       const cursor = pipeline.cursor;
@@ -287,9 +357,10 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       const awaitingAdmission = draining && !!flow && flowAwaitingAdmission(flow);
       // Reserved custody has no engine yet. The drain holds it before claiming
       // an owner; a claimed/reserving/dispatching launch still blocks admission.
-      if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
-        && !attempt.activation.owner && !attempt.launchId && !conversationId) continue;
-      if (["running", "reviewing"].includes(cursor.state)) {
+      const heldReservation = draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
+        && !attempt.activation.owner && !attempt.launchId && !conversationId;
+      if (heldReservation && !attempt?.agentPath) continue;
+      if (["running", "reviewing"].includes(cursor.state) || heldReservation) {
         const { owners, dispatching, currentRoundGone, relayInFlight } = flowCustody(flow, conversationId, ports.reviewerProcess);
         if (flow) checkedFlows.add(flow.id);
         const attemptOwnerId = conversationId ?? `stage:${pipeline.id}:${cursor.stageId}:attempt:${attempt?.n ?? 0}`;
@@ -308,10 +379,9 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         // needs no verdict-collection grace here: that action is already held.
         let released = !relayInFlight && !dispatching && (awaitingAdmission || owners.length > 0 || currentRoundGone);
         for (const owner of owners) {
-          const reading = await evidence(owner);
-          const verdict = reading ? judgeStageOwner(reading) : "blocks";
-          if (verdict === "blocks" || (verdict !== "released" && !((awaitingAdmission || owner.historical) && verdict === "settled")
-            && !pastBound(owner.conversationId, verdict))) released = false;
+          const { verdict, since } = await judgeStageOwner(owner);
+          if (verdict === "blocks" || verdict === "pending" || (verdict !== "released" && !((awaitingAdmission || owner.historical) && verdict === "settled")
+            && !pastBound(owner.conversationId, verdict, verdict === "unresolved" ? since : null))) released = false;
         }
         if (released) continue;
       }
@@ -322,12 +392,11 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       const { owners, dispatching, relayInFlight } = flowCustody(flow, null, ports.reviewerProcess);
       let blocks = dispatching || relayInFlight;
       for (const owner of owners) {
-        const reading = await evidence(owner);
-        const verdict = reading ? judgeStageOwner(reading) : "blocks";
+        const { verdict, since } = await judgeStageOwner(owner);
         // Parked/finished flows have no verdict collection to wait for. Unknown
         // ownership keeps the same diagnostic bound as an active stage.
         const collecting = flow.state === "reviewing" && !owner.historical;
-        if (verdict === "blocks" || (verdict === "unresolved" && !pastBound(owner.conversationId))
+        if (verdict === "blocks" || verdict === "pending" || (verdict === "unresolved" && !pastBound(owner.conversationId, "unresolved", since))
           || (verdict === "settled" && collecting && !pastBound(owner.conversationId, "settled"))) blocks = true;
       }
       if (!blocks) continue;
@@ -343,27 +412,74 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     blockers.stages = stages.length;
     work.push(...stages.map((stage) => `stage:${stage.pipelineId}:${stage.stageId}:${stage.conversationId ?? ""}`));
     blockers.stageList = stages.slice(0, 20);
-    const seats = ports.seats?.() ?? [];
-    const turns: BlockingTurn[] = [];
-    const seen = new Set<string>();
-    for (const session of runtime.sessions) {
-      if (!["running", "interrupt_requested"].includes(session.turn) && !["registering", "recovering"].includes(session.host)) continue;
-      // The journal's own words cannot settle this either way: a fallback can
-      // publish unhosted/running over a live process, and a row can keep
-      // hosted/running for days after its host died.
-      const reading = await evidence(session);
-      const verdict = reading ? judgeTurn(reading) : "blocks";
-      if (verdict === "discounted") { blockers.discounted!++; continue; }
-      if (seen.has(session.conversationId)) continue;
-      seen.add(session.conversationId);
-      if (verdict === "unresolved" && pastBound(session.conversationId)) continue;
-      const stage = stages.find((stage) => stage.conversationId === session.conversationId);
-      turns.push({ conversationId: session.conversationId, engine: session.sessionKey?.engine ?? "unknown",
-        project: session.cwd ? projectInfoFromCwd(session.cwd)?.project ?? null : null,
-        stage: stage ? { pipelineId: stage.pipelineId, stageId: stage.stageId } : null,
-        seat: seats.some((seat) => seat.conversationId === session.conversationId),
-        ...(verdict === "unresolved" ? { unresolved: true as const } : {}) });
+    /* R7 per owner, then R11: recorded answering processes never enter the
+       launch clock. Group by display id only after every verdict is read. */
+    const holding = new Map<string, { item: OwnerReading | OwnerlessReading; reason: OwnerReason; unresolved: boolean }>();
+    const proven = provenTurns.get(ports) ?? new Map<string, OwnerReason>();
+    provenTurns.set(ports, proven);
+    for (const id of proven.keys()) if (!census.owners.some((owner) => owner.id === id)) proven.delete(id);
+    for (const owner of census.owners) {
+      const { verdict, reason } = ownerVerdict(owner);
+      // Keep the observed reason while evidence is missing. Only the common
+      // owner verdict can release it after newer settlement or proven death.
+      if (verdict === "released") proven.delete(owner.id);
+      else if (verdict === "holds" && owner.role === "host" && !proven.has(owner.id)) proven.set(owner.id, reason);
+      if (verdict === "released") continue;
+      const kept = reason === "turn-unread" ? proven.get(owner.id) : undefined;
+      if (kept) {
+        holding.set(owner.id, { item: owner, reason: kept, unresolved: false });
+        continue;
+      }
+      holding.set(owner.id, { item: owner, reason, unresolved: false });
     }
+    for (const record of census.ownerless) {
+      if (record.tail?.turn === "busy") {
+        holding.set(record.id, { item: record, reason: "turn-open", unresolved: false });
+        continue;
+      }
+      if (launchPastBound(record)) continue;
+      holding.set(record.id, { item: record, reason: "launch-unproven", unresolved: true });
+    }
+    const seats = ports.seats?.() ?? [];
+    const groups = new Map<string, BlockingTurn>();
+    const group = (id: string, engine: string | null | undefined, cwd: string | null | undefined, reason: OwnerReason, isUnresolved: boolean) => {
+      const existing = groups.get(id);
+      if (existing) {
+        if (!isUnresolved) delete existing.unresolved;
+        return;
+      }
+      const stage = stages.find((stage) => stage.conversationId === id);
+      groups.set(id, { conversationId: id, engine: engine ?? "unknown",
+        project: cwd ? projectInfoFromCwd(cwd)?.project ?? null : null,
+        stage: stage ? { pipelineId: stage.pipelineId, stageId: stage.stageId } : null,
+        seat: seats.some((seat) => seat.conversationId === id), reason,
+        ...(isUnresolved ? { unresolved: true as const } : {}) });
+    };
+    /* R9: a journal row is turn evidence only through an owner's own status
+       mark, which the reader already read. Here it is a claim: one the
+       registry knows nothing about is unresolved, and one whose every owner
+       is released is discounted. Rows come first so the list keeps their order. */
+    for (const session of runtime.sessions) {
+      const reference = { conversationId: session.conversationId, artifactPath: session.artifactPath, sessionKey: session.sessionKey };
+      const bound = census.bound(reference);
+      const holders = bound.filter((item) => holding.has(item.id));
+      for (const item of holders) {
+        const { reason, unresolved: isUnresolved } = holding.get(item.id)!;
+        group(displayId(item), item.engine, item.cwd ?? session.cwd, reason, isUnresolved);
+      }
+      if (holders.length) continue;
+      if (!bound.length && !census.names(reference)) {
+        if (!sessionClaimsOpenTurn(session)) continue;
+        const transcript = session.artifactPath ? await census.tail({ artifactPath: session.artifactPath }) : null;
+        if (!pastBound(session.conversationId, "unresolved", transcript?.lastRecordAt ?? null)) {
+          group(session.conversationId, session.sessionKey?.engine, session.cwd, "unresolved", true);
+        }
+        continue;
+      }
+      if (sessionClaimsOpenTurn(session)) blockers.discounted!++;
+    }
+    for (const { item, reason, unresolved: isUnresolved } of holding.values()) group(displayId(item), item.engine, item.cwd, reason, isUnresolved);
+    const turns = [...groups.values()];
     // An id that resolved, or that nothing names any more, starts a new bound
     // if it is ever unresolved again.
     for (const key of memory.keys()) if (!observed.has(key)) memory.delete(key);

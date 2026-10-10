@@ -24,6 +24,7 @@ import { spawnSync } from "node:child_process";
 import { realPorts, UpdateRunner } from "./steps";
 import { ReleasePointer, releaseDirFor } from "./release";
 import { watchRestartRequests as watchOldRestartRequests } from "./__fixtures__/preAutoLauncher.mjs";
+import { owners } from "./quietTestFixtures";
 
 const root = mkdtempSync("/var/tmp/self-update-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -689,6 +690,7 @@ function scenario() {
     now: () => now, env: {}, dir, remote: "https://github.com/example/project", branch: "main", pollMinutes: 15, bun: "bun",
     mode: async () => ({ mode: "checkout", reason: null, record }),
     quiet: { runtimeSnapshot: async () => ({ sessions: turnRunning ? [{ turn: "running", host: "hosted" }] : [] }),
+      owners: owners(),
       pipelines: () => stageRunning ? [{ state: "running", cursor: { state: "spawning" } }] : [], presence: () => [], memoryAvailableMb: () => 8_192 },
     green: { read: async () => ({ state: greenState }) },
     targetOnBranch: async () => true,
