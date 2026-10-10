@@ -38,6 +38,8 @@ export async function companionBody(req: NextRequest, limit = 96_000): Promise<R
 }
 export function companionFailure(error: unknown): NextResponse {
   const candidate = error instanceof Error ? error.message : "";
-  const code = ["OPERATOR_REQUIRED", "MEMBER_REQUIRED", "NO_KEY", "KEY_FROM_ENV", "CAP_REACHED", "INVALID_SETTINGS", "INVALID_KEY", "INVALID_REQUEST", "SESSION_CLOSED", "SESSION_UNAVAILABLE", "COMPANION_DISABLED", "SESSION_LIMIT", "PROJECT_REFUSED", "TOOL_NOT_ALLOWED", "PROVIDER_ERROR", "MINT_UNCERTAIN"].includes(candidate) ? candidate : "COMPANION_UNAVAILABLE";
-  return NextResponse.json({ code }, { status: code === "MEMBER_REQUIRED" ? 401 : code === "OPERATOR_REQUIRED" ? 403 : code.startsWith("INVALID") ? 400 : code === "PROVIDER_ERROR" ? 502 : 409, headers: { "Cache-Control": "no-store" } });
+  const code = ["OPERATOR_REQUIRED", "MEMBER_REQUIRED", "NO_KEY", "KEY_FROM_ENV", "CAP_REACHED", "INVALID_SETTINGS", "INVALID_KEY", "INVALID_REQUEST", "SESSION_CLOSED", "SESSION_UNAVAILABLE", "COMPANION_DISABLED", "SESSION_LIMIT", "PROJECT_REFUSED", "TOOL_NOT_ALLOWED", "PROVIDER_ERROR", "MINT_UNCERTAIN", "CODEX_LIMIT_REACHED", "CODEX_AUTH_REQUIRED", "NO_CODEX_ACCOUNT", "CODEX_UNSUPPORTED"].includes(candidate) ? candidate : "COMPANION_UNAVAILABLE";
+  const reset = error instanceof Error && "resetsAt" in error ? error.resetsAt : null;
+  const resetsAt = typeof reset === "number" && Number.isSafeInteger(reset) && reset >= 0 ? reset : null;
+  return NextResponse.json({ code, ...(code === "CODEX_LIMIT_REACHED" ? { resetsAt } : {}) }, { status: code === "MEMBER_REQUIRED" ? 401 : code === "OPERATOR_REQUIRED" ? 403 : code.startsWith("INVALID") ? 400 : code === "PROVIDER_ERROR" ? 502 : 409, headers: { "Cache-Control": "no-store" } });
 }

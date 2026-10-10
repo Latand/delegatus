@@ -3,11 +3,14 @@ import { liveSessionConfiguration, type BackendRequest } from "./sessionConfig";
 
 export type LiveCommand = Record<string, unknown> & { type: string };
 export interface LiveConnection { send(event: LiveCommand): void; dispose(): void }
+export type LiveToolHandler = (name: string, args: unknown, callId: string, turnId: string) => Promise<unknown>;
 export interface LiveProvider {
+  /** Codex owns the backing turn and the call's leased process. */
+  readonly backend?: "codex";
   /** Rejects with PROVIDER_REFUSED only when the provider answered that it
    * created nothing; any other failure may have created a session. */
-  create(key: string, locale: Locale, sdp: string, projectName?: string): Promise<{ id: string; sdp: string }>;
-  attach(id: string, key: string, event: (value: unknown) => void, lost: () => void): Promise<LiveConnection>;
+  create(key: string, locale: Locale, sdp: string, projectName?: string, project?: string): Promise<{ id: string; sdp: string }>;
+  attach(id: string, key: string, event: (value: unknown) => void, lost: () => void, tool?: LiveToolHandler): Promise<LiveConnection>;
   hangup(id: string, key: string): Promise<void>;
   /** One backend response, paid for by the caller before it is asked. */
   respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown>;
