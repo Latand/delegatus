@@ -36,8 +36,8 @@ const RECONNECT_MAX_MS = 8_000;
 const QUIET_MS = MUX_PING_MS * 3 + 5_000;
 /* A reader that closes one stream to open another in the next moment keeps its connection. */
 const LINGER_MS = 2_000;
-/* The connection never came up this many times in a row: this server has none, and each stream gets its own.
-   A page that had it asks the route whether it is still there instead (see `probe`). */
+/* The connection failed this many times in a row: the page asks the route whether it is there at all (see
+   `probe`), and only a route that is gone or refused gives each stream its own connection. */
 const GIVE_UP_AFTER = 3;
 const CONTROL_RETRY_MS = 1_000;
 const CONTROL_ATTEMPTS = 3;
@@ -59,7 +59,6 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
   let physical: EventStream | null = null;
   let connectionId = "";
   let ready = false;
-  let everReady = false;
   let failures = 0;
   let probing = false;
   let direct = false;
@@ -244,7 +243,6 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
     source.addEventListener("ready", () => {
       if (!mine()) return;
       ready = true;
-      everReady = true;
       failures = 0;
       outbox = [];
       for (const channel of channels.values()) if (!channel.native && !channel.refused) outbox.push(channel.openOp());
@@ -308,19 +306,16 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
     drop();
     if (direct) return;
     failures += 1;
-    if (!everReady && failures >= GIVE_UP_AFTER) {
-      goDirect();
-      return;
-    }
     for (const channel of [...channels.values()]) if (!channel.native) channel.interrupted();
     if (failures >= GIVE_UP_AFTER) void probe();
     scheduleConnect();
   }
 
-  /** A page that had the connection keeps losing it: either the server is down for a while, and the
-      connection comes back with it, or the server it now reaches has no route (a rollback with
-      `LLV_STREAM_MUX=0`, an older release), and only plain streams will ever work. The route itself
-      tells the two apart: without a connection id it answers 400 when it is there. */
+  /** The connection keeps failing, whether the page ever had it or not: either the server is down for a
+      while (a restart, a 503), and the connection comes back with it, or the server it reaches has no
+      route (`LLV_STREAM_MUX=0`, an older release, a rollback), and only plain streams will ever work.
+      The route itself tells the two apart: without a connection id it answers 400 when it is there.
+      Giving up on anything less would put every stream of the tab back on a connection of its own. */
   async function probe(): Promise<void> {
     if (probing || direct) return;
     probing = true;

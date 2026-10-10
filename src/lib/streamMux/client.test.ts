@@ -235,20 +235,24 @@ test("a connection the server no longer knows, or one gone quiet, is replaced", 
 test("a server with no stream route gives each stream a connection of its own", async () => {
   const h = harness();
   const seen = watch(h.mux.open("/api/runtime/stream?after=0"), ["heartbeat"]);
-  /* The route answers 404: the connection fails before it ever says ready. */
+  /* The route answers 404, to the connection and to the question whether it is there. */
+  h.probeAnswers.push(404);
   h.physical()[0]!.fail();
   await h.advance(500);
   h.physical()[1]!.fail();
   await h.advance(1_000);
   h.physical()[2]!.fail();
+  await h.settle();
 
+  expect(h.probes()).toBe(1);
   expect(h.physical().every((source) => source.closed)).toBe(true);
   expect(h.plain().map((source) => source.url)).toEqual(["/api/runtime/stream?after=0"]);
   const own = h.plain()[0]!;
   own.onopen?.({ data: "" });
   own.say("message", "{\"seq\":1}", "1");
   own.say("heartbeat", "{}");
-  expect(seen.slice(2)).toEqual(["open", "message {\"seq\":1} #1", "heartbeat {}"]);
+  expect(seen).toEqual(["error", "error", "error", "open", "message {\"seq\":1} #1", "heartbeat {}"]);
+  await h.advance(60_000);
 
   /* From then on the page asks for no connection at all. */
   const later = h.mux.open("/api/logs/stream?subs=x");
@@ -256,6 +260,60 @@ test("a server with no stream route gives each stream a connection of its own", 
   expect(h.plain().map((source) => source.url)).toEqual(["/api/runtime/stream?after=0", "/api/logs/stream?subs=x"]);
   later.close();
   expect(h.plain()[1]!.closed).toBe(true);
+});
+
+test("a fresh page whose first connections fail keeps waiting for the connection while the route is there", async () => {
+  const h = harness();
+  const seen = watch(h.mux.open("/api/self-update/events"), ["state"]);
+  const runtime = watch(h.mux.open("/api/runtime/stream?after=0"));
+  /* A restart as the tab loads: the first connections answer 503, and so does the route when asked. */
+  h.probeAnswers.push(503, 0);
+  h.physical()[0]!.fail();
+  await h.advance(500);
+  h.physical()[1]!.fail();
+  await h.advance(1_000);
+  h.physical()[2]!.fail();
+  await h.settle();
+  expect(h.probes()).toBe(1);
+  expect(h.plain()).toHaveLength(0);
+  await h.advance(2_000);
+  h.physical()[3]!.fail();
+  await h.settle();
+  expect(h.probes()).toBe(2);
+  expect(h.plain()).toHaveLength(0);
+
+  /* The server is back: one connection carries both streams, and no stream opened one of its own. */
+  await h.advance(4_000);
+  expect(h.physical()).toHaveLength(5);
+  h.physical()[4]!.say("ready", "{}");
+  await h.settle();
+  expect(h.posts.at(-1)).toEqual({
+    c: "connection-00000005",
+    ops: [
+      { op: "open", id: "1", url: "/api/self-update/events" },
+      { op: "open", id: "2", url: "/api/runtime/stream?after=0" },
+    ],
+  });
+  h.physical()[4]!.carry("1", "state", "back");
+  expect(seen.at(-1)).toBe("state back");
+  expect(runtime.every((event) => event === "error")).toBe(true);
+  expect(h.physical().filter((source) => !source.closed)).toHaveLength(1);
+  expect(h.plain()).toHaveLength(0);
+});
+
+test("a fresh page the stream route is refused to reads its streams the plain way", async () => {
+  const h = harness();
+  watch(h.mux.open("/api/self-update/events"));
+  h.probeAnswers.push(403);
+  h.physical()[0]!.fail();
+  await h.advance(500);
+  h.physical()[1]!.fail();
+  await h.advance(1_000);
+  h.physical()[2]!.fail();
+  await h.settle();
+  expect(h.probes()).toBe(1);
+  expect(h.physical().every((source) => source.closed)).toBe(true);
+  expect(h.plain().map((source) => source.url)).toEqual(["/api/self-update/events"]);
 });
 
 test("a reader the control request is refused to reads its streams the plain way", async () => {
