@@ -32,13 +32,12 @@ test("Claude cancellation releases the lease during termination grace", async ()
       spawn: () => child as never,
       kill: (_pid, signal) => { signals.push(signal); if (signal === "SIGKILL") child.emit("close", 0); },
       pidStartToken: () => "fixture-process", isExpectedClaude: () => true,
-      waitForExit: async () => undefined,
+      waitForExit: async () => true,
       status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
       now: Date.now,
       setTimeout: (fn, ms) => { if (ms <= 2_000) void pause().then(fn); return {} as NodeJS.Timeout; },
       clearTimeout: () => undefined,
     }, { load: () => [], save: () => undefined });
-    await supervisor.whenRecovered();
     const operation = supervisor.start("default");
     const cancel = spyOn(claudeLoginSupervisor, "cancel").mockImplementation((id) => supervisor.cancel(id));
     try {
