@@ -177,3 +177,17 @@ test("a helper that finishes passes its status through and leaves no record", as
   expect(code).toBe(7);
   expect(fs.existsSync(path.join(state, "helpers")) ? fs.readdirSync(path.join(state, "helpers")) : []).toEqual([]);
 }, 10_000);
+
+test.if(process.platform === "linux")("a signal to the guardian ends the helper's whole group with it", async () => {
+  const { spawnLeasedHelper } = await import("./helperLease");
+  const state = path.join(SANDBOX, "signal-state");
+  fs.mkdirSync(state, { recursive: true, mode: 0o700 });
+  const report = path.join(SANDBOX, "signal.json");
+  const program = waitingHelper(path.join(SANDBOX, "signal", "helper.mjs"), report);
+  const guardian = spawnLeasedHelper("signal-helper", { command: process.execPath, args: [program], cwd: SANDBOX, env: process.env }, state);
+  const exited = new Promise((resolve) => guardian.once("exit", resolve));
+  const helper = await readReport(report);
+  guardian.kill("SIGINT");
+  await exited;
+  expect(await gone([helper.helper, helper.child])).toBe(true);
+}, 20_000);

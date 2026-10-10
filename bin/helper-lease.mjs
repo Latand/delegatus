@@ -142,6 +142,9 @@ if (!group) {
   process.exit(childExit?.code ?? 127);
 }
 writeRecord();
+/* A terminal's Ctrl-C reaches this process with the launcher's group, never
+   the helper's own: end the helper with it. */
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => void end());
 process.stdin.once("end", end);
 process.stdin.once("close", end);
 process.stdin.on("error", end);
