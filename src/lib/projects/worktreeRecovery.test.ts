@@ -146,7 +146,7 @@ test("partial and read-only catalog scans leave confirmed candidates for the nex
   f.transcript(cwd, { branch: "confirmed" });
   await projectCatalogSnapshotFromRaw(f.raw(), { complete: false });
   expect(readWorktreeRecoveries()).toEqual([]);
-  await projectCatalogSnapshotFromRaw(f.raw(), { persist: false, persistIndex: true });
+  await projectCatalogSnapshotFromRaw(f.raw(), { persist: false });
   expect(readWorktreeRecoveries()).toEqual([]);
   await f.scan();
   expect(canonicalProject(directoryProjectId(cwd))).toBe(f.identity.project);
@@ -296,4 +296,16 @@ test("a withdrawn release fence refuses the atomic recovery and the current rele
   } finally {
     if (previous === undefined) delete process.env.LLV_HOT_STATE_RELEASE_REVISION; else process.env.LLV_HOT_STATE_RELEASE_REVISION = previous;
   }
+});
+
+
+test("a complete request index refresh recovers projects and returns their canonical grouping", async () => {
+  const f = fixture(); const cwd = f.repo + "-review";
+  f.transcript(cwd, { branch: "confirmed" });
+  const sessions = path.dirname(Object.keys(f.files)[0]!);
+  const snapshot = await discoverFilesWithProjectCatalog([["codex-sessions", sessions]], undefined, { persist: false, persistIndex: true });
+  expect(snapshot.complete).toBe(true);
+  expect(snapshot.projectCatalog.map(entry => entry.project)).toEqual([f.identity.project]);
+  expect(snapshot.files.every(file => file.project === f.identity.project)).toBe(true);
+  expect(readLifecycleJournal().events[0]?.summary).toContain("rescan");
 });

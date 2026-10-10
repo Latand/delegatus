@@ -766,7 +766,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
     scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
       writeState({ version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: nextFiles });
-      if (options.persist !== false && options.recoverWorktrees !== false) {
+      if (options.recoverWorktrees !== false) {
         try {
           const { recoverWorktreeProjects } = await import("@/lib/projects/worktreeBackfill");
           const recovery = isProjectCatalogScanCurrent(scanToken)
