@@ -13,7 +13,7 @@ import { readStartIdentity } from "./self-update-supervisor.mjs";
 import { prepareLauncherCredentials } from "./launcher-credentials.mjs";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
 import { resetWindowsSnapshotForTests, windowsBackend } from "../src/lib/proc/windows";
-import { terminalClosed } from "./__fixtures__/terminal-lifecycle";
+import { terminalClosed, terminalExited } from "./__fixtures__/terminal-lifecycle";
 
 const fixtures: string[] = [];
 const fixtureRoots = new Map<string, { tempRoot: string; dev: number; ino: number; label: string }>();
@@ -238,7 +238,7 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
   // launcher and leave the bootstrap holding the fixture's Windows cwd.
   if (action?.id === "restart-terminal") {
     observeTerminal(child, f.root);
-    await terminalClosed(child);
+    await terminalExited(child);
     expect(child.exitCode).toBe(rollback ? 1 : 0);
     cleanupEvidence("terminal-command-complete", { pid: child.pid, startIdentity: child.pid ? owners.get(child.pid) : null, exit: child.exitCode,
       terminalOwners: [...terminalOwners].map(([pid, record]) => ({ pid, ...record, exited: ownerExited(pid, record.startIdentity) })) });
