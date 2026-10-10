@@ -1,7 +1,7 @@
 import { hardenedRedact } from "@/lib/view/compactText";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { PrototypeReviewRead } from "@/lib/prototypeReview/types";
-import { withoutLocalPaths } from "./redaction";
+import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { READ_SCHEMAS, validToolValue } from "./readSchemas";
 
 export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame"] as const;
@@ -68,7 +68,7 @@ export class CompanionBoardReads {
     const normalized = this.normalize(project,name,args);
     return this.read(project,name,normalized);
   }
-  async read(project: string, name: string, args: Record<string, unknown>): Promise<SpeechReadResult> {
+  async read(project: string, name: string, args: Record<string, unknown>, secrets: readonly string[] = []): Promise<SpeechReadResult> {
     project = canonicalProject(project);
     const kind = name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (name === "agent_activity" && args.conversationId) ? "conversation" : null;
     const id = String(args[kind === "pipeline" ? "pipelineId" : kind === "task" ? "taskId" : "conversationId"] ?? "");
@@ -77,7 +77,7 @@ export class CompanionBoardReads {
       const review = this.paths.review(id);
       // Complete review text is the operator's explicit one-call exception to
       // list budgets. Internal delivery text and local paths never leave it.
-      const scrub = (value: unknown): unknown => typeof value === "string" ? clean(value) : Array.isArray(value) ? value.map(scrub)
+      const scrub = (value: unknown): unknown => typeof value === "string" ? clean(withoutCredentials(value,secrets)) : Array.isArray(value) ? value.map(scrub)
         : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).filter(([key]) => !["source","url"].includes(key)).map(([key,value]) => [key,scrub(value)])) : value;
       return { item:scrub(review),speech:`${review.rounds.length} prototype review rounds. Read every variant, question, recommendation and saved decision from the item.`,truncated:!!review.historyTruncated };
     }
@@ -90,8 +90,10 @@ export class CompanionBoardReads {
       const conversationId = this.paths.recipient(project); if (!conversationId) throw new Error("NO_ORCHESTRATOR");
       args = {...args,conversationId}; tool = "conversation_messages";
     }
-    const source = await this.paths.call(tool,{...args,project,compact:true,includeHints:false,
-      ...(tool === "conversation_messages" ? {kinds:["message"],maxChars:320} : {}),...(tool === "get_task" ? {compact:false} : {})});
+    // Mask active credentials before projection cuts fields into speech-sized
+    // pieces. Otherwise a cut can leave a fragment that no longer matches.
+    const source = cleanStrings(await this.paths.call(tool,{...args,project,compact:true,includeHints:false,
+      ...(tool === "conversation_messages" ? {kinds:["message"],maxChars:320} : {}),...(tool === "get_task" ? {compact:false} : {})}),text=>withoutCredentials(text,secrets));
     if (name === "list_tasks") return page(source,rows(source.tasks).map(taskRow),"tasks");
     if (name === "list_pipelines") return page(source,rows(source.pipelines).map(pipelineRow),"pipelines");
     if (name === "get_task") {

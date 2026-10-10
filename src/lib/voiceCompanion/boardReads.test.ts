@@ -1,6 +1,17 @@
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { expect, test } from "bun:test";
-import { READ_TOOL_NAMES } from "./boardReads";
+import { CompanionBoardReads, READ_TOOL_NAMES } from "./boardReads";
+
+test("active credentials are masked before a speech projection can cut their fragments", async () => {
+  const key = `fixture-private-${"Q7vLm2Xr9TbW4nZc8KpY3dHs6FgJ1aE5".repeat(5)}`;
+  const pieces = key.match(/.{1,6}/g)!.join(" ");
+  const reads = new CompanionBoardReads({ call: async () => ({ total: 1, tasks: [{ id: "task-a", text: `Safe task ${pieces} ready`, status: "inbox" }] }),
+    projectFor: async () => "fixture", resolveProject: () => "fixture", recipient: () => null,
+    review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); } });
+  const result = await reads.read("fixture", "list_tasks", reads.normalize("fixture", "list_tasks", { openOnly: true }), [key]);
+  expect(result).toMatchObject({ total: 1, shown: 1, rows: [{ title: "Safe task [redacted] ready", state: "inbox" }] });
+  expect(result.speech).toBe("1 tasks. Safe task [redacted] ready: inbox");
+});
 
 test("every speech read tool stays on its board, bounds output, and refuses the rest of MCP", async () => {
   const title = "A".repeat(20_000);

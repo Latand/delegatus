@@ -1192,6 +1192,96 @@ test("prototype frame bytes reach backend vision while tool output and transcrip
   expect(f.sends()).toBe(0); await f.service.close(s.sessionId);
 });
 
+async function credentialReadFixture() {
+  const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const key = ["fixture", "private", "credential", "Q7vLm2Xr9TbW4nZc8KpY3dHs6FgJ1aE5"].join("-");
+  const pieces = key.match(/.{1,6}/g)!.join(" ");
+  const at = "2026-10-10T00:00:00.000Z";
+  const taskFile = path.join(root, "credential-reads.json");
+  const description = "Keep the complete safe description. ".repeat(160);
+  const round = { id: `pr_${"a".repeat(32)}`, taskId: "task-credential", project: "fixture", title: "Safe prototype review", createdAt: at,
+    source: { conversationId: null }, publicationKey: "fixture-publication", inputDigest: "b".repeat(64),
+    variants: [{ number: 1, name: "Safe variant", description, frames: [], videos: [] }],
+    questions: [{ id: "choice", text: "Which variant?", options: [{ label: "Safe variant", recommended: true }] }],
+    decision: { chosen: [1], comment: `Keep this safe decision. ${pieces} Keep the final sentence.`, at,
+      delivery: { state: "sent" as const, clientMessageId: "fixture-choice", conversationId: null, text: "Private delivery context" } } };
+  saveTasks([{ id: round.taskId, project: "fixture", text: `Safe task ${pieces} ready`, status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, prototypeReviews: [round] },
+    { id: "task-closed", project: "fixture", text: "Closed task", status: "done", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }], taskFile);
+  const f = fixture(key);
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    loadTasks: () => loadTasks(taskFile), listTaskRecords: () => loadTasks(taskFile), taskSelectionSource: () => taskSelectionSource(taskFile),
+    pipelineSelectionSource: undefined, listPipelineRecords: () => [] } });
+  const reads = new CompanionBoardReads({ ...paths, resolveProject: () => "fixture" });
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => key, timers: false, closeTimeoutMs: 20 });
+  return { ...f, service, reads, key, description, round };
+}
+
+async function expectCredentialReadSurfacesSafe(f: Awaited<ReturnType<typeof credentialReadFixture>>, sessionId: string) {
+  const { withoutSeparators } = await import("./redaction");
+  const surfaces = [JSON.stringify(f.provider.requests), JSON.stringify(f.provider.commands),
+    JSON.stringify(await f.service.events(sessionId, 0)), JSON.stringify(f.service.transcriptRecord(sessionId)), stateFile(), transcriptFiles()];
+  for (const surface of surfaces) expect(withoutSeparators(surface)).not.toContain(f.key);
+}
+
+test("whole prototype review masks active credential fragments before backend input and keeps the complete safe review", async () => {
+  const f = await credentialReadFixture();
+  f.provider.responder = (request, index) => {
+    const output = request.input.find(item => item.type === "function_call_output");
+    return backendResponse(`resp_review_${index}`, output ? [message(String(output.output))]
+      : [functionCall("review-credential", "read_prototype_review", { taskId: f.round.taskId })]);
+  };
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, delegationCreated("review-credential", 1));
+    await f.service.drain(s.sessionId);
+    const output = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(output.item.rounds[0]).toMatchObject({ variants: [{ number: 1, name: "Safe variant", description: f.description }], questions: f.round.questions,
+      decision: { chosen: [1], comment: "Keep this safe decision. [redacted] Keep the final sentence." } });
+    expect(output.truncated).toBe(false);
+    await expectCredentialReadSurfacesSafe(f, s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("filtered task reads mask active credential fragments before backend input, speech, browser events and transcripts", async () => {
+  const f = await credentialReadFixture();
+  f.provider.responder = (request, index) => {
+    const output = request.input.find(item => item.type === "function_call_output");
+    return backendResponse(`resp_filtered_${index}`, output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall("filtered-credential", "list_tasks", { statuses: ["inbox"], openOnly: true, query: "Safe task", ids: [f.round.taskId] })]);
+  };
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, delegationCreated("filtered-credential", 1));
+    await f.service.drain(s.sessionId);
+    const output = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(output).toMatchObject({ total: 1, shown: 1, rows: [{ title: "Safe task [redacted] ready", state: "inbox" }] });
+    expect(spoken(f).at(-1)?.content).toContain("Safe task [redacted] ready");
+    await expectCredentialReadSurfacesSafe(f, s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("cached follow-up context and repeated reads retain safe speech without reconstructing active credentials", async () => {
+  const f = await credentialReadFixture();
+  const actual = spyOn(f.reads, "read");
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+    ? backendResponse(`resp_cached_${index}`, [message("Safe task ready.")])
+    : backendResponse(`resp_cached_${index}`, [functionCall(`cached-${index}`, "list_tasks", { openOnly: true })]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    for (const id of ["first-read", "cached-follow-up"]) {
+      f.provider.replay(s.providerId, delegationCreated(id, 1));
+      await f.service.drain(s.sessionId);
+    }
+    expect(actual).toHaveBeenCalledTimes(1);
+    expect(f.provider.requests[2].input[0].content).toContain("Safe task [redacted] ready: inbox");
+    expect(JSON.parse(f.provider.requests[3].input.find(item => item.type === "function_call_output")!.output as string)).toMatchObject({ repeated: true });
+    await expectCredentialReadSurfacesSafe(f, s.sessionId);
+  } finally { await f.service.close(s.sessionId); actual.mockRestore(); }
+});
+
 test("current-view context updates the same provider call and a named project targets its own orchestrator", async () => {
   const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
   const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
