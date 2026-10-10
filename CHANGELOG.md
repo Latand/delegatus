@@ -72,6 +72,16 @@ guarantees for the 1.x series.
   failed too. A start that arrives while the connection is being checked waits
   for that check and gets the tool only once it is confirmed. The rotation banner and the "not delivered" reasons on this path read in
   the interface language, one line per cause, each with what to do.
+- **A second tab no longer freezes the board on the local address.** Opened
+  over plain HTTP (`http://127.0.0.1:8898`), every tab held three connections
+  for its live streams, and a browser allows six per address across all tabs.
+  With two tabs open, every other request of both waited without end: cards
+  and conversations stayed on their loading shapes, a launch or a sent message
+  did not leave the browser, and a third tab did not load at all. A tab now
+  carries its live streams over one connection instead of three, which leaves
+  room for requests with up to five tabs open; a sixth still takes the last
+  connection. Addresses served over HTTPS were never affected and are
+  unchanged. `LLV_STREAM_MUX=0` restores a connection per stream.
 
 ## [1.10.0] — 2026-10-06
 
