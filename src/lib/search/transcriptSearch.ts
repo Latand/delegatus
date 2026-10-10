@@ -6,6 +6,7 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import type { Database as BunDatabase } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
+import { spawnLeasedHelper, unrefLeasedHelper } from "@/lib/helperLease";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN } from "./snippet";
 import { isFunctionWord, queryUnits, widerExpression, type QueryUnit } from "./queryUnits";
 import { resolveProjectScope, type ProjectScope } from "./projectScope";
@@ -383,16 +384,24 @@ function scheduleSearchIndexBuild(filename: string): void {
   if (scheduledSearchIndexes.has(filename)) return;
   scheduledSearchIndexes.add(filename);
   try {
-    const proc = Bun.spawn([process.execPath, transcriptSearchWorkerPath()], {
+    /* Under a lease: it ends with this Viewer instead of holding the service
+       cgroup after it (src/lib/helperLease.ts). */
+    const proc = spawnLeasedHelper("transcript-search-index", {
+      command: process.execPath,
+      args: [transcriptSearchWorkerPath()],
+      cwd: process.cwd(),
       env: { ...process.env, LLV_STATE_DIR: path.dirname(filename) },
-      stdin: "ignore", stdout: "ignore", stderr: "ignore",
-    });
-    void proc.exited.then((code) => {
-      if (code !== 0) console.error(`[transcript-search] index worker exited with status ${code}; migration will retry on the next search`);
-    }, () => {
-      console.error("[transcript-search] index worker failed; migration will retry on the next search");
-    }).finally(() => scheduledSearchIndexes.delete(filename));
-    proc.unref();
+    }, path.dirname(filename));
+    let settled = false;
+    const settle = (failure: string | null) => {
+      if (settled) return;
+      settled = true;
+      if (failure) console.error(`[transcript-search] ${failure}; migration will retry on the next search`);
+      scheduledSearchIndexes.delete(filename);
+    };
+    proc.once("error", () => settle("index worker failed"));
+    proc.once("exit", (code, signal) => settle(code === 0 ? null : `index worker exited with status ${code ?? signal}`));
+    unrefLeasedHelper(proc);
   } catch {
     scheduledSearchIndexes.delete(filename);
     console.error("[transcript-search] could not start index worker; migration will retry on the next search");

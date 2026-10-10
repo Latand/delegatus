@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { configFilePath, stateDir, statePath } from "@/lib/configDir";
+import { spawnLeasedHelper } from "@/lib/helperLease";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 
 import { connectorLogSinkEnv } from "./connectorLog";
@@ -207,11 +207,13 @@ export function connectorProvisioned(): boolean {
 
 let provisioningInFlight: Promise<boolean> | null = null;
 
+/* Under a lease, so neither the provisioner nor the `uv sync` and import
+   probe it runs outlive this Viewer (src/lib/helperLease.ts). */
 function runProvisioner(spec: ProcessSpec): Promise<boolean> {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdio: "ignore" });
+      child = spawnLeasedHelper("telegram-provisioner", spec);
     } catch {
       resolve(false);
       return;

@@ -780,10 +780,64 @@ test("retirement ends the runner this Viewer started and leaves one it did not s
     pids.push(earlier.pid);
     await retireTelegramConnectorSupervisor();
     expect(() => process.kill(earlier.pid, 0)).not.toThrow();
+    /* Nor does a retired Viewer's public stop reach it. */
+    expect(await stopTelegramConnector()).toBe(false);
+    expect(() => process.kill(earlier.pid, 0)).not.toThrow();
+    delete (globalThis as Record<symbol, unknown>)[retired];
     await asRelease(path.join(SANDBOX, "release-e"), () => stopTelegramConnector());
   } finally {
     delete (globalThis as Record<symbol, unknown>)[retired];
     for (const pid of pids) endConnectorProcess(pid);
+  }
+}, 20_000);
+
+test("a health check begun before the handover leaves the successor's connector running when it finishes after it", async () => {
+  const { asRelease, endConnectorProcess, releaseTakeover, startConnectorFromReleaseBeside } = await import("./fixtures/releaseConnector");
+  const { saveTelegramSession, writeTelegramConnection } = await import("./sessionStore");
+  const session = saveTelegramSession(PLACEHOLDER_SESSION);
+  writeTelegramConnection({ version: 1, status: "error", credentialRef: session.credentialRef, identity: null,
+    lastHealthCheckAt: null, errorCode: "bridge_failed", identityIdUpgradedAt: null });
+  const target = path.join(process.env.LLV_STATE_DIR!, "viewer-release.json");
+  const recordFile = path.join(process.env.LLV_STATE_DIR!, "telegram", "connector.json");
+  const oldPort = process.env.PORT;
+  const pids: number[] = [];
+  let successor: { pid: number } | null = null;
+  try {
+    /* This test process is the predecessor Viewer, serving on 4001. */
+    process.env.PORT = "4001";
+    fs.writeFileSync(target, JSON.stringify({ endpoint: "http://127.0.0.1:4001" }));
+    await asRelease(path.join(SANDBOX, "release-f"), async () => {
+      let identityAsked!: () => void;
+      const asked = new Promise<void>((resolve) => { identityAsked = resolve; });
+      let answerIdentity!: (identity: null) => void;
+      const stops: number[] = [];
+      const takeover = releaseTakeover(session.connectorToken, {
+        readConnectorIdentity: () => { identityAsked(); return new Promise((resolve) => { answerIdentity = resolve; }); },
+        /* The production stop port, counted. */
+        stopConnector: (current) => { stops.push(1); return current ? stopTelegramConnectorForSession(current) : stopTelegramConnector(); },
+      });
+      const service = takeover.service;
+      const check = service.checkHealth();
+      await asked;
+      pids.push(...takeover.calls.pids);
+      /* The release hands traffic to the successor on 4002, which replaces
+         this Viewer's runner with its own while the identity read is pending. */
+      fs.writeFileSync(target, JSON.stringify({ endpoint: "http://127.0.0.1:4002" }));
+      successor = await startConnectorFromReleaseBeside(path.join(SANDBOX, "release-g"), { PORT: "4002" });
+      answerIdentity(null);
+      await check;
+      expect(stops.length).toBeGreaterThan(0);
+      expect(takeover.calls.spawns).toBe(1);
+    });
+    expect(() => process.kill(successor!.pid, 0)).not.toThrow();
+    expect((JSON.parse(fs.readFileSync(recordFile, "utf8")) as { pid: number }).pid).toBe(successor!.pid);
+  } finally {
+    if (oldPort === undefined) delete process.env.PORT; else process.env.PORT = oldPort;
+    fs.rmSync(target, { force: true });
+    for (const pid of [...pids, ...(successor ? [(successor as { pid: number }).pid] : [])]) endConnectorProcess(pid);
+    /* The successor's runner is not this process's child to reap; its record
+       goes with it. */
+    fs.rmSync(recordFile, { force: true });
   }
 }, 20_000);
 

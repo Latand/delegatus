@@ -62,6 +62,16 @@ executable and script, never its arguments. Nothing is signalled. A subtree
 that cannot be read whole, or a member whose identity changes while it is
 read, refuses as well.
 
+The Viewer's own helpers do not reach that refusal in normal operation. The
+Telegram connector holds its Viewer's stdin as a lease and ends at end of file.
+The connector provisioner and the transcript search index worker run under
+`bin/helper-lease.mjs`, which ends the helper's whole process group when the
+Viewer exits, however it exits, or hands release traffic to a successor. When
+the launcher stops its Viewer, it waits for those processes and signals any
+that remain. It acts only on records whose owner identity it read from that
+Viewer's process tree before the stop, so a successor's runner and helpers are
+left alone.
+
 Validate without publishing or restarting:
 
 ```sh

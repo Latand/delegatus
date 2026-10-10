@@ -187,6 +187,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/launcher-adoption.mjs"), path.join(bin, "launcher-adoption.mjs")),
     copyFile(path.resolve("bin/launcher-lock.mjs"), path.join(bin, "launcher-lock.mjs")),
     copyFile(path.resolve("bin/telegram-connector-retire.mjs"), path.join(bin, "telegram-connector-retire.mjs")),
+    copyFile(path.resolve("bin/viewer-helpers-retire.mjs"), path.join(bin, "viewer-helpers-retire.mjs")),
     copyFile(path.resolve("bin/launcher-service-proof.mjs"), path.join(bin, "launcher-service-proof.mjs")),
     copyFile(path.resolve("bin/legacySystemd.mjs"), path.join(bin, "legacySystemd.mjs")),
     copyFile(path.resolve("bin/oomPolicy.mjs"), path.join(bin, "oomPolicy.mjs")),

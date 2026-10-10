@@ -666,22 +666,33 @@ export async function retireTelegramConnectorSupervisor(): Promise<void> {
 }
 
 /** Stops the shared connector — the recorded process, whichever Viewer
-    generation spawned it. Idempotent; a stale or recycled pid is ignored. */
-export async function stopTelegramConnector(): Promise<void> {
-  await withConnectorSupervisorLock(stopRealConnectorUnlocked);
+    generation spawned it — while this Viewer owns traffic. Idempotent; a
+    stale or recycled pid is ignored. Answers whether it was allowed to act.
+    Authority is read under the supervisor lock, so a request that began
+    before the handover cannot stop the runner the successor recorded since;
+    the retiring Viewer's own runner ends through
+    {@link retireTelegramConnectorSupervisor}. */
+export async function stopTelegramConnector(): Promise<boolean> {
+  return await withConnectorSupervisorLock(async () => {
+    if (!connectorAdmissionOpen()) return false;
+    await stopRealConnectorUnlocked();
+    return true;
+  });
 }
 
 /** Stops the recorded connector only while it still belongs to this
-    credential generation. The ownership check and stop share the supervisor
-    lock so another Viewer cannot replace the connector between them. */
+    credential generation and this Viewer owns traffic. The checks and the
+    stop share the supervisor lock so another Viewer cannot replace the
+    connector between them. */
 export async function stopTelegramConnectorForSession(
   session: ConnectorBinding,
-  ports: Pick<TelegramConnectorPorts, "ownsProcess" | "stop"> = {},
+  ports: Pick<TelegramConnectorPorts, "ownsProcess" | "stop" | "admitted"> = {},
 ): Promise<boolean> {
   const ownsProcess = ports.ownsProcess ?? ownsRecordedConnector;
   const stop = ports.stop ?? stopRealConnectorUnlocked;
+  const admitted = ports.admitted ?? connectorAdmissionOpen;
   return await withConnectorSupervisorLock(async () => {
-    if (!ownsProcess(session)) return false;
+    if (!await admitted() || !ownsProcess(session)) return false;
     await stop();
     return true;
   });

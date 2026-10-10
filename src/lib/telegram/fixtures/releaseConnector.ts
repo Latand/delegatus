@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -7,7 +7,7 @@ import { statePath } from "@/lib/configDir";
 import type { TelegramAdapter } from "../adapter";
 import { connectorServerName, ensureTelegramConnector, spawnTelegramConnectorProcess, stopTelegramConnector, type ConnectorProbe, type TelegramConnectorPorts } from "../connector";
 import { stagedConnectorSourceDir } from "../packaging";
-import { TelegramConnectionService } from "../service";
+import { TelegramConnectionService, type TelegramServicePorts } from "../service";
 
 /** The connector program's stand-in: it waits to be stopped, and ignores its
     stdin lease, as a runner started before leases did. */
@@ -18,18 +18,7 @@ function writeStandInEntrypoint(releaseDir: string): string {
   return entrypoint;
 }
 
-/**
- * A connector that outlived the Viewer that started it, as a self-update or a
- * service restart used to leave it: started by a Viewer process that served
- * from one release directory and has exited, while the connector it detached
- * runs on. The supervisor's own code starts and records it, in a second
- * process, so the record is the one a release writes; only the connector
- * program is a stand-in that waits to be stopped.
- *
- * The stored session must already be in the state directory. The caller stops
- * the process by the pid returned here.
- */
-export function startConnectorFromRelease(releaseDir: string): { pid: number; entrypoint: string } {
+function connectorStarter(releaseDir: string, env: Record<string, string>): { supervisor: string; entrypoint: string; env: NodeJS.ProcessEnv } {
   const entrypoint = writeStandInEntrypoint(releaseDir);
   fs.mkdirSync(stagedConnectorSourceDir(), { recursive: true, mode: 0o700 });
   const supervisor = path.join(releaseDir, "start-connector.mjs");
@@ -54,8 +43,9 @@ export function startConnectorFromRelease(releaseDir: string): { pid: number; en
     "process.stdout.write(String(pid));",
     "",
   ].join("\n"));
-  const started = spawnSync(process.execPath, [supervisor], {
-    encoding: "utf8",
+  return {
+    supervisor,
+    entrypoint,
     env: {
       ...process.env,
       LLV_STATE_DIR: statePath(),
@@ -63,13 +53,48 @@ export function startConnectorFromRelease(releaseDir: string): { pid: number; en
       LLV_TELEGRAM_SERVER_BRIDGE: entrypoint,
       LLV_TELEGRAM_API_ID: "12345",
       LLV_TELEGRAM_API_HASH: "0123456789abcdef0123456789abcdef",
+      ...env,
     },
-  });
-  const pid = Number(started.stdout);
-  if (started.status !== 0 || !Number.isInteger(pid) || pid <= 1) {
-    throw new Error(`the earlier release could not start its connector: ${started.stderr}`);
+  };
+}
+
+function startedConnector(status: number | null, stdout: string, stderr: string, entrypoint: string): { pid: number; entrypoint: string } {
+  const pid = Number(stdout);
+  if (status !== 0 || !Number.isInteger(pid) || pid <= 1) {
+    throw new Error(`the earlier release could not start its connector: ${stderr}`);
   }
   return { pid, entrypoint };
+}
+
+/**
+ * A connector that outlived the Viewer that started it, as a self-update or a
+ * service restart used to leave it: started by a Viewer process that served
+ * from one release directory and has exited, while the connector it detached
+ * runs on. The supervisor's own code starts and records it, in a second
+ * process, so the record is the one a release writes; only the connector
+ * program is a stand-in that waits to be stopped.
+ *
+ * The stored session must already be in the state directory. The caller stops
+ * the process by the pid returned here.
+ */
+export function startConnectorFromRelease(releaseDir: string): { pid: number; entrypoint: string } {
+  const starter = connectorStarter(releaseDir, {});
+  const started = spawnSync(process.execPath, [starter.supervisor], { encoding: "utf8", env: starter.env });
+  return startedConnector(started.status, started.stdout, started.stderr, starter.entrypoint);
+}
+
+/** The same start from a Viewer that runs beside this process, under `env`
+    (another release's PORT): this process keeps reaping its own children
+    while the other one stops them. */
+export async function startConnectorFromReleaseBeside(releaseDir: string, env: Record<string, string>): Promise<{ pid: number; entrypoint: string }> {
+  const starter = connectorStarter(releaseDir, env);
+  const child = spawn(process.execPath, [starter.supervisor], { env: starter.env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+  const status = await new Promise<number | null>((resolve) => child.once("close", resolve));
+  return startedConnector(status, stdout, stderr, starter.entrypoint);
 }
 
 /**
@@ -78,9 +103,9 @@ export function startConnectorFromRelease(releaseDir: string): { pid: number; en
  * release's stand-in runner under its stdin lease; the other stand-ins are the
  * listener's answers (it verifies whatever listens), the account read and the
  * host registration. `calls.pids` names the runners it started; the caller
- * stops them with `stopTelegramConnector`.
+ * stops them with `stopTelegramConnector`. `overrides` replaces service ports.
  */
-export function releaseTakeover(connectorToken: string): { service: TelegramConnectionService; calls: { spawns: number; pids: number[] } } {
+export function releaseTakeover(connectorToken: string, overrides: Partial<TelegramServicePorts> = {}): { service: TelegramConnectionService; calls: { spawns: number; pids: number[] } } {
   const calls = { spawns: 0, pids: [] as number[] };
   const verified: ConnectorProbe = { ok: true, serverName: connectorServerName(connectorToken), tools: [{ name: "get_me", readOnly: true }] };
   const supervisor: TelegramConnectorPorts = {
@@ -109,6 +134,7 @@ export function releaseTakeover(connectorToken: string): { service: TelegramConn
     unregisterHosts: () => {},
     now: () => Date.now(),
     credentialsConfigured: () => true,
+    ...overrides,
   });
   return { service, calls };
 }
