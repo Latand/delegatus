@@ -1,3 +1,4 @@
+import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import fs from "node:fs";
@@ -509,7 +510,7 @@ async function failStructuredLaunchAndReap(
     try {
       await client.transitionOperation(launchId, "failed", { reason });
     } catch (error) {
-      console.error("[spawn] runtime operation failure did not settle during reconciliation", {
+      spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] runtime operation failure did not settle during reconciliation", {
         launchId,
         error: structuredSpawnFailureReason(error),
       });
@@ -523,7 +524,7 @@ async function failStructuredLaunchAndReap(
       try {
         released = await (options.releaseHost ?? releaseStructuredDeliveryHost)(cleanup.key);
       } catch (error) {
-        console.error("[spawn] registered host release failed during reconciliation", {
+        spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] registered host release failed during reconciliation", {
           launchId,
           error: structuredSpawnFailureReason(error),
         });
@@ -541,13 +542,13 @@ async function failStructuredLaunchAndReap(
         try {
           const terminated = await (options.terminateHostProcess ?? terminateVerifiedStructuredSpawnProcess)(cleanup.process);
           if (!terminated && cleanup.process.pid !== process.pid) {
-            console.error("[spawn] staged host termination remained unconfirmed", {
+            spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] staged host termination remained unconfirmed", {
               launchId,
               pid: cleanup.process.pid,
             });
           }
         } catch (error) {
-          console.error("[spawn] staged host termination failed during reconciliation", {
+          spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] staged host termination failed during reconciliation", {
             launchId,
             error: structuredSpawnFailureReason(error),
           });
@@ -919,7 +920,7 @@ async function actuateQueuedPinnedSpawn(
       rememberHandoffChild(response.path, claimedQueue.parentArtifactPath);
       persistHandoffLineage();
     } catch (error) {
-      console.error("[spawn] queued handoff lineage persistence failed", {
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] queued handoff lineage persistence failed", {
         launchId: receipt.launchId,
         conversationId: receipt.conversationId,
         error,
@@ -930,7 +931,7 @@ async function actuateQueuedPinnedSpawn(
     try {
       await (options.publishFilesRevision ?? publishFilesRevision)(client);
     } catch (error) {
-      console.error("[spawn] queued transcript materialization refresh failed", {
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] queued transcript materialization refresh failed", {
         launchId: receipt.launchId,
         conversationId: receipt.conversationId,
         error,
@@ -984,7 +985,7 @@ export async function terminalizeStaleStructuredSpawns(
         if (recoveredReceipt.state === "failed" || recoveredReceipt.state === "conflicted") terminalized.push(receipt.launchId);
         else if (recoveredReceipt.state === "completed") recovered.push(receipt.launchId);
       } catch (error) {
-        console.error("[reaper] queued pinned spawn recovery failed", {
+        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] queued pinned spawn recovery failed", {
           launchId: receipt.launchId,
           error,
         });
@@ -1008,7 +1009,7 @@ export async function terminalizeStaleStructuredSpawns(
         const failed = registry.readOnlySnapshot().receipts[receipt.launchId];
         if (failed?.state === "failed" || failed?.state === "conflicted") terminalized.push(receipt.launchId);
       } catch (error) {
-        console.error("[reaper] stale tmux spawn reconciliation failed", {
+        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale tmux spawn reconciliation failed", {
           launchId: receipt.launchId,
           error,
         });
@@ -1023,7 +1024,7 @@ export async function terminalizeStaleStructuredSpawns(
       if (reconciled.state === "failed") terminalized.push(receipt.launchId);
       else if (reconciled.state === "completed") recovered.push(receipt.launchId);
     } catch (error) {
-      console.error("[reaper] stale structured spawn reconciliation failed", {
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale structured spawn reconciliation failed", {
         launchId: receipt.launchId,
         error,
       });
@@ -2227,7 +2228,7 @@ export async function spawnStructuredConversation(
       try {
         await lateHost.release();
       } catch (error) {
-        console.error("[spawn] late structured host could not be released after setup timeout", {
+        spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] late structured host could not be released after setup timeout", {
           launchId: input.receipt.launchId,
           error: structuredSpawnFailureReason(error),
         });
@@ -2532,7 +2533,7 @@ export async function spawnStructuredConversation(
       }
     }
     if (cleanupError !== null) {
-      console.error("[spawn] failed host cleanup remained unconfirmed", {
+      spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] failed host cleanup remained unconfirmed", {
         launchId: input.receipt.launchId,
         error: structuredSpawnFailureReason(cleanupError),
       });

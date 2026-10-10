@@ -301,7 +301,12 @@ function that both call. Then:
    truncation, answer record or completion body. Exact known relay, pairing,
    installation and service credentials, opaque spawn credentials, private-key
    armor and host paths are removed. An unavailable scrubber fails the turn
-   without exposing its input in diagnostics. The non-owner path is unchanged.
+   without exposing its input in diagnostics. The owner spawn's asynchronous
+  diagnostic scope also scrubs launch, host cleanup, first-prompt delivery and
+  transcript-publication errors, including nested fields and Error stacks,
+  before console emission. Deferred callbacks retain that scope. A failed
+  credential resolver or serialization withholds the diagnostic payload.
+  The non-owner path is unchanged.
 3. Map it to an answer:
 
 | Last message, trimmed | Answer |
@@ -319,7 +324,12 @@ and contents of this computer. Heartbeats still go out on their timer.
 
 ### 2.8 Cancel, time limit, lease loss, restart
 
-- `cancel()` persists cancellation custody before calling conversation control.
+- `cancel()` attempts to persist cancellation custody before calling conversation
+  control. A ledger read or write failure still stops the known attributed
+  conversation, blocks late replies and retains the live callback for retry.
+  The runner stays unsettled until the cutoff can be written; a stop receipt
+  releases custody only after cancellation, attribution and confirmation are
+  durable.
   It also retires the exact reserved first prompt; an unavailable registry
   writer keeps that cleanup owed and prevents confirmation. Pending first
   prompts use `kill`, so recovering a reservation cannot start a later turn.

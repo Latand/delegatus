@@ -8,7 +8,8 @@ import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { ownerTierFor } from "./profile";
-import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, runOwnerAgent, settleOwnerFirstPrompt, type OwnerRunPorts } from "./ownerRun";
+import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, runOwnerAgent, revokeOwnerRuns, settleOwnerFirstPrompt, type OwnerRunPorts } from "./ownerRun";
+import { reserveRun, readRunLedger, externalRelayFile, dropRun } from "./store";
 import { appDirIn } from "../../../bin/appDir.mjs";
 
 function request(): ExternalRelayRequest {
@@ -191,4 +192,46 @@ test("failed owner receipt releases custody only after owed first-prompt cleanup
     expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "failed", text: "" });
     expect(await observeOwnerTurn({ clientAttemptId, claimedAt: new Date().toISOString() }, sources)).toMatchObject({ state: "failed", failure: { kind: "host-died" } });
   } finally { writer.mockRestore(); registry.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+for (const trigger of ["cancel", "revoke"] as const)
+for (const failure of ["write", "read"] as const) test(`owner ${trigger} stops the known host and retains custody during ledger ${failure} failure`, async () => {
+  const requestId = request().request_id;
+  reserveRun({ requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture",
+    ownerTurn: { clientAttemptId: `relay-owner-${requestId}` }, ownerPid: process.pid, ownerIdentity: "fixture",
+    childPid: null, childIdentity: null, runDir: "", startedAt: new Date().toISOString() }, 1);
+  let reached!: () => void, reply!: () => void;
+  const observing = new Promise<void>(r => { reached = r; });
+  const late = new Promise<void>(r => { reply = r; });
+  let stops = 0, recovered = false, finished = false;
+  const run = start({ launch, observe: async () => { reached(); await late; return { state: "ended", finalText: "Late privileged reply" }; },
+    stop: async () => { stops++; if (!recovered) throw Error("host stop unconfirmed"); }, stopRetryMs: 1 });
+  void run.done.then(() => { finished = true; });
+  await observing;
+  const write = fs.writeFileSync.bind(fs), read = fs.readFileSync.bind(fs);
+  const injected = failure === "write" ? spyOn(fs, "writeFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (String(file).startsWith(externalRelayFile("runs") + ".") && String(args[0]).includes('"cancel"'))
+      throw Object.assign(Error("fixture ledger writer unavailable"), { code: "EIO" });
+    return (write as (...args: unknown[]) => void)(file, ...args);
+  }) as typeof fs.writeFileSync) : spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (String(file) === externalRelayFile("runs")) throw Object.assign(Error("fixture ledger reader unavailable"), { code: "EIO" });
+    return (read as (...args: unknown[]) => unknown)(file, ...args);
+  }) as typeof fs.readFileSync);
+  try {
+    if (trigger === "revoke") await revokeOwnerRuns("relay_fixture").catch(() => {});
+    else run.cancel();
+    await Bun.sleep(25);
+    run.cancel(); // Repeated cancellation must share custody and the retry timer.
+    expect(stops).toBeGreaterThan(0);
+    expect(finished).toBe(false);
+    reply(); await Bun.sleep(10);
+    expect(finished).toBe(false);
+    injected.mockRestore();
+    recovered = true;
+    expect(await run.done).toMatchObject({ status: "cancelled", answer: null });
+    expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner", ownerTurn: { cancel: "interrupt", confirmed: true } });
+  } finally {
+    injected.mockRestore(); recovered = true; reply(); run.cancel(); await run.done;
+    dropRun(requestId);
+  }
 });

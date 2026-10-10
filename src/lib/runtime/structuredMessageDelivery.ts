@@ -1,3 +1,4 @@
+import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
@@ -171,7 +172,7 @@ function settleRecord(progress: DeliveryProgressPort | null, operationId: string
   try {
     progress.settle?.(operationId, state, reason);
   } catch (error) {
-    console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+    spawnDiagnosticError("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -787,10 +788,10 @@ function uncertainReservationFailure(reservation: HeldDelivery): StructuredMessa
 function requestDeliveryDrain(kick: () => void | Promise<void>): void {
   try {
     void Promise.resolve(kick()).catch((error) => {
-      console.error("[structured delivery] drain request failed", error);
+      spawnDiagnosticError("[structured delivery] drain request failed", error);
     });
   } catch (error) {
-    console.error("[structured delivery] drain request failed", error);
+    spawnDiagnosticError("[structured delivery] drain request failed", error);
   }
 }
 
@@ -975,7 +976,7 @@ function heldDrainProgress(
           nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
         });
       } catch (error) {
-        console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+        spawnDiagnosticError("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
       }
     },
   };
@@ -1030,7 +1031,9 @@ async function deliverHeldAttempt(
     session = await progress.step("reading the recipient's runtime session",
       () => readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined }));
   } catch (error) {
-    console.error("[structured delivery] runtime session read failed", error);
+    spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
+      `spawn_message_${receipt.launchId}` === request.command?.operationId)?.clientAttemptId,
+      "[structured delivery] runtime session read failed", error);
     progress.unreadable(error instanceof Error ? error.message : String(error));
     return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
   }
@@ -1230,7 +1233,9 @@ export async function enqueueStructuredMessage(
   try {
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
-    console.error("[structured delivery] runtime session read failed", error);
+    spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
+      receipt.launchId === request.launchId || `spawn_message_${receipt.launchId}` === request.operationId)?.clientAttemptId,
+      "[structured delivery] runtime session read failed", error);
     if (dependencies.idleContinuationAllowed) return continuationRefused(`runtime session read failed: ${error instanceof Error ? error.message : String(error)}`);
     return holdDuringRuntimeSynchronization(
       request,

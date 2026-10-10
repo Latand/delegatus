@@ -1,3 +1,4 @@
+import { withSpawnDiagnostics } from "@/lib/agent/spawnDiagnostics";
 import os from "node:os";
 import type { EphemeralAgentRun, EphemeralAgentResult } from "@/lib/agent/ephemeral";
 import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurn, type SpawnedTurnObservation } from "@/lib/agent/autonomousConversation";
@@ -97,8 +98,12 @@ export async function settleOwnerFirstPrompt(clientAttemptId: string, conversati
   return { confirmed: ended.acquired, pending: true };
 }
 
-const globalOwner = globalThis as typeof globalThis & { __llvRelayOwnerCancels?: Map<string, () => void> };
+const globalOwner = globalThis as typeof globalThis & {
+  __llvRelayOwnerCancels?: Map<string, () => void>;
+  __llvRelayOwnerTargets?: Map<string, { relayId: string; targetId: string }>;
+};
 const cancels = globalOwner.__llvRelayOwnerCancels ??= new Map();
+const activeOwnerRelays = globalOwner.__llvRelayOwnerTargets ??= new Map();
 const stopping = new Map<string, Promise<boolean>>();
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -114,16 +119,19 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
         if (!conversationId) {
           const observed = await bounded(ports.observe({ clientAttemptId: run.ownerTurn.clientAttemptId, claimedAt: run.startedAt }), 1000);
           conversationId = observed.conversationId;
-          if (conversationId) changeRun(run.requestId, r => ({ ...r, conversationId }));
+          if (conversationId) {
+            try { changeRun(run.requestId, r => ({ ...r, conversationId })); }
+            catch { /* Discovery must still reach control while persistence is unavailable. */ }
+          }
           // No accepted launch after admission returned is proof of no work.
           if (!conversationId && run.ownerTurn.admissionComplete && observed.state === "failed") {
-            changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, confirmed: true } }));
+            confirmStopPersistence(run, conversationId);
             return true;
           }
         }
         if (conversationId) {
-          await bounded(ports.stop(conversationId, run.ownerTurn.cancel, run.ownerTurn.clientAttemptId), 1000);
-          changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, confirmed: true } }));
+          await bounded(withSpawnDiagnostics(run.ownerTurn.clientAttemptId, () => ports.stop(conversationId!, run.ownerTurn!.cancel!, run.ownerTurn!.clientAttemptId)), 1000);
+          confirmStopPersistence(run, conversationId);
           return true;
         }
       } catch (error) {
@@ -135,7 +143,7 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
         try {
           const observed = await bounded(ports.observe({ clientAttemptId: run.ownerTurn.clientAttemptId, conversationId, claimedAt: run.startedAt }), 1000);
           if (run.ownerTurn.admissionComplete && (observed.state === "ended" || observed.failure?.kind === "host-died")) {
-            changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, confirmed: true } }));
+            confirmStopPersistence(run, conversationId);
             return true;
           }
         } catch { /* Control and observation unavailable: keep the record. */ }
@@ -154,6 +162,18 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
   void work.finally(() => { if (stopping.get(run.requestId) === work) stopping.delete(run.requestId); });
   return work;
 }
+/** A stop receipt cannot release custody until its cutoff and attribution are durable. */
+function confirmStopPersistence(run: RunRecord, conversationId?: string): void {
+  let found = false;
+  changeRun(run.requestId, r => {
+    found = true;
+    return { ...r, ...(conversationId ? { conversationId } : {}), ownerTurn: {
+      ...r.ownerTurn!, cancel: run.ownerTurn!.cancel,
+      admissionComplete: run.ownerTurn!.admissionComplete, confirmed: true,
+    } };
+  });
+  if (!found) throw new Error("owner cancellation custody missing");
+}
 function bounded<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("owner control deadline")), ms); })]).finally(() => clearTimeout(timer));
@@ -162,12 +182,20 @@ function bounded<T>(work: Promise<T>, ms: number): Promise<T> {
 /** Persist the cutoff before awaiting host control, including pending admissions. */
 export async function revokeOwnerRuns(relayId: string): Promise<void> {
   const pending: Promise<boolean>[] = [];
+  // Live callbacks retain their attribution even while the ledger cannot be read.
+  for (const [requestId, cancel] of cancels) {
+    const target = activeOwnerRelays.get(requestId);
+    if (target?.relayId === relayId && !ownerRelayAuthorized(relayId, target.targetId, requestId)) cancel();
+  }
   for (const run of readRunLedger().runs) {
     if (run.relayId !== relayId || !run.ownerTurn || ownerRelayAuthorized(relayId, run.targetId, run.requestId)) continue;
-    changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, cancel: r.ownerTurn?.cancel ?? (r.ownerTurn?.admissionComplete ? "interrupt" : "kill") } }));
     const cancel = cancels.get(run.requestId);
-    if (cancel) cancel();
-    else pending.push(confirmOwnerStop(readRunLedger().runs.find(r => r.requestId === run.requestId)!));
+    if (cancel) continue;
+    const cutoff: RunRecord = { ...run, ownerTurn: { ...run.ownerTurn,
+      cancel: run.ownerTurn.cancel ?? (run.ownerTurn.admissionComplete ? "interrupt" : "kill") } };
+    try { changeRun(run.requestId, () => cutoff); }
+    catch { /* The known host still receives control independently of persistence. */ }
+    pending.push(confirmOwnerStop(cutoff));
   }
   await Promise.all(pending);
 }
@@ -182,48 +210,71 @@ export function runOwnerAgent(input: {
   const ports = input.ports ?? productionPorts;
   const started = Date.now();
   const turn: SpawnedTurn = { clientAttemptId: `relay-owner-${input.request.request_id}`, claimedAt: new Date(started).toISOString() };
+  // Keep attribution independently of subsequent ledger reads and writes.
+  let custody: RunRecord | undefined;
+  try { custody = readRunLedger().runs.find(r => r.requestId === input.request.request_id); }
+  catch { throw new Error("owner launch custody unavailable"); }
   let settled = false, admitted = false, launchAttempted = false;
   let stopped: "interrupt" | "kill" | null = null;
   let cancelStatus: "timeout" | "cancelled" | "failed" = "cancelled";
   let stopWork: Promise<void> | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let resolve!: (result: EphemeralAgentResult) => void;
   const done = new Promise<EphemeralAgentResult>(r => { resolve = r; });
   const wake = new AbortController();
   const finish = (status: EphemeralAgentResult["status"], answer: unknown = null) => {
     if (settled) return;
     settled = true;
-    clearTimeout(timer); clearInterval(authorizationTimer);
+    clearTimeout(timer); clearTimeout(retryTimer); clearInterval(authorizationTimer);
     cancels.delete(input.request.request_id);
+    activeOwnerRelays.delete(input.request.request_id);
     wake.abort();
     resolve({ status, answer, durationMs: Date.now() - started, code: null, signal: null });
   };
-  const persistStop = () => {
-    try { changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, cancel: stopped! } })); }
-    catch { console.error("Owner relay cancellation ledger unavailable; stopping host work"); }
+  const persistStop = (): boolean => {
+    if (custody) custody = { ...custody, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
+      ownerTurn: { ...custody.ownerTurn!, cancel: stopped!, admissionComplete: admitted } };
+    let found = false;
+    try {
+      changeRun(input.request.request_id, r => {
+        found = true;
+        return { ...r, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
+          ownerTurn: { ...r.ownerTurn!, cancel: stopped!, admissionComplete: admitted } };
+      });
+      return found || !custody;
+    } catch {
+      console.error("Owner relay cancellation ledger unavailable; stopping host work");
+      return false;
+    }
   };
   const applyStop = () => {
     if (stopWork) return stopWork;
+    clearTimeout(retryTimer); retryTimer = undefined;
     stopWork = (async () => {
-      const stored = readRunLedger().runs.find(r => r.requestId === input.request.request_id);
-      if (stored?.ownerTurn) {
-        await confirmOwnerStop(stored, ports);
-        const recovered = readRunLedger().runs.find(r => r.requestId === input.request.request_id)?.conversationId;
-        if (recovered && recovered !== turn.conversationId) {
-          turn.conversationId = recovered;
-          input.onConversation(recovered);
-        }
-      }
-      else if (turn.conversationId) {
-        // The same bounded retry for callers that do not have a relay ledger.
+      const durable = persistStop();
+      // The local cutoff and known conversation take precedence over stale disk data.
+      if (custody?.ownerTurn) {
+        if (!launchAttempted) confirmStopPersistence(custody);
+        else await confirmOwnerStop(custody, ports);
+        try {
+          const recovered = readRunLedger().runs.find(r => r.requestId === input.request.request_id)?.conversationId;
+          if (recovered && recovered !== turn.conversationId) {
+            turn.conversationId = recovered;
+            input.onConversation(recovered);
+          }
+        } catch { /* The retained local attribution keeps stop retries possible. */ }
+      } else if (turn.conversationId) {
         for (let attempt = 0; attempt < 3; attempt++) {
-          try { await bounded(ports.stop(turn.conversationId, stopped!, turn.clientAttemptId), 1000); break; }
+          try { await bounded(withSpawnDiagnostics(turn.clientAttemptId, () => ports.stop(turn.conversationId!, stopped!, turn.clientAttemptId)), 1000); break; }
           catch { if (attempt < 2) await sleep(ports.stopRetryMs ?? 250); }
         }
       }
-      finish(cancelStatus);
+      if (durable || persistStop()) finish(cancelStatus);
+      // With no durable cutoff the runner must retain its callback, lease and row.
+      else retryTimer = setTimeout(() => { void applyStop(); }, ports.stopRetryMs ?? 1000);
     })().catch(() => {
-      console.error("Owner relay stop remains pending; durable custody retained");
-      finish(cancelStatus);
+      console.error("Owner relay stop remains pending; custody retained");
+      retryTimer = setTimeout(() => { void applyStop(); }, ports.stopRetryMs ?? 1000);
     }).finally(() => { stopWork = null; });
     return stopWork;
   };
@@ -231,8 +282,8 @@ export function runOwnerAgent(input: {
     if (settled && !stopped) return;
     if (!stopped) cancelStatus = status;
     stopped ??= admitted ? "interrupt" : "kill";
-    persistStop(); wake.abort();
-    if (turn.conversationId) void applyStop();
+    const durable = persistStop(); wake.abort();
+    if (turn.conversationId || !durable) void applyStop();
     else finish(status); // pending launch remains in the durable ledger
   };
   const authorize = () => { if (stopped) throw new Error("owner relay turn revoked"); input.authorize?.(); };
@@ -240,6 +291,7 @@ export function runOwnerAgent(input: {
   const authorizationTimer = setInterval(() => { if (!stopped) { try { authorize(); } catch { cancel("cancelled"); } } }, 100);
   authorizationTimer.unref();
   cancels.set(input.request.request_id, () => cancel("cancelled"));
+  if (custody) activeOwnerRelays.set(input.request.request_id, { relayId: custody.relayId, targetId: custody.targetId });
   void (async () => {
     try {
       authorize();
@@ -251,12 +303,13 @@ export function runOwnerAgent(input: {
         mcpServers: ["viewer"], plugins: [], notifyLauncher: false,
       }, authorize);
       admitted = true;
-      changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
       const id = launched.body.conversationId;
       if (typeof id === "string" && id.startsWith("conversation_")) {
         turn.conversationId = id;
+        if (custody) custody = { ...custody, conversationId: id };
         input.onConversation(id); // attribution persists even after a pending cutoff
       }
+      changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
       if (launched.body.initialMessage === "queued") { stopped = "kill"; cancelStatus = "failed"; persistStop(); await applyStop(); return; }
       try { authorize(); } catch { cancel("cancelled"); }
       if (stopped) { await applyStop(); return; }
@@ -278,11 +331,10 @@ export function runOwnerAgent(input: {
       }
     } catch {
       if (!launchAttempted) {
-        changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, cancel: "kill", confirmed: true, admissionComplete: true } }));
-        finish("cancelled"); return;
+        admitted = true; stopped = "kill";
+        cancel("cancelled"); await applyStop(); return;
       }
       admitted = true;
-      changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
       if (turn.conversationId) { cancel("failed"); await applyStop(); }
       else {
         // A launch that throws may have reserved a receipt before its response was lost.

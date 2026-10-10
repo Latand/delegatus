@@ -4628,3 +4628,75 @@ test("a preferred role tier falls back without a tier when the named account is 
     }
   }
 });
+
+for (const seam of ["launch", "host", "publication", "delivery"] as const) test(`owner ${seam} diagnostics scrub credential fields, Error stacks and transcript paths through the spawn command`, async () => {
+  await withSandboxRuntimeSocket(async () => {
+    const cwd = fs.mkdtempSync(path.join(routeSandbox, "owner-diagnostics-"));
+    const transcript = path.join(cwd, "private-transcript.jsonl");
+    fs.writeFileSync(transcript, "{}\n");
+    const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const { updateRelayStore } = await import("@/lib/externalRelay/store");
+    const relayCredential = crypto.randomBytes(24).toString("hex");
+    const capability = rotateOperatorSpawnCapability();
+    const installCredential = crypto.randomBytes(16).toString("hex");
+    const oldToken = process.env.LLV_TOKEN;
+    process.env.LLV_TOKEN = installCredential;
+    updateRelayStore(s => ({ ...s, relays: [{ id: "diagnostic_fixture", credential: relayCredential } as typeof s.relays[number]] }));
+    const keyMaterial = "fixture-sensitive-private-material";
+    const key = ["-----BEGIN PRIVATE KEY-----", keyMaterial, "-----END PRIVATE KEY-----"].join("\n");
+    const leak = [relayCredential, capability, installCredential, transcript, key].join("\n");
+    const error = Object.assign(seam === "host" ? new RuntimeHostUnavailableError(leak) : new Error(leak), {
+      details: { [relayCredential]: installCredential, transcript }, cause: new Error(key),
+    });
+    error.stack = `Error: ${leak}\n at ${transcript}:12:1`;
+    const diagnostics: unknown[][] = [];
+    const logger = spyOn(console, "error").mockImplementation((...args) => { diagnostics.push(args); });
+    let deferred: (() => Promise<void>) | null = null;
+    const dependencies = structuredRouteDependencies(cwd);
+    dependencies.registry = () => store;
+    dependencies.defer = work => { deferred = work; };
+    dependencies.publishFilesRevision = async () => { throw error; };
+    dependencies.spawnStructuredConversation = async input => {
+      if (seam === "launch" || seam === "host") throw error;
+      if (seam === "delivery") {
+        const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+        const delivery = await enqueueStructuredMessage({ path: transcript, conversationId: input.receipt.conversationId,
+          launchId: input.receipt.launchId, operationId: `spawn_message_${input.receipt.launchId}`, text: input.prompt }, {
+          enabled: () => true, registry: () => store, progress: null, idleContinuationAllowed: () => true,
+          client: () => ({ readSession: async () => { throw error; } }) as unknown as RuntimeHostClient,
+        });
+        expect(delivery).toMatchObject({ outcome: "failed" });
+        throw error;
+      }
+      return { ok: true, target: null, path: transcript, effectivePermissionMode: "default",
+        launchId: input.receipt.launchId, conversationId: input.receipt.conversationId,
+        launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+    };
+    try {
+      const response = await POST.withDependencies(new NextRequest("http://127.0.0.1:8898/api/spawn", {
+        method: "POST", headers: { host: "127.0.0.1:8898", origin: "http://127.0.0.1:8898", "sec-fetch-site": "same-origin",
+          "content-type": "application/json", "x-viewer-spawn-capability": capability },
+        body: JSON.stringify({ title: "Owner diagnostics fixture", engine: "claude", cwd, prompt: "Inspect fixture",
+          clientAttemptId: `relay-owner-diagnostics-${seam}`, mcpServers: ["viewer"] }),
+      }), dependencies);
+      expect(response.status).toBe(202);
+      const accepted = await response.json();
+      await runDeferred(deferred);
+      expect(diagnostics.length).toBeGreaterThan(0);
+      const emitted = JSON.stringify(diagnostics);
+      for (const value of [relayCredential, capability, installCredential, transcript, keyMaterial]) expect(emitted).not.toContain(value);
+      expect(emitted).toContain(accepted.launchId);
+      expect(emitted).toContain(accepted.conversationId);
+      const { ownerAnswer } = await import("@/lib/externalRelay/ownerRun");
+      const { contextRequest } = await import("@/lib/externalRelay/request.fixture");
+      const { requestSchema } = await import("@/lib/externalRelay/protocol");
+      const completion = ownerAnswer(leak, requestSchema.parse({ ...contextRequest, answer: { ...contextRequest.answer, max_chars: 32000 } }),
+        { messageId: "m1", text: "Inspect", requestText: null });
+      for (const value of [relayCredential, capability, installCredential, transcript, keyMaterial]) expect(JSON.stringify(completion)).not.toContain(value);
+    } finally {
+      logger.mockRestore(); store.close();
+      updateRelayStore(s => ({ ...s, relays: s.relays.filter(r => r.id !== "diagnostic_fixture") }));
+      if (oldToken === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = oldToken;
+    }
+  });
+});
