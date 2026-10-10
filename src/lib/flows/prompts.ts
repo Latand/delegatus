@@ -1,4 +1,5 @@
 import type { Flow, Round } from "./types";
+import { REVIEW_BASELINE_RULE } from "@/lib/roles/defaults";
 
 /**
  * Prompt templates for the implement-review loop. Wording changes happen
@@ -41,6 +42,8 @@ export function reviewerPrompt(flow: Flow, round: Round): string {
     round.readyNote ? `Ready note: ${round.readyNote}` : "Ready note: none provided.",
     "",
     "Read-only requirement: run tests, builds, linters, searches, and other investigation commands as needed. Do not edit files, write notebooks, commit, stage, or mutate the working tree.",
+    "",
+    REVIEW_BASELINE_RULE,
     "",
     "Output exactly this format:",
     "VERDICT: APPROVE | REQUEST_CHANGES | COMMENT",

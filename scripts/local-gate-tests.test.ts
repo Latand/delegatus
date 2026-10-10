@@ -23,6 +23,26 @@ function fixture(source: string) {
 }
 const source = (pass: boolean) => `import { test, expect, describe } from "bun:test"; describe("contract", () => test("same name & Unicode Ω", () => expect(${pass}).toBe(true)));`;
 
+test("review evidence names the exact base and head without changing repository refs", () => {
+  const f = fixture(source(false));
+  // The fixture's private run environment may acquire Bun cache files.
+  writeFileSync(path.join(f.dir, ".git/info/exclude"), "env/\n");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${source(false)}\ntest("added passing case", () => {});`);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "reviewed change");
+  const head = f.git("rev-parse", "HEAD");
+  const refs = f.git("for-each-ref"), worktrees = f.git("worktree", "list", "--porcelain");
+  const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", f.base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(cli.status).toBe(0);
+  expect(cli.stdout).toContain(`touched-tests: base commit ${f.base}`);
+  expect(cli.stdout).toContain(`touched-tests: reviewed head commit ${head}`);
+  expect(cli.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
+  expect(cli.stdout).toContain("0 new failures, 1 pre-existing failures");
+  expect(f.git("rev-parse", "HEAD")).toBe(head);
+  expect(f.git("for-each-ref")).toBe(refs);
+  expect(f.git("worktree", "list", "--porcelain")).toBe(worktrees);
+  expect(f.git("status", "--porcelain")).toBe("");
+});
+
 test("a new failure blocks by file and full test identity", () => {
   const f = fixture(source(true)); writeFileSync(path.join(f.dir, "example.test.ts"), source(false));
   const result = f.run();
