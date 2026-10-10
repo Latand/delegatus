@@ -251,8 +251,7 @@ export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStag
   if (pipeline.state === "needs_decision") {
     const options = pipelineActionOptions(pipeline);
     if (terminalReviewContinuationAvailable(pipeline)) {
-      const stage = parkedStage(pipeline);
-      return { kind: "decision", stage, choices: [{ action: "continue-review", stageId: null, stageName: null, expectedAttempt: null }], stop: reviewStop(pipeline) };
+      return null;
     }
     const retry = options.find((option) => option.action === "retry-stage");
     if (!retry || retry.refusal || !retry.stageId) return null;
@@ -268,7 +267,7 @@ export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStag
   if (pipeline.state === "needs_review") {
     const stop = reviewStop(pipeline);
     const none = { stageId: null, stageName: null, expectedAttempt: null };
-    return { kind: "review", stage: stop?.stage ?? null, choices: [{ action: "accept-head", ...none }, { action: "continue-review", ...none }], stop };
+    return { kind: "review", stage: stop?.stage ?? null, choices: [{ action: "accept-head", ...none }], stop };
   }
   return null;
 }

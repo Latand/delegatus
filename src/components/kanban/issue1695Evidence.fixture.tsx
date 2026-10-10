@@ -14,9 +14,9 @@ import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
-import { WorktreeRecovery } from "@/components/orchestrator/WorktreeRecovery";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
@@ -2722,10 +2722,13 @@ function mockRender(width: number, height: number, hue: number, label: string, p
 const PROTO = params.get("proto");
 const protoPosts: unknown[] = [];
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
+const protoHidden = new Map<string, AttentionDismissalMark>();
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
 /* The Viewer's own selectors: which round waits and which a later decision retired. */
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
-  return prototypeReviewSummary(rounds)!;
+  const summary = prototypeReviewSummary(rounds)!;
+  const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
+  return { ...summary, ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -3089,6 +3092,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (held) await new Promise((resolve) => setTimeout(resolve, held));
     return json({ text: L("Take the header from the two columns and keep the dense rows of the table.", "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.") });
   }
+  if (PROTO && url.pathname === "/api/attention/dismissals" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as { target: DismissalTarget; undo?: boolean; surface: "desktop" | "phone" };
+    const target = body.target;
+    if (target.kind === "prototype") {
+      const at = new Date().toISOString();
+      const by = { kind: "operator" as const, surface: body.surface };
+      if (body.undo) protoHidden.delete(target.reviewId);
+      else protoHidden.set(target.reviewId, { at, by });
+      protoPublish();
+      return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
+    }
+  }
   if (PROTO && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
@@ -3109,8 +3124,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       protoPublish();
     }
     return json({
-      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return by ? { ...entry, supersededBy: by } : entry; }),
-      waitingReviewId: rounds.length ? protoSummary(rounds).waitingReviewId : null,
+      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return { ...entry, ...(by ? { supersededBy: by } : {}), ...(protoHidden.has(entry.id) ? { hidden: protoHidden.get(entry.id) } : {}) }; }),
+      waitingReviewId: rounds.length && !protoSummary(rounds).waitingDismissal ? protoSummary(rounds).waitingReviewId : null,
       ...(rounds.length ? { summary: protoSummary(rounds) } : {}),
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });
@@ -3903,7 +3918,7 @@ createRoot(document.getElementById("root")!).render(VOICE ? voiceCompanionScene(
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
-) : SCENARIO === "worktree-recovery" ? <div className="bg-panel p-4" style={{ maxWidth: 440, margin: "24px auto" }}><WorktreeRecovery project="atlas" phone={innerWidth < 640} /></div> : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

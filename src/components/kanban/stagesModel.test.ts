@@ -123,7 +123,7 @@ test("pipeline actions carry the engine's own refusals", () => {
     "skip-stage": { action: "skip-stage", refusal: "no-decision", stageId: null, attempt: null },
     close: { action: "close", refusal: null, stageId: null, attempt: null },
     /* One more review round (#1938, #2072) is only for a spent review budget. */
-    "continue-review": { action: "continue-review", refusal: "no-review", stageId: null, attempt: null },
+    "continue-review": { action: "continue-review", refusal: "budget-fixed", stageId: null, attempt: null },
     /* Accept as is (#2187) too: the engine refuses it outside needs_review. */
     "accept-head": { action: "accept-head", refusal: "no-review", stageId: null, attempt: null },
     /* Try the merge again (#2187) only for a completed lane whose merge stopped;
@@ -131,7 +131,7 @@ test("pipeline actions carry the engine's own refusals", () => {
     "retry-merge": { action: "retry-merge", refusal: "no-merge", stageId: null, attempt: null },
     dismiss: { action: "dismiss", refusal: null, stageId: null, attempt: null },
   });
-  expect(byAction({ ...retrying, state: "needs_review" } as Pipeline)["continue-review"]).toEqual({ action: "continue-review", refusal: null, stageId: null, attempt: null });
+  expect(byAction({ ...retrying, state: "needs_review" } as Pipeline)["continue-review"]).toEqual({ action: "continue-review", refusal: "budget-fixed", stageId: null, attempt: null });
   expect(byAction({ ...retrying, state: "needs_review" } as Pipeline)["accept-head"]).toEqual({ action: "accept-head", refusal: null, stageId: null, attempt: null });
   const parked = byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "verify", state: "running" } } as unknown as Pipeline);
   /* The attempt retry and skip expect is the waiting stage's latest own attempt. */

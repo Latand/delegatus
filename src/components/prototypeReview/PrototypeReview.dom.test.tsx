@@ -74,6 +74,49 @@ afterEach(async () => {
   dom.document.body.innerHTML = "";
 });
 
+test.each([false, true])("Hide and history Undo share dismissal identity and keep a real choice available (phone: %s)", async (phone) => {
+  phoneLayout = phone;
+  const calls: unknown[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (String(url) === "/api/attention/dismissals") {
+      const body = JSON.parse(String(init?.body)); calls.push(body);
+      return new Response(JSON.stringify({ ok: true, dismissed: [body.target], alreadyClear: [], changed: [], undo: body.undo,
+        at: "2026-10-09T12:00:00Z", by: { kind: "operator", surface: phone ? "phone" : "desktop" } }));
+    }
+    return new Response(JSON.stringify(reviewRead()));
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-hide]")).not.toBeNull();
+  expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-hide]")!.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-hidden]")).not.toBeNull();
+  expect(document.querySelector("[data-prototype-save]")).toBeNull();
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-undo-hide]")!.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
+  expect(calls).toEqual([false, true].map(undo => ({ target: { kind: "prototype", taskId: "task-1", reviewId: `pr_${"a".repeat(32)}` }, undo, surface: phone ? "phone" : "desktop" })));
+});
+
+test.each(["rec", "busy"] as const)("Hide keeps the voice controls available while dictation is %s", async phase => {
+  heldPhase = phase;
+  const writes: unknown[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") writes.push(url);
+    return new Response(JSON.stringify(reviewRead()));
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout" onClose={() => {}} />); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  const hide = document.querySelector<HTMLButtonElement>("[data-prototype-hide]")!;
+  expect(hide.disabled).toBe(true);
+  await act(async () => { hide.click(); });
+  expect(writes).toEqual([]);
+  expect(document.querySelector("[data-prototype-hidden]")).toBeNull();
+});
+
 test("the comment is saved as it was written: edge spaces and line breaks reach the save request", async () => {
   const written = "  Keep the spacing.\nAdd a button.  \n";
   const posted: Array<{ reviewId: string; chosen: number[]; comment: string }> = [];
