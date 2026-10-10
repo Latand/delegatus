@@ -178,6 +178,7 @@ export class UpdateRunner {
       let exitCode: number | null = null;
       let failure: StepFailure | null = null;
       let timer: ReturnType<typeof setTimeout> | null = null;
+      let exitTurn: ReturnType<typeof setImmediate> | null = null;
       let liveness: ReturnType<typeof setInterval> | null = null;
       try {
         const limit = this.config.stepTimeoutMs?.[name] ?? STEP_TIMEOUT_MS[name];
@@ -192,11 +193,15 @@ export class UpdateRunner {
                 : new StepError({ kind: "timeout", minutes: limit / 60_000 }, `${name} did not finish within ${limit / 60_000} min`));
             };
             timer = setTimeout(() => {
-              // Let a queued exit settle runStep before finalizing the deadline.
-              // Bound the wait; missing status alone never proves interruption.
+              // Give queued I/O a turn before bounding an unreported exit.
+              // Timer callbacks alone cannot establish completion or loss.
               if (this.ports.childAlive?.() === null) {
-                timer = setTimeout(expire, this.config.livenessPollMs ?? 1_000);
-                timer.unref?.();
+                exitTurn = setImmediate(() => {
+                  exitTurn = null;
+                  timer = setTimeout(expire, this.config.livenessPollMs ?? 1_000);
+                  timer.unref?.();
+                });
+                exitTurn.unref?.();
               } else expire();
             }, limit);
             timer.unref?.();
@@ -224,6 +229,7 @@ export class UpdateRunner {
         }
       } finally {
         if (timer) clearTimeout(timer);
+        if (exitTurn) clearImmediate(exitTurn);
         if (liveness) clearInterval(liveness);
         accepting = false;
         closeSync(fd);

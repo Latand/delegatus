@@ -105,6 +105,7 @@ describe("child exit while command output is draining", () => {
       if (presence === "lost") {
         await flushPromises();
         expect(runner.state.steps[0]?.state).toBe("running");
+        await new Promise<void>((resolve) => setImmediate(resolve));
         jest.advanceTimersByTime(9);
         await flushPromises();
         expect(runner.state.steps[0]?.state).toBe("running");
@@ -266,8 +267,8 @@ describe("child exit while command output is draining", () => {
         await flushPromises();
       }
       expect(runner.state.steps[0]?.state).toBe("running");
-      // Dispatch the deadline before JS can receive the child's queued exit.
-      jest.advanceTimersByTime(5_000 - 40);
+      // Cross the deadline and a polling interval before dispatching queued I/O.
+      jest.advanceTimersByTime(5_000);
       await flushPromises();
       await run;
       expect(runner.state.steps[0]).toMatchObject({
@@ -318,6 +319,7 @@ describe("child exit while command output is draining", () => {
         failure: code === null ? { kind: "interrupted" } : code === 0 ? null : { kind: "exit", code },
         tail: ["final output"],
       });
+      await new Promise<void>((resolve) => setImmediate(resolve));
       jest.advanceTimersByTime(100);
       await flushPromises();
       expect(runner.state.state).toBe(code === 0 ? "done" : "failed");
