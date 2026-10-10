@@ -142,7 +142,7 @@ test("Claude spawn policy seeds a fresh account from the shared user settings sn
 
   expect(settings.model).toBe("shared-model");
   expect(settings.env).toEqual({ SHARED: "kept", ...agentPublicationIdentityEnv(process.env) });
-  expect(settings.hooks.PreToolUse).toHaveLength(1);
+  expect(settings.hooks.PreToolUse).toHaveLength(2);
 });
 
 test("Claude native MCP config keeps only granted servers out of the operator's registrations", () => {
@@ -397,7 +397,9 @@ test("allowSubagents uses an isolated profile while the denied profile stays enf
   };
 
   expect(denied.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
-  expect(allowed.hooks.PreToolUse).toEqual([{ matcher: "Read", hooks: [{ type: "command", command: "user-read-hook" }] }]);
+  expect(allowed.hooks.PreToolUse).toContainEqual({ matcher: "Read", hooks: [{ type: "command", command: "user-read-hook" }] });
+  expect(allowed.hooks.PreToolUse.filter(group => group.matcher === "Bash")).toHaveLength(1);
+  expect(allowed.hooks.PreToolUse.some(group => group.matcher === NATIVE_MULTI_AGENT_HOOK_MATCHER)).toBe(false);
 });
 
 test("managed Claude launch state accepts bypass mode and trusts the exact spawn directory", () => {

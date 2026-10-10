@@ -14,6 +14,7 @@ import { appDirIn } from "../../../bin/appDir.mjs";
 import type { AgentEngine } from "./cli";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { operatorTelegramClaudeEntry } from "@/lib/runtime/telegramConnectorEnv";
+import { installProcessCleanupHook, PROCESS_CLEANUP_HOOK_PREFIX } from "./processCleanupPolicy";
 
 type JsonObject = Record<string, unknown>;
 
@@ -384,7 +385,8 @@ export function prepareManagedClaudeSpawnHome(home: string, cwd: string): void {
 }
 
 function managedCommand(command: unknown): boolean {
-  return typeof command === "string" && command.startsWith(MANAGED_HOOK_PREFIX);
+  return typeof command === "string" && (command.startsWith(MANAGED_HOOK_PREFIX)
+    || command.startsWith(PROCESS_CLEANUP_HOOK_PREFIX));
 }
 
 function withoutManagedHandlers(value: unknown): unknown[] {
@@ -440,16 +442,17 @@ export function applyClaudeSpawnPolicy(
     delete settings.apiKeyHelper;
     delete settings.model;
   }
-  if (!options.allowSubagents && sourceSettings.disableAllHooks === true) {
-    throw new Error("Claude settings disableAllHooks prevents the Viewer spawn policy from enforcing native sub-agent denial");
+  if (sourceSettings.disableAllHooks === true) {
+    throw new Error("Claude settings disableAllHooks prevents the Viewer spawn policy from enforcing process cleanup");
   }
-  if (!options.allowSubagents && sourceSettings.allowManagedHooksOnly === true) {
-    throw new Error("Claude settings allowManagedHooksOnly prevents the Viewer spawn policy from enforcing native sub-agent denial");
+  if (sourceSettings.allowManagedHooksOnly === true) {
+    throw new Error("Claude settings allowManagedHooksOnly prevents the Viewer spawn policy from enforcing process cleanup");
   }
   const hooks = sourceSettings.hooks === undefined ? {} : record(sourceSettings.hooks);
   if (!hooks) throw new Error("Claude settings hooks must contain a JSON object");
 
   const preToolUse = withoutManagedHandlers(hooks.PreToolUse);
+  preToolUse.push({ matcher: "Bash", hooks: [{ type: "command", command: installProcessCleanupHook(home) }] });
   let memoryHook: ReturnType<typeof installMemoryHook> = null;
   try { if (!options.cleanMemory) memoryHook = installMemoryHook(home, options.publicationEnv ?? process.env, options.memoryQueuePath ?? null); } catch { /* optional memory must never stop a launch */ }
   const promptHooks = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit : [];
@@ -462,9 +465,7 @@ export function applyClaudeSpawnPolicy(
     });
   }
 
-  const enforcedSettings = options.allowSubagents
-    ? settings
-    : { ...settings, disableAllHooks: false, allowManagedHooksOnly: false };
+  const enforcedSettings = { ...settings, disableAllHooks: false, allowManagedHooksOnly: false };
   const mcpServers = claudeMcpServers(
     home,
     options.cwd,

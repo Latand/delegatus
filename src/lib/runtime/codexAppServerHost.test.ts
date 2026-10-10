@@ -27,6 +27,7 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, persistCodexHost, st
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
+import { codexProcessCleanupArgs } from "@/lib/agent/processCleanupPolicy";
 import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
 import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -149,9 +150,14 @@ test("fresh and adopted app-server hosts enforce native delegation with Telegram
     const host = resumed ? await CodexAppServerHost.adopt("policy-thread", options) : await CodexAppServerHost.start(options);
     try {
       expect(captured.args).toContain(`agents.enabled=${allowed}`);
+      expect(captured.args).toContain("features.hooks=true");
+      expect(captured.args?.some(arg => arg.startsWith("hooks.PreToolUse=["))).toBe(true);
       expect(captured.args?.includes('approvals_reviewer="user"')).toBe(!allowed);
       const params = server.requests.find((request) => request.method === (resumed ? "thread/resume" : "thread/start"))?.params as Record<string, unknown> | undefined;
       const config = params?.config;
+      const cleanup = config as { features: { hooks: boolean }; hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> } };
+      expect(cleanup.features.hooks).toBe(true);
+      expect(cleanup.hooks.PreToolUse[0].hooks[0].command.startsWith("LLV_MANAGED_PROCESS_CLEANUP_DENY=1 ")).toBe(true);
       expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed },
         mcp_servers: { viewer: { enabled: true }, telegram: { enabled: connected } } });
       expect(captured.options?.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBe(session?.connectorToken);
@@ -749,7 +755,7 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
 
-    expect(captured.args).toEqual([...DENIED_FEATURE_ARGS, "app-server", "--enable", "realtime_conversation"]);
+    expect(captured.args).toEqual([...DENIED_FEATURE_ARGS, ...codexProcessCleanupArgs(), "app-server", "--enable", "realtime_conversation"]);
     expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({
       config: {
         mcp_servers: {
@@ -782,6 +788,7 @@ describe("CodexAppServerHost", () => {
 
       expect(captured.args).toEqual([
         ...DENIED_FEATURE_ARGS,
+        ...codexProcessCleanupArgs(),
         "-c", `default_permissions=${JSON.stringify(permissionProfile)}`,
         "-c", permissionProfileConfig,
         "app-server", "--enable", "realtime_conversation",
@@ -1762,9 +1769,10 @@ describe("CodexAppServerHost", () => {
     const server = new FakeAppServer();
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
     const blockedCredential = ["must", "stay", "private"].join("-");
+    const codexHome = path.join(metadataState, "codex-home");
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      codexHome: "/codex-home",
+      codexHome,
       env: {
         NODE_ENV: "test",
         PATH: process.env.PATH,
@@ -1786,7 +1794,7 @@ describe("CodexAppServerHost", () => {
     expect(captured.options?.env).toEqual({
       NODE_ENV: "test",
       PATH: process.env.PATH,
-      CODEX_HOME: "/codex-home",
+      CODEX_HOME: codexHome,
       ...agentPublicationIdentityEnv({}),
       GIT_AUTHOR_NAME: "Delegatus",
       GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
@@ -2186,22 +2194,24 @@ describe("CodexAppServerHost", () => {
       "telegram-readonly": { command: "uv", enabled: true },
     };
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const codexHome = path.join(metadataState, "managed-codex-home");
     const host = await CodexAppServerHost.adopt("managed-thread", {
       cwd: "/repo",
-      codexHome: "/managed-codex-home",
+      codexHome,
       fileAuthCredentials: true,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server, captured),
     });
     expect(captured.args).toEqual([
       ...DENIED_FEATURE_ARGS,
+      ...codexProcessCleanupArgs(codexHome),
       "-c",
       "cli_auth_credentials_store=file",
       "app-server",
       "--enable",
       "realtime_conversation",
     ]);
-    expect(captured.options?.env?.CODEX_HOME).toBe("/managed-codex-home");
+    expect(captured.options?.env?.CODEX_HOME).toBe(codexHome);
     expect(captured.options?.detached).toBeTrue();
     expect(server.requests.some((request) => request.method === "thread/resume")).toBeTrue();
     const resume = server.requests.find((request) => request.method === "thread/resume");
