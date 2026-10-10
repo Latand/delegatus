@@ -89,8 +89,13 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       return { result: null, unknown: true, output: "The service did not confirm whether this action happened." };
     };
     let ambiguous = false;
-    const refused = (code?: string) => action && ambiguous ? unknown()
-      : { result: null, code, output: "The call could not be completed." };
+    const refused = (code?: string) => {
+      if (action && ambiguous) return unknown();
+      // A wire refusal proves this owner call was not admitted. Other calls'
+      // markers and any earlier uncertainty in this call still block handoff.
+      if (owner) possibleOwnerActions.delete(body.call_id);
+      return { result: null, code, output: "The call could not be completed." };
+    };
     const unfinished = () => action ? unknown() : { result: null, output: "The read did not finish." };
     const started = now();
     let failures = 0;
@@ -159,10 +164,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             const nonAdmission = ownerRateLimitSchema.safeParse(error.payload);
             if (!owner || nonAdmission.success) {
               if (++failures > 3) {
-                if (owner && onlyRateLimited) {
-                  sent--;
-                  possibleOwnerActions.delete(body.call_id);
-                }
+                if (owner && onlyRateLimited) sent--;
                 return refused(error.code);
               }
               await wait((owner && nonAdmission.success ? nonAdmission.data.error.retry_after_s

@@ -1548,6 +1548,36 @@ test("E3 owner pure 429 ceiling refunds its debit and permits completion with ha
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
 });
 
+for (const refusal of ["malformed", "too_large"]) test(`E3 owner ${refusal} refusal followed by a pure 429 ceiling permits handoff`, async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    const run = await runLoopCase({ request: ownerRequest(`owner_refusal_${refusal}`), features: ownerFeatures,
+      plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};
+        if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'00000000-0000-0000-0000-000000000000',body:{}})]};
+        return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+      response: (_body, attempt) => attempt === 1 ? x1Errors[refusal]! : ownerRateLimit(), runtime: { sleep: async () => {} } });
+    expect(run.completion).toMatchObject({ outcome: "declined", reason: "handoff" });
+    expect(run.calls).toHaveLength(5); expect(run.rounds).toHaveLength(3);
+    expect(new Set(run.calls.slice(1).map((call) => JSON.stringify(call))).size).toBe(1);
+    expect(run.rounds[2].prompt).toContain("15 calls are left.");
+    expect(run.rounds[2].schema.properties.action.enum).toContain("handoff");
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+for (const status of ["ok", "error"] as const) test(`E3 owner admitted ${status} followed by a pure 429 ceiling keeps handoff blocked`, async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    const run = await runLoopCase({ request: ownerRequest(`owner_admitted_${status}`), features: ownerFeatures,
+      plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};
+        if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'00000000-0000-0000-0000-000000000000',body:{}})]};
+        return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+      response: (body, attempt) => attempt === 1 ? ownerResponse(body, { status }) : ownerRateLimit(), runtime: { sleep: async () => {} } });
+    expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(run.calls).toHaveLength(5); expect(run.rounds[2].prompt).toContain("15 calls are left.");
+    expect(run.rounds[2].schema.properties.action.enum).not.toContain("handoff");
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
 test("X4 six owner runs extend the existing X2 capture format", async () => {
   const capture: { name: string; x1: unknown; calls: unknown[]; completion: unknown }[] = [];
   const grid = "00000000-0000-0000-0000-000000000000";

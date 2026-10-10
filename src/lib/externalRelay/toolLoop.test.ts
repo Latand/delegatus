@@ -57,10 +57,11 @@ for (const seconds of [1, 7, 60]) test(`E3 ${seconds}s ceiling caches the pure r
   } finally { await run.close(); }
 });
 
-for (const first of ["transport", "malformed", "pending", "unavailable", "unknown_429"]) test(`E3 after ${first} preserves owner uncertainty and its debit`, async () => {
+for (const refusal of ["rate_limited", "malformed", "too_large"])
+for (const first of ["transport", "malformed", "pending", "unavailable", "unknown_429"]) test(`E3 ${refusal} after ${first} preserves owner uncertainty and its debit`, async () => {
   let posts = 0;
   const run = await ownerLoopCase((_req, body) => {
-    if (++posts > 1) return owner429();
+    if (++posts > 1) return refusal === "rate_limited" ? owner429() : x1Errors[refusal]!;
     if (first === "transport") return { drop: true };
     if (first === "malformed") return { body: {} };
     if (first === "unknown_429") return { status: 429, body: { error: { code: "other", retry_after_s: 7 } } };
@@ -74,10 +75,30 @@ for (const first of ["transport", "malformed", "pending", "unavailable", "unknow
   } finally { await run.close(); }
 });
 
-test("a pure E3 refund preserves an earlier owner action and never replenishes its debit", async () => {
+for (const refusal of ["malformed", "too_large"]) test(`E3 after a pure ${refusal} refusal releases the owner marker without refunding that debit`, async () => {
+  const posts: unknown[] = [];
+  const run = await ownerLoopCase((_req, body) => {
+    posts.push(body);
+    return (body as { tool: string }).tool === "owner_create_grid" ? x1Errors[refusal]! : owner429();
+  });
+  try {
+    const first = actionCall("owner_create_grid", { body: { name: "Grid A" } });
+    const second = actionCall("owner_attach_grid_chats", { grid_id: "00000000-0000-0000-0000-000000000000", body: {} });
+    await run.loop.runCalls([first], 1);
+    expect(run.loop.callsLeft()).toBe(15); expect(run.loop.actionSent).toBe(false);
+    await run.loop.runCalls([second], 2);
+    expect(posts).toHaveLength(5); expect(run.waits).toEqual([7000, 7000, 7000]);
+    expect(run.loop.callsLeft()).toBe(15); expect(run.loop.actionSent).toBe(false); expect(run.loop.sawUnknown).toBe(false);
+    await run.loop.runCalls([first], 3);
+    await run.loop.runCalls([second], 4);
+    expect(posts).toHaveLength(5); expect(run.loop.callsLeft()).toBe(15); expect(run.loop.results).toHaveLength(2);
+  } finally { await run.close(); }
+});
+
+for (const status of ["ok", "error"] as const) test(`a pure E3 refund preserves an earlier admitted owner ${status} and never replenishes its debit`, async () => {
   const run = await ownerLoopCase((_req, body) => {
     const call = body as { tool: string };
-    return call.tool === "owner_create_grid" ? { body: ownerOk(body) } : owner429();
+    return call.tool === "owner_create_grid" ? { body: { ...ownerOk(body), status } } : owner429();
   });
   try {
     await run.loop.runCalls([actionCall("owner_create_grid", { body: { name: "Grid A" } })], 1);
