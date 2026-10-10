@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 43, and a v42 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(43);
+test("the default mandate is at version 44, and a v43 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(44);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -111,7 +111,8 @@ test("the default mandate is at version 43, and a v42 seat reads as stale", () =
      adds the ask-first bug report and the seat-to-seat rule for another
      project's work. v41 points the operator to a task's prototype review
      instead of describing variants in prose. v42 clears waiting rows that ask
-     nothing. v43 combines that board walk with the questionnaire before ambiguous work. */
+     nothing. v43 adds the questionnaire before ambiguous work. v44 combines
+     both with linked-seat coordination. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -125,7 +126,8 @@ test("the default mandate is at version 43, and a v42 seat reads as stale", () =
   expect(orchestratorMandateStale(40)).toBe(true);
   expect(orchestratorMandateStale(41)).toBe(true);
   expect(orchestratorMandateStale(42)).toBe(true);
-  expect(orchestratorMandateStale(43)).toBe(false);
+  expect(orchestratorMandateStale(43)).toBe(true);
+  expect(orchestratorMandateStale(44)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -175,6 +177,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
   42: "87da100ab11b67c8309e22764c89bc37c8b81922eb358e4c2adb2eef8ce82688",
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
+  44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -597,9 +600,9 @@ test("the mandate asks before a bug report is filed, publishes only an approved 
   expect(section).toContain("A no or an edit returns to the reporter and needs a new yes.");
   expect(section).toContain("Never file one another way.");
   /* Rule 2: seat to seat by default, and what lifts it. */
-  expect(section).toContain("Another project's work goes to its orchestrator: send_message_to_orchestrator with the task context.");
-  expect(section).toContain("Never create tasks or pipelines on its board, spawn agents there or message its workers");
-  expect(section).toContain("only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them");
+  expect(section).toContain("Other projects: send_message_to_orchestrator;");
+  expect(section).toContain("tasks, pipelines, spawns and worker messages need an explicit operator request");
+  expect(section).toContain("quoted in crossProjectRequest");
 
   /* A bespoke mandate receives both required rules once. A retained heading
      cannot suppress them when its body was edited or removed. */
@@ -780,10 +783,8 @@ test("the role table keeps the delivered default inside the structured envelope"
      (#2518) takes 1 100 more: the bug report and other-project section and
      the issue-reporter row. The visual-critic row and the UI-lane step that
      ends on it take 150 more. The prototype-review pointer adds 47 bytes;
-     the merged delivered default measures 29 363 bytes. The applyNow
-     pointer on the override-stage line adds 16 more, 29 379 in all.
-     The questionnaire, board cleanup and two repeated-text trims leave
-     29 370 bytes (30 bytes of room).
+     the delivered default includes the questionnaire, board cleanup and
+     linked-seat coordination alongside the applyNow pointer: 29 367 bytes.
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
   expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
@@ -947,6 +948,11 @@ test("the mandate directs prototype review to the task", () => {
   }
 });
 
+
+test("the mandate names linked seats and requires coordination before a shared release", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_orchestrator lists linkedSeats");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("send_message_to_orchestrator with machine named");
+});
 
 test("questionnaire mandate upgrades the shipped pointer once and preserves bespoke wording", () => {
   const directive = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;

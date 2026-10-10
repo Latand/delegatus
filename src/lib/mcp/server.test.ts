@@ -633,7 +633,7 @@ describe("MCP tool service", () => {
     const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
 
     for (const toolName of MCP_TOOL_NAMES) {
-      const args = { clientRequestId: `request-${toolName}`, value: toolName };
+      const args = { clientRequestId: `request-${toolName}`, value: toolName, ...(toolName === "backfill_worktree_projects" ? { dryRun: false } : {}) };
       const first = await service.callTool(toolName, args);
       const replay = await service.callTool(toolName, args);
 
@@ -1902,6 +1902,7 @@ describe("MCP tool service", () => {
         "list_conversations",
         "search_transcripts",
         "search_memory",
+        "backfill_worktree_projects",
         "get_conversation",
         "conversation_deliverability",
         "conversation_messages",
@@ -1945,7 +1946,7 @@ describe("MCP tool service", () => {
         "telegram_bot_messages",
         "issue_report",
       ]);
-      const optionalReadKeys = new Set(["message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review"]);
+      const optionalReadKeys = new Set(["backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");

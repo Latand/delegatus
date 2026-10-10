@@ -9,6 +9,7 @@ import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { useLocale } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
+import { WorktreeRecovery } from "./WorktreeRecovery";
 import { maintenanceReading, seatTickAge, seatTickLocalTime, seatTickReading, type MaintenanceReading, type SeatTickReading, type StatusSegment } from "./seatTickView";
 import { runtimeForEngine, runtimeForModel, useMaintainerRole, type MaintainerRoleRead, type MaintainerRuntime } from "./useMaintainerRole";
 import type { SeatTickChange, SeatTickSettingsRead } from "./useSeatTickSettings";
@@ -632,6 +633,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
       {/* BOARD MAINTENANCE — its own switch, interval and agent, saved with the rest. */}
       {record && maintenance && maintenanceView ? (
         <SeatTickMaintenance
+          project={read.project}
           maintenance={maintenance}
           view={maintenanceView}
           state={state}
@@ -687,7 +689,8 @@ function SeatTickAutoRotate({ value, state, control, row, phone, now, locale }: 
   </div>;
 }
 
-function SeatTickMaintenance({ maintenance, view, state, control, row, phone, onOpenedCard }: {
+function SeatTickMaintenance({ project, maintenance, view, state, control, row, phone, onOpenedCard }: {
+  project: string;
   maintenance: BoardMaintenanceAnswer;
   view: MaintenanceReading;
   state: SeatTickDraftState;
@@ -723,6 +726,7 @@ function SeatTickMaintenance({ maintenance, view, state, control, row, phone, on
           : t("seatTick.maintenance.aboutNoAgent")}
       </p>
       <p className="text-caption leading-4 text-muted">{t("seatTick.maintenance.clause")}</p>
+      <WorktreeRecovery key={project} project={project} phone={phone} />
 
       {runtime && maintainer.choices.length > 0 ? (
         <AgentPicker runtime={runtime} maintainer={maintainer} state={state} phone={phone} />

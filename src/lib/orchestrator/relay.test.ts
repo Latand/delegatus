@@ -237,6 +237,18 @@ test("the operator browser still sends its own words", async () => {
   expect(delivered[0]).toMatchObject({ text: "Please investigate this issue.", origin: { kind: "operator" } });
 });
 
+for (const machine of [undefined, "Remote install"]) test(`seat voice proposal metadata is refused on ${machine ? "linked" : "local"} relays`, async () => {
+  const sender = actor("project-a");
+  const response = await orchestratorPOST(request(sender.capability, {
+    project: "project-a", text: "Review the plan", clientMessageId: "voice-metadata",
+    ...(machine ? { machine } : {}),
+    voiceDelegatus: { sessionId: "voice-session", proposalId: "voice-proposal" },
+  }));
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({ code: "voice_admission_refused" });
+  expect(delivered).toEqual([]);
+});
+
 for (const engine of ["claude", "codex"] as const) test(`voice confirmation reaches ${engine} through the real relay once across a lost receipt and restart`, async () => {
   const recipient = actor("voice-project", "orchestrator", engine);
   realAdmission();
@@ -876,4 +888,24 @@ test("MCP recovers admitted relay payload after response loss, target rotation a
     expect(recovery.dispatches).toEqual([]);
     expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
   } finally { store.close(); }
+});
+
+
+test("linked relay preserves a terminal resume failure across admission recovery and never acknowledges it as accepted", async () => {
+  const { deliverLinkedSeatMessage, setLinkedSeatEnqueueForTests } = await import("@/lib/links/seatMessageDelivery");
+  const recipient = actor("project-b");
+  let admitted = 0;
+  setLinkedSeatEnqueueForTests(async message => {
+    admitted++;
+    const held = registry.holdDelivery(recipient.id as `conversation_${string}`, message.text, message.clientMessageId!, "text", [], null, { origin: message.origin });
+    registry.terminalizeHeldDelivery(held.id, "Fixture stopped-seat resume could not publish.");
+    return { ok: false, structured: true, outcome: "failed", status: 503, error: "Fixture resume failed", operationId: held.command.operationId };
+  });
+  try {
+    const first = await deliverLinkedSeatMessage("project-b", "Hold the lock.", "widget on Machine A", "peer:00112233:fixture", () => {});
+    expect(first).toMatchObject({ st: "refused", code: "delivery_failed" });
+    const recovered = await deliverLinkedSeatMessage("project-b", "Hold the lock.", "widget on Machine A", "peer:00112233:fixture", () => {});
+    expect(recovered).toMatchObject({ st: "refused", code: "delivery_failed", operationId: first.operationId });
+    expect(admitted).toBe(1);
+  } finally { setLinkedSeatEnqueueForTests(null); }
 });

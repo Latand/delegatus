@@ -1,17 +1,22 @@
 import { sharedLinkState } from "./runtimeState";
 /** Ephemeral, bounded agent summaries for one linked-board connection (M.6). */
+import fs from "node:fs";
+import { statePath } from "@/lib/configDir";
 import { createHash, randomBytes } from "node:crypto";
 
+import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadTasksForList } from "@/lib/tasks/store";
-import { findPipelineRecord, loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { Engine, FileEntry } from "@/lib/types";
 import { decodeLaneRow, isLaneKey, laneRowsFor, MAX_LANE_ROWS, type LaneRow } from "./laneFeed";
 import { linkedContext, runsHere } from "./linked";
 import { withoutStoredLessons } from "@/lib/memory/roleStore";
 
-export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
+export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; ro?: string; seat?: 1; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
 type Change = AgentRow | LaneRow | { k: string; gone: true };
 type Versioned = { row: AgentRow | LaneRow; version: number };
 type Marker = { k: string; version: number; at: number };
@@ -28,29 +33,42 @@ const PAGE_ENTRIES = 50;
 const PAGE_BYTES = 80_000;
 
 function safeId(value: unknown): string | null { return typeof value === "string" && /^[a-zA-Z0-9._-]{1,64}$/.test(value) ? value : null; }
-function rowFor(file: FileEntry, tasks: ReturnType<typeof loadTasksForList>, projects: ReadonlySet<string>): AgentRow | null {
+type FeedSnapshot = Pick<RegistryFile, "conversations" | "memberships" | "lineageEdges">;
+type FeedSources = {
+  snapshot?: () => FeedSnapshot;
+  seats?: () => readonly { project: string; conversationId: string }[];
+  canonical?: (project: string) => string;
+  seatRevision?: () => string;
+};
+function rowFor(file: FileEntry, tasks: ReturnType<typeof loadTasksForList>, projects: ReadonlySet<string>,
+  snapshot: FeedSnapshot, byPath: Map<string, RegistryFile["conversations"][string]>,
+  pipelines: readonly Pipeline[], seats: ReadonlyMap<string, string>, canonical: (project: string) => string): AgentRow | null {
   if (!AGENT_ENGINES.has(file.engine)) return null;
-  const identity = file.conversationId ?? file.path;
+  const conversation = byPath.get(file.path) ?? (file.conversationId ? snapshot.conversations[file.conversationId] : undefined);
+  const conversationId = conversation?.id ?? file.conversationId;
+  const identity = conversationId ?? file.path;
   if (!identity) return null;
-  const task = tasks.find((item) => item.assignments.some((assignment) => assignment.conversationId === file.conversationId || assignment.path === file.path));
-  const membership = file.durableLineage?.memberships.find((item) => item.kind === "pipeline" && item.containerId && item.stageId);
-  const pipeline = membership ? findPipelineRecord(membership.containerId) : null;
+  const task = tasks.find((item) => item.assignments.some((assignment) => typeof conversationId === "string" && typeof assignment.conversationId === "string" && assignment.conversationId === conversationId || assignment.path === file.path));
+  const membership = (conversationId ? snapshot.memberships[conversationId] : undefined)?.find((item) => item.kind === "pipeline" && item.containerId && item.stageId);
+  const pipeline = membership ? pipelines.find((item) => item.id === membership.containerId) : null;
   const boundTask = task ?? (pipeline ? tasks.find((item) => pipeline.taskIds.includes(item.id)) : undefined);
-  const p = boundTask?.project ?? file.project;
+  const p = canonical(boundTask?.project ?? file.project);
+  const seat = !!conversationId && seats.get(p) === conversationId;
+  const role = safeId(conversation?.agentRole ?? (conversationId ? snapshot.lineageEdges[conversationId]?.role : undefined));
   if (!projects.has(p) || !PROJECT.test(p)) return null;
   const at = file.lastAgentWorkAt ?? file.mtime * 1000;
-  if (file.proc !== "running" && Date.now() - at > 86_400_000) return null;
+  if (!seat && file.proc !== "running" && Date.now() - at > 86_400_000) return null;
   const engine = safeId(file.engine)!;
   const model = safeId(file.launchModel) ?? safeId(file.model) ?? "unknown";
   const stage = pipeline?.stages.find((item) => item.id === membership?.stageId);
-  const attempt = pipeline?.runs.find((run) => run.stageId === stage?.id)?.attempts.find((item) => item.conversationId === file.conversationId || item.agentPath === file.path);
+  const attempt = pipeline?.runs.find((run) => run.stageId === stage?.id)?.attempts.find((item) => typeof conversationId === "string" && typeof item.conversationId === "string" && item.conversationId === conversationId || item.agentPath === file.path);
   /* The whole first line is checked before it is cut, so a lesson it quotes is withheld whole. */
-  const title = boundTask?.chosen ? withoutStoredLessons(boundTask.text.split(/\r?\n|\r/, 1)[0]!).slice(0, 120)
-    : stage ? `${safeId(stage.id) ?? "Pipeline"} stage` : `${engine} agent`;
+  const title = seat ? "orchestrator" : boundTask?.chosen ? withoutStoredLessons(boundTask.text.split(/\r?\n|\r/, 1)[0]!).slice(0, 120)
+    : stage ? `${safeId(stage.id) ?? "Pipeline"} stage` : `${role ?? engine} agent`;
   const working = file.proc === "running" && (file.activity === "live" || file.activity === "recent");
   const st = file.pendingQuestion || file.waitingInput || file.pendingPermission ? "waiting" : working ? "working" : "done";
   return { k: `a:${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`, p, t: title,
-    e: engine, m: model, st, ...(boundTask ? { task: boundTask.id } : {}), at,
+    e: engine, m: model, st, ...(role ? { ro: role } : {}), ...(seat ? { seat: 1 as const } : {}), ...(boundTask ? { task: boundTask.id } : {}), at,
     ...(pipeline && stage ? { pl: { id: safeId(pipeline.id) ?? "pipeline", state: safeId(pipeline.state) ?? "unknown", stage: safeId(stage.id) ?? "stage", stageState: safeId(attempt?.state) ?? "unknown" } } : {}) };
 }
 
@@ -59,11 +77,12 @@ export function decodeAgentRow(value: unknown, projects: ReadonlySet<string>): A
   const row = value as AgentRow;
   if (!/^a:[0-9a-f]{16}$/.test(row.k) || !PROJECT.test(row.p) || !projects.has(row.p) || typeof row.t !== "string" || row.t.length > 120 || /[\r\n]/.test(row.t)
     || !safeId(row.e) || !safeId(row.m) || !["working", "waiting", "done"].includes(row.st)
-    || !Number.isSafeInteger(row.at) || row.at < 0 || row.task !== undefined && !safeId(row.task)
+    || !Number.isSafeInteger(row.at) || row.at < 0 || row.at > 8_640_000_000_000_000 || row.task !== undefined && !safeId(row.task)
+    || row.ro !== undefined && !safeId(row.ro) || row.seat !== undefined && row.seat !== 1
     || row.pl !== undefined && (!row.pl || typeof row.pl !== "object" || !safeId(row.pl.id) || !safeId(row.pl.state) || !safeId(row.pl.stage) || !safeId(row.pl.stageState))
     || Buffer.byteLength(JSON.stringify(row)) > 1536) return null;
   return { k: row.k, p: row.p, t: row.t, e: row.e, m: row.m, st: row.st,
-    ...(row.task ? { task: row.task } : {}), at: row.at,
+    ...(row.task ? { task: row.task } : {}), ...(row.ro ? { ro: row.ro } : {}), ...(row.seat === 1 ? { seat: 1 as const } : {}), at: row.at,
     ...(row.pl ? { pl: { id: row.pl.id, state: row.pl.state, stage: row.pl.stage, stageState: row.pl.stageState } } : {}) };
 }
 
@@ -77,6 +96,7 @@ export class AgentFeed {
   private seenPipelines: readonly Pipeline[] | null = null;
   private owned = false;
   private projectsKey = "";
+  private seatRevision = "";
   private resetSnapshot: { key: string; rows: Array<AgentRow | LaneRow>; cursor: Cursor } | null = null;
   private floor = 0;
   private expiresAt = Infinity;
@@ -84,33 +104,73 @@ export class AgentFeed {
     private readonly tasks: () => ReturnType<typeof loadTasksForList> = loadTasksForList,
     private readonly pipelines: () => readonly Pipeline[] = loadPipelinesForList,
     /** Which tasks this machine runs, fixed for one refresh: one context read, not one per task. */
-    private readonly ownership: () => Parameters<typeof laneRowsFor>[3] = () => { const context = linkedContext(); return (task) => runsHere(task, context); }) {}
+    private readonly ownership: () => Parameters<typeof laneRowsFor>[3] = () => { const context = linkedContext(); return (task) => runsHere(task, context); },
+    private readonly registrySources: FeedSources = {}) {}
 
   refresh(projects: ReadonlySet<string>): void {
     const files = this.source();
     const tasks = this.tasks();
     const projectsKey = [...projects].sort().join("|");
-    /* The pipeline registry is read only while a task that runs here could
-       have a lane to publish: its array is cached until the registry moves. */
+    const seatRevision = projects.size === 0 ? "" : this.registrySources.seatRevision?.() ?? (() => {
+      if (this.registrySources.seats) return "injected";
+      try { const stat = fs.statSync(statePath("orchestrator-seats.json")); return `${stat.ino}:${stat.size}:${stat.mtimeMs}`; }
+      catch { return "missing"; }
+    })();
+    /* Cached pipeline records also attribute scanned agents whose raw entries
+       carry no membership. An unchanged registry retains this array identity. */
     const owns = this.ownership();
     if (tasks !== this.seenTasks || projectsKey !== this.projectsKey) this.owned = projects.size > 0 && tasks.some((task) => projects.has(task.project) && owns(task));
-    const pipelines = this.owned ? this.pipelines() : null;
-    if (files === this.scanned && tasks === this.seenTasks && pipelines === this.seenPipelines && projectsKey === this.projectsKey && Date.now() < this.expiresAt) { this.pruneMarkers(); return; }
+    const pipelines = this.owned || (projects.size > 0 && !!files?.length) ? this.pipelines() : null;
+    if (files === this.scanned && tasks === this.seenTasks && pipelines === this.seenPipelines && projectsKey === this.projectsKey && seatRevision === this.seatRevision && Date.now() < this.expiresAt) { this.pruneMarkers(); return; }
     if (projectsKey !== this.projectsKey) this.resetSnapshot = null;
     this.scanned = files;
     this.seenTasks = tasks;
     this.seenPipelines = pipelines;
     this.projectsKey = projectsKey;
+    this.seatRevision = seatRevision;
     this.expiresAt = Infinity;
+    // Registry and seat storage are consulted only past the refresh cache fence.
+    const seatRows = projects.size > 0
+      ? this.registrySources.seats?.() ?? Object.values(readOrchestratorSeatFileOrNull()?.seats ?? {})
+      : [];
+    const snapshot = projects.size > 0 && (files?.length || seatRows.length)
+      ? this.registrySources.snapshot?.() ?? agentRegistry().readOnlySnapshot()
+      : { conversations: {}, memberships: {}, lineageEdges: {} };
+    const canonical = this.registrySources.canonical ?? canonicalProject;
+    const byPath = new Map<string, RegistryFile["conversations"][string]>();
+    for (const conversation of Object.values(snapshot.conversations)) {
+      for (const generation of conversation.generations) byPath.set(generation.path, conversation);
+      for (const path of conversation.continuityPaths ?? []) byPath.set(path, conversation);
+    }
+    const seats = new Map<string, string>(seatRows.flatMap(seat => typeof seat.conversationId === "string" ? [[canonical(seat.project), seat.conversationId] as [string, string]] : []));
     const next = new Map<string, AgentRow>();
+    const currentPaths = new Set(Object.values(snapshot.conversations).flatMap(conversation => conversation.generations.at(-1)?.path ?? []));
+    const selectedPaths = new Map<string, string>();
     for (const file of files ?? []) {
-      const row = rowFor(file, tasks, projects);
+      const row = rowFor(file, tasks, projects, snapshot, byPath, pipelines ?? [], seats, canonical);
       if (row) {
-        next.set(row.k, row);
-        if (file.proc !== "running") this.expiresAt = Math.min(this.expiresAt, row.at + 86_400_000);
+        const previous = next.get(row.k);
+        const previousPath = selectedPaths.get(row.k);
+        if (!previous || Number(currentPaths.has(file.path)) > Number(currentPaths.has(previousPath ?? ""))
+          || currentPaths.has(file.path) === currentPaths.has(previousPath ?? "") && row.at > previous.at) {
+          next.set(row.k, row); selectedPaths.set(row.k, file.path);
+        }
+        if (file.proc !== "running" && !row.seat) this.expiresAt = Math.min(this.expiresAt, row.at + 86_400_000);
       }
     }
-    const selected = [...next.values()].sort((a, b) => b.at - a.at || a.k.localeCompare(b.k));
+    // Designation is presence evidence even before the next completed scan.
+    for (const [project, id] of seats) {
+      const conversation = snapshot.conversations[id];
+      if (!projects.has(project) || !conversation || !AGENT_ENGINES.has(conversation.engine)) continue;
+      const k = `a:${createHash("sha256").update(id).digest("hex").slice(0, 16)}`;
+      if (next.has(k)) continue;
+      const generation = conversation.generations.at(-1);
+      const observed = Date.parse(conversation.turn?.observedAt ?? generation?.createdAt ?? "");
+      next.set(k, { k, p: project, t: "orchestrator", e: conversation.engine,
+        m: safeId(generation?.launchProfile.model) ?? "unknown", st: conversation.turn?.state === "busy" ? "working" : "done", ro: "orchestrator", seat: 1,
+        at: Number.isFinite(observed) && observed >= 0 ? observed : 0 });
+    }
+    const selected = [...next.values()].sort((a, b) => Number(!!b.seat) - Number(!!a.seat) || b.at - a.at || a.k.localeCompare(b.k));
     const perProject = new Map<string, number>();
     const wanted = new Map<string, AgentRow | LaneRow>();
     for (const row of selected) {
@@ -120,7 +180,7 @@ export class AgentFeed {
       perProject.set(row.p, count + 1);
       wanted.set(row.k, row);
     }
-    if (pipelines) for (const lane of laneRowsFor(() => pipelines, tasks, projects, owns)) wanted.set(lane.k, lane);
+    if (this.owned && pipelines) for (const lane of laneRowsFor(() => pipelines, tasks, projects, owns)) wanted.set(lane.k, lane);
     for (const [key] of this.rows) if (!wanted.has(key)) {
       this.rows.delete(key);
       this.markers.push({ k: key, version: ++this.version, at: Date.now() });
@@ -203,13 +263,13 @@ export function dropAgents(id: string): void { feeds.delete(id); received.delete
 export function receivedAgentRows(id: string): readonly AgentRow[] { return [...(received.get(id)?.rows.values() ?? [])]; }
 export function receivedLaneRows(id: string): readonly LaneRow[] { return [...(received.get(id)?.lanes.values() ?? [])]; }
 export function touchAgents(id: string): void { const state = received.get(id); if (state) state.at = Date.now(); }
-export function remoteAgents(project: string, taskId?: string): Array<AgentRow & { peer: string; stale: boolean; asOf: number }> {
+export function remoteAgents(project: string, taskId?: string): Array<AgentRow & { peer: string; install: string; stale: boolean; asOf: number }> {
   const context = linkedContext();
   return context.links.flatMap((link) => {
     const state = received.get(link.key);
     if (!state || !link.projects.has(project)) return [];
     return [...state.rows.values()].filter((row) => row.p === project && (taskId === undefined || row.task === taskId))
-      .map((row) => ({ ...row, peer: link.label, stale: Date.now() - state.at > 900_000, asOf: state.at }));
+      .map((row) => ({ ...row, peer: link.label, install: link.install, stale: Date.now() - state.at > 900_000, asOf: state.at }));
   });
 }
 /** The lanes of one project that linked peers published, each with the peer
@@ -250,7 +310,7 @@ export function acceptAgents(id: string, part: unknown, projects: ReadonlySet<st
   }
   if (target.size > 50) {
     const counts = new Map<string, number>();
-    const kept = [...target.values()].sort((a, b) => b.at - a.at).filter((row) => {
+    const kept = [...target.values()].sort((a, b) => Number(!!b.seat) - Number(!!a.seat) || b.at - a.at).filter((row) => {
       const count = counts.get(row.p) ?? 0;
       if (count >= 50) return false;
       counts.set(row.p, count + 1);
