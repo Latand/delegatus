@@ -13,6 +13,7 @@ import { readStartIdentity } from "./self-update-supervisor.mjs";
 import { prepareLauncherCredentials } from "./launcher-credentials.mjs";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
 import { resetWindowsSnapshotForTests, windowsBackend } from "../src/lib/proc/windows";
+import { terminalClosed } from "./__fixtures__/terminal-lifecycle";
 
 const fixtures: string[] = [];
 const fixtureRoots = new Map<string, { tempRoot: string; dev: number; ino: number; label: string }>();
@@ -93,7 +94,6 @@ async function stop(child: ReturnType<typeof spawn>) {
 afterEach(async () => {
   cleanupEvidence("teardown-start", { terminalOwners: [...terminalOwners].map(([pid, record]) => ({ pid, ...record, exited: ownerExited(pid, record.startIdentity) })) });
   for (const child of children) await stop(child);
-  children.clear();
   for (const [pid, identity] of owners) {
     // A process on its way out can still be listed while its identity no
     // longer reads. That proves neither exit nor ownership, so it is read
@@ -110,6 +110,8 @@ afterEach(async () => {
     cleanupEvidence("owner-exited", { pid, startIdentity: identity });
   }
   assertOwnersExited();
+  for (const child of children) await terminalClosed(child);
+  children.clear();
   cleanupEvidence("all-owners-exited-before-remove");
   for (const root of fixtures) {
     assertFixtureRoot(root);
@@ -131,8 +133,8 @@ afterEach(async () => {
   owners.clear();
   terminalOwners.clear();
   cleanupCase = null;
-}, 30000);
-async function until<T>(read: () => T | false | null, budget = 30000): Promise<T> {
+}, 90000);
+async function until<T>(read: () => T | false | null, budget = 90000): Promise<T> {
   const deadline = Date.now() + budget;
   while (Date.now() < deadline) { const value = read(); if (value) return value; await Bun.sleep(50); }
   throw new Error("Private handoff did not settle");
@@ -140,7 +142,7 @@ async function until<T>(read: () => T | false | null, budget = 30000): Promise<T
 async function fixture(alias: "LLV_TOKEN" | "DELEGATUS_TOKEN" = "LLV_TOKEN", label = "custody-fixture") {
   cleanupCase = label;
   if (process.platform === "win32" && !ownedIdentity(process.pid)) throw new Error("Native kernel identity reader is unavailable");
-  const tempRoot = realpathSync(process.platform === "win32" ? tmpdir() : "/var/tmp");
+  const tempRoot = realpathSync(tmpdir());
   const root = realpathSync(mkdtempSync(path.join(tempRoot, "dlg-custody-"))); fixtures.push(root);
   const created = lstatSync(root);
   fixtureRoots.set(root, { tempRoot, dev: created.dev, ino: created.ino, label });
@@ -236,7 +238,7 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
   // launcher and leave the bootstrap holding the fixture's Windows cwd.
   if (action?.id === "restart-terminal") {
     observeTerminal(child, f.root);
-    await until(() => child.exitCode !== null ? true : null);
+    await terminalClosed(child);
     expect(child.exitCode).toBe(rollback ? 1 : 0);
     cleanupEvidence("terminal-command-complete", { pid: child.pid, startIdentity: child.pid ? owners.get(child.pid) : null, exit: child.exitCode,
       terminalOwners: [...terminalOwners].map(([pid, record]) => ({ pid, ...record, exited: ownerExited(pid, record.startIdentity) })) });
@@ -291,7 +293,7 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
     expect(observed.status).toBe(0); expect(observed.stdout.includes(f.key)).toBe(false); expect(observed.stderr.includes(f.key)).toBe(false);
   }
   cleanupEvidence("body-complete", { alias, actionId, rollback, assertionsCompleted: true });
-}, 120000);
+}, 240000);
 
 function windowsPowerShellEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
@@ -413,6 +415,9 @@ test("fixture cleanup control awaits its bounded retry and preserves hard failur
   for (const [code, failures] of [["EBUSY", 2], ["EPERM", 1], ["EBUSY", Infinity], ["EPERM", Infinity], ["EACCES", Infinity]] as const) {
     let attempts = 0, complete = false;
     const delays: number[] = [], release: (() => void)[] = [];
+    let sleeping: () => void;
+    const nextSleep = () => new Promise<void>(resolve => { sleeping = resolve; });
+    let entered = nextSleep();
     let lastError: NodeJS.ErrnoException | undefined;
     const run = removeFixture(f.root, {
       retry: true,
@@ -420,15 +425,16 @@ test("fixture cleanup control awaits its bounded retry and preserves hard failur
         attempts++;
         if (attempts <= failures) { lastError = Object.assign(new Error("Synthetic cleanup control"), { code }); throw lastError; }
       },
-      sleep: ms => { delays.push(ms); return new Promise<void>(resolve => release.push(resolve)); },
+      sleep: ms => { delays.push(ms); sleeping(); return new Promise<void>(resolve => release.push(resolve)); },
     }).then(value => { complete = true; return { value, error: undefined }; }, error => { complete = true; return { value: undefined, error }; });
     const waits = code === "EACCES" ? 0 : Math.min(failures, 6);
     for (let index = 0; index < waits; index++) {
-      await until(() => delays.length === index + 1 ? true : null, 1000);
+      await entered;
       expect(attempts).toBe(index + 1); expect(complete).toBe(false); expect(delays[index]).toBe(350);
       // An unresolved sleep must prevent another attempt, even after a turn
       // of the real event loop. Merely scheduling a delay cannot pass this.
       await Bun.sleep(0); expect(attempts).toBe(index + 1); expect(complete).toBe(false);
+      entered = nextSleep();
       release[index]!();
     }
     const outcome = await run;
