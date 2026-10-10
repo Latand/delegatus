@@ -76,3 +76,55 @@ test("a demo stored by an earlier build reads as off, the real voice stays on, a
   }
   expect(storage.settings().enabled).toBe(false);
 });
+
+test("call usage shows observed spend while live and only complete settlement is final; settings use persisted close time", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let now = Date.parse("2026-10-10T07:00:00Z");
+  const storage = new CompanionStorage(() => now);
+  const { CompanionAdmission } = await import("./admission");
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unused"); } }, () => now);
+  const session = admission.create({ project: "usage", locale: "en", startedBy: { operator: true } });
+  storage.reserve(session.id, 1);
+  expect(storage.usageFor(session.id)).toEqual({ callUsd: 0, callFinal: false, callIncomplete: false, month: "2026-10", monthUsd: 0, monthCapUsd: 20 });
+  storage.observe(session.id, 0.2);
+  expect(storage.usageFor(session.id)).toMatchObject({ callUsd: 0.2, monthUsd: 0.2, callFinal: false });
+  storage.change(document => { document.sessions[session.id].usage = { seconds: 30, responses: { backend: { usd: 0.001, complete: true,
+    tokens: { input: 100, cached: 10, cacheWrite: 20, output: 200 }, responseId: "response_fixture" } } }; });
+  storage.settle(session.id, 0.3);
+  expect(storage.usageFor(session.id)).toMatchObject({ callUsd: 0.3, callFinal: true, callIncomplete: false });
+  now += 40_000;
+  admission.emit(session.id, { type: "session.closed", reason: "operator" });
+  admission.retire(session.id);
+  // Settings read no transcript bytes, including when the journal is damaged.
+  const transcriptFile = path.join(root, "state", "voice-companion", "transcripts", `${session.id}.jsonl`);
+  const transcriptBytes = fs.readFileSync(transcriptFile);
+  fs.writeFileSync(transcriptFile, "damaged transcript");
+  expect(storage.settings().lastSession).toEqual({ usd: 0.3, seconds: 30, endedAt: now, incomplete: false });
+  fs.writeFileSync(transcriptFile, transcriptBytes);
+  const incomplete = admission.create({ project: "usage", locale: "en" });
+  storage.reserve(incomplete.id, 0.5);
+  storage.settle(incomplete.id, null);
+  expect(storage.usageFor(incomplete.id)).toMatchObject({ callUsd: 0.5, callFinal: false, callIncomplete: true, monthUsd: 0.8 });
+  now = Date.parse("2026-11-01T00:00:00Z");
+  expect(storage.usageFor(session.id)).toMatchObject({ callUsd: 0.3, month: "2026-11", monthUsd: 0 });
+});
+
+test("stored session authority and backend token details reject malformed data", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const storage = new CompanionStorage();
+  const { CompanionAdmission } = await import("./admission");
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unused"); } });
+  const session = admission.create({ project: "valid", locale: "en", startedBy: { memberId: "m_fixture" } });
+  const valid = storage.read();
+  const file = path.join(root, "state", "voice-companion.json");
+  for (const patch of [{ startedBy: { memberId: "m_fixture", cookie: "forbidden" } }, { startedBy: { operator: false } },
+    { currentProject: 0 }, { reportWatermarks: { valid: -1 } }, { spokenReports: [1] },
+    { usage: { seconds: 0, responses: { r: { complete: true, usd: 0, tokens: { input: 1, cached: 1, cacheWrite: 1, output: 0 } } } } }]) {
+    const document = structuredClone(valid);
+    Object.assign(document.sessions[session.id], patch);
+    fs.writeFileSync(file, JSON.stringify(document));
+    expect(() => storage.read()).toThrow("COMPANION_STATE_UNAVAILABLE");
+  }
+  fs.writeFileSync(file, JSON.stringify(valid));
+  expect(storage.read().sessions[session.id].startedBy).toEqual({ memberId: "m_fixture" });
+});

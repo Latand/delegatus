@@ -321,6 +321,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
         return mapping?.kind === "row" ? { ...mapping, label: t("headerMenu.mapping") } : null;
       case "dictation":
         return dictation ?? null;
+      case "voice":
+        return row("voice-companion", AudioLines, t("voiceCompanion.settings.label"), () => { close(); openVoiceCompanionSettings(); });
       case "linked":
         return row("linked-settings", Link2, t("links.title"), () => { close(); openLinkedSettings(); });
       case "relay":

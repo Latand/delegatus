@@ -8,22 +8,353 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-10
+
+### Added
+- **Memory on a message shows what it added.** When shared memory adds
+  memories to a message you sent, a chip under the message reads
+  **Memory · 3**, with the count. A click, a tap or Enter opens it to the
+  titles, each in full on its own row, and a title opens its memory file in
+  the document preview. When memory looked and found nothing that fits, a
+  muted line reads **Memory: nothing relevant**; an ordinary turn shows
+  nothing. The chip appears once the delivery is confirmed and moves only
+  what is below your message. It works in Claude, Codex and orchestrator
+  conversations, and on a phone it is a 44 px target ([#2556]).
+- **Pinch to zoom in the image preview on a phone.** In the file preview and
+  in the fullscreen viewer, two fingers zoom about the point between them,
+  one finger pans a zoomed picture and a double tap goes between fit and
+  zoomed, while the page itself stays still. At fit, the fullscreen viewer
+  steps to the next or previous picture with a sideways swipe and closes
+  with a drag up or down ([#2553]).
+- **The orchestrator offers a bug report when a Delegatus tool fails.** It
+  asks in its chat, with suggested replies, whether to prepare a report. An
+  `issue-reporter` agent gathers the evidence, looks for a duplicate among
+  the open issues, writes the report, runs the privacy hint tool and makes
+  its own privacy judgment of the whole text. The chat shows the exact title
+  and body beside that judgment and a short list of the hints that remain. A
+  hint can be a false alarm and never blocks a preview. You decide last, and
+  `issue_report` files the report only with your approval of that exact text
+  ([#2530]).
+- **Prototype review on a task.** An agent can publish screens for you to
+  judge as a review on a task: up to nine numbered variants, each with a name
+  and a short description. The card's foot gets a **Prototype** button that
+  marks a round you have not opened, one you opened and not decided, and a
+  decision with the numbers you chose. Above the orchestrator's composer,
+  "Prototype ready" names the review and jumps to it, and a waiting review
+  counts in **Needs you**. The review shows one picture at a time with a strip
+  of thumbnails, an original beside its change or under a slider, and a video
+  in place; ← and → step through the pictures and 1 to 9 toggle a variant.
+  Choose one variant or several, add a comment, typed or dictated, and save.
+  The choice goes to the project's orchestrator once, as your own message,
+  and survives a reload; a send that failed keeps the decision and offers a
+  retry. Earlier rounds open from the review's header. The pictures are
+  copied into the state directory and nothing is uploaded. Copies for tasks
+  finished more than 30 days ago are retired; the variants and decisions
+  stay, and the review says on which date the pictures went, as "5 Oct 2026".
+  Agents publish with `publish_prototype_review` and read your choice with
+  `read_prototype_review`, and design and UI stages are told to use them
+  ([#2544], [#2589]).
+- **The orchestrator's actions show on the board as wires.** When the
+  orchestrator starts a pipeline, launches a stage of a pipeline it owns,
+  creates a task or moves one, a wire runs from its seat along the top of the
+  board and down beside the card's column into the card, and a pulse rings
+  the card. The wire holds for a minute, then fades; another action on the
+  same card restarts its minute. More than six actions in one board update
+  draw nothing, and cards scrolled out of view are counted at the column's
+  edge. On a phone a line down the left margin joins the seat to the cards of
+  the open tab. At rest the board draws nothing, and under reduced motion a
+  wire appears and goes without animation. A task now records who last
+  changed its status, so only the orchestrator's own actions draw a wire.
+  A wire takes the route with the fewest bends, then the shortest, in every
+  layout of the board. Hovering a wire thickens it and shows its task's
+  title; a click, Enter or Space scrolls to the card, focuses it and flashes
+  it, and Tab reaches each wire. On a phone a tap does the same. While you
+  scroll, the card's end of the wire moves with the card in the same frame
+  in browsers that support scroll timelines ([#2565], [#2601], [#2683]).
+- **A visual critic role.** **Visual critic** judges only the rendered
+  screens of a change. It renders the frames itself at desktop and phone
+  sizes, in English and Ukrainian, light and dark, and reports each ugly spot
+  and each piece of information you do not need, naming its frames. It is
+  read-only, starts no other agents, runs on Claude Opus at high effort by
+  default and can be changed in **Roles: engine and model** like any other
+  role. It can be a pipeline stage or started with `spawn_agent`, and the
+  orchestrator's interface lanes now end with it ([#2578]).
+- **The external relay knows who is asking.** A relay request can carry who
+  asked, with their rights in the chat, a short memory of the chat and an
+  index of the service's own tools; such requests used to be declined as
+  invalid. The answering agent reads them as data, and when one of the
+  service's tools fits the question better, it hands the question back to
+  the service. Every answer is kept, read-only, for 30 days. The member
+  limit counts runs per person and chat; chat admins and owners are exempt
+  ([#2562]).
+- **Agents learn from earlier stages.** When a pipeline stage reports, its
+  agent is asked for one to three short rules: a kind of mistake and how to
+  avoid it, with a one-line reason, meant for its role in this project, for
+  every role in the project or for every project on this machine. The next
+  agent it applies to starts with them in a "Learned rules" block under its
+  brief. Review and verification stages stay clean: they get no rules and
+  leave none. **Learned rules** on the board's ⋯ (among the project rules on
+  a phone) opens a window with the three groups side by side. It says what a
+  new agent of the shown role starts with, shows a rule's reason on hover or
+  a tap, and removes a rule with ×, with Undo. A line under a stage's report
+  says which rules it left. A rule that repeats another word for word merges
+  into it, and each group keeps at most 10 000 characters by archiving its
+  oldest rule. Rule text stays on this machine: it is held back from what a
+  stage passes on, from linked boards and from bridge reports, and a
+  pipeline's publication checks for it. `LLV_ROLE_MEMORY=off` turns the
+  feature off ([#2609]).
+- **The orchestrator can hand over to a fresh one at a context threshold.**
+  The seat tick settings have an **Auto-rotation** section with a
+  percentage ("Rotate when context reaches, %"), off by default. Once the
+  orchestrator's context reaches it, a fresh orchestrator takes over with a
+  handoff at the next idle moment, after the running turn has ended. The
+  board shows a card: "Orchestrator replaced", or "Automatic rotation
+  failed" with the time of the next try while the current one keeps
+  working. The rotation advice in the seat's header now reads the context
+  as it is after a compaction, with the same window size the sidebar uses;
+  a large transcript or many compactions no longer recommend a rotation by
+  themselves ([#2645], [#2667]).
+- **Voice Delegatus, a character you talk to on the desktop.** **Voice
+  Delegatus** in Settings shows a floating companion that you talk to by
+  voice. It answers about the board itself: tasks, pipelines with their
+  roles and verdicts, and a prototype review with its pictures. It sends
+  work to the project's orchestrator as soon as you ask, and asks you first
+  only when the request is critical or it is unsure what you meant. The
+  orchestrator's new reports are spoken once and stay in the call's
+  transcript as cards, also after you hang up. A call carries on when you
+  switch projects and works on the project in view or the one you name. It
+  needs your OpenAI API key, kept in a file only your account can read, and
+  has a monthly spend cap; the cost of the call and of the month show in the
+  transcript's header and in the phone's settings, marked as an estimate
+  when OpenAI did not confirm the final usage. The companion skips cards
+  scrolled out of view when it measures the page, so a full board stays
+  responsive while it is on ([#2642], [#2681], [#2672], [#2673]).
+- **A prototype review can ask questions first.** When a request leaves
+  important choices open, an agent can publish a short questionnaire of
+  three to seven questions in the prototype review, with or without
+  pictures. You answer all of them in one message or skip to the
+  recommended answers, and the orchestrator is told to reach that shared
+  understanding before work starts ([#2658]).
+- **Change a running stage's model, effort, speed or account from its
+  conversation.** In the conversation of a running pipeline stage, the
+  runtime selector in the composer now switches the stage itself: the same
+  attempt continues on your choice, in the same worktree and branch. The
+  selector spins while the switch runs and, when a switch fails, names the
+  model or the account; it says the stage stopped only once the stop is
+  confirmed. On a phone the sheet says the change applies at once. A change
+  of engine stays with the orchestrator ([#2511]).
+- **Orchestrators on linked installs can message each other.** A project's
+  orchestrator can send a message to the orchestrator of a shared project
+  on a linked machine, and activity on a shared project names the seat,
+  role, task and stage behind it. Each message arrives once, through
+  retries, restarts and rotations, and sharing and permissions are checked
+  on both sides. Both installs need this release; update the one that grants
+  access first ([#2660]).
+- **A finding that comes back updates its task.** An agent that reports the
+  same finding again, such as a maintenance check, can tag its task with a
+  finding key. A repeat then raises that task's count and last-seen time,
+  and the card's state line starts with the count and how long ago it was
+  last seen, with the exact time on hover. A
+  repeat after the task is done opens a new task linked to the old one
+  ([#2656]).
+- **The external relay can use the service's own tools.** When a paired
+  relay service offers its tools with a request, the answering agent reads
+  with them for a bounded number of rounds, and for a requester who is
+  allowed to, performs at most one action per round and waits for its
+  confirmation. An action whose outcome is unknown ends the calling, and the
+  answer says so. Three more relay abilities ship switched off: a
+  conversation per chat with `/compact`, the owner's tools, and **Full agent
+  for the owner** on a target, which runs the relay owner's requests as
+  ordinary Delegatus agents with full access to this computer, trusting the
+  relay service to say who the owner is ([#2622], [#2624], [#2639],
+  [#2675], [#2677]).
+
 ### Changed
-- **Production gets CPU priority over tests and pipeline work.** On Linux with
-  a systemd user manager, agents you talk to run with ten times the CPU weight
-  of pipeline stages, flow reviewers, workflow stages, gates, workflow setup,
-  pipeline publication and release builds. That work runs in its own slice with
-  300% of a CPU per process tree and 75% of the machine for all of it together,
-  whatever the memory mode, and hosts picked up again after a restart or moved
-  to another account keep it. A new pipeline or workflow stage, workflow setup,
-  publication install, release build or gate waits while CPU pressure is high
-  and says so in its detail line or log; your messages never wait. Where this
-  placement should work and cannot, including a slice where the kernel applies
-  no CPU controls, that work stops with the reason
-  (`DELEGATUS_AGENT_CPU=off` opts out). `node bin/install-cpu-placement.mjs`
-  writes the systemd files that give the service itself the same priority; they
-  apply after a reload and a restart you choose. Both gate scripts now share
-  one set of slots, and the merger runs its gates through `scripts/gate-slot.sh`.
+- **The left sidebar is one tidy panel with a compact system block.** Every
+  project name, section label and line of the system block starts on one
+  left edge. A project row is one line: the name, the count waiting on you,
+  the count working and a short age such as `11m`; the conversation count
+  moved to the row's tooltip. Sections read "Pinned 2", "Projects 4" and
+  "Archive 2", with the archive folding under the list. The list takes the
+  height the old footer used: about 649 px of a 900 px window, where it had
+  336. The system block has one line per reading: free RAM and swap, each
+  account with its engine and what is left of its tightest window, Copilot
+  and Telegram, and every bar draws what is left. **All windows** in the
+  block's header adds each account's plan and every limit window with its
+  reset time, and the choice is remembered. In the compact view every Claude
+  and Codex account has its own line with its own reading, and a click on an
+  account that is not active opens the accounts panel on it. The phone keeps
+  its own project sheet ([#2554], [#2653]).
+- **Work for another project goes from seat to seat.** An orchestrator's
+  `create_task`, `create_pipeline` or `spawn_agent` aimed at another project
+  is refused before anything starts, with a pointer to
+  `send_message_to_orchestrator`, so each project's orchestrator keeps its
+  own board. When you asked for the work directly, the seat quotes your
+  request in `crossProjectRequest` and the call goes through ([#2530]).
+- **A merge batch lands its healthy pull requests.** The merger compares the
+  batch's tests with main by name, lets through the failures main already
+  has, confirms each new failure and finds the pull request behind it by
+  taking candidates out one at a time. The healthy pull requests land in
+  their order; the one that broke a test keeps its reviewed head, and the
+  report names the failing tests ([#2549]).
+- **The header menu is short, and Settings is a page of it.** The ⋯ at the
+  top of the sidebar opened 13 rows over 437 px; it now opens at 215 px.
+  Three icon cells lead it: **Activity**, **Team** and **Updates**. Below
+  them stand **Open on phone** with its QR code, **Settings**, **Help and
+  learning** (the setup guide and the interface walk) and, for a signed-in
+  member, **Sign out**. Settings opens as a page with a back row: language,
+  notifications, shared memory, the OpenRouter key, **Roles: engine and
+  model**, dictation, linked installs, **Chat relay** and **Install ping**.
+  The Settings row and the shared memory row say memory's state in a word:
+  working with this month's count, off, key needed, or capped until the 1st.
+  Memory's page has the project's switch, the reason memory is not added
+  with its action beside it (**Enter the key** opens the field right there),
+  and the month's figures; the OpenRouter key has a page of its own. The
+  **Install ping** dialog now holds only the ping. On a phone the board menu
+  holds the same entries without scrolling, with the project's switches and
+  Archive on a **Project rules** page. Every entry of the old menu is still
+  there ([#2579]).
+- **A task card's ⋯ is a compact menu.** It took the whole window (456 by
+  884 px in Ukrainian, scrolling, with 30 controls) and now opens at 300 by
+  280 px: the four columns in one row with the current one marked; four icon
+  actions to rename, describe, attach a pull request or issue, and hide,
+  with a line saying what hiding leaves running ("Hide: 2 agents keep
+  working") or why the card cannot be hidden; the three priorities in a row,
+  with "Top of the Inbox" and "Bottom of the Inbox" under High and Low; then
+  **Appearance** and **More**, which open in place, and **Pipeline actions**,
+  which opens as a page. Moving, hiding, renaming and setting a priority are
+  still two presses, and Enter, E, H and I work as before. A column's ⋯, a
+  conversation's ⋯ and the board's ⋯ follow the same layout; the board's ⋯
+  keeps **Merging and syncing** and **Orchestrator** as pages and opens at
+  192 px, down from 491. On a phone, the card's long-press sheet shows the
+  other columns as a row of cells, and the task's ⋯ shows its actions as
+  cells. A section always opens under its own row ([#2557]).
+- **Production gets CPU priority over tests and pipeline work.** On Linux
+  with a systemd user manager, agents you talk to run with ten times the CPU
+  weight of pipeline stages, flow reviewers, workflow stages, gates, workflow
+  setup, pipeline publication and release builds. That work runs in its own
+  slice with 300% of a CPU per process tree and 75% of the machine for all of
+  it together, whatever the memory mode, and hosts picked up again after a
+  restart or moved to another account keep it. A new pipeline or workflow
+  stage, workflow setup, publication install, release build or gate waits
+  while CPU pressure is high and says so in its detail line or log; your
+  messages never wait. Where this placement should work and cannot,
+  including a slice where the kernel applies no CPU controls, that work
+  stops with the reason (`DELEGATUS_AGENT_CPU=off` opts out). All of this
+  applies on its own. The service itself, the web server and the runtime
+  host, gets the same priority only once you ask for it:
+  `node bin/install-cpu-placement.mjs` writes three systemd files and prints
+  the reload and restart that apply them, and runs neither, so you pick the
+  moment ([#2574]).
+- **A wait for a free worker slot reads as one.** An orchestrator could mark
+  a task waiting for a worker slot with the resource kind, and the card read
+  "Queued: waiting for resources" while the machine had memory to spare. The
+  task tools now tell agents that a slot wait is `worker` ("Queued: waiting
+  for a free worker"), that `resource` is a shortage of memory or disk named
+  in the note, and that `limit` is an account usage limit. The hold editor's
+  options read "Free worker slot" and "Machine resources (memory, disk)", and
+  a resource hold shows its note on the card ([#2575]).
+- **The interface stays quick on a busy machine.** Under load, the runtime
+  summary and snapshot the interface reads took more than a second each,
+  because other requests copied the whole task list and agent registry every
+  time. Those readers now share one read-only copy, and both answer in about
+  30 ms under the same load. The snapshot is handed on in the bytes the
+  runtime sent, with no second decoding and encoding. A request to the
+  runtime now waits 10 s before it gives up, and 30 s for a snapshot; it was
+  3 s and 10 s ([#2582], [#2590]).
+
+- **An agent opens in one window, with the open agents listed on its left.**
+  A stage chip, a graph node, a conversation row, a past attempt or a link
+  no longer expands the agent inside its card: it opens in one large window
+  over the board, and the board keeps its layout. The open agents are listed
+  on the window's left; a row brings its agent into the reader, ‹ › and
+  Alt+J / Alt+K step through them, × on a row closes that agent and **Close
+  all** closes every one. Esc or the corner × closes the window and keeps
+  the agents behind a pill in the header, which brings it back. The
+  orchestrator's seat has an expand button again, before Fold, that opens it
+  in the same window. On a phone, a swipe that lands on another task's agent
+  names that task for three seconds ([#2612], [#2659]).
+- **New agent: the form is the composer.** **+ Agent** opens a conversation
+  composer with the cursor already in the field. Type or dictate, add
+  images, pick the engine, model and reasoning in the runtime pill (and the
+  account, if you want one), then press Send or Enter. The pane becomes the
+  conversation, and your first message stays where it was ([#2559]).
+- **Every "working" number counts the same thing.** The sidebar's project
+  row, the Overview, the board header, each column, a card and the phone now
+  count agents whose turn is running right now. Subagents, background
+  commands, pipelines and workflows are no longer added in, so the sidebar
+  and the board no longer show different numbers for one project. The
+  Overview's top line reads "N agents working in M projects", and its "need
+  you" count matches the sidebar's ([#2604]).
+- **The seat tick chip is a switch.** The tick chip in the orchestrator's
+  header, and the seat row on a phone, became a switch with four stops: off,
+  every 4 hours, every hour (the default) and every 10 minutes. Drag or flick
+  it to change the interval; a click or a tap without moving opens the
+  settings as before ([#2602]).
+- **«Needs you» holds only what waits on you.** Results that a rule or the
+  orchestrator settled go to the report log as completed lines, with links
+  to the task and the pull request. A message an agent sent that is still
+  being delivered no longer asks for you, and routine upkeep, such as a
+  card's age or a task with no one on it, becomes a report; a concrete
+  question that blocks work still asks. A prototype review has **Hide**
+  beside its choice, which takes the round off both waiting lists at once,
+  keeps its history and can be undone. The orchestrator's board
+  maintenance can read the project's «Needs you» list and clear rows that
+  no longer ask, with an optional reason and undo ([#2668], [#2638]).
+- **A review budget is fixed when the pipeline is created.** A review gate
+  with N rounds runs N reviews, fixes the findings of the last one and goes
+  on to merge under the existing merge setting and required checks, with no
+  extra re-check and no follow-up task. A request for more rounds, or for a
+  higher budget on a gate already passed, is refused with the reason
+  ([#2668]).
+- **Finished lanes free their disk, and the sidebar warns before it fills.**
+  Finished design, research, review, closed and abandoned lanes are cleaned
+  up four days after they settle, when every commit is safe on the remote
+  or nothing was committed; unpublished commits and kept evidence stay, with
+  the reason. When a volume runs low, the system block shows a "Disk" line
+  for it in the warning or danger colour and names what takes the most
+  space, such as "Most space: Worktrees 187 GiB, Temp 15 GiB". While a
+  volume a new lane needs is critically low, the lane waits with that
+  reason and tries again every minute; running agents carry on ([#2571]).
+- **Worktree sessions regroup under their repository by themselves.** A
+  sibling checkout of a repository, made with `git worktree add
+  ../repo-lane-3` for example, is remembered while it exists, so its
+  sessions stay in the repository's project after the checkout is deleted.
+  Older sessions that had split into a project of their own are folded back
+  at startup and after a full rescan, when a recorded mapping, the
+  transcript's own repository hint or a branch confirms it; a matching name
+  alone never folds anything. There is nothing to press, and
+  `backfill_worktree_projects` stays as a read-only preview ([#2670],
+  [#2676]).
+- **Prototype review on a phone fills the screen.** The review takes the
+  whole screen, a frame takes its full width at its own size and scrolls,
+  and the footer with your choice stays pinned under it. A tap opens the
+  frame full screen, where two fingers zoom and a sideways swipe goes to the
+  next frame of the same variant ([#2607]).
+- **The relay card is a compact settings card.** A relay shows its status
+  on one line, with Pause, Resume and Disconnect behind its ⋯. Each target
+  is one folded row with its engine, model, running count, member limit and
+  effort, and unfolds in place to the same engine, model and effort controls
+  as the new-agent form. Relay chats appear in the conversation list
+  ([#2661]).
+- **Orchestrator tools take a project's display name.** A project can be
+  named by its key, an earlier key or the name the sidebar shows. An
+  unknown name is refused plainly before anything starts, and an ambiguous
+  one lists the candidates ([#2636]).
+- **A merged lane wakes its orchestrator.** When a lane finished before its
+  pull request merged, the merge later wakes the project's orchestrator
+  with the lane, the pull request and the merged commit, also after a
+  rotation; several merges share one wake ([#2654]).
+- **Helpers of a stage join its task.** An agent that a pipeline stage
+  starts with `spawn_agent` joins the stage's task, and no placeholder card
+  appears for it ([#2655]).
+- **Launching a deployer needs the deploy confirmation.** `spawn_agent`
+  takes `confirm: "deploy"` for a deployer, and only the project's
+  orchestrator or your own session may launch one ([#2644]).
+- **The landing page plays a board demo.** The hero is a board that runs by
+  itself: a project gets its orchestrator, a request becomes three tasks,
+  two of them go through build, review and verify, and one merges. A pause
+  button stops it, and a phone gets its own layout ([#2665]).
 
 ### Fixed
 - **Work cut by a Delegatus restart continues by itself.** A deploy, a
@@ -32,11 +363,12 @@ guarantees for the 1.x series.
   verdict" until someone pressed retry. The release and the booting
   Delegatus now record every turn they cut. A stage cut that way is retried
   once in the same worktree, keeping uncommitted work, and its first message
-  says the previous attempt was cut and quotes what it last said; when the
-  next restart cuts that retry too, the stage parks for a decision. A stage
-  whose turn a provider failure had already ended keeps its provider recovery
-  and spends no restart retry. A spawned
-  agent whose turn was cut, including one waiting on a background command the
+  says the previous attempt was cut and quotes what it last said. Each later
+  restart that cuts a replacement gets its own fresh attempt; a replacement
+  that is interrupted again within the same start, with no restart behind
+  it, parks the stage for a decision. A stage whose turn a provider failure
+  had already ended keeps its provider recovery and spends no restart retry.
+  A spawned agent whose turn was cut, including one waiting on a background command the
   restart killed, gets one message saying so, so it re-checks what it was
   waiting for. The checkout deploy verdict lists the conversations its
   restart interrupted, with the pipeline stage when there is one; when those
@@ -51,27 +383,226 @@ guarantees for the 1.x series.
   it over. A background command the agent was already told about is never
   reported a second time, a turn that finishes by itself while Delegatus is
   still taking the conversation over gets no message, and a damaged record
-  of background work holds the conversation until it can be read.
+  of background work holds the conversation until it can be read. A
+  continuation that a second abort cut is continued again, Codex replaying its settings after a restart no longer hides the
+  cut, and an automatic notice that arrives after the restart, such as a
+  finished review, no longer cancels the recovery as if you had stopped it
+  ([#2570], [#2666], [#2679]).
 - **Telegram never stops an agent from starting, and a connection that can be
   restored is restored by the start itself.** A conversation that holds the
   Telegram tool and whose agent was not running used to refuse every message
-  whenever the Telegram connection did not read connected, and a new agent that
-  asked for the tool was refused outright. Now the start looks at why. If you are signed in and the connection is only down (after a restart
-  or an update, or after one failed check), it reconnects, waiting at most
+  whenever the Telegram connection did not read connected, and a new agent
+  that asked for the tool was refused outright. Now the start looks at why.
+  If you are signed in and the connection is only down (after a restart or
+  an update, or after one failed check), it reconnects, waiting at most
   twenty seconds, and the agent starts with the tool. If Telegram was never
-  connected on this machine, or you signed out, the tool is left out and nothing
-  is asked of you; an agent started there is no longer given the tool on paper.
-  If Telegram needs you (it ended your session, or the reconnect failed), the
-  agent starts without the tool, is told so in one line, and the orchestrator
-  seat shows one line with what to do. The tool returns on the next start after
-  you reconnect. Access you withdrew still refuses the start. After a restart
-  the connection now comes back on its own even with daily reports switched
-  off. After an update, the new version takes over the Telegram process the
-  previous version left running; it used to refuse that process on every check,
-  so Telegram stayed in an error until the machine was restarted and signing out
-  failed too. A start that arrives while the connection is being checked waits
-  for that check and gets the tool only once it is confirmed. The rotation banner and the "not delivered" reasons on this path read in
-  the interface language, one line per cause, each with what to do.
+  connected on this machine, or you signed out, the tool is left out and
+  nothing is asked of you; an agent started there is no longer given the
+  tool on paper. If Telegram needs you (it ended your session, or the
+  reconnect failed), the agent starts without the tool, is told so in one
+  line, and the orchestrator seat shows one line with what to do. The tool
+  returns on the next start after you reconnect. Access you withdrew still
+  refuses the start. After a restart the connection now comes back on its
+  own even with daily reports switched off. After an update, the new version
+  takes over the Telegram process the previous version left running; it used
+  to refuse that process on every check, so Telegram stayed in an error until
+  the machine was restarted and signing out failed too. A start that arrives
+  while the connection is being checked waits for that check and gets the
+  tool only once it is confirmed. The rotation banner and the "not
+  delivered" reasons on this path read in the interface language, one line
+  per cause, each with what to do ([#2517]).
+- **The delivery check card can be discarded, and says when the check is
+  over.** **Discard** on a send whose arrival was never verified answered
+  "delivery discard could not be recorded durably" for an older failure, or
+  for one whose reservation had been compacted. It now removes the card, and
+  the discard holds through a restart and a late acknowledgement. Once the
+  delivery check has ended, the card reads "Delivery unconfirmed"; it used
+  to read "Checking delivery…" indefinitely. The card is compact: the status
+  is said once, the message takes two lines with **Show all**, Retry and
+  Discard are the size of the receipt chips (44 px on a phone), and a relay
+  from another orchestrator reads "Agent relay · project" with its full
+  wording on hover. During an account handover, Discard is disabled and says
+  when it becomes available ([#2545]).
+- **A right click on a zoomed picture leaves it in place.** In the file
+  preview and the fullscreen viewer, a right click, a middle click or a
+  click with a modifier captured the pointer, so after **Copy image** the
+  picture followed the mouse. Such a click now moves nothing, and the
+  browser's menu opens on the picture itself. A pan ends on release, on a
+  lost capture and when the window loses focus. The wheel and a trackpad
+  pinch zoom about the cursor, and zooming out stops at fit ([#2553]).
+- **Resuming a large Codex conversation is quick again.** The step that trims
+  an oversized replay searched to the end of a line once for every string in
+  it, which cost tens of seconds of CPU on each resume of a large thread. It
+  now reads each frame once ([#2569]).
+- **Shared memory adds memories to your messages again.** The search left
+  out every memory of the engine receiving the message, so a Claude
+  orchestrator's turns found almost nothing to choose from and nothing was
+  added. It now searches the topics of both engines, leaving out only what
+  the receiving agent already loads, and includes memories recorded under an
+  earlier name of the same project when Delegatus can prove the folder is
+  the same. A brief from the new-agent form counts as your message; a launch
+  by another agent, a pipeline or board maintenance does not. The memory
+  status line explains your last message: no candidates, no match, the cap,
+  a timeout or a delivery not yet confirmed ([#2540]).
+- **A message sent while its conversation switches accounts is accepted at
+  once and says why it waits.** It used to sit with no reason shown for up
+  to two minutes and then read "Delivery couldn't be confirmed", although it
+  arrived once. It is now recorded straight away, and the composer reads
+  "Switching accounts — your message goes out right after", or, while a turn
+  is still running, that the switch waits for the turn to end. The message
+  goes out once to whichever account holds the conversation by then, and an
+  arrival after the composer gave up on it clears that line. A switch that
+  fails says the message waits for a retry or a cancel ([#2573]).
+- **A board column holds still while you scroll it.** Near the end of a long
+  column, cards above the window shrank once they left view and the column
+  jumped back on its own; a card above the window that grew on a refresh, or
+  a task that arrived there, pushed the cards you were reading. Cards now
+  keep their height out of view, a column keeps its place when something
+  above it changes size, and a column that widens under the mouse keeps the
+  first card you see where it was ([#2563]).
+- **A control's hint closes when you click the control.** After a click on
+  **Compact** in a conversation's control strip, its hint stayed on screen,
+  and it was still there after a switch to another orchestrator or project.
+  A hint now closes on its click, when its control becomes disabled, on a
+  press or a key elsewhere, and when the view moves to another conversation.
+  Focus from a mouse click opens no hint; keyboard focus still does. This
+  holds for every hint in the product, Send with an empty field included
+  ([#2561]).
+- **A finished stage leaves no "not delivered" chips and stops streaming
+  within seconds.** After a pipeline stage passed and its Codex agent wrote a
+  long final answer, the agent's card kept streaming text for minutes and
+  collected red "not delivered: idle-retirement-deferred" chips. The answer
+  was passed on a few characters at a time; what is already there now goes in
+  one piece, so a 61 000-character answer arrives in a handful of writes and
+  the card settles when the agent does. Retiring an idle agent never shows a
+  chip; a message of yours that failed and a stop you asked for still do
+  ([#2567]).
+- **A follow-up pipeline on an existing pull request branch finishes its
+  stage.** A pipeline started on the branch of a pull request opened by an
+  earlier, finished pipeline ran its stage and pushed, then stopped with
+  "another pipeline owns the stage branch" and waited for a decision. A
+  completed or closed pipeline with no active delivery no longer holds its
+  branch; a running or parked one still does ([#2581]).
+
+- **A stage that hits an account limit continues on its own.** When a
+  stage's provider limit runs out, Delegatus first tries every other allowed
+  account of the same engine. When none has room, the stage waits for the
+  reset the provider named, or 30 minutes when it named none, and then
+  continues in its worktree, also after a restart. A stage pinned to one
+  account keeps that account ([#2537]).
+- **An orchestrator whose login expired is noticed.** When the
+  orchestrator's turns fail on authentication, the seat tick tells you once
+  and moves the orchestrator to another allowed account with room, or
+  pauses its wakes when there is none. It used to keep waking a seat that
+  could not answer, once for nine hours ([#2617]).
+- **The rotated orchestrator stays on screen.** After a rotation started
+  from a phone, the view could jump back to the old orchestrator once the
+  new one had a transcript, and reopening the new one could show its
+  mandate as a message from you ([#2674]).
+- **Create works on a vacated seat from a phone and on every retry.** When
+  an orchestrator's conversation was gone, Create on a phone, and **Try
+  again** on the desktop after a failed attempt, kept failing because the
+  request did not say it replaced the old seat ([#2627]).
+- **An idle orchestrator hears about finished work on time.** A child that
+  finishes is reported at the next check even right after another wake,
+  and running work keeps its reminders at the interval you set. A deploy
+  the orchestrator requested keeps its attribution when the reply to the
+  request was lost ([#2632]).
+- **Sending right after an account switch no longer hangs.** A message sent
+  just after you picked another account could wait ten minutes and fail as
+  not delivered; it now goes out on the new account once the switch ends. A
+  switch also finishes 10–19 s sooner, the agent stays on its card while it
+  runs, and "not delivered" clears as soon as the message arrives
+  ([#2597]).
+- **A message that waits says why.** A message held between acceptance and
+  its agent shows the reason on its row and its receipt chip within about
+  8 s, with the attempt and the next check. One slow conversation no longer
+  holds up the messages of the others, and a stalled send is recovered
+  without being sent twice ([#2572]).
+- **Re-check on the composer's delivery notice works.** For a message
+  delivered while the tab was away, **Re-check** did nothing. It now reads
+  the message's own record, shows "Checking delivery…" and then the time it
+  checked, and the notice is one line that goes once nothing is owed
+  ([#2611]).
+- **Pasting a long multilingual text no longer stalls the browser.** The
+  composer turns off the browser's spellcheck, where Chromium stalled on
+  such a paste ([#2615]).
+- **A stage whose agent is alive is never parked as lost.** When a stage's
+  first message took long to arrive under load, the stage could be parked
+  although its agent was working; its late report is now accepted
+  ([#2606]).
+- **A stage whose commit a hook refuses fixes its own files once.** When the
+  repository's pre-commit hook refuses a passed stage's commit (whitespace,
+  privacy or lint), the stage's agent gets the hook's output and one chance
+  to repair its files before the lane parks ([#2599]).
+- **A decided prototype round retires the older ones.** Once you decide a
+  later round, earlier undecided rounds of the same task no longer wait on
+  you; they read "superseded by round N" and can still be decided by hand
+  ([#2608]).
+- **The Updates dialog shows its first state at once.** It opens with the
+  installation, both revisions and both processes; the work a restart would
+  land on follows when it has been read, and unknown work never shows as 0.
+  A failed read says why and keeps retrying, and the "N commits behind"
+  badge goes once both processes serve the new version ([#2598]).
+- **Updating finishes cleanly.** A release step that had finished is no
+  longer reported as interrupted while its output was still being read
+  ([#2664]), and the release build no longer runs out of memory in its
+  TypeScript check ([#2646]).
+- **A deploy or restart accepts a healthy install with a large board.** The
+  health check refused an install whose task list was larger than 4 MiB; it
+  now asks for a bounded answer ([#2678]).
+- **`deployment_status` lists a checkout install's deployments again**, a
+  page at a time ([#2600]).
+- **Delegatus answers during a slow startup.** While the runtime host opens
+  a large journal at startup, the web address keeps answering, and later
+  starts skip the one-time migration ([#2462]).
+- **The terminal starts reliably on Windows.** It could stall after both
+  services were healthy when Windows briefly locked the launcher's record
+  ([#2680]).
+- **Dictation setup installs versions that work.** A fresh install of local
+  dictation could pick a PyAV release that failed every transcription.
+  `scripts/setup-whisper.sh` now installs a pinned set of versions and
+  transcribes one second of audio before it reports ready ([#2651]).
+
+### Security
+- Three dependencies were updated for published security advisories:
+  `@modelcontextprotocol/sdk` to 1.31.0 (GHSA-6qxp-vccf-f47h), `sharp` to
+  0.35.5 (GHSA-wq5f-xc86-pv6w) and Next.js to 16.3.8
+  (GHSA-cjq9-62q9-8jv4). Delegatus's own fix to Next.js's client manifest
+  carries over to 16.3.8 unchanged.
+
+### Maintainer notes
+- Main and release-tag image builds run in a publication slot of their own,
+  so they no longer queue behind pull request builds; at most one pull
+  request build and one publication build run at once ([#2560]).
+- The oversized replay envelope test in `codexAppServerHost.test.ts` is back
+  on the default timeout, which fails it if the slow scan returns ([#2569]).
+- Both gate scripts, `scripts/gate-slot.sh` and the installed
+  `/var/tmp/llv-gate`, count against one set of machine slots, and the
+  merger runs its gates through `scripts/gate-slot.sh` ([#2574]).
+- Every deadline a web-side caller puts on a runtime request comes from
+  `src/lib/runtime/deadlines.ts`, and `deadlines.test.ts` fails on a literal
+  deadline anywhere else ([#2590]).
+- Test subprocesses are owned from the moment they spawn, and Linux test
+  runners run in private systemd services that contain every descendant
+  through timeout and cancellation ([#2568]).
+- Pre-push runs the native Codex tests that do not depend on the Codex
+  version once and the engine tests once per supported version, and every
+  step ends by the publication's deadline ([#2605]).
+- In the kanban and conversation browser drivers, a case that times out
+  fails alone and closes its own browsers ([#2592]).
+- The merger lands a batch when only main is red, skips detectors from pull
+  requests outside the batch, defers only the pull request whose reviewed
+  test went stale, and compares merge resolutions with main file by file
+  ([#2587], [#2610], [#2623]).
+- Release builds type-check with `tsconfig.production.json` and give the
+  TypeScript check a 6 GiB heap floor ([#2646]).
+- New tests pin authenticated web restarts, an operator-parked lane staying
+  quiet, and bound-project admission without runner timing ([#2652],
+  [#2635], [#2669]).
+- An investigation of the Viewer's memory use found registry rows that a
+  full reload keeps after they were deleted elsewhere; the reported
+  footprint stays unattributed ([#2529]).
 
 ## [1.10.0] — 2026-10-06
 
@@ -175,16 +706,18 @@ guarantees for the 1.x series.
   while the transcript is missing from the current scan. A parked stage
   shows its report summary above retry and skip, and a phone stage row
   lists its earlier attempts ([#2442]).
-- **Update replaces the whole installation.** Checkout and packaged updates
-  replace the resident launcher, Viewer and runtime host together, verify their
-  serving identities, and restore the previous release on failure. Recovery
-  Viewers re-adopt their launcher; manual and older installs receive the exact
-  prerequisite action. Checkout `deploy_exact_sha` uses the same durable apply
-  and settlement path ([#2495]).
-- **Busy installations drain admitted work before an automatic update.** New
-  autonomous work waits while the original cohort finishes. The hold survives
-  recovery, both restart roles and rollback. After six hours the dialog names
-  the blockers and offers **Deploy now** or **Keep waiting** ([#2430]).
+- **Update in the dialog replaces the whole install.** **Update** now
+  restarts every part of Delegatus on the new release, for a git checkout
+  and for a package install alike, and brings the previous release back if
+  the new one fails to start. An install started by hand, or by an older
+  version, gets the one command or restart it needs shown in the dialog,
+  and after that it updates from the dialog again. An agent's
+  `deploy_exact_sha` updates a checkout the same way ([#2495]).
+- **A busy install lets running work finish before an automatic update.**
+  New autonomous work waits while the agents and stages already running
+  finish, and that wait carries on across a restart or a rollback. After six
+  hours the dialog names what is still running and offers **Deploy now** or
+  **Keep waiting** ([#2430]).
 - **Step between your own messages.** A row between the conversation and
   the composer has **Previous mine**, **Next mine** and a count such as
   "Your message 3 of 12"; Alt+Up and Alt+Down do the same in the focused
@@ -340,7 +873,7 @@ guarantees for the 1.x series.
   setting when the browser asks for permission again ([#2505], [#2527]).
 - **Pipelines recover on their own in more cases.** A stage whose report
   was recorded, a usage limit, a transient sign-in failure, a silent host
-  death and a Viewer restart no longer park a lane: the stage continues in
+  death and a Delegatus restart no longer park a lane: the stage continues in
   its conversation or relaunches in the same worktree with its uncommitted
   work, once per boot. A stage that keeps working after its turn ended
   keeps its host. A fix stage that finds another issue in its own review
@@ -363,8 +896,8 @@ guarantees for the 1.x series.
 - **Agent hosts start, resume and end cleanly.** Concurrent retries of a
   launch share one delivery, and a kill ends a launch host that was never
   adopted. Finished stage hosts and orphaned tool processes release their
-  memory. A worker resumed after a runtime-host succession gets its
-  recorded access back, a Claude stage in a worktree behind a symlink finds
+  memory. A worker resumed after Delegatus restarts during an update gets
+  its recorded access back, a Claude stage in a worktree behind a symlink finds
   its transcript, and an account switch never starts while the host is
   inside a turn ([#2440], [#2465], [#2476], [#2484], [#2520]).
 - **A Codex agent launched without sub-agents cannot start native ones.**
@@ -379,31 +912,25 @@ guarantees for the 1.x series.
 - **A token-protected install keeps its web interface after an update.**
   The restart probe asked for the page without the access key, got a 401
   and stopped both the new and the previous web process. Both probes now
-  carry the key the Viewer gates on ([#2474]).
-- **A stopped Viewer answers 503.** While the selected Viewer release is
-  down, the runtime host used to close a browser connection without a
-  reply. It now returns a 503 that names the release. Runtime-host start-up
-  with a large journal is quick again, and an agent's send made during a
-  Viewer restart reconnects ([#2433], [#2437], [#2487]).
-- **Legacy launcher upgrades restore the prior serving release.** If an older
-  launcher already published a candidate and switched only the web process,
-  the one-time bootstrap captures rollback from the verified serving host.
-  A failed host or web start restores both processes on that release; an entry
-  that cannot load is refused before restart ([#2495]).
-- **The host deploy command authenticates on team installations.**
-  `scripts/rebuild.sh` uses the existing controller credential for admission
-  and status polling. The client connects only to a validated loopback address,
-  refuses redirects, and keeps credentials out of arguments and output. Receipt
-  replay and deployment exit codes are preserved ([#2495]).
-- **Bun-only MCP startup checks use the shipped launcher modules.** The macOS
-  newcomer fixture and the hermetic MCP fixtures now copy the published `bin`
-  directory, including platform identity and launcher helpers, so new imports
-  are covered automatically ([#2495]).
-- **An automatic update's final check compares admitted work by identity.**
-  Journal writes of a turn that is already running no longer refuse the
-  restart, so **Deploy now** reaches it; a turn or a stage that starts during
-  admission still refuses it. A refused admission keeps the cohort, the
-  operator's decision and the cumulative wait ([#2495]).
+  carry the access key ([#2474]).
+- **The page says when Delegatus is restarting.** While the web interface
+  is down, for example during an update, the browser used to get a
+  dropped connection with no answer. It now gets an error page (HTTP 503)
+  that names the release being started. Delegatus starts quickly again
+  after a long history of agent activity, and a message an agent sends
+  during a restart goes through once it is back ([#2433], [#2437],
+  [#2487]).
+- **Updating from an older version can go back if it fails.** When an
+  older version had already switched only the web interface to a new
+  release, the first update from the dialog now remembers the release that
+  was running before. If either part fails to start, both go back to that
+  release, and a release that cannot load is refused before anything
+  restarts ([#2495]).
+- **Deploy now works while agents are busy.** An agent that was already
+  running when you chose **Deploy now** no longer stops the update just by
+  writing to its log; an agent or a stage that starts at that moment still
+  holds it. When the update is held, it keeps your choice, the list of
+  work it waits for and the time already waited ([#2495]).
 - **An automatic update waits only for turns that are really running.**
   The drain counted turns whose host had died, conversations that were gone
   and ones it could not resolve, 93 on one installation against 3 live
@@ -419,6 +946,8 @@ guarantees for the 1.x series.
 - Two dependencies were updated for published security advisories:
   `proxy-addr` to 2.0.8 (GHSA-jqcg-44mw-7w3h) and `source-map-js` to 1.2.2
   (GHSA-68fv-2mgg-jv7q).
+- The `braces` dependency is patched against its published advisory until
+  an upstream release fixes it ([#2495], [#2496]).
 
 ### Maintainer notes
 - The local hooks now compare with the merge base: touched tests run one
@@ -455,12 +984,20 @@ guarantees for the 1.x series.
   restart no longer reads as a failed deploy. `docs/deploy-checkout.md`
   describes the plan and where the verdicts are kept, and the deployer role
   names the procedure ([#2546]).
-- The installed `braces` dependency carries the runtime mitigation from upstream
-  tree `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST and
-  parent-cycle regressions in the release gates. The locally fixed advisory
-  metadata expires on 2026-10-10; [#2496] tracks removal after an upstream release.
-- Release-pointer reads and update admission retain main's asynchronous Git
-  checks together with durable drain custody.
+- The host deploy command `scripts/rebuild.sh` authenticates on team
+  installations: it uses the existing controller credential for admission
+  and status polling, connects only to a validated loopback address,
+  refuses redirects, and keeps credentials out of arguments and output.
+  Receipt replay and deployment exit codes are preserved ([#2495]).
+- The `braces` patch is the runtime mitigation from upstream tree
+  `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST and
+  parent-cycle regressions in the release gates. Its locally fixed advisory
+  metadata expires on 2026-10-10; [#2496] tracks removal after an upstream
+  release ([#2495]).
+- The macOS newcomer fixture and the hermetic MCP fixtures copy the published
+  `bin` directory, platform identity and launcher helpers included, so the
+  Bun-only MCP startup checks cover new launcher imports on their own
+  ([#2495]).
 
 ## [1.9.0] — 2026-10-01
 
@@ -2169,7 +2706,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/Latand/delegatus/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/Latand/delegatus/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Latand/delegatus/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/Latand/delegatus/compare/v1.7.1...v1.8.0
@@ -2478,3 +3016,98 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2536]: https://github.com/Latand/delegatus/pull/2536
 [#2546]: https://github.com/Latand/delegatus/pull/2546
 [#2550]: https://github.com/Latand/delegatus/pull/2550
+[#2517]: https://github.com/Latand/delegatus/pull/2517
+[#2530]: https://github.com/Latand/delegatus/pull/2530
+[#2545]: https://github.com/Latand/delegatus/pull/2545
+[#2549]: https://github.com/Latand/delegatus/pull/2549
+[#2553]: https://github.com/Latand/delegatus/pull/2553
+[#2554]: https://github.com/Latand/delegatus/pull/2554
+[#2556]: https://github.com/Latand/delegatus/pull/2556
+[#2560]: https://github.com/Latand/delegatus/pull/2560
+[#2569]: https://github.com/Latand/delegatus/pull/2569
+[#2540]: https://github.com/Latand/delegatus/pull/2540
+[#2544]: https://github.com/Latand/delegatus/pull/2544
+[#2557]: https://github.com/Latand/delegatus/pull/2557
+[#2561]: https://github.com/Latand/delegatus/pull/2561
+[#2562]: https://github.com/Latand/delegatus/pull/2562
+[#2563]: https://github.com/Latand/delegatus/pull/2563
+[#2565]: https://github.com/Latand/delegatus/pull/2565
+[#2567]: https://github.com/Latand/delegatus/pull/2567
+[#2573]: https://github.com/Latand/delegatus/pull/2573
+[#2574]: https://github.com/Latand/delegatus/pull/2574
+[#2575]: https://github.com/Latand/delegatus/pull/2575
+[#2578]: https://github.com/Latand/delegatus/pull/2578
+[#2579]: https://github.com/Latand/delegatus/pull/2579
+[#2581]: https://github.com/Latand/delegatus/pull/2581
+[#2582]: https://github.com/Latand/delegatus/pull/2582
+[#2589]: https://github.com/Latand/delegatus/pull/2589
+[#2590]: https://github.com/Latand/delegatus/pull/2590
+[#2462]: https://github.com/Latand/delegatus/pull/2462
+[#2511]: https://github.com/Latand/delegatus/pull/2511
+[#2529]: https://github.com/Latand/delegatus/pull/2529
+[#2537]: https://github.com/Latand/delegatus/pull/2537
+[#2559]: https://github.com/Latand/delegatus/pull/2559
+[#2568]: https://github.com/Latand/delegatus/pull/2568
+[#2570]: https://github.com/Latand/delegatus/pull/2570
+[#2571]: https://github.com/Latand/delegatus/pull/2571
+[#2572]: https://github.com/Latand/delegatus/pull/2572
+[#2587]: https://github.com/Latand/delegatus/pull/2587
+[#2592]: https://github.com/Latand/delegatus/pull/2592
+[#2597]: https://github.com/Latand/delegatus/pull/2597
+[#2598]: https://github.com/Latand/delegatus/pull/2598
+[#2599]: https://github.com/Latand/delegatus/pull/2599
+[#2600]: https://github.com/Latand/delegatus/pull/2600
+[#2601]: https://github.com/Latand/delegatus/pull/2601
+[#2602]: https://github.com/Latand/delegatus/pull/2602
+[#2604]: https://github.com/Latand/delegatus/pull/2604
+[#2605]: https://github.com/Latand/delegatus/pull/2605
+[#2606]: https://github.com/Latand/delegatus/pull/2606
+[#2607]: https://github.com/Latand/delegatus/pull/2607
+[#2608]: https://github.com/Latand/delegatus/pull/2608
+[#2609]: https://github.com/Latand/delegatus/pull/2609
+[#2610]: https://github.com/Latand/delegatus/pull/2610
+[#2611]: https://github.com/Latand/delegatus/pull/2611
+[#2612]: https://github.com/Latand/delegatus/pull/2612
+[#2615]: https://github.com/Latand/delegatus/pull/2615
+[#2617]: https://github.com/Latand/delegatus/pull/2617
+[#2622]: https://github.com/Latand/delegatus/pull/2622
+[#2623]: https://github.com/Latand/delegatus/pull/2623
+[#2624]: https://github.com/Latand/delegatus/pull/2624
+[#2627]: https://github.com/Latand/delegatus/pull/2627
+[#2632]: https://github.com/Latand/delegatus/pull/2632
+[#2635]: https://github.com/Latand/delegatus/pull/2635
+[#2636]: https://github.com/Latand/delegatus/pull/2636
+[#2638]: https://github.com/Latand/delegatus/pull/2638
+[#2639]: https://github.com/Latand/delegatus/pull/2639
+[#2642]: https://github.com/Latand/delegatus/pull/2642
+[#2644]: https://github.com/Latand/delegatus/pull/2644
+[#2645]: https://github.com/Latand/delegatus/pull/2645
+[#2646]: https://github.com/Latand/delegatus/pull/2646
+[#2651]: https://github.com/Latand/delegatus/pull/2651
+[#2652]: https://github.com/Latand/delegatus/pull/2652
+[#2653]: https://github.com/Latand/delegatus/pull/2653
+[#2654]: https://github.com/Latand/delegatus/pull/2654
+[#2655]: https://github.com/Latand/delegatus/pull/2655
+[#2656]: https://github.com/Latand/delegatus/pull/2656
+[#2658]: https://github.com/Latand/delegatus/pull/2658
+[#2659]: https://github.com/Latand/delegatus/pull/2659
+[#2660]: https://github.com/Latand/delegatus/pull/2660
+[#2661]: https://github.com/Latand/delegatus/pull/2661
+[#2664]: https://github.com/Latand/delegatus/pull/2664
+[#2665]: https://github.com/Latand/delegatus/pull/2665
+[#2666]: https://github.com/Latand/delegatus/pull/2666
+[#2667]: https://github.com/Latand/delegatus/pull/2667
+[#2668]: https://github.com/Latand/delegatus/pull/2668
+[#2669]: https://github.com/Latand/delegatus/pull/2669
+[#2670]: https://github.com/Latand/delegatus/pull/2670
+[#2672]: https://github.com/Latand/delegatus/pull/2672
+[#2673]: https://github.com/Latand/delegatus/pull/2673
+[#2674]: https://github.com/Latand/delegatus/pull/2674
+[#2675]: https://github.com/Latand/delegatus/pull/2675
+[#2676]: https://github.com/Latand/delegatus/pull/2676
+[#2677]: https://github.com/Latand/delegatus/pull/2677
+[#2678]: https://github.com/Latand/delegatus/pull/2678
+[#2679]: https://github.com/Latand/delegatus/pull/2679
+[#2680]: https://github.com/Latand/delegatus/pull/2680
+[#2681]: https://github.com/Latand/delegatus/pull/2681
+[#2683]: https://github.com/Latand/delegatus/pull/2683

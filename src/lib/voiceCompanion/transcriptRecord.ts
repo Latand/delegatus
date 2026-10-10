@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { writePrivate, type StoredSession } from "./storage";
+import type { CompanionUsage } from "./contract";
 
 export type TranscriptKind = "session_start" | "session_end" | "utterance" | "reply" | "delegation" | "tool" | "handoff" | "request" | "report";
 /** Page contract. Times are milliseconds from session start; speech also
@@ -15,7 +16,7 @@ export interface TranscriptEntry {
   /** First occurrence, retained when fragments or delivery states update. */
   order?: number;
 }
-export interface SessionTranscriptRecord { entries: TranscriptEntry[]; truncated: boolean }
+export interface SessionTranscriptRecord { entries: TranscriptEntry[]; truncated: boolean; usage?: CompanionUsage }
 const MAX_BYTES = 4 * 1024 * 1024;
 const CLOSE_RESERVE = 2048;
 const validId = (id: string) => /^[A-Za-z0-9_-]{1,200}$/u.test(id);

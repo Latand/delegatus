@@ -7,6 +7,7 @@ import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "@
 export interface VoiceCompanionHook {
   state: CompanionState;
   start(options: { locale: Locale; project: string }): Promise<void>;
+  setProject(project: string | null): Promise<void>;
   command(command: CompanionCommand): Promise<void>;
   stop(): Promise<void>;
   refresh(): Promise<void>;
@@ -39,6 +40,7 @@ export interface CompanionStore {
   /** Subscribes to the adapter; the returned function releases its microphone, transport and delivery observer. */
   connect(): () => void;
   start(options: { locale: Locale; project: string }): Promise<void>;
+  setProject(project: string | null): Promise<void>;
   command(command: CompanionCommand): Promise<void>;
   stop(): Promise<void>;
   refresh(): Promise<void>;
@@ -73,6 +75,7 @@ export function createCompanionStore(adapter: VoiceCompanionAdapter): CompanionS
       try { await adapter.start(options); }
       catch (error) { apply({ type: "failed-start", adapter }); throw error; }
     },
+    setProject: project => adapter.setProject?.(project) ?? Promise.resolve(),
     command: (value) => adapter.command(value),
     stop: () => adapter.close(),
     refresh: () => adapter.refresh?.() ?? Promise.resolve(),
@@ -93,8 +96,9 @@ export function useVoiceCompanion(adapter: VoiceCompanionAdapter): VoiceCompanio
     try { await adapter.start(options); }
     catch (error) { dispatch({ type: "failed-start", adapter }); throw error; }
   }, [adapter]);
+  const setProject = useCallback((project: string | null) => adapter.setProject?.(project) ?? Promise.resolve(), [adapter]);
   const command = useCallback((value: CompanionCommand) => adapter.command(value), [adapter]);
   const stop = useCallback(() => adapter.close(), [adapter]);
   const refresh = useCallback(() => adapter.refresh?.() ?? Promise.resolve(), [adapter]);
-  return { state: snapshot.adapter === adapter ? snapshot.state : INITIAL_COMPANION_STATE, start, command, stop, refresh };
+  return { state: snapshot.adapter === adapter ? snapshot.state : INITIAL_COMPANION_STATE, start, setProject, command, stop, refresh };
 }

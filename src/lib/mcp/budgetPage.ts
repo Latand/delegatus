@@ -9,7 +9,7 @@ const caches = new WeakMap<object, Map<string, Held>>();
  * advances only after every row in that page has been delivered. Continuations
  * are immutable, replayable and bound to filters and projection options. */
 export async function budgetPage(owner: object, tool: string, args: McpToolArgs, budget: number,
-  load: (cursor: string | null) => Promise<Page>, full: boolean): Promise<McpToolPayload> {
+  load: (cursor: string | null) => Promise<Page>, full: boolean, rowLimit = Number.POSITIVE_INFINITY): Promise<McpToolPayload> {
   let cache = caches.get(owner);
   if (!cache) { cache = new Map(); caches.set(owner, cache); }
   const { cursor, clientRequestId: _key, ...filters } = args;
@@ -34,7 +34,7 @@ export async function budgetPage(owner: object, tool: string, args: McpToolArgs,
   const rows: Record<string, unknown>[] = [];
   // Account for the real service envelope, including the caller-controlled key.
   const ceiling = budget - 256 - Buffer.byteLength(String(args.clientRequestId ?? ""));
-  for (let i = offset; i < page.rows.length; i++) {
+  for (let i = offset; i < page.rows.length && rows.length < rowLimit; i++) {
     const row = page.rows[i]!;
     if (!full && Buffer.byteLength(JSON.stringify(make([...rows, row]))) > ceiling) {
       if (rows.length) break;

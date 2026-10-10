@@ -6921,3 +6921,32 @@ for (const engine of ["claude", "codex"] as const) {
     }
   });
 }
+
+
+test("owner relay cutoff after host publication releases its host before the first prompt", async () => {
+  const id = crypto.randomUUID(), cwd = path.join(sandbox, `owner-cutoff-${crypto.randomUUID()}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const host = new RoundTripHost("claude", artifactPath, id);
+  const launchProfile = emptyLaunchProfile({ cwd });
+  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, transport: "structured", accountId: "owner-fixture", launchProfile });
+  if (begun.kind !== "created") throw Error("owner fixture receipt unavailable");
+  let allowed = true;
+  try {
+    await expect(spawnStructuredConversation({ engine: "claude", receipt: begun.receipt,
+      spec: { command: "claude", engine: "claude", cwd, windowName: "owner", transcript: artifactPath, launchProfile },
+      account: { engine: "claude", accountId: "owner-fixture", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      ["prompt"]: "Owner instruction", registry, client,
+      authorize: () => { if (!allowed) throw Error("owner relay revoked"); },
+    }, { startHost: async () => host, bindHost: async () => () => {},
+      publishHost: async () => { allowed = false; return async () => {}; },
+      processIdentity: () => ({ pid: process.pid, startIdentity: "owner-fixture-host" }),
+    })).rejects.toThrow("owner relay revoked");
+    expect(host.sent).toEqual([]); expect(host.releaseCount).toBeGreaterThan(0);
+    expect(registry.snapshot().receipts[begun.receipt.launchId]?.state).toBe("failed");
+    expect(await client.operationStatus(`spawn_message_${begun.receipt.launchId}`)).toBeNull();
+  } finally { await host.release(); journal.close(); }
+});

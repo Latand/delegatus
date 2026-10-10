@@ -1272,7 +1272,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (RELAY_SCENE === "paired" || RELAY_SCENE === "chats") return json({
         relays: [
           relayRow({ targets: [
-            target({ engine: "claude", model: "opus", effort: "low", concurrency: 2, answered_by: "install" }),
+            target({ engine: "claude", model: "opus", effort: "low", concurrency: 2, answered_by: "install", ownerTier: true }),
             target({ id: "bot-2", name: "Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays", engine: "codex", model: "gpt-6-astra", effort: "high", memberLimitPerHour: null }),
             target({ id: "bot-3", name: "New bot" }),
             target({ id: "bot-4", name: "Пошук по базі знань для нових учасників чату магазину", engine: "claude", model: "sonnet", concurrency: 3, memberLimitPerHour: 25, answered_by: "install" }),

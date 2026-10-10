@@ -127,7 +127,7 @@ test("turned on, it mounts without starting a call; Talk with no key or a reache
   }
 });
 
-test("the first placement, on mount and after a change of project, shows the character at its place with no travel from off screen", async () => {
+test("the first placement is on screen and a change of project preserves the companion root", async () => {
   routes(settingsOf({ enabled: true, keySource: "file" }));
   /* The root stands at −9999 px, hidden, until its first placement. That placement is committed with the root's
      transition off (`data-move="jump"`), which a timer lifts 280 ms later: read before then, the root that has just
@@ -139,12 +139,12 @@ test("the first placement, on mount and after a change of project, shows the cha
   const host = await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
   const first = placedAt();
   expect({ ...first, root: null }).toEqual({ root: null, placed: true, move: "jump", transform: expect.not.stringContaining("-9999") });
-  /* Another project in view is another companion, placed afresh. */
+  /* Browser context changes preserve the mounted companion. */
   await act(async () => mounted!.root.render(<VoiceCompanionHost project="borealis" mobile={false} />));
   await act(async () => settle());
   const second = placedAt();
   expect(host.querySelectorAll("[data-voice-companion]").length).toBe(1);
-  expect(second.root).not.toBe(first.root);
+  expect(second.root).toBe(first.root);
   expect({ ...second, root: null }).toEqual({ root: null, placed: true, move: "jump", transform: expect.not.stringContaining("-9999") });
   /* And once the jump is over, the root's own transition is back for the moves that follow. */
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
@@ -309,8 +309,11 @@ async function liveHarness() {
   const admission = new CompanionAdmission(storage, {
     recipient: project => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "claude" }),
     send: async binding => { sent.push(binding.delivery.clientMessageId); return { status: "queued", operationId: `operation-${sent.length}` }; }, reports: () => reportList });
-  const reads = new CompanionBoardReads({ tasks: () => ["project-a", "project-b"].map(project => ({ id: `task-${project}`, project, text: `Task of ${project}`, status: "open" })),
-    pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const reads = new CompanionBoardReads({
+    call: async (_name, args) => ({ tasks: ["project-a", "project-b"].filter(project => project === args.project).map(project => ({ id: `task-${project}`, project, text: `Task of ${project}`, status: "inbox" })) }),
+    projectFor: async () => "project-a", recipient: project => `conversation_${project}`, resolveProject: current => current ?? "project-a",
+    review: () => { throw new Error("REVIEW_NOT_FOUND"); }, frame: async () => { throw new Error("FRAME_NOT_FOUND"); },
+  });
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => FAKE_KEY, timers: false, closeTimeoutMs: 20 });
   setCompanionSessionsForTests(service);
   const track = { enabled: true, stops: 0, stop() { this.stops += 1; } };
@@ -378,7 +381,7 @@ async function liveHarness() {
     /** The orchestrator's report on the newest request sent, correlated the way the bridge correlates it. */
     report(body: string, project = "project-a") {
       const id = `report-${reportList.length + 1}`;
-      reportList.push({ id, key: id, seq: reportList.length + 1, at: "2026-10-09T00:00:00Z", class: "completed", body, project, correlatesDirective: sent[sent.length - 1],
+      reportList.push({ id, key: id, seq: reportList.length + 1, at: new Date(Date.now() + 1).toISOString(), class: "completed", body, project, correlatesDirective: sent[sent.length - 1],
         origin: { kind: "manager", conversationId: `conversation_${project}`, role: "orchestrator" } });
     }, service, trackStops: () => track.stops, tones,
     starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
@@ -402,47 +405,48 @@ const unmountNow = async () => {
 };
 const pause = (ms = 60) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
 
-test("another project in view, or none, ends the live conversation: no read, no proposal and no paid start follows it there", async () => {
+test("project switches and null context preserve the same live call, transcript and microphone until true unmount", async () => {
   const live = await liveHarness();
+  let closed = false, seq = 0;
+  const events: CompanionEvent[] = [];
+  const emit = (payload: Payload) => events.push({ ...payload, version: 1, sessionId: "same-call", generation: 1, seq: ++seq, eventId: `same-${seq}`, atMs: seq } as CompanionEvent);
+  harness.setRoute((url, init) => {
+    const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/voice-companion/settings") return jsonResponse(settingsOf({ enabled: true, keySource: "file" }));
+    if (path === "/api/orchestrator/seat") return jsonResponse({ seat: { project: "atlas", conversationId: "conversation_atlas", seatEpoch: 1, engine: "claude" }, exists: true });
+    if (path !== "/api/voice-companion/session") return undefined;
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (body?.action === "start") {
+      emit({ type: "session.ready", mode: "official-realtime" });
+      emit({ type: "transcript.final", speaker: "operator", itemId: "input", text: "Keep this conversation open." });
+      return jsonResponse({ sessionId: "same-call", sdp: "fake-answer" });
+    }
+    if (body?.action === "close") { closed = true; emit({ type: "session.closed", reason: "operator" }); }
+    return jsonResponse(body ? { ok: true } : { events });
+  });
   try {
     await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
-    expect(live.starts()).toBe(0);
     await click(document.querySelector("[data-companion-talk]"));
     await pause();
-    const [first] = Object.values(live.storage.read().sessions);
-    expect([live.starts(), first.project, first.closed]).toEqual([1, "project-a", false]);
-    await live.propose(live.provider.sessions[0].id, "Review the plan", "Two plans exist.");
-    expect(document.querySelector<HTMLElement>("[data-companion-delegation]")?.dataset.stage).toBe("awaiting-confirmation");
-    const proposal = Object.values(live.storage.read().sessions[first.id].proposals)[0].proposal;
-
-    await act(async () => mounted!.root.render(<VoiceCompanionHost project="project-b" mobile={false} />));
-    await pause(200);
-    expect(live.storage.read().sessions[first.id].closed).toBe(true);
-    expect(live.provider.attached).toBe(0);
-    /* The companion of project B is idle: no session was started for it. */
-    expect(document.querySelector<HTMLElement>("[data-voice-companion]")?.dataset.phase).toBe("offline");
-    expect(document.querySelector("[data-companion-delegation]")).toBeNull();
-    expect(live.starts()).toBe(1);
-    /* The provider still speaking for the old session reads nothing of project A. */
-    const answers = live.provider.commands.length;
-    const asked = live.provider.requests.length;
-    live.provider.replay(live.provider.sessions[0].id, { type: "session.delegation.created", event_id: "late-read", offset_ms: 9_000, delegation: { id: "late", type: "delegation", target: "client" } });
-    await pause();
-    expect([live.provider.commands.length, live.provider.requests.length]).toEqual([answers, asked]);
-    /* The confirmation left unanswered in A cannot be sent any more. */
-    await live.service.command(first.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" }).catch(() => undefined);
-    expect(live.sent).toEqual([]);
-    expect(live.storage.read().sessions[first.id].proposals[proposal.proposalId].state).toBe("cancelled");
-
-    /* B talks only after its own tap, and to its own project. */
-    await click(document.querySelector("[data-companion-talk]"));
-    await pause();
-    const second = Object.values(live.storage.read().sessions).find((row) => !row.closed)!;
-    expect([live.starts(), second.project]).toEqual([2, "project-b"]);
-    await act(async () => mounted!.root.render(<VoiceCompanionHost project={null} mobile={false} />));
-    await pause(200);
-    expect(Object.values(live.storage.read().sessions).every((row) => row.closed)).toBe(true);
-    expect(live.starts()).toBe(2);
+    const companion = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+    const transcript = document.querySelector("[data-companion-transcript]")?.textContent;
+    expect(transcript).toContain("Keep this conversation open.");
+    for (const project of ["project-b", null, "project-a"]) {
+      await act(async () => mounted!.root.render(<VoiceCompanionHost project={project} mobile={false} />));
+      await pause(200);
+      expect(document.querySelector("[data-voice-companion]") === companion).toBe(true);
+      expect(document.querySelector("[data-companion-transcript]")?.textContent).toBe(transcript);
+      expect(closed).toBe(false);
+      expect(live.trackStops()).toBe(0);
+      expect(live.starts()).toBe(1);
+      expect(companion.dataset.phase).not.toBe("offline");
+      const contexts = sessionCalls().filter(call => (call.body as { action?: string } | null)?.action === "context");
+      expect(contexts.at(-1)?.body).toEqual({ action: "context", sessionId: "same-call", project });
+    }
+    await unmountNow();
+    await pause(100);
+    expect(closed).toBe(true);
+    expect(live.trackStops()).toBeGreaterThan(0);
   } finally { await unmountNow(); await live.release(); }
 });
 
@@ -470,14 +474,11 @@ test("a request to the orchestrator goes out at once with no button; one the mod
     expect(live.sent).toHaveLength(1);
     const arrivalOf = (card: HTMLElement) => Number(card.closest<HTMLElement>("[data-floater]")!.dataset.arrival);
     const asked = arrivalOf(waiting);
-    /* A spoken yes sends it once. The answer is news: the decided card arrives again beside the character, so
-       the talk that went on while it waited cannot have sent it off before it says where the request stands.
-       The asking card leaves from where it was and, as anything leaving the lane does, takes the older ones
-       with it, the first request's card among them. */
+    /* A spoken yes updates the waiting card in place and retains the earlier delivered request. */
     await live.answer(provider, "send");
     expect(live.sent).toHaveLength(2);
-    expect(cards().map((card) => [card.dataset.stage, card.querySelector("[data-companion-instruction]")?.textContent])).toEqual([["queued", "Delete the old presets"]]);
-    expect(arrivalOf(cards()[0]!)).toBeGreaterThan(asked);
+    expect(cards().map((card) => [card.dataset.stage, card.querySelector("[data-companion-instruction]")?.textContent])).toEqual([["queued", "Review the plan"], ["queued", "Delete the old presets"]]);
+    expect(arrivalOf(cards().at(-1)!)).toBe(asked);
     expect(document.querySelector("[data-companion-send]")).toBeNull();
     /* A spoken no sends nothing, and the card says so in words. */
     await live.propose(provider, "Stop every agent", "I am not sure this is what you meant.");
@@ -485,7 +486,7 @@ test("a request to the orchestrator goes out at once with no button; one the mod
     const askedAgain = arrivalOf(cards().at(-1)!);
     await live.answer(provider, "cancel");
     const declined = cards().at(-1)!;
-    expect(arrivalOf(declined)).toBeGreaterThan(askedAgain);
+    expect(arrivalOf(declined)).toBe(askedAgain);
     expect([declined.dataset.stage, declined.querySelector("[data-companion-withdrawn]")?.textContent]).toEqual(["cancelled", translate("en", "voiceCompanion.declined")]);
     expect(live.sent).toHaveLength(2);
   } finally { await unmountNow(); await live.release(); }
@@ -716,3 +717,147 @@ test("review: a transcript stays current when the orchestrator answers after the
     expect([live.starts(), live.provider.sessions.length]).toEqual([startsBefore, providerSessions]);
   } finally { await unmountNow(); await live.release(); }
 }, 20_000);
+
+
+test("false playback stop and restart keep streaming words, bubble nodes, arrivals and older report cards", async () => {
+  const { VoiceCompanion } = await import("./VoiceCompanion");
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  let seq = 0;
+  const publish = (payload: Payload) => {
+    const event = { ...payload, version: 1 as const, sessionId: "stable-call", generation: 1, seq: ++seq, eventId: `stable-${seq}`, atMs: seq } as CompanionEvent;
+    for (const listener of listeners) listener(event);
+  };
+  const emit = async (payload: Payload) => act(async () => { publish(payload); await settle(); });
+  const adapter: VoiceCompanionAdapter = { mode: "simulated", subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    start: async () => { publish({ type: "session.ready", mode: "simulated" }); }, command: async () => {}, close: async () => {} };
+  await mount(<VoiceCompanion adapter={adapter} project="atlas" locale="en" />);
+  await click(document.querySelector("[data-companion-talk]"));
+  await emit({ type: "orchestrator.report", reportId: "older", status: "result", text: "The earlier report stays.", at: 0, project: "atlas" });
+  const recipient = { project: "atlas", conversationId: "conversation_atlas", seatEpoch: 1, engine: "claude" as const };
+  const delivery = { proposalId: "p-answer", callId: "c-answer", clientMessageId: "voice-answer", operationId: "operation-answer", recipient };
+  await emit({ type: "delegation.tool.called", callId: delivery.callId, sourceItemId: "delegation", instruction: "Review the plan" });
+  await emit({ type: "delegation.sending", proposal: { ...delivery, sourceItemId: "delegation", instruction: "Review the plan", authority: "live-model" } });
+  await emit({ type: "delegation.tool.result", callId: delivery.callId, result: { status: "delivered", delivery } });
+  for (const reportId of ["answer-1", "answer-2"]) await emit({ type: "orchestrator.answer", delivery, reportId, status: "progress", text: reportId });
+  expect([...document.querySelectorAll('[data-kind="answer"] [data-companion-answer]')].map(node => node.textContent)).toEqual(["answer-1", "answer-2"]);
+  await emit({ type: "delegation.tool.called", callId: "waiting", sourceItemId: "delegation", instruction: "Review the second plan" });
+  await emit({ type: "delegation.confirmation.required", proposal: { proposalId: "p-waiting", callId: "waiting", sourceItemId: "delegation", instruction: "Review the second plan", recipient, authority: "live-model", confirmation: { reason: "Two plans exist." } } });
+  const waiting = document.querySelector<HTMLElement>('[data-floater="delegation:waiting"]')!;
+  expect(waiting).toBeTruthy();
+  const waitingArrival = waiting.dataset.arrival;
+  const snapshot = () => new Map([...document.querySelectorAll<HTMLElement>('[data-floater^="companion:long#"]')].map(node => [node.dataset.floater!, { node, arrival: node.dataset.arrival, text: node.querySelector(".vc-text")!.textContent }]));
+  await emit({ type: "transcript.delta", speaker: "companion", itemId: "long", delta: "A complete sentence about the current work and the checks we need. ".repeat(5) + "The orchestrator replied. The plan holds, with one gap: last month's saved" });
+  await emit({ type: "playback.started", responseId: "audio-1", itemId: "long" });
+  const before = snapshot();
+  expect(before.size).toBe(1);
+  await emit({ type: "playback.stopped", responseId: "audio-1", itemId: "long", playedMs: 400, reason: "ended" });
+  const paused = snapshot();
+  expect(paused.size).toBeGreaterThan(before.size);
+  await emit({ type: "playback.started", responseId: "audio-2", itemId: "long", playedMs: 400 });
+  const resumed = snapshot();
+  expect([...resumed.keys()]).toEqual([...paused.keys()]);
+  for (const [key, value] of paused) { expect(resumed.get(key)?.node === value.node).toBe(true); expect(resumed.get(key)?.arrival).toBe(value.arrival); expect(resumed.get(key)?.text).toBe(value.text); }
+  expect(document.querySelector('[data-floater="report:older"]')).toBeTruthy();
+  expect(document.querySelector('[data-leaving] [data-companion-report]')).toBeNull();
+  await emit({ type: "playback.stopped", responseId: "audio-2", itemId: "long", playedMs: 450, reason: "interrupted" });
+  expect([...snapshot().keys()]).toEqual([...paused.keys()]);
+  expect(document.querySelector('[data-floater="delegation:waiting"]') === waiting).toBe(true);
+  await emit({ type: "delegation.confirmed", proposalId: "p-waiting", via: "tap" });
+  expect(document.querySelector('[data-floater="delegation:waiting"]') === waiting).toBe(true);
+  expect(waiting.dataset.arrival).toBe(waitingArrival);
+  for (let index = 1; index <= 5; index++) await emit({ type: "orchestrator.report", reportId: `new-${index}`, status: "result", text: `New report ${index}`, at: index, project: "atlas" });
+  expect(document.querySelectorAll('[data-floater][data-kind="speech"]').length).toBe(6);
+  expect(document.querySelectorAll('[data-floater][data-kind="answer"], [data-floater][data-kind="report"]').length).toBe(4);
+  expect(document.querySelector('[data-floater="delegation:waiting"]') === waiting).toBe(true);
+});
+
+
+test("one poll preserves the order of standalone reports and answers to different requests", async () => {
+  const { VoiceCompanion } = await import("./VoiceCompanion");
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  let seq = 0;
+  const publish = (payload: Payload) => {
+    const event = { ...payload, version: 1 as const, sessionId: "report-burst", generation: 1, seq: ++seq, eventId: `report-${seq}`, atMs: seq } as CompanionEvent;
+    for (const listener of listeners) listener(event);
+  };
+  const adapter: VoiceCompanionAdapter = { mode: "simulated", subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    start: async () => { publish({ type: "session.ready", mode: "simulated" }); }, command: async () => {}, close: async () => {} };
+  await mount(<VoiceCompanion adapter={adapter} project="atlas" locale="en" />);
+  await click(document.querySelector("[data-companion-talk]"));
+  const recipient = { project: "atlas", conversationId: "conversation_atlas", seatEpoch: 1, engine: "claude" as const };
+  const request = (callId: string) => {
+    const delivery = { proposalId: `p-${callId}`, callId, clientMessageId: `voice-${callId}`, operationId: `operation-${callId}`, recipient };
+    publish({ type: "delegation.tool.called", callId, sourceItemId: "delegation", instruction: "Review the plan" });
+    publish({ type: "delegation.sending", proposal: { ...delivery, sourceItemId: "delegation", instruction: "Review the plan", authority: "live-model" } });
+    publish({ type: "delegation.tool.result", callId, result: { status: "delivered", delivery } });
+    return delivery;
+  };
+  let earlier!: ReturnType<typeof request>;
+  let later!: ReturnType<typeof request>;
+  await act(async () => { earlier = request("earlier"); later = request("later"); await settle(); });
+  await act(async () => {
+    publish({ type: "orchestrator.report", reportId: "first", status: "result", text: "First", at: 1, project: "atlas" });
+    publish({ type: "orchestrator.answer", reportId: "second", status: "result", text: "Second", delivery: later });
+    publish({ type: "orchestrator.answer", reportId: "third", status: "result", text: "Third", delivery: earlier });
+    await settle();
+  });
+  expect([...document.querySelectorAll('.vc-stack > [data-floater] [data-companion-answer]')].map(node => node.textContent)).toEqual(["First", "Second", "Third"]);
+});
+
+test("a burst of reports holds the lane against the speech after it: older reports leave only from the far end, by their cap", async () => {
+  const { VoiceCompanion, REPORT_CAP } = await import("./VoiceCompanion");
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  let seq = 0;
+  const publish = (payload: Payload) => {
+    const event = { ...payload, version: 1 as const, sessionId: "report-room", generation: 1, seq: ++seq, eventId: `room-${seq}`, atMs: seq } as CompanionEvent;
+    for (const listener of listeners) listener(event);
+  };
+  const emit = async (payload: Payload) => act(async () => { publish(payload); await settle(); });
+  const adapter: VoiceCompanionAdapter = { mode: "simulated", subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    start: async () => { publish({ type: "session.ready", mode: "simulated" }); }, command: async () => {}, close: async () => {} };
+  /* Every element 72 px tall: four report cards fill a lane of at most 360 px, so the speech that follows finds no room. */
+  const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get(this: HTMLElement) { return this.matches("[data-floater]") ? 72 : height.get!.call(this); } });
+  try {
+    await mount(<VoiceCompanion adapter={adapter} project="atlas" locale="en" />);
+    await click(document.querySelector("[data-companion-talk]"));
+    const held = () => [...document.querySelectorAll<HTMLElement>('.vc-stack > [data-floater^="report:"]')].map(node => node.dataset.floater!.slice("report:".length));
+    await emit({ type: "transcript.final", speaker: "operator", itemId: "ask", text: "Read me the reports." });
+    for (let index = 1; index <= REPORT_CAP + 2; index++) {
+      await emit({ type: "orchestrator.report", reportId: `r${index}`, status: "result", text: `Report ${index}`, at: index, project: "atlas" });
+      expect(held(), `after report ${index}`).toEqual(Array.from({ length: Math.min(index, REPORT_CAP) }, (_, at) => `r${Math.max(0, index - REPORT_CAP) + at + 1}`));
+    }
+    for (let index = 1; index <= 3; index++) {
+      await emit({ type: "response.started", responseId: `said-${index}`, itemId: `said-${index}` });
+      await emit({ type: "transcript.final", speaker: "companion", itemId: `said-${index}`, responseId: `said-${index}`, text: `Report ${index + 2} said aloud.` });
+      await emit({ type: "playback.started", responseId: `said-${index}`, itemId: `said-${index}` });
+      await emit({ type: "playback.stopped", responseId: `said-${index}`, itemId: `said-${index}`, playedMs: 1_200, reason: "ended" });
+      expect(held(), `after the companion's line ${index}`).toEqual(["r3", "r4", "r5", "r6"]);
+    }
+    /* The operator's own words take their room as before: the oldest report leaves from the far end and the newest holds. */
+    await emit({ type: "transcript.final", speaker: "operator", itemId: "next", text: "And the billing lane?" });
+    expect(document.querySelector('.vc-stack > [data-floater^="operator:next#"]'), "the operator's new words are shown").toBeTruthy();
+    expect(held().at(-1)).toBe("r6");
+    expect(held()[0], "an older report left from the far end").not.toBe("r3");
+  } finally { Object.defineProperty(HTMLElement.prototype, "offsetHeight", height); }
+});
+
+test("phone settings retain the month and last call in both languages, including incomplete usage", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      routes(settingsOf({ enabled: true, usageUsd: 0.91, lastSession: { usd: 0.4, seconds: 471, endedAt: Date.UTC(2026, 9, 10), incomplete: true } }));
+      await act(async () => setLocale(locale));
+      await mount(<><VoiceCompanionHost project="atlas" mobile /><VoiceCompanionSetting /></>);
+      expect(document.querySelector("[data-voice-companion]")).toBeNull();
+      expect(document.querySelector("[data-voice-companion-setting]")).toBeTruthy();
+      expect(document.querySelector("[data-companion-spend-meter]")).toBeNull();
+      expect(document.querySelector("[data-voice-companion-usage]")?.textContent).toContain(locale === "en" ? "October" : "жовтень");
+      const last = document.querySelector<HTMLElement>("[data-voice-companion-last-call]")!;
+      expect(last.textContent).toContain("$0.40 · 7:51");
+      expect(last.textContent).toContain(locale === "en" ? "Last call: estimated" : "Остання розмова: орієнтовно");
+      expect(last.title).toContain("OpenAI");
+      await unmountNow();
+    }
+  } finally { await act(async () => setLocale("en")); }
+});

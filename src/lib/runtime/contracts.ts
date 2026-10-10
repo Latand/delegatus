@@ -259,8 +259,10 @@ export interface RuntimeOperationReceipt {
   idempotencyKey: string;
   conversationId: string;
   kind: RuntimeOperationKind;
-  /** Kill authorship, derived from the admitted onlyIfIdle fence. */
+  /** Stop authorship, derived from the admitted idle fence or authenticated control actor. */
   origin?: "system" | "operator";
+  /** Distinguishes an authenticated actor/fence from legacy inferred custody. */
+  originAuthenticated?: true;
   status: RuntimeReceiptStatus;
   turnId?: string | null;
   queuePosition?: number | null;
@@ -418,6 +420,8 @@ export function runtimeSettingsCapability(engine: RuntimeEngine, nativeTurnProfi
 export interface RuntimeInterruptCommand extends RuntimeCommandBase {
   kind: "interrupt";
   turnId?: string | null;
+  /** Authenticated caller, stamped by the admission surface. */
+  origin?: MessageOrigin;
 }
 
 /** Automatic retirement is bound to one observed idle session revision and writer. */
@@ -449,6 +453,8 @@ export function runtimeIdleKillMatches(
 
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  /** Authenticated control authorship; an automatic recovery is system custody. */
+  origin?: MessageOrigin;
   onlyIfIdle?: RuntimeIdleKillFence;
   providerRecovery?: RuntimeProviderRecoveryRef;
   sessionKey: { engine: RuntimeEngine; sessionId: string };

@@ -120,6 +120,23 @@ test("Voice Delegatus closes the menu and opens the voice companion's own settin
   expect([opened, closed]).toEqual([1, 1]);
 });
 
+test("phone: Voice Delegatus is reachable through Settings and closes the sheet", async () => {
+  dom.innerWidth = 390;
+  let opened = 0;
+  let closed = 0;
+  const open = () => { opened += 1; };
+  window.addEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open);
+  try {
+    const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
+    await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => { closed += 1; }} />);
+    await click(document.querySelector('[data-mobile2-menu-row="settings"]'));
+    const row = document.querySelector('[data-mobile2-menu-row="voice-companion"]')!;
+    expect(row.textContent).toBe(translate("en", "voiceCompanion.settings.label"));
+    await click(row);
+    expect([opened, closed]).toEqual([1, 1]);
+  } finally { window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open); }
+});
+
 test("Help and learning opens in place under its own row", async () => {
   const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
   const help = host.querySelector("[data-rail-menu-help]")!;
@@ -166,7 +183,7 @@ test("phone: create cells, the board's rows, the header's cells and rows, and th
   await click(sheet.querySelector("[data-mobile2-menu-row='back']"));
   await click(sheet.querySelector("[data-mobile2-menu-row='settings']"));
   const page = [...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
-  expect(page).toEqual(["back", "memory", "key", "agent-mapping", "dictation", "linked-settings", "external-relay", "ping"]);
+  expect(page).toEqual(["back", "memory", "key", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping"]);
   expect(sheet.textContent).toContain(translate("en", "mobile2.menu.sound"));
   await click(sheet.querySelector("[data-mobile2-menu-row='memory']"));
   expect(sheet.querySelector("[data-memory-page]")).not.toBeNull();

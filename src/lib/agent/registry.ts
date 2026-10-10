@@ -5962,6 +5962,22 @@ export class AgentRegistry {
     });
   }
 
+  /** Retire a deferred launch's payload without losing any live host binding. */
+  async retireQueuedSpawnOffLoop(launchId: string, reason: string): Promise<boolean> {
+    const written = await this.deliveryWrite({ label: "spawn.queued-cutoff", operationId: `spawn_message_${launchId}` }, () =>
+      this.mutate(file => {
+        const receipt = file.receipts[launchId];
+        if (!receipt?.queuedPinnedSpawn) return true;
+        receipt.launchProfile = emptyLaunchProfile(receipt.queuedPinnedSpawn.spec.launchProfile, this.mcpGrantPolicy);
+        receipt.queuedPinnedSpawn = null;
+        receipt.error = reason;
+        if (receipt.state === "starting" && !receipt.pane && !receipt.key) receipt.state = "failed";
+        terminalizeFailedSpawnDeliveriesInFile(file, launchId);
+        return true;
+      }));
+    return written.acquired && written.value;
+  }
+
   /** Atomically adopts a structured receipt whose pre-host owner exited.
       A live owner keeps responsibility for its process-local deferred work. */
   claimStartingStructuredSpawn(launchId: string): { claimed: boolean; receipt: SpawnReceipt } {

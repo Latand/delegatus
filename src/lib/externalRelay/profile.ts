@@ -1,13 +1,23 @@
-import type { ExternalRelayRequester } from "./protocol";
+import type { ExternalRelayRequest, ExternalRelayRequester } from "./protocol";
 import type { RelayTargetSettings } from "./store";
 
 /**
  * What one relay answer may use (relay.md §B.6). Every requester gets the
- * same profile in this build: the engine's native web search and nothing
- * else. The requester is the input so a later tier (the owner's) can branch
- * on it; nothing is granted from it here.
+ * restricted profile: the engine's native web search. Owner host access is
+ * selected separately by ownerTierFor, after strict wire parsing.
  */
-export type RelayAnswerProfile = { webSearch: boolean };
+export type RelayAnswerProfile = { webSearch: boolean; owner?: true };
+
+export type OwnerInstruction = { messageId: string; text: string; requestText: string | null };
+/** Only the triggering message authored by the service-identified owner grants host access. */
+export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest): OwnerInstruction | null {
+  if (target.ownerTier !== true) return null;
+  const requester = request.input.requester;
+  if (!requester || requester.is_owner !== true || requester.is_anonymous_admin !== false) return null;
+  const message = request.input.respond_to ? request.input.conversation.find(m => m.id === request.input.respond_to) : undefined;
+  if (!message || message.author.self || message.author.key !== requester.key) return null;
+  return { messageId: message.id, text: message.text, requestText: request.input.request_text };
+}
 export function answerProfileFor(
   _requester: ExternalRelayRequester | null | undefined,
 ): RelayAnswerProfile {

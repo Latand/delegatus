@@ -648,11 +648,43 @@ holds across handle retirement and reconnect during that interval. The same
 ordering applies to the completion path. If replay or its deciding checkpoint
 is missing, the drain holds rather than inventing a newer settlement.
 
+A replay reset explicitly marks history incomplete. The existing durable
+`producerCursor` for the owner's `engine-host:<key>:` prefix survives event
+retention and producer-receipt maintenance. An own idle publication settles
+the missing history when its cursor is strictly newer than that bound, or
+when it includes an attributable retained terminal and replay covers the
+durable engine cursor. A retained newer start invalidates that terminal;
+a queued busy sample preserves it only when its source cursor is older.
+Absent, zero or unreadable bounds keep the owner held; neither an empty
+retained replay nor an older retained idle mark proves completion. The drain
+reads this checkpoint through the existing runtime client, without changing
+the registry or journal writer paths.
+
+Native admissions have no engine cursor. Their retained own delivery receipts
+remain evidence alongside replay: a receipt that says `turn-started` keeps
+custody when missing history cannot attribute and order its turn. An idle
+sample ahead of the engine cursor supplies no ordering for such an admission.
+Retained keyed evidence can prove a receipt foreign or supply its own start
+and settlement; the numeric engine bound alone cannot clear it.
+
 An unordered positive handle, registry reference or transcript tail keeps its
 hold until its own evidence settles. A standalone host without a journal
-writer releases on its own completed transcript when no own positive source
-remains. Setup and reviewer custody continue to hold while their processes
+writer treats its own `live`, `starting` or `handoff` entry as an admission
+claim without a per-prompt acceptance boundary. An older completed transcript
+can remain after another prompt is acknowledged, even when it is newer than
+the registry timestamp. The answering owner keeps that ambiguity until its own
+entry reports idle or its process dies.
+Setup and reviewer custody continue to hold while their processes
 answer.
+
+A handle supplies its own process identity. A gone registry identity at its
+pid suppresses the handle only when both saved start identities are present
+and equal. A busy answering handle whose start identity is null retains its
+own custody; reuse proven for an older registry process cannot release it.
+The same attribution test precedes settlement for a live registry owner:
+idle health speaks for that owner only when the pid and both non-null saved
+start identities match. Missing or different identity fields leave the
+recorded answering owner held until its own attributable completion or death.
 
 **Bounded grace covers a launch that never proved work.** An ownerless hosted
 row, an open receipt with no admission process or an unregistered claim may

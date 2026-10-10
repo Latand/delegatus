@@ -202,8 +202,9 @@ test("get_pipeline with stageId answers one stage's conclusion without prompts o
 
   const compact = await bindings.get_pipeline({ clientRequestId: "stage-compact", pipelineId: pipeline.id, compact: true });
   expectNoBodies(compact);
-  expect(bytes(compact)).toBeLessThan(700);
-  expect(compact).toMatchObject({ pipelineId: pipeline.id, stages: [{ id: "build", latestAttempt: { n: 6, state: "failed", verdict: "fail" } }, { id: "review" }] });
+  // The voice detail contract retains stage kind and role alongside state.
+  expect(bytes(compact)).toBeLessThan(800);
+  expect(compact).toMatchObject({ pipelineId: pipeline.id, stages: [{ id: "build", kind: "run", roleId: "builder", latestAttempt: { n: 6, state: "failed", verdict: "fail" } }, { id: "review", kind: "review-loop", roleId: "reviewer" }] });
 });
 
 test("get_pipeline reads an accepted report before settlement, after replacement, reopen, explicit selection, and settlement (#1919)", async () => {

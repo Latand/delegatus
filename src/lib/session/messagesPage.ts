@@ -47,6 +47,8 @@ export interface MessagesPageQuery {
   since?: string;
   limit: number;
   maxChars: number;
+  /** Trusted in-process projection, applied to complete text before clipping. */
+  redactText?: (text: string) => string;
   cursor?: MessagesPageCursor | null;
 }
 
@@ -210,8 +212,9 @@ function boundedRecord(
   normalized: NormalizedSessionLine,
   seq: number,
   maxChars: number,
+  redactText?: (text: string) => string,
 ): ConversationMessage {
-  const redacted = hardenedRedact(normalized.record.text);
+  const redacted = hardenedRedact(redactText ? redactText(normalized.record.text) : normalized.record.text);
   const truncated = redacted.length > maxChars;
   const record: ConversationMessage = {
     seq,
@@ -401,7 +404,7 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
       }
       if (isTwin(candidate)) continue;
       if (!query.kinds.has(candidate.record.kind) || !query.roles.has(candidate.record.role)) continue;
-      records.push(boundedRecord(candidate, offset, maxChars));
+      records.push(boundedRecord(candidate, offset, maxChars, query.redactText));
     }
     if (records.length >= limit) {
       hasMore = offset > 0;

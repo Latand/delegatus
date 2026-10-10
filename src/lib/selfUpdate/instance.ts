@@ -140,6 +140,14 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
   const terminals = new Map<string, number>();
   const turnKey = (key: string, turn: string) => `${key}\0${turn}`;
   const prefix = `engine-host:${owner.entryKey}:`;
+  // Retained writer marks preserve predecessor attribution after pruning.
+  for (const row of rows) {
+    const mark = row.writerStatus, epoch = fenceEpoch(mark?.writerClaim);
+    if (!mark?.activeTurnId || epoch === null) continue;
+    const key = rowKeyId(mark.sessionKey);
+    turns.set(turnKey(key, mark.activeTurnId), epoch);
+    turnOwners.set(turnKey(row.conversationId, mark.activeTurnId), { key, epoch });
+  }
   for (const event of events) {
     if (event.scope.type !== "session") continue;
     const payload = event.payload;
@@ -268,7 +276,7 @@ export interface OwnerCensusReaderOptions {
   /** Existing journal replay, for ordered start/completion evidence. */
   readEvents?: (after: number) => Promise<RuntimeReplay>;
   /** Durable engine high-water mark, including events pruned from replay. */
-  readProducerCursor?: (kind: string, prefix: string) => Promise<number>;
+  readProducerCursor?: (kind: string, prefix: string) => Promise<number | null>;
   /** The hosts this Viewer holds, by session key. */
   heldHosts?: () => ReadonlyMap<string, EngineHost>;
   /** This Viewer's own process, the claimant of the claims it makes (R6b). */
@@ -439,7 +447,9 @@ export function ownerCensusReader(
           let handle: "busy" | "idle" | null = null;
           if (owner.structuredHost && owner.entryKey && held.has(owner.entryKey)) {
             const state = await health(owner.entryKey);
-            if (state && (state.pid === null || state.pid === owner.pid)) {
+            if (state && state.pid === owner.pid && state.processStartIdentity !== null
+              && owner.identities.some((identity) => identity.pid === state.pid && identity.startIdentity !== null
+                && identity.startIdentity === state.processStartIdentity)) {
               handle = handleTurn(state);
               spoken.add(owner.entryKey);
             }
@@ -454,7 +464,12 @@ export function ownerCensusReader(
             const kind = owner.engine === "codex" ? "codex-app-server" : owner.engine === "claude" ? "claude-broker" : null;
             const cursor = history.incomplete && kind ? await readProducerCursor(kind, `engine-host:${owner.entryKey}:`) : null;
             const replayCursor = history.engineCursors.get(`${kind}\0engine-host:${owner.entryKey}:`) ?? 0;
-            const ownConversationIds = new Set(rows.map((row) => row.conversationId));
+            const ownConversationIds = new Set(rows.filter((row) => {
+              const mark = row.writerStatus ?? row;
+              return rowKeyId(mark.sessionKey) === owner.entryKey && fenceEpoch(mark.writerClaim) === owner.writerEpoch
+                || row.nativeTurnClaims?.some((claim) => rowKeyId(claim.sessionKey) === owner.entryKey
+                  && (claim.writerClaim === null || fenceEpoch(claim.writerClaim) === owner.writerEpoch));
+            }).map((row) => row.conversationId));
             reading.journal = orderedJournalStatement(rows, owner, history.events, history.incomplete, cursor, replayCursor, ownConversationIds);
             if (reading.journal === "idle") {
               // Terminal release also needs coverage of native admissions.

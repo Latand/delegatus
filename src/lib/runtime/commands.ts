@@ -225,6 +225,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
       ...(operationId ? { operationId } : {}),
       idempotencyKey,
       ...(turnId !== undefined ? { turnId } : {}),
+      ...(parseMessageOrigin(body.origin) ? { origin: parseMessageOrigin(body.origin)! } : {}),
     };
   }
 
@@ -238,6 +239,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
       ...(operationId ? { operationId } : {}),
       idempotencyKey,
       sessionKey: runtimeSessionKey(body.sessionKey),
+      ...(parseMessageOrigin(body.origin) ? { origin: parseMessageOrigin(body.origin)! } : {}),
       ...(body.onlyIfIdle !== undefined ? { onlyIfIdle: parseRuntimeIdleKillFence(body.onlyIfIdle) } : {}),
       ...(body.providerRecovery !== undefined ? { providerRecovery: parseRuntimeProviderRecoveryRef(body.providerRecovery) } : {}),
     };

@@ -197,6 +197,36 @@
       }
     },
     {
+      "viewport": "390x844",
+      "lang": "en",
+      "scheme": "light",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 316,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "monthSpend": "Used in October: $3.40 of $35.00.",
+      "lastCall": "Last call: $0.40 · 7:51 · Oct 10.",
+      "phoneSettingsMounted": true,
+      "openedThrough": "header menu Settings → Voice Delegatus"
+    },
+    {
+      "viewport": "390x844",
+      "lang": "uk",
+      "scheme": "dark",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 316,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "monthSpend": "Витрачено за жовтень: $3.40 із $35.00.",
+      "lastCall": "Остання розмова: $0.40 · 7:51 · 10 жовтня.",
+      "phoneSettingsMounted": true,
+      "openedThrough": "header menu Settings → Voice Delegatus"
+    },
+    {
       "lang": "en",
       "realBackendWithoutKey": "refused in the lane with the way to the settings; no start attempted"
     },

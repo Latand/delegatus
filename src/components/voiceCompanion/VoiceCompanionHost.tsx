@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useOrchestratorSeat } from "@/components/orchestrator/useOrchestratorSeat";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
@@ -42,18 +42,14 @@ function MountedCompanion({ project, keyMissing, capReached, onSessionEnd }: { p
   const seat = seatRead?.seat && seatRead.exists && seatRead.seat.conversationId ? seatRead.seat : null;
   /* Unknown until the seat was read: nothing is said about an orchestrator that may well be there. */
   const hasSeat = project === null || seatRead === null ? undefined : seat !== null;
-  /* A live conversation belongs to the project it was started in: its reads, its proposals and its
-     orchestrator. Another project in view, or none, is another adapter, and leaving closes the session. */
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- the project is the adapter's identity
-  const adapter: VoiceCompanionAdapter = useMemo(() => new OfficialVoiceCompanionAdapter(), [project]);
+  const [adapter] = useState<VoiceCompanionAdapter>(() => new OfficialVoiceCompanionAdapter());
+  useEffect(() => { void adapter.setProject?.(project).catch(() => undefined); }, [adapter, project]);
   /* The month's usage is read again when a conversation ends. */
   useEffect(() => adapter.subscribe((event) => { if (event.type === "session.closed") void onSessionEnd(); }), [adapter, onSessionEnd]);
   /* With no key it says that a key is needed, and with the cap reached that the month is spent, before any microphone or session. */
   const preflight = useCallback(() => (keyMissing ? "NO_KEY" : capReached ? "CAP_REACHED" : null), [keyMissing, capReached]);
   return (
     <VoiceCompanion
-      /* Another project starts idle: only its own tap on Talk opens a paid session. */
-      key={`live:${project ?? ""}`}
       adapter={adapter}
       project={project}
       locale={speech}

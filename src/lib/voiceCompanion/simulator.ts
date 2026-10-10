@@ -63,7 +63,10 @@ export type ScriptStep =
       spoken?: { itemId: Id; text: string; decision: "send" | "cancel" };
       /** The send's outcome stays unknown: no receipt names its operation, nothing settles and no answer can join it. */
       unconfirmed?: boolean }
-  | { kind: "answer"; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; afterMs: number };
+  | { kind: "answer"; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; afterMs: number }
+  /** Standalone orchestrator reports, tied to no request of this call, each arriving `afterMs` from this step while
+      the script goes on, as a poll brings them in during speech. The script ends once the last one arrived. */
+  | { kind: "reports"; reports: readonly { reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; afterMs: number }[] };
 
 export interface SimulatorOptions {
   script: readonly ScriptStep[];
@@ -249,11 +252,22 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
     }
   }
 
+  async function arrive(step: Extract<ScriptStep, { kind: "reports" }>, mine: number) {
+    const from = clock.now();
+    for (const report of [...step.reports].sort((left, right) => left.afterMs - right.afterMs)) {
+      await clock.sleep(Math.max(0, from + report.afterMs - clock.now()));
+      if (gone(mine)) return;
+      emit({ type: "orchestrator.report", reportId: report.reportId, status: report.status, text: report.text, at: Date.now(), project: options.recipient.project });
+    }
+  }
+
   async function play(steps: readonly ScriptStep[], mine: number): Promise<void> {
     let delivery: Delivery | null = null;
+    const arriving: Promise<void>[] = [];
     for (const step of steps) {
       if (gone(mine)) return;
       if (step.kind === "pause") await clock.sleep(step.ms);
+      else if (step.kind === "reports") arriving.push(arrive(step, mine));
       else if (step.kind === "operator") await speakOperator(step.itemId, step.text, mine);
       else if (step.kind === "companion") await speakCompanion(step, mine);
       else if (step.kind === "tools") await runTools(step, mine);
@@ -325,6 +339,7 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
         emit({ type: "orchestrator.answer", delivery, reportId: step.reportId, status: step.status, text: step.text });
       }
     }
+    await Promise.all(arriving);
   }
 
   return {

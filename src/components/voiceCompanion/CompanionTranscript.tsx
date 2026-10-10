@@ -5,6 +5,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 
 import { EngineMark } from "@/components/EngineMark";
 import { CopyButton } from "@/components/feed/CopyButton";
+import type { CompanionUsage } from "@/lib/voiceCompanion/contract";
+import { CompanionSpend } from "./CompanionSpend";
 import { useLocale } from "@/lib/i18n";
 import { laneLayout, type Rect, type Size } from "@/lib/voiceCompanion/placement";
 import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
@@ -34,6 +36,7 @@ export function transcriptRect(viewport: Size, block: Rect): Rect {
 type Status = "running" | "done" | "failed";
 type Row =
   | { kind: "speech"; key: string; atMs: number; speaker: "operator" | "companion"; text: string }
+  | { kind: "report"; key: string; atMs: number; project: string | null; status: string | null; text: string }
   | { kind: "call"; key: string; atMs: number; name: string; status: Status; args: string; result: string | null; reason: string | null; handoffs: string[] }
   | { kind: "request"; key: string; atMs: number; instruction: string; stage: string; reason: string | null; engine: "claude" | "codex" | null;
       states: Array<{ atMs: number; status: string }>; args: string | null; result: string | null; answers: Array<{ key: string; atMs: number; text: string; status: string | null }> };
@@ -77,6 +80,7 @@ export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
     } else if (entry.kind === "report") {
       const request = requests.get(str((data.delivery as { callId?: string } | undefined)?.callId) ?? "");
       if (request) request.answers.push({ key: entry.id, atMs: entry.atMs, text: str(data.text) ?? "", status: str(data.status) });
+      else rows.push({ kind: "report", key: entry.id, atMs: entry.atMs, project: str(data.projectName) ?? str(data.project), status: str(data.status), text: str(data.text) ?? "" });
     } else if (entry.kind === "handoff") {
       calls.get(str(data.delegationId) ?? "")?.handoffs.push(str(data.text) ?? "");
     }
@@ -111,8 +115,9 @@ function Disclosure({ summary, children, name, label }: { summary: ReactNode; ch
   );
 }
 
-export function CompanionTranscript({ record, left, top, width, height, onClose }: {
+export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, onClose }: {
   record: SessionTranscriptRecord;
+  usage?: CompanionUsage;
   /* The box, from the companion's own corner. */
   left: number; top: number; width: number; height: number;
   onClose: () => void;
@@ -204,6 +209,19 @@ export function CompanionTranscript({ record, left, top, width, height, onClose 
         </li>
       );
     }
+    if (row.kind === "report") return (
+      <li key={row.key} className="vc-tr-row" data-kind="report">
+        <div className="vc-call vc-deleg vc-reply" data-stage="answered" data-report-status={row.status ?? undefined} data-transcript-report>
+          <div className="vc-deleg-head">
+            <span className="vc-call-icon" aria-hidden><Check size={14} /></span>
+            <span className="vc-deleg-title">{row.project ?? t("voiceCompanion.orchestrator")}{row.status && row.status in L.reports ? ` · ${L.reports[row.status as keyof typeof L.reports]}` : ""}</span>
+            <span className="vc-tr-time vc-tr-push">{clock(row.atMs)}</span>
+            <CopyButton text={row.text} label={L.copyMessage} className="vc-tr-copy" />
+          </div>
+          <p className="vc-answer">{row.text}</p>
+        </div>
+      </li>
+    );
     return <li key={row.key} className="vc-tr-row" data-kind={row.kind}>{row.kind === "call" ? call(row) : request(row)}</li>;
   };
 
@@ -227,6 +245,7 @@ export function CompanionTranscript({ record, left, top, width, height, onClose 
         {record.truncated ? <p className="vc-deleg-note vc-deleg-wait">{L.truncated}</p> : null}
         {rows.length ? <ol className="vc-tr-list">{rows.map(item)}</ol> : <p className="vc-deleg-note vc-deleg-wait">{L.empty}</p>}
       </div>
+      {usage ? <CompanionSpend usage={usage} /> : null}
     </div>
   );
 }
@@ -247,6 +266,16 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-title { font-size: 13px; font-weight: 700; }
 .vc-tr-sub { font-size: 11.5px; color: var(--color-secondary); white-space: nowrap; }
 .vc-tr-close { margin-left: auto; width: 26px; height: 26px; box-shadow: none; }
+.vc-tr-spend { flex: none; padding: 8px 14px 10px; border-top: 1px solid var(--color-border); font-size: 11.5px; line-height: 16px; font-variant-numeric: tabular-nums; color: var(--color-secondary); }
+.vc-tr-spend-amounts { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
+.vc-tr-spend-meter { position: relative; height: 3px; margin-top: 6px; border-radius: 2px; overflow: hidden; background: var(--color-border); }
+.vc-tr-spend-meter > span { position: absolute; inset: 0; transform-origin: left; }
+.vc-tr-spend-meter [data-spend-month-fill] { background: color-mix(in srgb, var(--color-secondary) 40%, transparent); }
+.vc-tr-spend-meter [data-spend-call-fill] { background: var(--vc-teal-ink); }
+.vc-tr-spend-value { color: var(--color-primary); font-weight: 600; }
+.vc-tr-spend-cap { color: var(--color-muted); }
+.vc-tr-spend [data-tone="warning"], .vc-tr-spend [data-tone="warning"] .vc-tr-spend-value { color: var(--color-warning); }
+.vc-tr-spend [data-tone="danger"], .vc-tr-spend [data-tone="danger"] .vc-tr-spend-value { color: var(--color-danger); }
 .vc-tr-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; user-select: text; padding: 10px 12px 12px; }
 .vc-tr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .vc-tr-row { display: flex; flex-direction: column; min-width: 0; }

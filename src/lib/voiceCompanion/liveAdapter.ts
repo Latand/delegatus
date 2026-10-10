@@ -1,6 +1,6 @@
 "use client";
 
-import type { CompanionCommand, CompanionEvent, Locale, Payload, VoiceCompanionAdapter } from "./contract";
+import type { CompanionCommand, CompanionEvent, CompanionUsage, Locale, Payload, VoiceCompanionAdapter } from "./contract";
 import { createBrowserCues, type CompanionCues } from "./cues";
 import type { SessionTranscriptRecord } from "./transcriptRecord";
 import { BrowserCompanionMedia, type CompanionMedia, type MediaCallbacks } from "./media";
@@ -16,7 +16,7 @@ interface AdapterOptions {
 }
 type StopReason = Extract<Payload, { type: "playback.stopped" }>["reason"];
 /** A pause in played audio shorter than the transcript's display pause continues the same line. */
-const CONTINUE_MS = 1_500;
+export const CONTINUE_MS = 1_500;
 
 /** Typed adapter consumed by useVoiceCompanion. Server events own transcripts,
  * proposals, receipt/reply correlation and usage. Local events own played RMS.
@@ -37,6 +37,12 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   private observedId: string | null = null;
   private pendingDeliveries = new Set<string>();
   private requestId: string | null = null;
+  private project: string | null = null;
+  private syncedProject: string | null | undefined;
+  private contextSync: Promise<void> | null = null;
+  /** A dispatched context can have reached the server even when its reply is lost. */
+  private contextUncertain = false;
+  private muted = false;
   private cursor = 0;
   private seq = 0;
   private born = 0;
@@ -47,6 +53,9 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   private claimed = new Set<string>();
   /** `bound` is false while the audio waits for its line's words. */
   private playing: { responseId: string; itemId: string; bound: boolean; offsetMs: number; playedMs: number } | null = null;
+  private pauseTimer: ReturnType<typeof setTimeout> | null = null;
+  private paused = false;
+  private pausedAt: number | null = null;
   private lastPlayed: { responseId: string; itemId: string; bound: boolean; endedAt: number; playedMs: number } | null = null;
   /** Audio that ended before its words arrived, oldest first. */
   private unbound: Array<{ responseId: string; playedMs: number; reason: StopReason }> = [];
@@ -77,6 +86,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     if (this.starting) return this.starting;
     /* The tap is the user activation the sounds need. */
     this.cues.prepare();
+    this.project = options.project;
     const promise = this.begin(options);
     this.starting = promise;
     return promise.finally(() => { if (this.starting === promise) this.starting = null; });
@@ -84,6 +94,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   private async begin(options: { locale: Locale; project: string }): Promise<void> {
     await this.close();
     this.stopObserver();
+    this.contextSync = null; this.syncedProject = undefined; this.contextUncertain = false;
+    this.muted = false;
     const epoch = ++this.epoch;
     this.localSession = crypto.randomUUID(); this.requestId = crypto.randomUUID();
     this.cursor = 0; this.seq = 0; this.born = performance.now();
@@ -100,7 +112,10 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       this.sessionId = result.sessionId;
       this.observedId = result.sessionId;
       this.localSession = result.sessionId;
+      this.syncedProject = options.project;
+      void this.syncContext().catch(() => undefined);
       await media.answer(result.sdp);
+      this.contextMute();
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
       await this.readEvents();
       this.schedule(epoch);
@@ -133,6 +148,9 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     if (!sessionId) return Promise.resolve();
     const epoch = this.epoch;
     const promise = (async () => {
+      // Context acknowledgements can take longer than the heartbeat window.
+      // Reconcile independently; input stays paused until acknowledgement.
+      void this.syncContext().catch(() => undefined);
       const result = await this.request(undefined, `?sessionId=${encodeURIComponent(sessionId)}&after=${this.cursor}`);
       if (epoch !== this.epoch || !Array.isArray(result.events)) return;
       for (const value of result.events as CompanionEvent[]) {
@@ -151,6 +169,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
           if (this.timer) clearTimeout(this.timer); this.timer = null;
         }
       }
+      if (result.usage && typeof result.usage === "object") this.emit({ type: "usage.updated", usage: result.usage as CompanionUsage });
       this.schedule(epoch);
     })();
     this.poll = promise;
@@ -177,6 +196,13 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   }
   private playback(sample: { rms: number; playedMs: number; speaking: boolean }): void {
     if (!this.sessionId) return;
+    if (sample.speaking && this.paused && this.playing) {
+      if (this.pauseTimer) clearTimeout(this.pauseTimer);
+      this.pauseTimer = null;
+      this.paused = false; this.pausedAt = null;
+      // Media's played clock restarts for the resumed audible stretch.
+      this.playing.offsetMs = this.playing.playedMs;
+    }
     if (sample.speaking && !this.playing) {
       const paused = this.lastPlayed && this.clock() - this.lastPlayed.endedAt < CONTINUE_MS ? this.lastPlayed : null;
       if (paused && !paused.bound) this.unbound = this.unbound.filter(row => row.responseId !== paused.responseId);
@@ -188,20 +214,27 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       this.emit({ type: "playback.started", responseId: this.playing.responseId, itemId: this.playing.itemId, playedMs: this.playing.playedMs });
     }
     if (this.playing) {
-      this.playing.playedMs = this.playing.offsetMs + sample.playedMs;
+      if (!this.paused) this.playing.playedMs = this.playing.offsetMs + sample.playedMs;
       const { responseId, itemId, playedMs } = this.playing;
       if (sample.speaking) this.emit({ type: "playback.level", responseId, itemId, playedMs, rms: sample.rms });
-      else this.stopPlayback("ended");
+      else if (!this.paused) {
+        this.paused = true; this.pausedAt = this.clock();
+        this.emit({ type: "playback.level", responseId, itemId, playedMs, rms: 0 });
+        this.pauseTimer = setTimeout(() => { this.pauseTimer = null; this.stopPlayback("ended"); }, CONTINUE_MS);
+      }
     }
   }
   private stopPlayback(reason: StopReason): void {
+    if (this.pauseTimer) clearTimeout(this.pauseTimer);
+    const endedAt = this.pausedAt ?? this.clock();
+    this.pauseTimer = null; this.paused = false; this.pausedAt = null;
     const playing = this.playing;
     this.playing = null;
     if (!playing) return;
     const { responseId, itemId, playedMs, bound } = playing;
     this.emit({ type: "playback.stopped", responseId, itemId, playedMs, reason });
     if (!bound) this.unbound = [...this.unbound, { responseId, playedMs, reason }].slice(-4);
-    this.lastPlayed = reason === "ended" ? { responseId, itemId, bound, endedAt: this.clock(), playedMs } : null;
+    this.lastPlayed = reason === "ended" ? { responseId, itemId, bound, endedAt, playedMs } : null;
   }
   /** An explicit interruption: what plays is cut, and lines that never played will not. */
   private yieldPlayback(): void {
@@ -213,9 +246,43 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   async command(command: CompanionCommand): Promise<void> {
     if (!this.sessionId) throw new Error("SESSION_CLOSED");
     if (command.type === "interrupt") this.yieldPlayback();
-    if (command.type === "mute") this.media?.mute(command.muted);
+    if (command.type === "mute") { this.muted = command.muted; this.contextMute(); }
     await this.request({ action: "command", sessionId: this.sessionId, command });
     await this.readEvents();
+  }
+  async setProject(project: string | null): Promise<void> {
+    this.project = project;
+    this.contextMute();
+    await this.syncContext();
+  }
+  private contextMute(): void {
+    this.media?.mute(this.muted || (!!this.sessionId && (this.contextSync !== null || this.contextUncertain || this.project !== this.syncedProject)));
+  }
+  private syncContext(): Promise<void> {
+    if (this.contextSync) return this.contextSync;
+    if (!this.sessionId || (this.project === this.syncedProject && !this.contextUncertain)) return Promise.resolve();
+    const epoch = this.epoch;
+    const sessionId = this.sessionId;
+    this.contextUncertain = true;
+    this.contextMute();
+    const promise = (async () => {
+      while (epoch === this.epoch && this.sessionId === sessionId && (this.contextUncertain || this.project !== this.syncedProject)) {
+        const project = this.project;
+        this.contextUncertain = true;
+        await this.request({ action: "context", sessionId, project });
+        if (epoch === this.epoch && this.sessionId === sessionId) {
+          this.syncedProject = project;
+          this.contextUncertain = false;
+          this.contextMute();
+          this.emit({ type: "context.updated", project });
+        }
+      }
+    })().catch(error => {
+      if (epoch === this.epoch && this.sessionId) this.emit({ type: "error", code: "CONTEXT_UNCONFIRMED", recoverable: true });
+      throw error;
+    });
+    this.contextSync = promise;
+    return promise.finally(() => { if (this.contextSync === promise) { this.contextSync = null; this.contextMute(); } });
   }
   /** The one place the disconnect cue sounds: whichever end comes first, the others find it spent. */
   private disconnected(): void {
@@ -231,7 +298,9 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     const sessionId = this.observedId;
     if (!sessionId) return null;
     const result = await this.request(undefined, `?sessionId=${encodeURIComponent(sessionId)}&view=transcript`);
-    return Array.isArray(result.entries) ? result as unknown as SessionTranscriptRecord : null;
+    if (!Array.isArray(result.entries)) return null;
+    if (result.usage && typeof result.usage === "object") this.emit({ type: "usage.updated", usage: result.usage as CompanionUsage });
+    return result as unknown as SessionTranscriptRecord;
   }
   async refresh(): Promise<void> { await this.readEvents(); this.schedule(this.epoch); }
   private stopObserver(): void {

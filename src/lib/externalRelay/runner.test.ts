@@ -1,12 +1,13 @@
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
+import dns from "node:dns/promises";
 import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
 import { ownerRequest, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
 import { relayClaimCapabilities } from "./poller";
 import { setRelaySwitch } from "./switches";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,7 +16,7 @@ import { procBackend } from "@/lib/proc";
 import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
-import { advertisedSlots, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
+import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
@@ -1061,8 +1062,8 @@ async function runLoopCase(options: {
   role?: string; request?: ReturnType<typeof x1Request>; plan?: string;
   response?: (body: WireCall, attempt: number) => { status?: number; body?: unknown; drop?: boolean } | Promise<{ status?: number; body?: unknown; drop?: boolean }>;
   completeResponse?: (body: unknown, attempt: number) => { status?: number; body?: unknown };
-  runtime?: ToolLoopRuntime;
-  relayId?: string;
+  runtime?: ToolLoopRuntime & { ownerPorts?: import("./ownerRun").OwnerRunPorts };
+  relayId?: string; ownerTier?: boolean;
   reverseReadArrival?: boolean;
   heartbeatResponse?: (seq: number) => { status?: number; body?: unknown };
   features?: string[];
@@ -1109,7 +1110,7 @@ async function runLoopCase(options: {
   const paired = relay(`${server.origin}/v1`);
   if (options.features) paired.features = options.features;
   paired.id = options.relayId ?? `loop_${crypto.randomUUID()}`;
-  paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null };
+  paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null, ...(options.ownerTier !== undefined ? { ownerTier: options.ownerTier } : {}) };
   const previousSelection = accountManager.resolveHeadlessSpawn;
   const restoreFeatures = options.live ? setCodexFeatureReaderForTest(undefined) : undefined;
   if (options.live) {
@@ -1536,6 +1537,36 @@ const ownerResponse = (body: WireCall, overrides: Partial<ToolCallResult> = {}) 
   truncated: false, effect: "tool" in body && ["owner_list_grids", "owner_list_grid_chats"].includes(body.tool!) ? "read" : "action",
   delivered: false, replayed: false, calls_remaining: 15, audience: "owner", ...overrides,
 } });
+
+test("both owner switches preserve non-owner relay runs and reject offered owner tools", async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  let launches = 0;
+  const runtime = { ownerPorts: {
+    launch: async () => { launches++; throw Error("non-owner must not launch"); },
+    observe: async () => ({ state: "running" as const }), stop: async () => {},
+  } };
+  try {
+    for (const role of ["member", "admin", "anonymous_admin"]) {
+      const request = ownerRequest(`both_switches_${role}`);
+      const input = x1Request(role).input;
+      request.input.requester = input.requester;
+      request.input.conversation = input.conversation;
+      const options = { request, features: ownerFeatures, runtime,
+        plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};return {action:'reply',text:'Done',reply_to:null,calls:[]};` };
+      const off = await runLoopCase({ ...options, ownerTier: false });
+      const on = await runLoopCase({ ...options, ownerTier: true });
+      expect(on.completion).toMatchObject({ outcome: "answered" });
+      expect({ ...on.completion, duration_ms: 0 }).toEqual({ ...off.completion, duration_ms: 0 });
+      const surfaces = (run: typeof on) => run.rounds.map(({ prompt, schema }) => ({ prompt, schema }));
+      expect(surfaces(on)).toEqual(surfaces(off));
+      expect(on.calls).toEqual([]);
+      expect(on.record!.profile).not.toHaveProperty("owner");
+      expect(on.rounds[0].schema.properties.calls.items.properties.tool.enum).not.toContain("owner_create_grid");
+      expect(projectionsOf(on)[0]).toMatchObject({ status: "denied", code: "not_permitted" });
+    }
+    expect(launches).toBe(0);
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
 
 test("E3 owner pure 429 ceiling refunds its debit and permits completion with handoff", async () => {
   setRelaySwitch("relay:owner_tools:enabled", true);
@@ -2106,16 +2137,18 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
   const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
   const surfaces: Record<string, unknown> = {};
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-  async function replay(role: string) {
+  async function replay(role: string, ownerTier?: boolean) {
     const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
-    const run = await runLoopCase({ request, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
+    const run = await runLoopCase({ request, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
     const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
     const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
+    if (ownerTier !== undefined) delete view.targets[0]!.ownerTier;
     return { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))), calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
   }
   for (const role of cases) surfaces[role] = await replay(role);
   if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }
   expect(surfaces).toEqual(snapshot.surfaces);
+  for (const role of cases.filter(r => r !== "owner")) expect(await replay(role, true)).toEqual(snapshot.surfaces[role]);
   const { setRelaySwitch } = await import("./switches");
   const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
   try {
@@ -2127,3 +2160,289 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
     for (const role of ["admin", "anonymous_admin", "actions_admin"]) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
   } finally { fs.rmSync(switchFile, { force: true }); }
 }, 30000);
+
+
+for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "invalid_request"] as const)
+  test(`owner tier runner: ${scenario}`, async () => {
+    const { contextRequest } = await import("./request.fixture");
+    const { setRelaySwitch } = await import("./switches");
+    const { readConversations } = await import("./conversations");
+    const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
+    const bodies: Record<string, unknown>[] = [], stops: string[] = [], beats: Record<string, unknown>[] = [];
+    const id = `owner_${crypto.randomUUID()}`;
+    const server = await startTestRelay((req, body) => {
+      if (req.url?.endsWith("/heartbeat")) {
+        beats.push(body as Record<string, unknown>);
+        return scenario === "lease_lost" ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } };
+      }
+      return { body: { status: "ok" } };
+    });
+    const paired = relay(`${server.origin}/v1`);
+    paired.targets[0]!.ownerTier = true;
+    if (scenario === "owner_tools") paired.features = ownerFeatures;
+    updateRelayStore(s => ({ ...s, relays: [paired] }));
+    const request = { ...contextRequest, request_id: id, chat: { key: "owner-group" },
+      input: { ...contextRequest.input, ...(scenario === "owner_tools" ? { tools: ownerRequest().input.tools } : {}), requester: { ...contextRequest.input.requester, is_owner: scenario === "invalid_request" ? "true" : true } } };
+    const conversationsBefore = readConversations();
+    try {
+      setRelaySwitch("chat_conversations", true);
+      if (scenario === "owner_tools") setRelaySwitch("relay:owner_tools:enabled", true);
+      const completion = await runClaimedRequest(paired, request, undefined, {
+        command: "/missing-owner-must-never-run-cli", timeoutMs: scenario === "hard_cap" ? 50 : 2000,
+        ownerPorts: {
+          launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_owner_runner" } }; },
+          observe: async () => {
+            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null });
+            if (!beats.length || scenario === "lease_lost" || scenario === "hard_cap") return { state: "running" };
+            return { state: "ended", finalText: "Owner reply" };
+          },
+          stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
+        },
+      });
+      expect(readConversations()).toEqual(conversationsBefore);
+      expect(readRunLedger().runs).toEqual([]);
+      if (scenario === "invalid_request") { expect(completion).toMatchObject({ outcome: "declined", reason: "invalid_request" }); expect(bodies).toEqual([]); }
+      else {
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0]).toMatchObject({ cwd: os.homedir(), engine: "codex", model: "gpt-6-sol", effort: "low", accountId: "answer", clientAttemptId: `relay-owner-${id}`, mcpServers: ["viewer"], plugins: [] });
+        expect(beats.length).toBeGreaterThan(0);
+        expect(beats.every(b => !b.progress)).toBe(true);
+        const record = readAnswerRecord(paired.id, "target_1", id);
+        expect(record).toMatchObject({ profile: { webSearch: true, owner: true }, conversationId: "conversation_owner_runner" });
+        if (scenario === "answer" || scenario === "owner_tools") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply", reply_to: "m1" } }); expect(stops).toEqual([]); }
+        if (scenario === "lease_lost") { expect(completion).toBeNull(); expect(stops).toEqual(["interrupt"]); }
+        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "failed", reason: "hard_cap" }); expect(stops).toEqual(["interrupt"]); }
+      }
+    } finally { fs.rmSync(switchFile, { force: true }); await server.close(); }
+  });
+
+
+for (const phase of ["running", "pending"] as const) test(`owner cutoff through PATCH stops ${phase} host work and withholds late reply`, async () => {
+  const { NextRequest } = await import("next/server");
+  const { PATCH } = await import("@/app/api/external-relay/relays/[id]/route");
+  const completions: unknown[] = [], stops: string[] = [];
+  let notify!: () => void, release!: () => void;
+  const reached = new Promise<void>(r => { notify = r; });
+  const held = new Promise<void>(r => { release = r; });
+  let working = false;
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = `cutoff_${phase}`;
+  try {
+    const done = runClaimedRequest(paired, { ...contextRequest, request_id: requestId,
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      timeoutMs: 2000, ownerPorts: {
+        launch: async () => {
+          if (phase === "pending") { notify(); await held; }
+          working = true;
+          return { status: 202, body: { conversationId: `conversation_cutoff_${phase}` } };
+        },
+        observe: async () => { if (phase === "running") { notify(); await held; } return { state: "ended", finalText: "Late owner reply" }; },
+        stop: async (_id, action) => { stops.push(action); working = false; }, pollMs: 1, stopRetryMs: 1,
+      },
+    });
+    await reached;
+    const origin = "http://127.0.0.1:8899";
+    const response = await PATCH(new NextRequest(`${origin}/api/external-relay/relays/${paired.id}`, {
+      method: "PATCH", headers: { origin, host: "127.0.0.1:8899", "content-type": "application/json" },
+      body: JSON.stringify({ target: { id: "target_1", ownerTier: false } }),
+    }), { params: Promise.resolve({ id: paired.id }) });
+    expect(response.status).toBe(200);
+    if (phase === "pending") expect(readRunLedger().runs[0]?.ownerTurn).toMatchObject({ cancel: "kill" });
+    release();
+    expect(await done).toMatchObject({ outcome: "failed", reason: "cancelled" });
+    await Bun.sleep(20);
+    expect(working).toBe(false);
+    expect(stops).toEqual([phase === "pending" ? "kill" : "interrupt"]);
+    expect(JSON.stringify(completions)).not.toContain("Late owner reply");
+    const record = readAnswerRecord(paired.id, "target_1", requestId);
+    expect(record?.answer).toBeNull();
+    expect(record?.conversationId).toBe(`conversation_cutoff_${phase}`);
+    const { sweepExternalRelayOrphans } = await import("./poller");
+    await sweepExternalRelayOrphans();
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { release(); await service.close(); }
+});
+
+test("owner admission rechecks current store even when the claimed target object is stale", async () => {
+  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
+  let launches = 0;
+  try {
+    const completion = await runClaimedRequest(paired, { ...contextRequest, request_id: "stale_owner_admission",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => { launches++; return { status: 202, body: {} }; }, observe: async () => ({ state: "failed" }), stop: async () => {} },
+    });
+    expect(launches).toBe(0); expect(completion?.outcome).toBe("failed");
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { await service.close(); }
+});
+
+for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains failed-stop custody and recovers through sweep`, async () => {
+  const { sweepExternalRelayOrphans } = await import("./poller");
+  const service = await startTestRelay(req => req.url?.endsWith("/heartbeat") && trigger === "lease_lost"
+    ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let stops = 0, working = true, recover = false;
+  const ports = { launch: async () => ({ status: 202, body: { conversationId: `conversation_stop_${trigger}` } }),
+    observe: async () => ({ state: "running" as const }), stopRetryMs: 1, pollMs: 1,
+    stop: async () => { stops++; if (!recover) throw Error("control unavailable"); working = false; } };
+  try {
+    const done = await runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`,
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { timeoutMs: 20, ownerPorts: ports });
+    if (trigger === "lease_lost") expect(done).toBeNull(); else expect(done).toMatchObject({ reason: "hard_cap" });
+    expect(stops).toBe(3); expect(working).toBe(true);
+    expect(readRunLedger().runs[0]).toMatchObject({ conversationId: `conversation_stop_${trigger}`, ownerTurn: { cancel: "interrupt" } });
+    expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    expect(relayActivity(paired.id).lastOutcome).toBe("owner_stop_pending");
+    const { relayPollerStatus } = await import("./poller");
+    const { noteRelayOutcome } = await import("./activity");
+    noteRelayOutcome(paired.id, "failed:hard_cap");
+    expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_pending");
+    // A restarted Viewer still has the receipt-bound conversation to stop.
+    const { changeRun } = await import("./store");
+    changeRun(`stop_${trigger}`, r => ({ ...r, ownerPid: 999999999, ownerIdentity: "gone" }));
+    recover = true;
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(4); expect(working).toBe(false); expect(readRunLedger().runs).toEqual([]);
+  } finally { await service.close(); }
+});
+
+for (const admission of ["failed_receipt", "lost_response"] as const) test(`owner ${admission} keeps custody until host control confirms`, async () => {
+  const { sweepExternalRelayOrphans } = await import("./poller");
+  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let stops = 0, recover = false;
+  const conversationId = `conversation_${admission}`;
+  const ports = {
+    launch: async () => admission === "lost_response" ? { status: 202, body: {} }
+      : { status: 503, body: { conversationId } },
+    observe: async () => ({ state: "failed" as const, conversationId,
+      failure: { kind: "launch-failed" as const, detail: "receipt failed before cleanup was confirmed" } }),
+    stop: async () => { stops++; if (!recover) throw Error("control receipt pending"); }, stopRetryMs: 1,
+  };
+  try {
+    const completion = await runClaimedRequest(paired, { ...contextRequest, request_id: admission,
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { ownerPorts: ports });
+    expect(completion).toMatchObject({ outcome: "failed" });
+    expect(stops).toBe(3);
+    expect(readRunLedger().runs[0]).toMatchObject({ conversationId, ownerTurn: { cancel: "kill", admissionComplete: true } });
+    expect(readAnswerRecord(paired.id, "target_1", admission)?.conversationId).toBe(conversationId);
+    expect(readRunLedger().runs[0]!.ownerTurn!.confirmed).not.toBe(true);
+    expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    // Retry while the same Viewer is alive, without relying on a restart.
+    recover = true;
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(4); expect(readRunLedger().runs).toEqual([]);
+  } finally { await service.close(); }
+});
+
+test("owner credentials, host paths and key material never reach completion, answer records or diagnostics", async () => {
+  const { rotateOperatorSpawnCapability } = await import("@/lib/agent/operatorCapability");
+  const control = rotateOperatorSpawnCapability();
+  const spawn = randomBytes(32).toString("base64url");
+  const completions: unknown[] = [], diagnostics: unknown[][] = [];
+  const service = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) completions.push(body); return { body: { status: "ok" } }; });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.credential = randomBytes(32).toString("base64url");
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
+  const material = "fixture-private-material";
+  const pgpMaterial = "fixture-pgp-private-material";
+  const value = ["fixture", "host", "credential", "value"].join("-");
+  const json = JSON.stringify({ password: value, api_key: value });
+  const finalText = ["Done", json, JSON.stringify({ detail: json }), paired.credential, control, spawn, ...paths, "-----BEGIN PRIVATE KEY-----", material, "-----END PRIVATE KEY-----",
+    "-----BEGIN PGP PRIVATE KEY BLOCK-----", pgpMaterial, "-----END PGP PRIVATE KEY BLOCK-----"].join("\n");
+  const oldError = console.error;
+  console.error = (...args) => { diagnostics.push(args); };
+  try {
+    const outcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_scrubbed",
+      answer: { ...contextRequest.answer, max_chars: 32000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_scrubbed" } }), observe: async () => ({ state: "ended", finalText }), stop: async () => {} },
+    });
+    expect(outcome).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("Done") } });
+    const record = readAnswerRecord(paired.id, "target_1", "owner_scrubbed");
+    expect(completions).toHaveLength(1);
+    expect(record?.answer?.text).toContain("Done");
+    for (const surface of [completions, record, diagnostics]) for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(surface)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    const encoded = Array.from(paired.credential, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+    const encodedOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_encoded",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_encoded" } }),
+        observe: async () => ({ state: "ended", finalText: `{"detail":"${encoded}"}` }), stop: async () => {} },
+    });
+    expect(encodedOutcome).toMatchObject({ outcome: "answered", answer: { text: "[redacted]" } });
+    expect(completions[1]).toMatchObject({ answer: { text: "[redacted]" } });
+    expect(readAnswerRecord(paired.id, "target_1", "owner_encoded")?.answer?.text).toBe("[redacted]");
+    let partial = control.slice(0, 42) + `\\u${control.charCodeAt(42).toString(16).padStart(4, "0")}`;
+    for (let depth = 0; depth < 3; depth++) {
+      partial = JSON.stringify({ detail: partial });
+      const id = `owner_partial_${depth}`;
+      const result = await runClaimedRequest(paired, { ...contextRequest, request_id: id,
+        input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+        ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_partial" } }),
+          observe: async () => ({ state: "ended", finalText: partial }), stop: async () => {} },
+      });
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: "[redacted]" } });
+      expect(completions.at(-1)).toMatchObject({ answer: { text: "[redacted]" } });
+      expect(readAnswerRecord(paired.id, "target_1", id)?.answer?.text).toBe("[redacted]");
+      expect(JSON.stringify([completions, readAnswerRecord(paired.id, "target_1", id), diagnostics])).not.toContain(control.slice(0, 42));
+    }
+    for (const [kind, opaque] of [["home", "q".repeat(36) + ["", "home", "a"].join("-")],
+      ["vendor", "q".repeat(27) + ["", "sk", "r".repeat(12)].join("-")],
+      ["encoded", "%71" + "q".repeat(26) + ["", "sk", "r".repeat(12)].join("-")]] as const) {
+      const id = `owner_opaque_${kind}`;
+      const opaqueOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: id,
+        answer: { ...contextRequest.answer, max_chars: 32000 },
+        input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+        ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_opaque" } }),
+          observe: async () => ({ state: "ended", finalText: JSON.stringify({ detail: opaque }) }), stop: async () => {} },
+      });
+      const opaqueRecord = readAnswerRecord(paired.id, "target_1", id);
+      expect(opaqueOutcome).toMatchObject({ outcome: "answered" });
+      expect(opaqueRecord?.answer?.text).toContain("[redacted]");
+      expect(JSON.stringify([opaqueOutcome, opaqueRecord, completions])).not.toContain(opaque.slice(0, 27));
+    }
+    await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_safe_diagnostic",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      timeoutMs: 10, ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_diag" } }),
+        observe: async () => ({ state: "running" }), stop: async () => { throw Error(finalText); }, stopRetryMs: 1, pollMs: 1 },
+    });
+    for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(diagnostics)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    const { dropRun } = await import("./store"); dropRun("owner_safe_diagnostic");
+  } finally { console.error = oldError; await service.close(); }
+});
+
+for (const retry of [false, true]) test(`owner completion rechecks cutoff after DNS resolution${retry ? " on retry" : ""}`, async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((_req, body) => {
+    completions.push(body);
+    return retry && completions.length === 1 ? { drop: true } : { body: { status: "ok" } };
+  });
+  let reached!: () => void, release!: () => void;
+  const resolving = new Promise<void>(r => { reached = r; });
+  const held = new Promise<void>(r => { release = r; });
+  let attempts = 0, allowed = true;
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => {
+    if (++attempts === (retry ? 2 : 1)) { reached(); await held; }
+    return [{ address: "127.0.0.1", family: 4 }];
+  }) as unknown as typeof dns.lookup);
+  try {
+    const paired = relay(`${server.origin.replace("127.0.0.1", "relay-fixture.test")}/v1`);
+    const done = completeRelayRequest(paired, "owner_dns_fixture", {
+      lease_id: "lease_fixture", outcome: "answered", duration_ms: 0, answer: { action: "reply", text: "Late owner reply", reply_to: null },
+    }, Date.now, 45000, () => allowed);
+    await resolving; allowed = false; release();
+    expect(await done).toMatchObject({ body: { outcome: "failed", reason: "cancelled" }, delivery: "accepted" });
+    expect(completions.at(-1)).toMatchObject({ outcome: "failed", reason: "cancelled" });
+    expect(completions).toHaveLength(retry ? 2 : 1);
+  } finally { release(); lookup.mockRestore(); await server.close(); }
+});

@@ -56,6 +56,7 @@ function structuredConversation(
     parentConversationId?: `conversation_${string}`;
     registry?: AgentRegistry;
     pendingPermissions?: PendingPermissionRequest[];
+    pipeline?: boolean;
   } = {},
 ): { registry: AgentRegistry; path: string; conversationId: string } {
   const engine = options.engine ?? "codex";
@@ -67,6 +68,8 @@ function structuredConversation(
     engine,
     cwd: sandbox,
     transport: "structured",
+    ...(options.pipeline ? { memberships: [{ kind: "pipeline" as const, containerId: "pipeline-fixture", role: "builder", slot: "build",
+      stageId: "build", stageOrder: null, round: null, parentConversationId: null }] } : {}),
     accountId: options.accountId ?? `${engine}-subscription`,
     ...(options.parentConversationId ? { parentConversationId: options.parentConversationId } : {}),
   });
@@ -632,6 +635,7 @@ test("structured interrupt uses the runtime command channel", async () => {
   expect(commands).toEqual([{
     kind: "interrupt",
     operationId: "interrupt-one",
+    origin: { kind: "operator" },
     idempotencyKey: "interrupt-one",
     conversationId: fixture.conversationId,
     turnId: "turn-live",
@@ -661,6 +665,7 @@ test("structured kill enters the durable runtime command channel", async () => {
   expect(result).toMatchObject({ status: 202, body: { ok: true, structured: true, target: fixture.conversationId } });
   expect(commands).toEqual([{
     kind: "kill",
+    origin: { kind: "operator" },
     operationId: "kill-one",
     idempotencyKey: "kill-one",
     conversationId: fixture.conversationId,
@@ -711,6 +716,7 @@ test("structured kill addressed by conversationId enters the durable command cha
   expect(result).toMatchObject({ status: 202, body: { ok: true, structured: true, target: fixture.conversationId } });
   expect(commands).toEqual([{
     kind: "kill",
+    origin: { kind: "operator" },
     operationId: "kill-by-id",
     idempotencyKey: "kill-by-id",
     conversationId: fixture.conversationId,
@@ -796,11 +802,11 @@ test("a kill transport timeout with no durable record stays a retryable failure"
   expect(result).toEqual({ status: 503, body: { error: "runtime host request timed out" } });
 });
 
-test("a dead structured session replays its terminal kill outcome for path callers", async () => {
+test.each(["operator", "agent"] as const)("a dead structured session replays its terminal kill outcome for path callers (%s)", async actor => {
   const fixture = structuredConversation();
   terminateStructuredFixture(fixture);
 
-  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: "", action: "kill" }, {
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: "", action: "kill", actor: actor === "agent" ? { kind: "agent", conversationId: fixture.conversationId } : { kind: "operator" } }, {
     registry: fixture.registry,
     client: null,
     enabled: () => true,
@@ -812,11 +818,11 @@ test("a dead structured session replays its terminal kill outcome for path calle
   });
 });
 
-test("a dead structured session replays its terminal kill outcome for conversation-id callers", async () => {
+test.each(["operator", "agent"] as const)("a dead structured session replays its terminal kill outcome for conversation-id callers (%s)", async actor => {
   const fixture = structuredConversation();
   terminateStructuredFixture(fixture);
 
-  const result = await dispatchStructuredControl({ path: "", conversationId: fixture.conversationId, action: "kill" }, {
+  const result = await dispatchStructuredControl({ path: "", conversationId: fixture.conversationId, action: "kill", actor: actor === "agent" ? { kind: "agent", conversationId: fixture.conversationId } : { kind: "operator" } }, {
     registry: fixture.registry,
     client: null,
     enabled: () => true,
@@ -828,7 +834,7 @@ test("a dead structured session replays its terminal kill outcome for conversati
   });
 });
 
-test("a dead structured branch replays terminal kill without branch/root pane failures", async () => {
+test.each(["operator", "agent"] as const)("a dead structured branch replays terminal kill without branch/root pane failures (%s)", async actor => {
   const root = structuredConversation();
   const branch = structuredConversation({
     registry: root.registry,
@@ -837,12 +843,12 @@ test("a dead structured branch replays terminal kill without branch/root pane fa
   terminateStructuredFixture(branch);
   terminateStructuredFixture(root);
 
-  const branchResult = await dispatchStructuredControl({ path: branch.path, conversationId: "", action: "kill" }, {
+  const branchResult = await dispatchStructuredControl({ path: branch.path, conversationId: "", action: "kill", actor: actor === "agent" ? { kind: "agent", conversationId: branch.conversationId } : { kind: "operator" } }, {
     registry: root.registry,
     client: null,
     enabled: () => true,
   });
-  const rootResult = await dispatchStructuredControl({ path: "", conversationId: root.conversationId, action: "kill" }, {
+  const rootResult = await dispatchStructuredControl({ path: "", conversationId: root.conversationId, action: "kill", actor: actor === "agent" ? { kind: "agent", conversationId: root.conversationId } : { kind: "operator" } }, {
     registry: root.registry,
     client: null,
     enabled: () => true,
@@ -856,6 +862,56 @@ test("a dead structured branch replays terminal kill without branch/root pane fa
     status: 200,
     body: { ok: true, structured: true, target: root.conversationId, outcome: "delivered" },
   });
+});
+
+test.each(["dead", "failed"] as const)("an operator kill retains cancellation intent on a %s host", async outcome => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+  const fixture = structuredConversation({ pipeline: true });
+  if (outcome === "dead") terminateStructuredFixture(fixture);
+  const filename = path.join(process.env.LLV_STATE_DIR!, `stop-intent-${crypto.randomUUID()}.sqlite`);
+  let journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => 1000 });
+  const client = { command: async command => journal.executeOperation(command),
+    operationStatus: async id => journal.operationResult(id), effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor) } as RuntimeHostClient;
+  try {
+    const result = await dispatchStructuredControl({ path: fixture.path, conversationId: "", action: "kill", operationId: "operator-stop-intent" }, {
+      registry: fixture.registry, client, enabled: () => true, kick: () => {},
+    });
+    expect(result).toMatchObject({ status: 202, body: { operationId: "operator-stop-intent", receipt: { origin: "operator" } } });
+    journal.transitionOperation("operator-stop-intent", "failed");
+    journal.append({ scope: { type: "session", id: fixture.conversationId }, kind: "delta", payload: { text: "later history" } });
+    journal.compact(1);
+    expect(journal.operationResult("operator-stop-intent")).toBeNull();
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(await hasRuntimeSwitchKill(client, fixture.conversationId, new Date(1000).toISOString(), [], true)).toBe(true);
+    expect(journal.effectBatch(100, ["runtime.kill-boundary"])).toHaveLength(0);
+  } finally { journal.close(); }
+});
+
+test.each((["interrupt", "kill"] as const).flatMap(action => ["monitor", "api-client", "operator"].map(caller => ({ action, caller }))))
+("verified $caller custody reaches the durable $action boundary", async ({ action, caller }) => {
+  const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+  const fixture = structuredConversation({ pipeline: true });
+  const filename = path.join(process.env.LLV_STATE_DIR!, `control-author-${crypto.randomUUID()}.sqlite`);
+  const journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => 1000 });
+  journal.append({ scope: { type: "session", id: fixture.conversationId }, kind: "session-status", payload: {
+    conversationId: fixture.conversationId, sessionKey: { engine: "codex", sessionId: fixture.registry.conversation(fixture.conversationId as `conversation_${string}`)!.generations.at(-1)!.id },
+    host: "hosted", turn: "running", activeTurnId: "turn-live", writerClaim: "verified-control-writer", attentionIds: [],
+  } });
+  const client = { command: async command => journal.executeOperation(command), operationStatus: async id => journal.operationResult(id),
+    effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor) } as RuntimeHostClient;
+  try {
+    const result = await dispatchStructuredControl({ path: fixture.path, conversationId: "", action, operationId: "verified-control-origin",
+      actor: { kind: "operator" }, controlOrigin: caller === "operator" ? { kind: "operator" } : { kind: "agent", role: caller } },
+    { registry: fixture.registry, client, enabled: () => true, kick: () => {} });
+    expect(result).toMatchObject({ status: 202, body: { receipt: { status: action === "interrupt" ? "pending" : "queued",
+      origin: caller === "operator" ? "operator" : "system" } } });
+    journal.transitionOperation("verified-control-origin", "failed");
+    journal.append({ scope: { type: "session", id: fixture.conversationId }, kind: "delta", payload: { text: "later history" } });
+    journal.compact(1);
+    expect(await hasRuntimeSwitchKill(client, fixture.conversationId, new Date(1000).toISOString(), [], true)).toBe(caller === "operator");
+  } finally { journal.close(); }
 });
 
 test("disabled structured hosting leaves persisted ownership on the legacy control path", async () => {

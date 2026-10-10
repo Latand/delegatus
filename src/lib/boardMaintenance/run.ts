@@ -1,6 +1,6 @@
 import { statePath } from "@/lib/configDir";
 import { activeDrain } from "@/lib/selfUpdate/drain";
-import type { NextRequest } from "next/server";
+import { launchAutonomousConversation as launchMaintenanceConversation, observeSpawnedTurn } from "@/lib/agent/autonomousConversation";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createTask, patchTask } from "@/lib/tasks/commands";
@@ -18,7 +18,7 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
-import { reportSpawnHeaders, startDeferredSpawnWork, type ReportSpawnResult } from "@/lib/telegram/reportSpawn";
+import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
 import { claimMaintenanceRun, readMaintenanceProject, readMaintenanceRun, maintenanceRuns, previousMaintenanceRun, patchMaintenanceRun } from "./store";
 import { maintenanceRunIsLive, MAINTENANCE_LAUNCH_TIMEOUT_MS, MAINTENANCE_LAUNCH_GRACE_MS, MAINTENANCE_RUN_TIMEOUT_MS, type MaintenanceRun } from "./types";
 import { maintenanceBrief, maintenanceCardText, maintenanceCardDetails, parseMaintenanceReport } from "./text";
@@ -48,20 +48,7 @@ export interface BoardMaintenancePorts {
   launchTimeoutMs?: number;
 }
 
-/** The normal spawn lane, outside Next's request-scoped after(). */
-export async function launchMaintenanceConversation(body: Record<string, unknown>): Promise<ReportSpawnResult> {
-  const [{ executeSpawnRequest, productionSpawnCommandDependencies }, { ensureOperatorSpawnCapability }, { VIEWER_SPAWN_CAPABILITY_HEADER }] = await Promise.all([
-    import("@/lib/agent/spawnCommand"), import("@/lib/agent/operatorCapability"), import("@/lib/agent/spawnPolicy"),
-  ]);
-  const request = { headers: reportSpawnHeaders(ensureOperatorSpawnCapability(), VIEWER_SPAWN_CAPABILITY_HEADER), json: async () => body } as unknown as NextRequest;
-  // Loading the spawn lane is asynchronous; existing receipts keep their custody.
-  if (activeDrain() && !productionSpawnCommandDependencies.registry().spawnReceiptForClientAttempt(String(body.clientAttemptId))) {
-    return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } };
-  }
-  const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
-    autonomousAdmissionHeld: () => !!activeDrain(), defer: startDeferredSpawnWork });
-  return { status: response.status, body: await response.json() as Record<string, unknown> };
-}
+export { launchAutonomousConversation as launchMaintenanceConversation } from "@/lib/agent/autonomousConversation";
 export async function maintenanceWorkEvidence(project: string, now: number, sources: SeatTickSources, repoDir: string | null): Promise<TaskWorkEvidence[]> {
   const tasks = sources.tasks().filter(t => canonicalOrchestratorProject(t.project) === project && t.status !== "done");
   const pipelines = sources.pipelines().filter(p => canonicalOrchestratorProject(p.project) === project);
@@ -92,19 +79,7 @@ export async function maintenanceWorkEvidence(project: string, now: number, sour
   }).filter(e => e.verdict !== "idle");
 }
 export async function observeMaintenanceRun(run: MaintenanceRun, sources: SeatTickSources, finalMessage: typeof spawnNoticeFinalMessage = spawnNoticeFinalMessage): Promise<MaintenanceObservation> {
-  const registry = sources.registry();
-  const receipt = registry.spawnReceiptForClientAttempt(run.clientAttemptId);
-  const bound = receipt ? { conversationId: receipt.conversationId, launchId: receipt.launchId, path: receipt.artifactPath } : {};
-  if (receipt && (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted")) return { ...bound, state: "failed", failure: { kind: "launch-failed", detail: receipt.error ?? "launch refused" } };
-  const id = receipt?.conversationId ?? run.conversationId;
-  const record = id ? (await sources.liveness({ conversationId: id, stallAfterMs: 30 * 60_000, limit: 1 }))[0] : null;
-  if (record?.reason === "host_gone_turn_open") return { ...bound, state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } };
-  if (record?.reason === "launch_unproven_expired" || (!record || record.reason === "launch_unproven") && sources.now() - Date.parse(run.claimedAt) > MAINTENANCE_LAUNCH_GRACE_MS) return { ...bound, state: "failed", failure: { kind: "launch-failed", detail: "no host proved the launch" } };
-  if (receipt?.state === "completed" && record && ["host_alive_turn_idle", "host_gone_turn_settled"].includes(record.reason) && record.lastRecordAt && Date.parse(record.lastRecordAt) >= Date.parse(run.launchedAt ?? run.claimedAt)) {
-    const final = finalMessage(id!);
-    return { ...bound, state: "ended", finalText: final.text, turnError: final.error };
-  }
-  return { ...bound, state: "running" };
+  return observeSpawnedTurn(run, sources, finalMessage, MAINTENANCE_LAUNCH_GRACE_MS);
 }
 function createCard(run: MaintenanceRun, ports: BoardMaintenancePorts): string {
   const input = { project: run.project, text: maintenanceCardText((ports.locale ?? (() => operatorLocale() ?? "uk"))(), run, ports.timeZone?.() ?? operatorTimeZone() ?? undefined), details: maintenanceCardDetails(run), icon: "brush-cleaning", color: "slate", placement: "unplaced", clientRequestId: `board-maintenance:${run.runId}` };

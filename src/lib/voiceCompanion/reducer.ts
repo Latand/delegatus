@@ -1,4 +1,4 @@
-import type { CompanionEvent, CompanionMode, Delivery, Id, Proposal, Recipient } from "./contract";
+import type { CompanionEvent, CompanionMode, CompanionUsage, Delivery, Id, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type GateRefusal } from "./gate";
 import { liveProposalRefusal } from "./liveGate";
 
@@ -69,6 +69,9 @@ export type DelegationStage =
   | "cancelled"
   | "failed";
 
+export type OrchestratorAnswer = { reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; order: number };
+export type OrchestratorReport = OrchestratorAnswer & { at: number; project: string };
+
 export interface DelegationView {
   notice: "REPLY_PENDING" | "DELIVERY_UNCONFIRMED" | "DELIVERY_FAILED" | `DELIVERY_REFUSED:${string}` | null;
   callId: Id;
@@ -80,10 +83,14 @@ export interface DelegationView {
   delivery: Delivery | null;
   /** Why a delegation was refused, or why a waiting confirmation ended with nothing sent. */
   refusal: GateRefusal | string | null;
-  answer: { reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string } | null;
+  /** Latest answer retained for consumers of the original contract. */
+  answer: OrchestratorAnswer | null;
+  answers: readonly OrchestratorAnswer[];
 }
 
 export interface CompanionState {
+  usage: CompanionUsage | null;
+  orchestratorReports: readonly OrchestratorReport[];
   closure: { reason: Extract<CompanionEvent, { type: "session.closed" }>["reason"]; incomplete: boolean } | null;
   mode: CompanionMode | null;
   generation: number;
@@ -115,7 +122,7 @@ const TEXT_LIMIT = 4_000;
 const ID_LIMIT = 200;
 
 export const INITIAL_COMPANION_STATE: CompanionState = {
-  closure: null,
+  usage: null, orchestratorReports: [], closure: null,
   mode: null, generation: 0, phase: "offline", mouth: 0, playedMs: 0, revision: 0, lines: [], calls: [], delegation: null,
   playing: null, error: null, seen: new Set(), levelSeq: -1, reports: new Set(), deliveryCards: [],
 };
@@ -211,7 +218,7 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
   const next = reduceCurrent(state, event);
   if (next === state) return state;
   const deliveryEvent = ["delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"].includes(event.type);
-  const retainedCardEvent = event.type === "delegation.confirmed" || deliveryEvent;
+  const retainedCardEvent = event.type === "delegation.confirmed" || event.type === "delegation.retargeted" || deliveryEvent;
   if (next.delegation === state.delegation && !retainedCardEvent) return next;
   const cards = [...state.deliveryCards];
   const reports = new Set(next.reports);
@@ -227,7 +234,7 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
   }
   if (retainedCardEvent) {
     for (let i = 0; i < cards.length; i++) {
-      if (cards[i].callId === next.delegation?.callId) continue;
+      if (cards[i].callId === next.delegation?.callId) { cards[i] = next.delegation; continue; }
       // Apply events to their retained proposal by identity. Delivery events
       // still pass the complete frozen-binding checks in reduceCurrent.
       const reduced = reduceCurrent({ ...state, delegation: cards[i] }, event);
@@ -236,7 +243,7 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
     }
   }
   if (next.delegation?.delivery) {
-    const index = cards.findIndex(row => row.delivery?.clientMessageId === next.delegation!.delivery!.clientMessageId);
+    const index = cards.findIndex(row => row.callId === next.delegation!.callId);
     if (index < 0) cards.push(next.delegation);
     else cards[index] = next.delegation;
   }
@@ -260,6 +267,13 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       calls: state.calls.map((call) => (call.status === "running" ? { ...call, status: "failed" as const, result: null } : call)),
       phase: state.phase === "offline" ? "offline" : "idle" };
   }
+  // Poll snapshots are local observations, outside the persisted event ring and its deduplication set.
+  if (event.type === "usage.updated") {
+    if (base.usage && Object.entries(event.usage).every(([key, value]) => base.usage![key as keyof CompanionUsage] === value)) return base;
+    return { ...base, usage: event.usage, revision: base.revision + 1 };
+  }
+  if (event.type === "context.updated") return base.error === "CONTEXT_UNCONFIRMED"
+    ? { ...base, error: null, revision: base.revision + 1 } : base;
   if (event.type === "playback.level") {
     if (event.seq <= base.levelSeq || base.playing?.responseId !== event.responseId) return base;
     return { ...base, mouth: clamp01(event.rms), playedMs: ms(event.playedMs), levelSeq: event.seq };
@@ -345,7 +359,7 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
     case "delegation.tool.called": {
       if (!validId(event.callId)) return base;
       /* A tool call is a candidate and nothing more: it opens no delivery. */
-      return next({ delegation: { callId: event.callId, instruction: bounded(event.instruction), stage: "proposed", proposal: null, sourceText: null, delivery: null, refusal: null, answer: null, notice: null } });
+      return next({ delegation: { callId: event.callId, instruction: bounded(event.instruction), stage: "proposed", proposal: null, sourceText: null, delivery: null, refusal: null, answer: null, answers: [], notice: null } });
     }
     case "delegation.sending": {
       const { proposal } = event;
@@ -366,6 +380,17 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       if (!verdict.admit) return next({ delegation: { ...base.delegation, stage: "refused", refusal: verdict.reason } });
       const sourceText = inputs.find((input) => input.itemId === proposal.sourceItemId)?.text ?? null;
       return next({ delegation: { ...base.delegation, stage: "awaiting-confirmation", proposal, sourceText, instruction: bounded(proposal.instruction) } });
+    }
+    case "delegation.retargeted": {
+      const current = base.delegation;
+      if (!current?.proposal || current.proposal.proposalId !== event.proposalId || current.proposal.recipient.project !== event.recipient.project) return next({});
+      const pending = ["proposed", "awaiting-confirmation", "sending"].includes(current.stage) && !current.delivery;
+      const refusedSeat = ["refused", "failed"].includes(current.stage) && current.refusal === "voice_seat_changed" && !current.delivery?.operationId;
+      // A server retarget event also proves a refused seat for an earlier delivery with no operation.
+      const unknownSeat = current.stage === "unknown" && current.delivery?.operationId === null;
+      if (!pending && !refusedSeat && !unknownSeat) return next({});
+      return next({ delegation: { ...current, proposal: { ...current.proposal, recipient: event.recipient },
+        ...(refusedSeat || unknownSeat ? { stage: "sending", delivery: null, refusal: null, notice: null } : {}) } });
     }
     case "delegation.confirmed": {
       const current = base.delegation;
@@ -401,6 +426,11 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       if (!sendingRefusal && !settles(current.delivery, event.delivery)) return next({});
       return next({ delegation: { ...current, stage: event.status, delivery: event.delivery, refusal: event.code ?? current.refusal, notice: event.status === "failed" ? (event.code ? `DELIVERY_REFUSED:${event.code}` : "DELIVERY_FAILED") : "REPLY_PENDING" } });
     }
+    case "orchestrator.report": {
+      if (!validId(event.reportId) || base.reports.has(event.reportId)) return next({});
+      const report = { reportId: event.reportId, status: event.status, text: bounded(event.text), order: event.seq, at: event.at, project: event.project };
+      return next({ reports: new Set(base.reports).add(event.reportId), orchestratorReports: [...base.orchestratorReports, report] });
+    }
     case "orchestrator.answer": {
       const current = base.delegation;
       /* Correlation is the whole delivery identity; a fresh report elsewhere
@@ -408,7 +438,8 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       if (!current || !answers(current.delivery, event.delivery) || !validId(event.reportId) || base.reports.has(event.reportId)) return next({});
       return next({
         reports: new Set(base.reports).add(event.reportId),
-        delegation: { ...current, stage: "answered", notice: null, answer: { reportId: event.reportId, status: event.status, text: bounded(event.text) } },
+        delegation: { ...current, stage: "answered", notice: null, answer: { reportId: event.reportId, status: event.status, text: bounded(event.text), order: event.seq },
+          answers: [...current.answers, { reportId: event.reportId, status: event.status, text: bounded(event.text), order: event.seq }] },
       });
     }
     case "error":

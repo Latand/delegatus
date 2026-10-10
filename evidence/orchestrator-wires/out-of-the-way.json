@@ -1,0 +1,175 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "method": "elementFromPoint on a 2 px grid; the drawn wires made hit-testable at the hit stroke's width",
+  "runs": [
+    {
+      "form": "1440-side",
+      "frame": "tabs",
+      "wires": [
+        "t-onboarding",
+        "t-upload"
+      ],
+      "tabs": [
+        {
+          "tab": "Inbox3",
+          "points": 405,
+          "lost": 0
+        },
+        {
+          "tab": "In progress8",
+          "points": 600,
+          "lost": 0
+        },
+        {
+          "tab": "Waiting2",
+          "points": 474,
+          "lost": 0
+        },
+        {
+          "tab": "Done4",
+          "points": 402,
+          "lost": 0
+        }
+      ]
+    },
+    {
+      "form": "1440-side",
+      "frame": "scrolled-right",
+      "wires": [],
+      "edge": 414,
+      "scrollLeft": 362,
+      "hit": {
+        "points": 92700,
+        "hits": 0,
+        "taken": {}
+      },
+      "drawn": {
+        "points": 92700,
+        "hits": 0,
+        "taken": {}
+      },
+      "tabs": [
+        {
+          "tab": "Inbox3",
+          "points": 405,
+          "lost": 0
+        },
+        {
+          "tab": "In progress8",
+          "points": 600,
+          "lost": 0
+        },
+        {
+          "tab": "Waiting2",
+          "points": 474,
+          "lost": 0
+        },
+        {
+          "tab": "Done4",
+          "points": 402,
+          "lost": 0
+        }
+      ]
+    },
+    {
+      "form": "1440-top",
+      "frame": "tabs",
+      "wires": [
+        "t-onboarding",
+        "t-upload"
+      ],
+      "tabs": [
+        {
+          "tab": "Inbox3",
+          "points": 405,
+          "lost": 0
+        },
+        {
+          "tab": "In progress8",
+          "points": 600,
+          "lost": 0
+        },
+        {
+          "tab": "Waiting2",
+          "points": 474,
+          "lost": 0
+        },
+        {
+          "tab": "Done4",
+          "points": 402,
+          "lost": 0
+        }
+      ]
+    },
+    {
+      "form": "1440-top",
+      "frame": "scrolled-right",
+      "wires": [
+        "t-upload"
+      ],
+      "edge": 248,
+      "scrollLeft": 196,
+      "hit": {
+        "points": 55350,
+        "hits": 0,
+        "taken": {}
+      },
+      "drawn": {
+        "points": 55350,
+        "hits": 0,
+        "taken": {}
+      },
+      "tabs": [
+        {
+          "tab": "Inbox3",
+          "points": 405,
+          "lost": 0
+        },
+        {
+          "tab": "In progress8",
+          "points": 600,
+          "lost": 0
+        },
+        {
+          "tab": "Waiting2",
+          "points": 474,
+          "lost": 0
+        },
+        {
+          "tab": "Done4",
+          "points": 402,
+          "lost": 0
+        }
+      ]
+    },
+    {
+      "form": "390",
+      "frame": "tabs",
+      "wires": [
+        "t-upload"
+      ],
+      "tabs": [
+        {
+          "tab": "inbox",
+          "points": 924,
+          "lost": 0
+        },
+        {
+          "tab": "assigned",
+          "points": 925,
+          "lost": 0
+        },
+        {
+          "tab": "blocked",
+          "points": 924,
+          "lost": 0
+        },
+        {
+          "tab": "done",
+          "points": 925,
+          "lost": 0
+        }
+      ]
+    }
+  ]
+}

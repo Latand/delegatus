@@ -129,6 +129,28 @@ test("each report the orchestrator brought back has a copy control of its own th
   expect(written).toHaveLength(before + answers.length);
 });
 
+test("standalone reports retain their full text, project, status and copy control, including after hangup", async () => {
+  const { record } = await open();
+  const text = "The orchestrator checked every requested case. ".repeat(15);
+  const entries = [...record.entries,
+    { id: "standalone-before", kind: "report" as const, atMs: 70_000, order: 100, data: { project: "Atlas", status: "progress", text } },
+    { id: "end", kind: "session_end" as const, atMs: 75_000, order: 101, data: {} },
+    { id: "standalone-after", kind: "report" as const, atMs: 80_000, order: 102, data: { project: "Beta", status: "result", text: `${text} All checks passed.` } },
+  ];
+  await act(async () => mounted!.root.render(<CompanionTranscript record={{ entries, truncated: false }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+  await act(async () => settle());
+  const reports = [...mounted!.host.querySelectorAll<HTMLElement>('[data-kind="report"]')];
+  expect(reports).toHaveLength(2);
+  expect(reports.map(report => report.querySelector(".vc-answer")!.textContent)).toEqual([text, `${text} All checks passed.`]);
+  expect(reports[0]!.textContent).toContain("Atlas");
+  expect(reports[0]!.textContent).toContain("Progress");
+  expect(reports[0]!.textContent).toContain("1:10");
+  expect(reports[1]!.textContent).toContain("Beta");
+  expect(reports[1]!.textContent).toContain("Result");
+  for (const report of reports) await click(report.querySelector("button"));
+  expect(written).toEqual([text, `${text} All checks passed.`]);
+});
+
 test("a collapsed call row keeps its chevron inside its card, so the row is as wide as the cards under it", () => {
   const css = TRANSCRIPT_CSS;
   expect(css).toMatch(/\.vc-tr-chev\s*\{[^}]*position:\s*absolute/);
@@ -142,6 +164,33 @@ test("Escape and the close control close it", async () => {
   expect(closed).toBe(1);
   await click(view.querySelector("[data-transcript-close]"));
   expect(closed).toBe(2);
+});
+
+test("a copy where the clipboard API refuses keeps focus in the panel, so Escape still closes it", async () => {
+  let closed = 0;
+  const { view } = await open(() => { closed += 1; });
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard")!;
+  const exec = document.execCommand;
+  const textarea = Object.getPrototypeOf(document.createElement("textarea")) as HTMLTextAreaElement;
+  const select = textarea.select;
+  /* A browser with no clipboard permission rejects writeText and the copy falls back to a selected textarea,
+     which takes focus as a browser's select() does. */
+  Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("NotAllowedError"); } }, configurable: true });
+  document.execCommand = () => true;
+  textarea.select = function (this: HTMLTextAreaElement) { this.focus(); select.call(this); };
+  try {
+    const button = view.querySelector<HTMLButtonElement>('[data-kind="speech"] button')!;
+    button.focus();
+    await click(button);
+    expect(button.getAttribute("aria-label")).toBe("copied");
+    expect(document.activeElement).toBe(button);
+    await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(closed).toBe(1);
+  } finally {
+    Object.defineProperty(navigator, "clipboard", clipboard);
+    document.execCommand = exec;
+    textarea.select = select;
+  }
 });
 
 test("a spoken confirmation and a retried request are lines of their own that open to their own arguments and result", async () => {
@@ -270,4 +319,89 @@ test("the request row's human label is set in the UI sans font, not the tool-nam
   expect(real.hasAttribute("data-human-label")).toBe(false);
   expect(TRANSCRIPT_CSS).toMatch(/\.vc-call-name\[data-human-label\]\s*\{[^}]*font-family:\s*inherit/);
   expect(TRANSCRIPT_CSS).toMatch(/\.vc-call-name\[data-human-label\]\s*\{[^}]*white-space:\s*nowrap/);
+});
+
+
+test("the transcript footer shows live, settled and incomplete spend with the month's meter and the call's share in both languages", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      await act(async () => setLocale(locale));
+      const usage = { callUsd: 0.19, callFinal: false, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 };
+      const render = async (value: typeof usage) => act(async () => root.render(<CompanionTranscript record={{ ...sampleTranscript(locale), usage: value }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+      await render(usage);
+      const line = () => host.querySelector<HTMLElement>("[data-companion-spend]")!;
+      expect(line().textContent).toBe(locale === "en" ? "This call $0.19 October $0.51 of $20.00" : "Ця розмова $0.19 жовтень $0.51 із $20.00");
+      expect(line().previousElementSibling?.hasAttribute("data-transcript-body")).toBe(true);
+      /* Variant 2's emphasis: both sums spent carry the weight, the cap is muted. */
+      const valued = (role: string) => line().querySelector<HTMLElement>(`[data-spend-amounts] [data-spend-value="${role}"]`)!;
+      expect([valued("usd"), valued("spent"), valued("cap")].map((node) => [node.className, node.textContent])).toEqual([["vc-tr-spend-value", "$0.19"], ["vc-tr-spend-value", "$0.51"], ["vc-tr-spend-cap", "$20.00"]]);
+      expect(TRANSCRIPT_CSS).toMatch(/\.vc-tr-spend-value\s*\{[^}]*font-weight:\s*600/);
+      expect(TRANSCRIPT_CSS).toMatch(/\.vc-tr-spend-cap\s*\{[^}]*color:\s*var\(--color-muted\)/);
+      expect(line().parentElement!.lastElementChild).toBe(line());
+      const meter = () => line().querySelector<HTMLElement>('[data-companion-spend-meter][role="meter"]')!;
+      const share = (kind: "call" | "month") => Number(line().querySelector<HTMLElement>(`[data-spend-${kind}-fill]`)!.style.transform.slice(7, -1));
+      expect(Number(meter().getAttribute("aria-valuenow"))).toBeCloseTo(2.55);
+      expect(meter().getAttribute("aria-valuetext")).toContain("$0.51");
+      expect(share("month")).toBeCloseTo(0.51 / 20);
+      expect(share("call")).toBeCloseTo(0.19 / 20);
+      expect(line().getAttribute("aria-label")).toContain("$20.00");
+      expect(line().hasAttribute("title")).toBe(false);
+      await render({ ...usage, callFinal: true, callUsd: 0.4, monthUsd: 16 });
+      expect(line().dataset.final).toBe("true");
+      expect(line().textContent).toContain("$0.40");
+      expect(line().querySelector('[data-tone="warning"]')).toBeTruthy();
+      expect(share("month")).toBe(0.8);
+      expect(share("call")).toBe(0.02);
+      await render({ ...usage, callIncomplete: true, callUsd: 0.004, monthUsd: 20 });
+      expect(line().textContent).toContain("<$0.01");
+      expect(line().textContent).toContain(locale === "en" ? "estimated" : "орієнтовно");
+      expect(line().title).toContain("OpenAI");
+      expect(line().querySelector('[data-tone="danger"]')).toBeTruthy();
+      expect(share("month")).toBe(1);
+      await render({ ...usage, monthUsd: 24, callUsd: 30 });
+      expect(share("month")).toBe(1);
+      expect(share("call")).toBe(1);
+      expect(meter().getAttribute("aria-valuenow")).toBe("100");
+      await render({ ...usage, monthUsd: 0, callUsd: 0, monthCapUsd: 0 });
+      expect(share("month")).toBe(0);
+      expect(share("call")).toBe(0);
+    }
+  } finally { await act(async () => setLocale("en")); }
+});
+
+test("a short call without final usage shows its retained reservation as an estimate", async () => {
+  const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+  const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
+  const { setLocale } = await import("@/lib/i18n");
+  const now = Date.UTC(2026, 9, 10);
+  const storage = new CompanionStorage(() => now);
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unused"); } }, () => now);
+  const session = admission.create({ project: "estimate", locale: "en", startedBy: { operator: true } });
+  storage.reserve(session.id, 0.27);
+  storage.observe(session.id, 0.002);
+  storage.settle(session.id, null);
+  const usage = storage.usageFor(session.id);
+  expect(usage).toMatchObject({ callUsd: 0.27, callFinal: false, callIncomplete: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      await act(async () => setLocale(locale));
+      await act(async () => root.render(<CompanionTranscript record={{ ...sampleTranscript(locale), usage }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+      const line = host.querySelector<HTMLElement>("[data-companion-spend]")!;
+      const qualifier = locale === "en" ? "estimated" : "орієнтовно";
+      expect(line.textContent).toContain(qualifier);
+      expect(line.textContent).toContain("$0.27");
+      expect(line.getAttribute("aria-label")!.toLowerCase()).toContain(qualifier);
+      expect(line.textContent).not.toMatch(/at least|щонайменше/iu);
+      expect(line.dataset.final).toBe("false");
+    }
+  } finally { await act(async () => setLocale("en")); }
 });

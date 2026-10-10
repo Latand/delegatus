@@ -1,6 +1,11 @@
+import { hostTurnRecordIdentity, readHostTurnRecord } from "@/lib/runtime/eventStore";
+import { engineRecordSince, processLaunchedAt } from "@/lib/runtime/liveness";
+import { withoutExitBookkeeping } from "@/lib/pipelines/durableEvidence";
+import { isTaskNotificationRecord } from "@/lib/pipelines/backgroundTasks";
+import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
-import { agentRegistry, resolveConversationAlias } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { getPipelines } from "@/lib/pipelines/engine";
@@ -214,6 +219,9 @@ export interface AgentLivenessSnapshot {
 }
 
 export interface AgentLivenessRequest {
+  /** Seat progression alone may reconcile a current writer's closed idle turn.
+      General liveness and update-drain readers retain native orphan work. */
+  reconcileStructuredIdle?: boolean;
   conversationId?: string;
   transcriptPath?: string;
   project?: string;
@@ -323,6 +331,7 @@ export interface AgentLivenessSources {
       Omitted, the file is stat'ed. */
   transcriptIdentity?(transcriptPath: string): Promise<string | null>;
   probe: LivenessProbe;
+  readHostTurnRecord?: typeof readHostTurnRecord;
 }
 
 export function productionLivenessSources(
@@ -345,6 +354,106 @@ export function productionLivenessSources(
     transcriptEvidence: readLivenessTranscriptEvidence,
     probe: livenessProbe(),
   };
+}
+
+/** A native Claude tool result can remain open after the writer closed its turn.
+ * The old host can stop recording before the CLI writes its final tool frames.
+ * A linked continuation predating the recovered writer belongs to that cut;
+ * prompts, notifications and work after the writer started retain custody.
+ * Only seat progression opts in; orphan work and release/drain custody keep
+ * their existing readers.
+ */
+async function reconcileWriterIdle(
+  evidence: LivenessTranscriptEvidence | null, path: string,
+  registry: LivenessRegistrySnapshot, sources: AgentLivenessSources,
+): Promise<LivenessTranscriptEvidence | null> {
+  if (evidence?.turn !== "busy" || !evidence.nativeTail || !evidence.identity) return evidence;
+  // Seat progression asks about the current generation's writer. A live
+  // sibling at the same path keeps its own drain verdict through the census.
+  const writerEntry = (snapshot: LivenessRegistrySnapshot): AgentRegistryEntry | null => {
+    const id = conversationIdForPath(snapshot, path);
+    const conversation = id ? canonicalConversation(snapshot, id) : null;
+    const generation = conversation?.generations.at(-1);
+    if (!generation || generation.path !== path) return null;
+    return Object.values(snapshot.entries).find(current => current.artifactPath === path
+      && current.key.engine === conversation!.engine && current.key.sessionId === generation.id) ?? null;
+  };
+  const entry = writerEntry(registry);
+  const writerStamp = (snapshot: LivenessRegistrySnapshot): string | null => {
+    const current = writerEntry(snapshot);
+    if (!current) return null;
+    const recorded = entryOwners(current, sources.probe).owners.find(candidate => candidate.role === "host"
+      && candidate.structuredHost && candidate.writerEpoch !== null && ownerProcessAlive(candidate, sources.probe));
+    const host = current?.structuredHost;
+    const owner = current?.claimOwner ? structuredClaimIdentity(current.claimOwner) : null;
+    const process = recorded?.identities[0];
+    if (current.key.engine !== "claude" || host?.kind !== "claude-broker"
+      || current.status !== "idle" || current.pendingAction !== null || host.activeTurnRef !== null
+      || host.pendingAttention.length > 0 || (host.pendingPermissions?.length ?? 0) > 0
+      || !owner?.startIdentity || !process?.startIdentity
+      || !sources.probe.pidAlive(owner.pid) || sources.probe.processIdentity(owner.pid) !== owner.startIdentity
+      || !sources.probe.pidAlive(process.pid) || sources.probe.processIdentity(process.pid) !== process.startIdentity
+      || current.claimEpoch <= 0 || current.claimEpoch !== host.writerClaimEpoch) return null;
+    const id = conversationIdForPath(snapshot, path);
+    const conversation = id ? canonicalConversation(snapshot, id) : null;
+    const generation = conversation?.generations.at(-1);
+    if (!generation || conversation?.engine !== current.key.engine
+      || generation.id !== current.key.sessionId || generation.path !== path) return null;
+    return JSON.stringify([id, current.key, current.claimOwner, owner, process, current.claimEpoch,
+      host.writerClaimEpoch, host.eventCursor, host.activeTurnRef, current.status, current.pendingAction]);
+  };
+  const stamp = writerStamp(registry);
+  if (!stamp || !entry) return evidence;
+  const sessionId = entry.key.sessionId;
+  const ledger = (sources.readHostTurnRecord ?? readHostTurnRecord)(sessionId);
+  if (ledger.state !== "read" || ledger.complete !== true || ledger.turn?.closed?.by !== "turn-ended"
+    || !ledger.turn.closed.seq || ledger.latestStatus?.status !== "idle"
+    || ledger.latestStatus.seq <= ledger.turn.closed.seq
+    || ledger.lastActivitySeq === undefined || ledger.lastActivitySeq > ledger.turn.closed.seq
+    || ledger.lastSeq !== entry.structuredHost!.eventCursor) return evidence;
+  // A prompt admitted by the native CLI can precede its first provider frame.
+  // Require ledger attribution or a proven continuation of the closed turn.
+  if (evidence.nativeTail.integrity !== "complete") return evidence;
+  const newestWork = evidence.nativeTail.records.findLast(record => record.type === "user" || record.type === "assistant");
+  if (!newestWork || typeof newestWork.uuid !== "string") return evidence;
+  const mirrored = ledger.framesBefore.some(frame => frame.uuid === newestWork.uuid && frame.turnId === ledger.turn!.turnId);
+  if (mirrored) {
+    if (engineRecordSince("claude", ledger, evidence.nativeTail) !== "empty") return evidence;
+  } else {
+    // File mtime can advance on status/cleanup writes long after the close.
+    // The verified current process's birth is the recovery boundary instead.
+    const startedAt = processLaunchedAt(entry.structuredHost!.process!.startIdentity);
+    const anchor = ledger.framesBefore.at(-1);
+    const records = evidence.nativeTail.records;
+    const anchorIndex = anchor ? records.findLastIndex(record => record.uuid === anchor.uuid) : -1;
+    if (startedAt === null || !anchor || anchor.turnId !== ledger.turn.turnId
+      || (anchorIndex < 0 && !evidence.nativeTail.prefixTruncated) || ledger.framesAfter.length > 0) return evidence;
+    let previousAt = Date.parse(String(anchorIndex < 0 ? anchor.timestamp ?? "" : records[anchorIndex]!.timestamp ?? ""));
+    if (!Number.isFinite(previousAt) || previousAt >= startedAt) return evidence;
+    const linked = new Set([anchor.uuid]);
+    const work = new Set(withoutExitBookkeeping(records.slice(anchorIndex + 1), false)
+      .filter(record => record.type === "user" || record.type === "assistant"));
+    if (work.size === 0) return evidence;
+    for (const record of records.slice(anchorIndex + 1)) {
+      if (isTaskNotificationRecord(record) || record.type === "queue-operation"
+        || record.type === "user" && !work.has(record)) return evidence;
+      const connected = typeof record.parentUuid === "string" && linked.has(record.parentUuid);
+      if (work.has(record)) {
+        const at = Date.parse(String(record.timestamp ?? ""));
+        const content = recordsValue(recordValue(record.message)?.content);
+        if (!connected || record.isSidechain === true || typeof record.uuid !== "string" || !record.uuid || linked.has(record.uuid)
+          || !Number.isFinite(at) || at < previousAt || at >= startedAt
+          || record.type === "user" && (content.length === 0 || content.some(part => part.type !== "tool_result"))) return evidence;
+        previousAt = at;
+      }
+      // Attachments can sit between a tool result and its next assistant frame.
+      if (connected && typeof record.uuid === "string") linked.add(record.uuid);
+    }
+  }
+  if (evidence.identity !== await transcriptFileIdentity(path)
+    || stamp !== writerStamp(sources.registrySnapshot())
+    || ledger.identity !== hostTurnRecordIdentity(sessionId)) return evidence;
+  return { ...evidence, turn: "idle" };
 }
 
 function isoOrNull(ms: number | null): string | null {
@@ -1038,7 +1147,9 @@ async function livenessSnapshotWithin(
           ?? sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: hydrationSignal });
         const evidence = await answer.within(read);
         if (evidence === ANSWER_SPENT && identity !== null && !carried) carryEvidence(entry.path, identity, read);
-        return evidence;
+        if (evidence === ANSWER_SPENT || request.reconcileStructuredIdle !== true) return evidence;
+        const reconciled = await answer.within(reconcileWriterIdle(evidence, entry.path, registry, sources));
+        return reconciled === ANSWER_SPENT ? evidence : reconciled;
       } catch (error) {
         /* One bad row costs one row. Cancellation is the exception: it is the
            caller going away, and it must still stop the pass. */

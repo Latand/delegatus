@@ -48,7 +48,18 @@ export type Delivery = {
 
 export type CompanionMode = "simulated" | "official-realtime";
 
+export interface CompanionUsage {
+  callUsd: number;
+  callFinal: boolean;
+  callIncomplete: boolean;
+  month: string;
+  monthUsd: number;
+  monthCapUsd: number;
+}
+
 export type Payload =
+  | { type: "usage.updated"; usage: CompanionUsage }
+  | { type: "context.updated"; project: string | null }
   | { type: "session.ready"; mode: CompanionMode }
   | { type: "session.closed"; reason: "operator" | "tool" | "cap" | "transport" | "error"; incomplete?: boolean }
   | { type: "input.speech.started"; itemId: Id }
@@ -71,6 +82,7 @@ export type Payload =
   | { type: "delegation.sending"; proposal: Proposal }
   /** The exception: the model asked for the operator's answer first. */
   | { type: "delegation.confirmation.required"; proposal: Proposal }
+  | { type: "delegation.retargeted"; proposalId: Id; recipient: Recipient }
   | { type: "delegation.confirmed"; proposalId: Id; via: "tap" | "speech"; confirmationItemId?: Id }
   | {
       type: "delegation.tool.result";
@@ -81,6 +93,7 @@ export type Payload =
         | { status: "refused" | "cancelled"; code: string };
     }
   | { type: "delegation.delivery.settled"; delivery: Delivery; status: "delivered" | "failed"; code?: string }
+  | { type: "orchestrator.report"; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; at: number; project: string }
   | { type: "orchestrator.answer"; delivery: Delivery; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string }
   | { type: "error"; code: string; recoverable: boolean };
 
@@ -106,6 +119,8 @@ export type CompanionCommand =
 export interface VoiceCompanionAdapter {
   readonly mode: CompanionMode;
   start(options: { locale: Locale; project: Id }): Promise<void>;
+  /** Updates browser context on the same call, including while it starts. */
+  setProject?(project: string | null): Promise<void>;
   subscribe(emit: (event: CompanionEvent) => void): () => void;
   command(command: CompanionCommand): Promise<void>;
   /** drains ownership cleanup; idempotent */

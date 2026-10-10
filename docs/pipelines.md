@@ -124,6 +124,16 @@ Pipeline stages cannot create another pipeline. The stage-kind validator and the
 
 A runtime switch is a durable record on the attempt. Same-engine moves interrupt the turn, apply the existing conversation reconfigure, and deliver one keyed continuation; account moves use the engine’s native fork/resume. An engine change first confirms the old host stopped, then starts a linked successor in the same stage slot with the bound brief and a bounded handoff. The tick replays persisted operation keys after restart. A failed move reuses its held continuation on the original runtime; an unconfirmed cancellation or launch parks with its reason. A newer operator kill and a lane close fence continuation. After commitment, verdict evidence starts at the new turn, and the former conversation cannot report the attempt. Allowed account selection and the attempt’s access/sandbox remain in force: the project’s allowed accounts are asked again when the queued move runs, before the new runtime is created and before it is published, so a target revoked after the request launches nothing and the attempt continues on its previous runtime. The speed is written exactly as chosen, and a repeated identical request after the move settled starts nothing. The operator switches a running stage in the runtime pill of its conversation: a model, reasoning, speed or account row there applies now, and the pill shows the switch under way and, when it does not take, whether the stage stayed on its runtime, continued there after a rollback, waits for a decision, or was stopped. An engine change goes through MCP `pipeline_action override-stage`.
 
+A recorded deploy, self-update or runtime-host restart cut automatically reserves
+one fresh attempt for that interrupted turn, preserving the bound brief and
+checkout. A later recorded cut of its replacement owes another fresh attempt;
+re-reading the same cut creates no duplicate. A saved provider wait yields to
+that restart when the restart ended the turn. A provider failure that ended the
+turn before the restart retains its scheduled recovery. Codex settings replay
+and native abort prose are bookkeeping; authenticated agent notifications keep
+recovery automatic. Operator stop, pause, close and delivered operator messages
+retain their cancellation fences. Unknown message authorship stays external.
+
 After a Delegatus restart, startup adoption consults the pipeline record before re-hosting a structured conversation: a conversation whose stage attempt has already settled (passed, failed, parked or skipped) is not resumed on the strength of its unfinished-turn claim alone, because no controller would accept its verdict or advance it. Work owed to it — a held delivery, a pending operation, an orchestrator recovery — can still make it eligible, subject to the evidence fences below.
 
 

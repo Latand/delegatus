@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
-import { POST as orchestratorMessage } from "@/app/api/orchestrator/message/route";
+import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
+import type { TeamActor } from "@/lib/team/contract";
 import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { pageBridgeReports } from "@/lib/bridge/store";
+import { readBridgeReportLog } from "@/lib/bridge/store";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -18,7 +19,8 @@ export const companionDeliveryPaths: CompanionDeliveryPaths = {
       conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, engine } : null;
   },
   send: binding => sendCompanionMessage(binding),
-  reports: project => pageBridgeReports({ inProject: candidate => canonicalProject(candidate) === canonicalProject(project), limit: 100 }).reports,
+  reports: project => readBridgeReportLog().reports.filter(report => report.project
+    && canonicalProject(report.project) === canonicalProject(project)),
   async receipt(delivery) {
     const receipt = delivery.operationId ? await resolveSendReceipt(delivery.operationId) : null;
     if (!receipt || receipt.conversationId !== delivery.recipient.conversationId || receipt.clientMessageId !== delivery.clientMessageId) return "pending";
@@ -27,16 +29,20 @@ export const companionDeliveryPaths: CompanionDeliveryPaths = {
 };
 
 export async function sendCompanionMessage(binding: Parameters<CompanionDeliveryPaths["send"]>[0],
-  route: (req: NextRequest) => Promise<Response> = orchestratorMessage): ReturnType<CompanionDeliveryPaths["send"]> {
-  const response = await route(new NextRequest("http://127.0.0.1/api/orchestrator/message", {
+  route: (req: NextRequest, options?: { actor: TeamActor }) => Promise<Response> = conversationHostPOST): ReturnType<CompanionDeliveryPaths["send"]> {
+  const actor: TeamActor = binding.startedBy && "memberId" in binding.startedBy
+    ? { kind: "member", memberId: binding.startedBy.memberId } : { kind: "operator" };
+  const response = await route(new NextRequest("http://127.0.0.1/api/conversation-host", {
     method: "POST", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
-    body: JSON.stringify({ project: binding.delivery.recipient.project, conversationId: binding.delivery.recipient.conversationId,
+    body: JSON.stringify({ orchestratorRelayProject: binding.delivery.recipient.project, conversationId: binding.delivery.recipient.conversationId,
       text: binding.text, clientMessageId: binding.delivery.clientMessageId,
+      policy: "steer-or-queue",
       voiceDelegatus: { sessionId: binding.sessionId, proposalId: binding.proposalId } }),
-  }));
+  }), { actor });
   const result = await response.json();
   if (response.status >= 400 && response.status < 500 && typeof result.code === "string")
-    return { status: "failed", operationId: null, code: result.code };
+    return { status: typeof result.operationId === "string" ? "unknown" : "failed",
+      operationId: typeof result.operationId === "string" ? result.operationId : null, code: result.code };
   if (!response.ok || typeof result.operationId !== "string") throw new Error("DELIVERY_UNCONFIRMED");
   const receipt = await resolveSendReceipt(result.operationId);
   return { status: receipt?.state === "delivered" ? "delivered" : receipt?.state === "failed" ? "unknown" : "queued", operationId: result.operationId };

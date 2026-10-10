@@ -263,6 +263,18 @@ test("settings this install refuses answer with local codes, never the service's
     expect((await patch(JSON.stringify({ target: { id: "bot", memberLimitPerHour: value } }))).status).toBe(200);
     expect(readRelayStore().relays.find((relay) => relay.id === "route_relay")?.targets[0]?.memberLimitPerHour).toBe(value);
   }
+  const untouched = readRelayStore().relays.find((relay) => relay.id === "route_relay")!.targets[0]!;
+  expect(Object.hasOwn(untouched, "ownerTier")).toBe(false);
+  for (const value of ["true", 1, null]) {
+    const response = await patch(JSON.stringify({ target: { id: "bot", ownerTier: value } }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe("refused_here");
+  }
+  for (const value of [true, false]) {
+    const response = await patch(JSON.stringify({ target: { id: "bot", ownerTier: value } }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).relay.targets[0].ownerTier).toBe(value);
+  }
 });
 test("recent answers and one exchange are read-only reads for the operator alone", async () => {
   const { answerRecorder } = await import("@/lib/externalRelay/answers");

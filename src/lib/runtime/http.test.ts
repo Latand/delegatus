@@ -2179,6 +2179,23 @@ test("runtime retry leaves an in-flight operation and its ownership unchanged", 
   expect(retries).toBe(0);
 });
 
+test.each([true, false].flatMap(browser => ["interrupt", "kill"].map(control => ({ browser, control }))))
+("control authorship comes from the authenticated surface ($control, browser=$browser)", async ({ browser, control }) => {
+  const commands: unknown[] = [];
+  const client = { command: async (command: unknown) => {
+    commands.push(command);
+    return { operationId: "interrupt-authorship", receipt: { operationId: "interrupt-authorship", status: "pending" } };
+  } } as unknown as RuntimeHostClient;
+  const response = await handleRuntimeCommand(request({ conversationId: "conversation_interrupt_authorship", operationId: "interrupt-authorship",
+    origin: browser ? { kind: "agent", role: "pipeline" } : { kind: "operator" },
+    ...(control === "kill" ? { sessionKey: { engine: "codex", sessionId: "stage-control" } } : {}) },
+    browser ? { host: "127.0.0.1", "sec-fetch-site": "same-origin" } : { host: "127.0.0.1" }), control as "interrupt" | "kill", {
+    enabled: () => true, structuredEnabled: () => true, client: () => client,
+  });
+  expect(response.status).toBe(202);
+  expect((commands[0] as { origin?: MessageOrigin })?.origin?.kind).toBe(browser ? "operator" : "agent");
+});
+
 test("a send no structured delivery owns is refused rather than admitted without a reservation", async () => {
   /* #1131: this was the last road by which `queued` could be a final answer.
      The structured path declines the conversation, and the direct command below

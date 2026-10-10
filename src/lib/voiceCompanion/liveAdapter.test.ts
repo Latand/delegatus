@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, jest, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,9 @@ import type { CompanionEvent } from "./contract";
 import type { MediaCallbacks, CompanionMedia } from "./media";
 import { FakeLiveProvider } from "./fakeProvider";
 import { CompanionBoardReads } from "./boardReads";
+
+beforeEach(() => jest.useFakeTimers());
+afterEach(() => jest.useRealTimers());
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-adapter-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -20,6 +23,10 @@ function fixture(extra: ConstructorParameters<typeof OfficialVoiceCompanionAdapt
   let opens = 0, closes = 0, muted = false, interrupts = 0;
   const requests: Record<string, unknown>[] = [];
   let serverEvents: CompanionEvent[] = [];
+  let usage: import("./contract").CompanionUsage | undefined;
+  let contextFailures = 0;
+  let contextGate: { promise: Promise<Response>; release: (response: Response) => void } | null = null;
+  let servedProject: string | null = null;
   let seq = 0;
   const event = (payload: Record<string, unknown>) => ({ ...payload, sessionId: "fixture-session", version: 1, generation: 1, seq: ++seq, eventId: `event-${seq}`, atMs: seq }) as CompanionEvent;
   const media: CompanionMedia = { open: async () => { opens++; return "v=0"; }, answer: async () => {}, mute: value => { muted = value; },
@@ -27,13 +34,23 @@ function fixture(extra: ConstructorParameters<typeof OfficialVoiceCompanionAdapt
   let clock = 0;
   const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, now: () => clock, media: cb => { callbacks = cb; return media; }, ...extra,
     fetch: (async (_url, init) => {
-      if (!init?.body) return Response.json({ events: serverEvents });
+      if (!init?.body) return String(_url).includes("view=transcript") ? Response.json({ entries: [], truncated: false, usage }) : Response.json({ events: serverEvents, usage });
       const body = JSON.parse(String(init.body)); requests.push(body);
-      if (body.action === "start") { serverEvents = [event({ type: "session.ready", mode: "official-realtime" })]; return Response.json({ sessionId: "fixture-session", sdp: "fake-answer" }); }
+      if (body.action === "context") {
+        if (contextFailures-- > 0) return Response.json({ code: "COMPANION_UNAVAILABLE" }, { status: 503 });
+        servedProject = body.project;
+        if (contextGate) { const held = contextGate; contextGate = null; return held.promise; }
+      }
+      if (body.action === "start") { servedProject = body.project; serverEvents = [event({ type: "session.ready", mode: "official-realtime" })]; return Response.json({ sessionId: "fixture-session", sdp: "fake-answer" }); }
       if (body.action === "close") serverEvents.push(event({ type: "session.closed", reason: "operator", incomplete: false }));
       return Response.json({ ok: true });
     }) as typeof fetch });
-  return { adapter, requests, media, event, push: (value: CompanionEvent) => serverEvents.push(value), advance: (ms: number) => { clock += ms; }, get callbacks() { return callbacks; },
+  return { adapter, requests, media, event, holdContextOnce: () => {
+    let release!: (response: Response) => void;
+    const promise = new Promise<Response>(resolve => { release = resolve; });
+    contextGate = { promise, release };
+    return (failed = false) => release(failed ? Response.json({ code: "COMPANION_UNAVAILABLE" }, { status: 503 }) : Response.json({ ok: true }));
+  }, failContextOnce: () => { contextFailures = 1; }, get servedProject() { return servedProject; }, usage: (value: import("./contract").CompanionUsage) => { usage = value; }, push: (value: CompanionEvent) => serverEvents.push(value), advance: (ms: number) => { clock += ms; jest.advanceTimersByTime(ms); }, get callbacks() { return callbacks; },
     get opens() { return opens; }, get closes() { return closes; }, get muted() { return muted; }, get interrupts() { return interrupts; } };
 }
 test("media starts on request, mouth follows played output, microphone echo preserves playback, and awaited hangup releases media", async () => {
@@ -180,7 +197,8 @@ async function served() {
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
   const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] });
   const provider = new FakeLiveProvider();
-  const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }),
+  const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads({ call: async () => ({}), projectFor: async () => "fixture", recipient: () => "conversation_fixture",
+    resolveProject: current => current ?? "fixture", review: () => { throw new Error("REVIEW_NOT_FOUND"); }, frame: async () => { throw new Error("FRAME_NOT_FOUND"); } }),
     provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
   let callbacks!: MediaCallbacks;
   let clock = 1_000;
@@ -205,7 +223,7 @@ async function served() {
   let at = 0;
   return {
     adapter, get state() { return state; }, get callbacks() { return callbacks; },
-    advance(ms: number) { clock += ms; },
+    advance(ms: number) { clock += ms; jest.advanceTimersByTime(ms); },
     /** One companion line from the provider, then the next poll; each starts after a display pause. */
     async says(text: string) {
       at += 3_000;
@@ -225,6 +243,7 @@ test("played audio reaches its own line in any order: audio before text, text be
   await f.says("Hello, I can help with the board.");
   expect(f.lines()).toEqual([["Hello, I can help with the board.", "playing", null]]);
   f.callbacks.playback({ speaking: false, rms: 0, playedMs: 1_000 });
+  f.advance(1500);
   expect(f.lines()).toEqual([["Hello, I can help with the board.", "played", null]]);
   expect(f.state.mouth).toBe(0);
   // The next answer, words first: its audio is its own and leaves the first line alone.
@@ -234,11 +253,13 @@ test("played audio reaches its own line in any order: audio before text, text be
   f.callbacks.playback({ speaking: true, rms: 0.4, playedMs: 0 });
   expect(f.lines().map(line => line[1])).toEqual(["played", "playing"]);
   f.callbacks.playback({ speaking: false, rms: 0, playedMs: 700 });
+  f.advance(1500);
   expect(f.lines().map(line => line[1])).toEqual(["played", "played"]);
   // Words that arrive after their audio stopped are shown as played.
   f.advance(2_000);
   f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
   f.callbacks.playback({ speaking: false, rms: 0, playedMs: 900 });
+  f.advance(1500);
   await f.says("Done.");
   expect(f.lines().map(line => line[1])).toEqual(["played", "played", "played"]);
   // An explicit interruption cuts audio whose words have not arrived; they arrive marked cut where it stopped.
@@ -260,6 +281,7 @@ test("played audio reaches its own line in any order: audio before text, text be
   f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 200 });
   expect([f.lines().at(-1)![1], f.state.playedMs]).toEqual(["playing", 800]);
   f.callbacks.playback({ speaking: false, rms: 0, playedMs: 300 });
+  f.advance(1500);
   expect(f.lines().map(line => line[1])).toEqual(["played", "played", "played", "cut", "played"]);
   // No line without words carries playback.
   expect(f.state.lines.filter(line => line.speaker === "companion" && !line.text)).toEqual([]);
@@ -284,6 +306,7 @@ test("late words reach their own audio oldest first: a finished answer keeps its
       expect(f.lines()).toEqual([["First answer.", "played", null], ["Second answer.", "cut", 200]]);
     } else {
       f.callbacks.playback({ speaking: false, rms: 0, playedMs: 700 });
+  f.advance(1500);
       expect(f.lines().map(line => line[1])).toEqual(["played", "played"]);
     }
     await f.adapter.dispose();
@@ -348,8 +371,186 @@ test("paced chunk gaps from 600 to 1400 ms keep one played line even with microp
     f.advance(gap); timeline += 400 + gap;
   }
   expect(state.lines.filter(line => line.speaker === "companion")).toHaveLength(1);
-  expect(state.lines[0]).toMatchObject({ itemId: "paced-line", playback: "played", text });
+  expect(state.lines[0]).toMatchObject({ itemId: "paced-line", playback: "playing", text });
+  f.advance(1500);
+  expect(state.lines[0]).toMatchObject({ playback: "played" });
   expect(f.interrupts).toBe(0);
   expect(events.filter(event => event.type === "playback.stopped" && event.reason === "interrupted")).toEqual([]);
   await f.adapter.dispose();
+});
+
+
+test("a 300 ms output pause rests the mouth and keeps one playback until 1500 ms of silence", async () => {
+  const f = fixture();
+  const events: CompanionEvent[] = [];
+  let state = INITIAL_COMPANION_STATE;
+  f.adapter.subscribe(event => { events.push(event); state = reduceCompanion(state, event); });
+  try {
+    await f.adapter.start({ project: "fixture", locale: "en" });
+    f.push(f.event({ type: "transcript.snapshot", speaker: "companion", itemId: "line", text: "First phrase. Next phrase.", final: true }));
+    await f.adapter.refresh();
+    f.callbacks.playback({ speaking: true, rms: 0.6, playedMs: 400 });
+    f.callbacks.playback({ speaking: false, rms: 0, playedMs: 400 });
+    f.advance(300);
+    expect(state.mouth).toBe(0);
+    expect(events.filter(event => event.type === "playback.stopped")).toHaveLength(0);
+    f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+    f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 200 });
+    expect(events.filter(event => event.type === "playback.started")).toHaveLength(1);
+    expect(state.playedMs).toBe(600);
+    f.callbacks.playback({ speaking: false, rms: 0, playedMs: 300 });
+    f.advance(1499);
+    expect(events.filter(event => event.type === "playback.stopped")).toHaveLength(0);
+    f.advance(101);
+    expect(events.filter(event => event.type === "playback.stopped")).toMatchObject([{ reason: "ended", playedMs: 700 }]);
+  } finally { await f.adapter.dispose(); }
+});
+
+
+test("context changes during microphone start reach the minted session without another start or hangup", async () => {
+  const f = fixture();
+  let opened!: (sdp: string) => void;
+  f.media.open = () => new Promise(resolve => { opened = resolve; });
+  const started = f.adapter.start({ project: "first", locale: "en" });
+  await Promise.resolve();
+  await f.adapter.setProject("second");
+  await f.adapter.setProject(null);
+  opened("v=0");
+  await started;
+  expect(f.requests.filter(row => row.action === "context")).toEqual([{ action: "context", sessionId: "fixture-session", project: null }]);
+  await f.adapter.setProject("third");
+  expect(f.requests.at(-1)).toEqual({ action: "context", sessionId: "fixture-session", project: "third" });
+  expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+  expect(f.requests.filter(row => row.action === "close")).toHaveLength(0);
+  await f.adapter.dispose();
+});
+
+
+test("live and ended usage updates arrive even when no new persisted events were added", async () => {
+  const f = fixture();
+  let state = INITIAL_COMPANION_STATE;
+  f.adapter.subscribe(event => { state = reduceCompanion(state, event); });
+  try {
+    await f.adapter.start({ project: "fixture", locale: "en" });
+    const seen = state.seen;
+    const usage = { callUsd: 0.19, callFinal: false, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 };
+    f.usage(usage);
+    await f.adapter.refresh();
+    expect(state.usage).toEqual(usage);
+    expect(state.seen).toBe(seen);
+    f.usage({ ...usage, callUsd: 0.4, callFinal: true, monthUsd: 0.72 });
+    await f.adapter.close();
+    expect(state.usage).toMatchObject({ callUsd: 0.4, callFinal: true, monthUsd: 0.72 });
+    expect(state.phase).toBe("offline");
+    f.usage({ ...usage, callUsd: 0.41, callFinal: true, monthUsd: 0.73 });
+    await f.adapter.transcript();
+    expect(state.usage).toMatchObject({ callUsd: 0.41, callFinal: true, monthUsd: 0.73 });
+  } finally { await f.adapter.dispose(); }
+});
+
+
+test("failed context updates pause input and retry on the same call before another project can receive speech", async () => {
+  const f = fixture();
+  let state = INITIAL_COMPANION_STATE;
+  f.adapter.subscribe(event => { state = reduceCompanion(state, event); });
+  try {
+    await f.adapter.start({ project: "project-a", locale: "en" });
+    for (const project of ["project-b", null]) {
+      f.failContextOnce();
+      await expect(f.adapter.setProject(project)).rejects.toThrow("COMPANION_UNAVAILABLE");
+      expect(f.muted).toBe(true);
+      expect(f.servedProject).not.toBe(project);
+      expect(state.error).toBe("CONTEXT_UNCONFIRMED");
+      await f.adapter.refresh();
+      expect(f.servedProject).toBe(project);
+      expect(f.muted).toBe(false);
+      expect(state.error).toBeNull();
+    }
+    await f.adapter.command({ type: "mute", muted: true });
+    await f.adapter.setProject("project-a");
+    expect(f.muted).toBe(true);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+    expect(f.requests.filter(row => row.action === "close")).toHaveLength(0);
+  } finally { await f.adapter.dispose(); }
+});
+
+test("healthy event polling keeps the real watchdog alive while a project acknowledgement is held", async () => {
+  const { CompanionStorage } = await import("./storage");
+  const { CompanionAdmission } = await import("./admission");
+  const { CompanionLiveSessions } = await import("./liveSession");
+  let now = Date.parse("2026-10-10T00:00:00Z");
+  const storage = new CompanionStorage(() => now); storage.updateSettings({ enabled: true });
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unused"); } }, () => now);
+  const provider = new FakeLiveProvider();
+  const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads({ call: async () => ({}), projectFor: async () => "first",
+    recipient: () => null, resolveProject: current => current!, review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); } }),
+    provider, { now: () => now, key: () => "synthetic-credential", closeTimeoutMs: 20 });
+  let muted = false;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let gets = 0;
+  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 1_000, cues: { prepare() {}, connect() {}, disconnect() {}, dispose() {} },
+    media: () => ({ open: async () => "v=0", answer: async () => {}, mute: value => { muted = value; }, interrupt() {}, close: async () => {} }),
+    fetch: (async (url, init) => {
+      if (!init?.body) {
+        gets++;
+        const query = new URL(String(url), "http://127.0.0.1").searchParams;
+        return Response.json({ events: await service.events(query.get("sessionId")!, Number(query.get("after"))) });
+      }
+      const body = JSON.parse(String(init.body));
+      if (body.action === "start") return Response.json(await service.start(body));
+      if (body.action === "context") { await service.context(body.sessionId, body.project); await held; }
+      if (body.action === "close") await service.close(body.sessionId);
+      return Response.json({ ok: true });
+    }) as typeof fetch });
+  await adapter.start({ project: "first", locale: "en" });
+  const session = Object.values(storage.read().sessions).at(-1)!;
+  const update = adapter.setProject("second");
+  try {
+    for (let second = 0; second < 36; second++) {
+      now += 1_000; jest.advanceTimersByTime(1_000);
+      for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+    }
+    expect(gets).toBeGreaterThan(30);
+    expect(storage.read().sessions[session.id].closed).toBe(false);
+    expect(provider.attached).toBe(1);
+    expect(provider.commands.some(command => command.type === "session.close")).toBe(false);
+    expect(muted).toBe(true);
+    release(); await update;
+    expect(muted).toBe(false);
+    expect(provider.sessions).toHaveLength(1);
+  } finally { release(); await update; await adapter.dispose(); }
+});
+
+for (const lost of [false, true]) test(`returning to the acknowledged project keeps input paused until reconciliation${lost ? " after a lost response" : ""}`, async () => {
+  const f = fixture();
+  let releaseB = (_failed = false) => {};
+  let releaseA = (_failed = false) => {};
+  try {
+    await f.adapter.start({ project: "project-a", locale: "en" });
+    releaseB = f.holdContextOnce();
+    const toB = f.adapter.setProject("project-b").catch(error => error);
+    expect(f.servedProject).toBe("project-b");
+    expect(f.muted).toBe(true);
+    const toA = f.adapter.setProject("project-a").catch(error => error);
+    expect(f.muted).toBe(true);
+    releaseA = f.holdContextOnce();
+    releaseB(lost);
+    if (lost) {
+      await Promise.all([toB, toA]);
+      expect(f.servedProject).toBe("project-b");
+      expect(f.muted).toBe(true);
+    }
+    const refreshing = lost ? f.adapter.refresh() : Promise.all([toB, toA]);
+    for (let turn = 0; turn < 12; turn++) await Promise.resolve();
+    expect(f.requests.filter(row => row.action === "context").map(row => row.project)).toEqual(["project-b", "project-a"]);
+    expect(f.servedProject).toBe("project-a");
+    expect(f.muted).toBe(true);
+    releaseA();
+    await refreshing;
+    await f.adapter.setProject("project-a");
+    expect(f.muted).toBe(false);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+    expect(f.requests.filter(row => row.action === "close")).toHaveLength(0);
+  } finally { releaseB(); releaseA(); await f.adapter.dispose(); }
 });

@@ -268,6 +268,8 @@ function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs):
 export type McpToolArgs = Record<string, unknown> & { clientRequestId?: unknown };
 export type McpToolPayload = Record<string, unknown>;
 export interface McpToolCallContext {
+  /** Trusted read projection; never accepted from serialized tool arguments. */
+  redactText?: (text: string) => string;
   signal?: AbortSignal;
   deadlineAt?: number;
   /** Numeric transport subphases, supplied by the service, never tool arguments. */

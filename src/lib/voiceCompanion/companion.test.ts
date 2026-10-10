@@ -12,6 +12,7 @@ import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CONTROL_SELECTOR, defa
 const TEXT_FOR_NARROW = "The orchestrator replied. The plan holds, with one gap: last month's saved exports need a migration test before the merge, and the old keys stay readable for anyone who still has them.";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
 import { DEMO_IDS, SCENARIOS, scenarioScript, scenarioText, type ScenarioName } from "./scenarios";
+import { REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { createSimulatedCompanion, syntheticLevel, virtualClock, type ScriptStep } from "./simulator";
 
 const RECIPIENT: Recipient = { project: "atlas", conversationId: "conversation_orchestrator", seatEpoch: 1, engine: "claude" };
@@ -599,6 +600,20 @@ describe("every scenario plays out on the contract", () => {
         const answered = run.events.findIndex((event) => event.type === "response.started");
         expect(run.events.findLastIndex((event) => event.type === "tool.result")).toBeLessThan(answered);
       }
+      /* More standalone reports than the lane holds arrive while the companion speaks, each kept once in arrival order. */
+      if (name === "reports") {
+        const reports = run.state().orchestratorReports;
+        expect(reports.map((report) => report.reportId)).toEqual(scenarioText(locale).reports.map((_, index) => `${DEMO_IDS.burstReportPrefix}${index + 1}`));
+        expect(reports.length).toBeGreaterThan(REPORT_CAP);
+        expect(reports.map((report) => report.text)).toEqual(scenarioText(locale).reports.map(([, text]) => text));
+        /* Every report arrives while the companion's answers are under way. */
+        const arrivals = run.events.flatMap((event, index) => (event.type === "orchestrator.report" ? [index] : []));
+        expect(arrivals[0]).toBeGreaterThan(run.events.findIndex((event) => event.type === "response.started"));
+        expect(arrivals.at(-1)).toBeLessThan(run.events.findLastIndex((event) => event.type === "playback.stopped"));
+        expect(run.state().lines.filter((line) => line.speaker === "companion").map((line) => line.text).slice(1)).toEqual([...scenarioText(locale).reportsSpoken]);
+        expect(run.state().lines.filter((line) => line.speaker === "operator").map((line) => line.text)).toEqual([scenarioText(locale).reportsAsk]);
+        expect(run.events.some((event) => event.type.startsWith("delegation.") || event.type.startsWith("tool."))).toBe(false);
+      }
       if (name === "readLong") expect(splitSpeech(run.state().lines.at(-1)!.text).length).toBeGreaterThan(4);
       if (name === "many") expect(run.state().lines.length).toBe(10);
       /* The very long answer needs more bubbles than the four shown at once, so older ones must leave. */
@@ -740,6 +755,43 @@ describe("a delivery and its answer bind the whole frozen identity", () => {
       at({ type: "orchestrator.answer", delivery, reportId: "r1", status: "result", text: "Again." }),
     ], queued());
     expect(state.delegation).toMatchObject({ stage: "answered", answer: { reportId: "r1", text: "The plan holds." } });
+  });
+
+  test("successive answers and standalone reports remain in report order, once each", () => {
+    let state = queued();
+    for (const reportId of ["r1", "r2", "r1"]) state = reduceCompanion(state, at({ type: "orchestrator.answer", delivery, reportId, status: "progress", text: reportId }));
+    expect(state.delegation?.answers.map(answer => answer.reportId)).toEqual(["r1", "r2"]);
+    for (const reportId of ["r3", "r4", "r3"]) state = reduceCompanion(state, at({ type: "orchestrator.report", reportId, status: "result", text: reportId, at: 10, project: RECIPIENT.project }));
+    expect(state.orchestratorReports.map(report => report.reportId)).toEqual(["r3", "r4"]);
+  });
+
+  test("retargeted confirmations and refused seats accept the successor while proven deliveries keep their binding", () => {
+    const recipient = { ...RECIPIENT, seatEpoch: 2, conversationId: "conversation_successor" };
+    const nextDelivery = { ...delivery, recipient, clientMessageId: "m-new", operationId: "op-new" };
+    const waiting = run([
+      at({ type: "session.ready", mode: "official-realtime" }),
+      at({ type: "delegation.tool.called", callId: "c1", sourceItemId: "input", instruction: "Review the plan" }),
+      at({ type: "delegation.confirmation.required", proposal: { proposalId: "p1", callId: "c1", sourceItemId: "input", instruction: "Review the plan", authority: "live-model", recipient: RECIPIENT } }),
+    ]);
+    const retargeted = run([
+      at({ type: "delegation.retargeted", proposalId: "p1", recipient }),
+      at({ type: "delegation.confirmed", proposalId: "p1", via: "tap" }),
+      at({ type: "delegation.tool.result", callId: "c1", result: { status: "queued", delivery: nextDelivery } }),
+    ], waiting);
+    expect(retargeted.delegation).toMatchObject({ stage: "queued", delivery: nextDelivery });
+    const unknown = run([at({ type: "delegation.tool.result", callId: "c1", result: { status: "unknown", delivery: { ...delivery, operationId: null } } })], confirmed());
+    const retried = run([
+      at({ type: "delegation.retargeted", proposalId: "p1", recipient }),
+      at({ type: "delegation.tool.result", callId: "c1", result: { status: "queued", delivery: nextDelivery } }),
+    ], unknown);
+    expect(retried.delegation).toMatchObject({ stage: "queued", delivery: nextDelivery });
+    const retained = reduceCompanion(retried, at({ type: "delegation.tool.called", callId: "next-call", sourceItemId: "input", instruction: "A newer request" }));
+    expect(retained.deliveryCards.filter(card => card.callId === "c1")).toHaveLength(1);
+    expect(retained.deliveryCards.find(card => card.callId === "c1")?.delivery).toEqual(nextDelivery);
+    const proven = reduceCompanion(queued(), at({ type: "delegation.retargeted", proposalId: "p1", recipient }));
+    expect(proven.delegation?.delivery).toEqual(delivery);
+    const refusal = run([at({ type: "delegation.tool.result", callId: "c1", result: { status: "refused", code: "voice_seat_changed" } })], confirmed());
+    expect(reduceCompanion(refusal, at({ type: "delegation.retargeted", proposalId: "p1", recipient })).delegation).toMatchObject({ stage: "sending", proposal: { recipient } });
   });
 
   for (const [name, other] of variants) {

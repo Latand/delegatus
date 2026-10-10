@@ -293,7 +293,7 @@ for (const engine of ["claude", "codex"] as const) test(`a spoken request and th
   const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
   const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
   const { CompanionLiveSessions } = await import("@/lib/voiceCompanion/liveSession");
-  const { CompanionBoardReads } = await import("@/lib/voiceCompanion/boardReads");
+  const { fixtureBoardReads } = await import("@/lib/voiceCompanion/boardReads.fixture");
   const { backendResponse, delegationCreated, FakeLiveProvider, functionCall, message } = await import("@/lib/voiceCompanion/fakeProvider");
   const { companionDeliveryPaths } = await import("@/lib/voiceCompanion/deliveryPaths");
   const storage = new CompanionStorage();
@@ -304,7 +304,7 @@ for (const engine of ["claude", "codex"] as const) test(`a spoken request and th
   provider.responder = (req, index) => req.input.some((item) => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
     : backendResponse(`resp_${index}`, [functionCall(`call-${call++}`, "request_orchestrator_delegation", { instruction: "Review the plan", asked_again: askedAgain })]);
   const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, companionDeliveryPaths),
-    new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
+    fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
     { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
   const said = (delta: string, at: number, speaker: "input" | "output" = "input") =>
     ({ type: `session.${speaker}_transcript.delta`, event_id: `${speaker}-${at}`, delta, start_ms: at, end_ms: at + 400 });

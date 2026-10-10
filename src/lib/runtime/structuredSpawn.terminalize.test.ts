@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
@@ -801,4 +801,69 @@ test("the actuation cap bounds one cycle and the remainder converges on the next
   for (const receipt of receipts) {
     expect(store.snapshot().receipts[receipt.launchId]!.state).toBe("failed");
   }
+});
+
+function queuedOwnerFixture(transport: "tmux" | "structured") {
+  const store = registry();
+  const cwd = path.dirname(store.filename);
+  const profile = emptyLaunchProfile({ cwd, title: "Owner queue fixture" });
+  const begun = store.beginSpawnRequest({ engine: "claude", cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
+    clientAttemptId: `relay-owner-queued-${transport}`, launchProfile: profile });
+  if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("queued owner fixture unavailable");
+  const prompt = "Owner queue fixture instruction";
+  store.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(0).toISOString(), accountId: "account-a", locale: "en",
+    spec: { engine: "claude", command: "claude", cwd, windowName: "owner-fixture", launchProfile: profile },
+    prompt, imageRefs: [], parentArtifactPath: null, pipelineSourceConversationId: null }, "Owner queue fixture");
+  store.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner);
+  return { store, cwd, receipt: begun.receipt };
+}
+
+for (const transport of ["tmux", "structured"] as const)
+for (const writerRefused of [false, true]) test(`queued ${transport} owner cutoff retires its prompt and fences recovery (writer refused: ${writerRefused})`, async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture(transport);
+  const { settleOwnerFirstPrompt } = await import("@/lib/externalRelay/ownerRun");
+  const writer = spyOn(store, "retireQueuedSpawnOffLoop");
+  if (writerRefused) writer.mockResolvedValue(false);
+  let launches = 0;
+  try {
+    expect(await settleOwnerFirstPrompt(receipt.clientAttemptId!, receipt.conversationId, store)).toMatchObject({ confirmed: !writerRefused });
+    if (writerRefused) expect(store.readOnlySnapshot().receipts[receipt.launchId]!.queuedPinnedSpawn).not.toBeNull();
+    else expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+    await terminalizeStaleStructuredSpawns(store, transport === "structured" ? DEAD_RUNTIME_CLIENT : null, {
+      resolveSpawnAccount: () => { throw Error("revoked queue must not resolve an account"); },
+      spawnTmuxAgent: async () => { launches++; throw Error("revoked owner tmux launch"); },
+      spawnStructuredConversation: async () => { launches++; throw Error("revoked owner structured launch"); },
+    });
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+    writer.mockRestore();
+    expect(await settleOwnerFirstPrompt(receipt.clientAttemptId!, receipt.conversationId, store)).toEqual({ confirmed: true, pending: false });
+  } finally { writer.mockRestore(); store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} owner recovery rechecks authorization after account admission waits`, async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture(transport);
+  const saved = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(cwd, "relay-state");
+  const { reserveRun, updateRelayStore } = await import("@/lib/externalRelay/store");
+  const { procBackend } = await import("@/lib/proc");
+  updateRelayStore(s => ({ ...s, relays: [{ id: "relay_fixture", paused: false, credential: crypto.randomUUID(),
+    targets: [{ id: "target_fixture", enabled: true, ownerTier: true }] } as typeof s.relays[number]] }));
+  reserveRun({ requestId: `queued-${transport}`, leaseId: "lease_fixture", relayId: "relay_fixture", targetId: "target_fixture",
+    ownerTurn: { clientAttemptId: receipt.clientAttemptId! }, conversationId: receipt.conversationId, ownerPid: process.pid,
+    ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null, runDir: "", startedAt: new Date().toISOString() }, 1);
+  let admissions = 0, launches = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, transport === "structured" ? DEAD_RUNTIME_CLIENT : null, {
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => { admissions++; await Promise.resolve();
+        updateRelayStore(s => ({ ...s, relays: s.relays.map(r => ({ ...r, paused: true })) }));
+        return { kind: "admissible", basis: "current", stale: false, retryAt: null }; },
+      spawnTmuxAgent: async () => { launches++; throw Error("revoked owner launch"); },
+      spawnStructuredConversation: async () => { launches++; throw Error("revoked owner launch"); },
+    });
+    expect(admissions).toBe(1); expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+    if (saved === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = saved; }
 });

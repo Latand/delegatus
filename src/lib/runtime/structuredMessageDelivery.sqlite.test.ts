@@ -6,6 +6,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { linkedPeer } from "@/lib/links/linked";
 import { updateRemoteProjects } from "@/lib/links/boardLinks";
 import { atomicWrite, setShared, writePeers, type Link } from "@/lib/links/state";
@@ -598,4 +599,75 @@ test("a rejected admission's settle and a refused requeue wait off the loop and 
     registry.close();
     made.cleanup();
   }
+});
+
+
+for (const writerRefused of [false, true]) test(`owner relay authorization lost during delivery claim (${writerRefused ? "writer refused" : "writer available"})`, async () => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "owner-first-prompt-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const artifactPath = path.join(cwd, "owner.jsonl");
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath,
+    cwd, accountId: "default", status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:owner-fixture", process: { pid: 101, startIdentity: "owner-fixture" },
+      eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: "structured-host:owner-fixture", pendingAction: null });
+  let allowed = true, commands = 0, checked = false;
+  const claim = registry.beginDeliveryAttemptOffLoop.bind(registry);
+  const spy = spyOn(registry, "beginDeliveryAttemptOffLoop").mockImplementation(async (...args) => {
+    const result = await claim(...args); allowed = false; return result;
+  });
+  const write = registry.deliveryWrite.bind(registry);
+  const writer = spyOn(registry, "deliveryWrite").mockImplementation(async (...args) => {
+    if (writerRefused && args[0].label === "delivery.owner-cutoff") return { acquired: false };
+    return write(...args);
+  });
+  const client = { readSession: async () => ({ conversationId: conversation.id, artifactPath,
+    sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+    capabilities: { steer: true, structuredAttention: true } }),
+    command: async () => { commands++; throw Error("revoked first prompt dispatched"); },
+  } as unknown as RuntimeHostClient;
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      clientMessageId: "owner-first-prompt", operationId: "owner-first-prompt", text: "Owner instruction" }, {
+      registry: () => registry, client: () => client, enabled: () => true, kick: () => {},
+      authorizeDispatch: () => { checked = true; if (!allowed) throw Error("owner relay revoked"); },
+    });
+    expect(checked).toBe(true); expect(commands).toBe(0);
+    if (writerRefused) {
+      expect(result).toMatchObject({ ok: false, status: 503, transportUncertain: true });
+      expect(Object.values(registry.snapshot().heldDeliveries)).toEqual(expect.arrayContaining([expect.objectContaining({ state: "delivery-uncertain" })]));
+    } else {
+      expect(result).toMatchObject({ ok: false, status: 403, error: "autonomous first prompt authorization revoked" });
+      expect(Object.values(registry.snapshot().heldDeliveries)).toEqual(expect.arrayContaining([expect.objectContaining({ state: "failed", text: "" })]));
+      expect(result && "transportUncertain" in result).toBe(false);
+    }
+  } finally { spy.mockRestore(); writer.mockRestore(); registry.close(); }
+});
+
+test("recovery fences a revoked owner's retained first prompt even while cancellation writes are refused", async () => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "owner-recovery-cutoff-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, clientAttemptId: "relay-owner-revoked-recovery", transport: "structured" });
+  if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+  const conversationId = begun.receipt.conversationId;
+  const delivery = registry.holdDelivery(conversationId, "Revoked owner instruction", `spawn_${begun.receipt.launchId}`, "text", [], null,
+    { operationId: `spawn_message_${begun.receipt.launchId}` });
+  let refused = true, commands = 0;
+  const write = registry.deliveryWrite.bind(registry);
+  const writer = spyOn(registry, "deliveryWrite").mockImplementation(async (...args) => {
+    if (refused && args[0].label === "delivery.owner-cutoff") return { acquired: false };
+    return write(...args);
+  });
+  const client = { command: async () => { commands++; throw Error("revoked recovery dispatched"); },
+    readSession: async () => { throw Error("revoked recovery inspected a host"); } } as unknown as RuntimeHostClient;
+  const request = { deliveryId: delivery.id, clientMessageId: delivery.clientMessageId!, path: "", conversationId, text: delivery.text, command: delivery.command, reconcileUncertain: true };
+  try {
+    expect(await deliverHeldStructuredMessage(request, { registry: () => registry, client: () => client, enabled: () => true })).toMatchObject({ outcome: "held" });
+    expect(commands).toBe(0); expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]!.text).toBe("Revoked owner instruction");
+    refused = false;
+    expect(await deliverHeldStructuredMessage(request, { registry: () => registry, client: () => client, enabled: () => true })).toBe("failed");
+    expect(commands).toBe(0); expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "failed", text: "" });
+  } finally { writer.mockRestore(); registry.close(); }
 });

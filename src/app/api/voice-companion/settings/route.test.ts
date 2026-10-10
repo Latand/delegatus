@@ -41,3 +41,15 @@ test("no settings request can choose a simulator: a backend, the demo or the rea
   expect(settings).toMatchObject({ enabled: false, monthlyCapUsd: 20 });
   expect(settings).not.toHaveProperty("backend");
 });
+
+test("settings in team mode require an active human session", async () => {
+  const { claimInstall } = await import("@/lib/team/members");
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { MEMBER_COOKIE } = await import("@/lib/team/sessions");
+  resetTeamStoreForTests();
+  const owner = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
+  expect(await (await GET(request("GET"))).json()).toEqual({ code: "MEMBER_REQUIRED" });
+  expect((await PUT(request("PUT", { enabled: true }))).status).toBe(401);
+  expect((await GET(request("GET", undefined, { cookie: `${MEMBER_COOKIE}=${owner.cookie}` }))).status).toBe(200);
+  resetTeamStoreForTests();
+});

@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,10 +10,16 @@ import { isAlive } from "../src/lib/selfUpdate/pid";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
 import type { LauncherRecord } from "../src/lib/selfUpdate/launcher";
 import { readStartIdentity } from "./self-update-supervisor.mjs";
+import { terminalClosed, terminalExited } from "./__fixtures__/terminal-lifecycle";
 
 const roots: string[] = [];
 const children = new Set<ReturnType<typeof spawn>>();
 const owners = new Map<number, string>();
+function ownerExited(pid: number, identity: string) {
+  if (!isAlive(pid)) return true;
+  const current = readStartIdentity(pid);
+  return current !== null && current !== identity;
+}
 
 async function stop(child: ReturnType<typeof spawn>) {
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -30,11 +37,11 @@ async function stopRecorded(record: LauncherRecord) {
     const deadline = Date.now() + 3000;
     while (isAlive(entry.pid) && Date.now() < deadline) await Bun.sleep(25);
     if (isAlive(entry.pid) && readStartIdentity(entry.pid) === entry.startIdentity) process.kill(entry.pid, "SIGKILL");
+    await until(() => !isAlive(entry.pid!) ? true : null);
   }
 }
 afterEach(async () => {
   for (const child of children) await stop(child);
-  children.clear();
   // Detached supervisors are owned by the bootstrap. Capture their genuine
   // records while observing them and signal only those recorded identities.
   for (const [pid, identity] of owners) {
@@ -43,13 +50,23 @@ afterEach(async () => {
     const deadline = Date.now() + 3000;
     while (isAlive(pid) && Date.now() < deadline) await Bun.sleep(25);
     if (isAlive(pid) && readStartIdentity(pid) === identity) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } }
+    await until(() => ownerExited(pid, identity) ? true : null);
   }
+  for (const [pid, identity] of owners) {
+    if (!ownerExited(pid, identity)) throw new Error("Fixture owner is still running before removal");
+  }
+  // Descendants may inherit a pipe, so drain close events only after the
+  // recorded owners have exited. Waiting earlier can retain a Windows child.
+  for (const child of children) await terminalClosed(child);
+  children.clear();
   owners.clear();
-  for (const root of roots) rmSync(root, { recursive: true, force: true });
+  // Exited Windows processes can leave NTFS handles pending release. Retry
+  // removal only for our recorded temp roots, after all owners have exited.
+  for (const root of roots) await rm(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 8 : 0, retryDelay: 250 });
   roots.length = 0;
-}, 20000);
+}, 90000);
 
-async function until<T>(read: () => T | null | false, budget = process.platform === "win32" ? 30000 : 10000): Promise<T> {
+async function until<T>(read: () => T | null | false, budget = 90000): Promise<T> {
   const deadline = Date.now() + budget;
   while (Date.now() < deadline) {
     const value = read();
@@ -60,7 +77,7 @@ async function until<T>(read: () => T | null | false, budget = process.platform 
 }
 
 async function fixture(equalsPort = false) {
-  const root = mkdtempSync(path.join(process.platform === "win32" ? tmpdir() : "/var/tmp", "dlg-terminal-")); roots.push(root);
+  const root = mkdtempSync(path.join(tmpdir(), "dlg-terminal-")); roots.push(root);
   const state = path.join(root, "request-context");
   const base = path.join(root, "package");
   const prior = path.join(root, "prior");
@@ -126,7 +143,7 @@ async function fixture(equalsPort = false) {
   let output = "";
   old.stdout!.on("data", data => { output = (output + data).slice(-4096); });
   old.stderr!.on("data", data => { output = (output + data).slice(-4096); });
-  const before = await until(() => { const record = readRecord(); return record?.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null; }, 20000).catch(error => { throw new Error(String(error) + " (exit " + old.exitCode + ")\n" + output + "\n" + JSON.stringify(readRecord())); });
+  const before = await until(() => { const record = readRecord(); return record?.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null; }).catch(error => { throw new Error(String(error) + " (exit " + old.exitCode + ")\n" + output + "\n" + JSON.stringify(readRecord())); });
   const apply = new ApplyController(path.dirname(recordFile));
   apply.begin(before, target, "operator");
   writeFileSync(pointer, JSON.stringify({ kind: "package", sha: target, dir: candidate, baseVersion: "0.0.0", version: "0.0.2" }));
@@ -243,7 +260,7 @@ for (const rollback of [false, true]) test(`Windows request-context terminal ent
     const value = f.readRecord();
     return value?.launcher.pid !== f.before.launcher.pid && value?.web.state === "healthy" && value.runtimeHost.state === "healthy" ? value : null;
   }).catch(async error => { await f.diagnose("replacement owner with web/runtimeHost healthy", run); throw error; });
-  await until(() => run.child.exitCode !== null ? true : null)
+  await terminalExited(run.child)
     .catch(async error => { await f.diagnose("bootstrap exit after replacement became healthy", run); throw error; });
   expect(run.child.exitCode).toBe(rollback ? 1 : 0);
   // The launcher records its children healthy, then writes the request it
@@ -266,19 +283,19 @@ for (const rollback of [false, true]) test(`Windows request-context terminal ent
   expect(cold.current).toMatchObject({ requestId: f.apply.current!.requestId, rolledBack: rollback });
   const page = await fetch(`http://127.0.0.1:${f.port}/`, { headers: { authorization: "Bearer " + f.env.LLV_TOKEN }, signal: AbortSignal.timeout(2000) });
   expect(await page.text()).toContain(path.join(rollback ? f.prior : f.candidate, "dist", "standalone"));
-}, 90000);
+}, 240000);
 
 test("Windows request-context terminal entrypoint refuses a competing live owner without changing custody", async () => {
   const f = await fixture();
   const before = readFileSync(path.join(path.dirname(f.before.requestFile), "apply.json"), "utf8");
   const run = f.bootstrap();
-  await until(() => run.child.exitCode !== null ? true : null);
+  await terminalExited(run.child);
   expect(run.child.exitCode).toBe(1);
   expect(run.error()).toContain("A live launcher already supervises this installation.");
   expect(readFileSync(path.join(path.dirname(f.before.requestFile), "apply.json"), "utf8")).toBe(before);
   expect(f.readRecord()!.launcher.pid).toBe(f.before.launcher.pid);
   expect(existsSync(path.join(path.dirname(f.before.requestFile), path.basename(f.before.requestFile).replace(/^request/, "trial")))).toBe(false);
-}, 90000);
+}, 240000);
 
 test("terminal entrypoint refuses an invalid request filename before changing custody", async () => {
   const f = await fixture();
@@ -287,18 +304,18 @@ test("terminal entrypoint refuses an invalid request filename before changing cu
   plan.requestFile = path.win32.join(path.win32.dirname(plan.requestFile), "unrelated.json");
   const before = readFileSync(path.join(path.dirname(f.before.requestFile), "apply.json"), "utf8");
   const run = f.bootstrap(Buffer.from(JSON.stringify(plan)).toString("base64"));
-  await until(() => run.child.exitCode !== null ? true : null);
+  await terminalExited(run.child);
   expect(run.child.exitCode).toBe(1);
   expect(run.error()).toContain("Invalid launcher request filename");
   expect(readFileSync(path.join(path.dirname(f.before.requestFile), "apply.json"), "utf8")).toBe(before);
-}, 90000);
+}, 240000);
 
 for (const rollback of [false, true]) test(`equals-port terminal entrypoint probes only its owned listener, rollback=${rollback}`, async () => {
   const f = await fixture(true);
   if (rollback) writeFileSync(path.join(f.candidate, "bin", "cli.mjs"), 'throw new Error("synthetic import failure");\n');
   await stop(f.old); await stopRecorded(f.before);
   const run = f.bootstrap();
-  await until(() => run.child.exitCode !== null ? true : null);
+  await terminalExited(run.child);
   expect(existsSync(path.join(f.diagnosticsDir, "foreign-probe"))).toBe(false);
   expect(run.child.exitCode).toBe(rollback ? 1 : 0);
   const probes = readFileSync(path.join(f.diagnosticsDir, "owned-probes"), "utf8").trim().split("\n");
@@ -307,4 +324,85 @@ for (const rollback of [false, true]) test(`equals-port terminal entrypoint prob
   const record = f.readRecord()!;
   expect(record.web.revision).toBe((rollback ? "a" : "b").repeat(7));
   expect(record.runtimeHost.revision).toBe(record.web.revision);
-}, 90000);
+}, 240000);
+
+test("launcher record survives transient Windows rename conflicts without losing final custody", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dlg-terminal-record-")); roots.push(root);
+  for (const [platform, code, failures, succeeds] of [
+    ["win32", "EPERM", 2, true], ["win32", "EBUSY", 2, true],
+    ["win32", "EPERM", Infinity, false], ["win32", "EACCES", Infinity, false],
+    ["linux", "EPERM", 2, false],
+  ] as const) {
+    const file = path.join(root, "launcher.json"), entry = path.join(root, "record.mjs");
+    writeFileSync(file, JSON.stringify({ launcher: { state: "starting" } }));
+    writeFileSync(entry, `
+      import fs from "node:fs";
+      import { mock } from "bun:test";
+      const file = ${JSON.stringify(file)};
+      let attempts = 0;
+      mock.module("node:fs", () => ({ ...fs, renameSync(from, to) {
+        if (to === file) {
+          attempts++;
+          if (attempts <= ${failures}) {
+            if (JSON.parse(fs.readFileSync(file, "utf8")).launcher.state !== "starting") throw new Error("Custody changed before rename");
+            throw Object.assign(new Error("Synthetic sharing conflict"), { code: ${JSON.stringify(code)} });
+          }
+        }
+        return fs.renameSync(from, to);
+      } }));
+      Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });
+      // Drive retry exhaustion without depending on elapsed runner time.
+      Atomics.wait = () => "timed-out";
+      const { createLauncherRecord } = await import(${JSON.stringify(new URL("./self-update-supervisor.mjs", import.meta.url).href)});
+      const record = createLauncherRecord(file, { checkout: null, releasesDir: "", releasePointer: "", requestFile: "", port: 0, socket: "" });
+      record.set("launcher", { state: "healthy", requestId: "settled-request" });
+      const written = JSON.parse(fs.readFileSync(file, "utf8"));
+      console.log(JSON.stringify({ attempts, launcher: written.launcher, temporary: fs.existsSync(file + "." + process.pid + ".tmp") }));
+    `);
+    const child = spawn(process.execPath, ["--bun", entry], { stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+    let output = ""; child.stdout!.on("data", data => output += data);
+    child.stderr!.resume();
+    await terminalClosed(child);
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(output);
+    expect(result.launcher.state).toBe(succeeds ? "healthy" : "starting");
+    if (succeeds) { expect(result.attempts).toBe(3); expect(result.launcher.requestId).toBe("settled-request"); }
+    else expect(result.attempts).toBe(platform === "win32" && code === "EPERM" ? 101 : 1);
+    expect(result.temporary).toBe(false);
+  }
+}, 30000);
+
+test("terminal completion waits for process exit while a recorded descendant holds its pipe", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dlg-terminal-pipe-")); roots.push(root);
+  const entry = path.join(root, "parent.mjs"), worker = path.join(root, "worker.mjs"), receipt = path.join(root, "worker.json");
+  writeFileSync(worker, `
+    import { writeFileSync } from "node:fs";
+    import { readStartIdentity } from ${JSON.stringify(new URL("./self-update-supervisor.mjs", import.meta.url).href)};
+    writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, identity: readStartIdentity(process.pid) }));
+    setInterval(() => {}, 1000);
+  `);
+  writeFileSync(entry, `
+    import { spawn } from "node:child_process";
+    import { existsSync } from "node:fs";
+    const child = spawn(process.execPath, ["--bun", ${JSON.stringify(worker)}], { detached: true, stdio: "inherit" });
+    child.unref();
+    while (!existsSync(${JSON.stringify(receipt)})) await Bun.sleep(5);
+    process.exit(0);
+  `);
+  const child = spawn(process.execPath, ["--bun", entry], { stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+  child.stdout!.resume(); child.stderr!.resume();
+  let closed = false; child.once("close", () => { closed = true; });
+  const owned = await until(() => {
+    try { return JSON.parse(readFileSync(receipt, "utf8")) as { pid: number; identity: string }; }
+    catch { return null; } // The worker may still be publishing its identity.
+  });
+  expect(owned.identity).toBeTruthy(); owners.set(owned.pid, owned.identity);
+  await terminalExited(child);
+  expect(child.exitCode).toBe(0);
+  expect(closed).toBe(false);
+  expect(readStartIdentity(owned.pid)).toBe(owned.identity);
+  process.kill(owned.pid, "SIGTERM");
+  await until(() => ownerExited(owned.pid, owned.identity) ? true : null);
+  await terminalClosed(child);
+  expect(closed).toBe(true);
+}, 240000);

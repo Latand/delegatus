@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Window } from "happy-dom";
 
 import { ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
-import { createOrchestratorWires, type OrchestratorWires } from "./orchestratorWires";
+import { createOrchestratorWires, pathLength, WIRE_RIDE_ID, type OrchestratorWires, type WiresHost } from "./orchestratorWires";
 
 /* The layer's life: nothing while no wire is shown, one wire per card for the
    hold, and nothing left behind after it. Geometry is the browser driver's. */
@@ -32,22 +34,23 @@ afterEach(async () => {
 
 const rect = (x: number, y: number, width: number, height: number) => ({ x, y, left: x, top: y, right: x + width, bottom: y + height, width, height, toJSON() {} }) as DOMRect;
 
-function board(options: { seat?: boolean } = {}) {
+function board(options: { seat?: boolean; host?: Partial<WiresHost> } = {}) {
   const root = document.createElement("div");
   root.className = "kb";
   root.innerHTML = `${options.seat === false ? "" : '<section data-kanban-seat="atlas" data-placement="side"></section>'}
-    <section class="column" data-status="assigned"><div class="col-body">
-      <article class="card" data-id="task:a"></article><article class="card" data-id="task:b"></article><article class="card" data-id="task:far"></article>
-    </div></section>`;
+    <div class="board-frame" tabindex="-1"><div class="board scroll"><section class="column" data-status="assigned"><div class="col-body">
+      <article class="card" data-id="task:a" tabindex="0"></article><article class="card" data-id="task:b"></article><article class="card" data-id="task:far"></article>
+    </div></section></div></div>`;
   document.body.append(root);
   const place = (selector: string, box: DOMRect) => { const node = root.querySelector<HTMLElement>(selector); if (node) node.getBoundingClientRect = () => box; };
   place("[data-kanban-seat]", rect(0, 60, 360, 820));
+  place(".board", rect(370, 70, 1070, 830));
   place(".column", rect(400, 80, 300, 800));
   place(".col-body", rect(400, 120, 300, 760));
   place('[data-id="task:a"]', rect(412, 130, 276, 120));
   place('[data-id="task:b"]', rect(412, 262, 276, 120));
   place('[data-id="task:far"]', rect(412, 2_000, 276, 120));
-  const layer = createOrchestratorWires({ root, phone: false });
+  const layer = createOrchestratorWires({ root, phone: false, ...options.host });
   layers.push(layer);
   const node = () => root.querySelector<HTMLElement>("[data-orchestrator-wires]");
   const drawn = () => [...root.querySelectorAll("[data-orchestrator-wires] g[data-wire]")].map((group) => group.getAttribute("data-wire"));
@@ -127,8 +130,8 @@ test("with motion, the hold is followed by a fade, and the clock ends the wire w
   expect(opacity()).toHaveLength(0);
   layer.probe.advance(ORCHESTRATOR_WIRE_HOLD_MS);
   expect(drawn()).toEqual(["a"]);
-  /* The wire's group and the seat's port, which goes with the last wire. */
-  expect(opacity().map((call) => call.node.getAttribute("data-wire") ?? call.node.getAttribute("class"))).toEqual(["a", "oa-port"]);
+  /* The wire's two pieces and the seat's port, which goes with the last wire. */
+  expect(opacity().map((call) => call.node.getAttribute("data-wire") ?? call.node.getAttribute("data-wire-end") ?? call.node.getAttribute("class"))).toEqual(["a", "a", "oa-port"]);
   /* A new action during the fade brings the wire back whole. */
   layer.act([{ kind: "stage", taskId: "a", pipelineId: null, at: Date.now() }]);
   expect(opacity()).toHaveLength(0);
@@ -195,7 +198,7 @@ test("a card whose port the column has scrolled under its header is counted at t
   layer.probe.advance(1_000);
   layer.act([{ kind: "stage", taskId: "a", pipelineId: null, at: Date.now() }]);
   expect(drawn()).toEqual(["a"]);
-  const cy = Number(root.querySelector("g[data-wire] .oa-port")!.getAttribute("cy"));
+  const cy = Number(root.querySelector("g[data-wire-end] .oa-port")!.getAttribute("cy"));
   expect(cy).toBeGreaterThanOrEqual(120 + 6);
 });
 
@@ -295,6 +298,271 @@ test("repeated actions in a hidden tab keep one pulse a wire, and the hold's end
   expect(node()).toBeNull();
   expect(live()).toEqual([]);
   expect(document.querySelectorAll(".oa-dot, .oa-ring").length).toBe(0);
+});
+
+describe("a wire under the pointer and the keyboard, and riding its column's scroll", () => {
+  /* docs/research/orchestrator-wires-hover-scroll.md §3–§4. */
+  const hits = (root: HTMLElement) => ({ seat: root.querySelector<SVGPathElement>("g[data-wire] path.oa-hit"), card: root.querySelector<SVGPathElement>("g[data-wire-end] path.oa-hit") });
+  const fire = (target: Element, type: string, init: Record<string, unknown> = {}) => {
+    const Event = type.startsWith("pointer") ? dom.PointerEvent : type.startsWith("key") ? dom.KeyboardEvent : type.startsWith("focus") ? dom.FocusEvent : dom.MouseEvent;
+    target.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }) as unknown as Event);
+  };
+
+  test("a drawn wire has a hit stroke wider than its own on both pieces, ending short of the card; the seat's piece is cut where the column shows", () => {
+    const { layer, root } = board();
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+    const { seat, card } = hits(root);
+    expect(seat).not.toBeNull();
+    expect(card).not.toBeNull();
+    /* The seat's piece takes the whole route; the card's runs down the gutter into the port, and stops 3.5 px short of the card. */
+    expect(seat!.getAttribute("d")).toBe(root.querySelector("g[data-wire] path.oa-wire")!.getAttribute("d"));
+    expect(card!.getAttribute("d")).toBe(root.querySelector("g[data-wire-end] path.oa-wire")!.getAttribute("d"));
+    expect(card!.getAttribute("d")!.endsWith("H408.5")).toBe(true);
+    expect(card!.getAttribute("d")!.startsWith("M391,")).toBe(true);
+    /* The card's piece sits in a box the size of the column's scroller, reaching left over the gutter. */
+    const clip = root.querySelector<HTMLElement>("[data-oa-clip]")!;
+    expect(clip.contains(card)).toBe(true);
+    expect([clip.style.left, clip.style.top, clip.style.width, clip.style.height]).toEqual(["384px", "120px", "316px", "760px"]);
+    /* The seat's piece is cut out of that box, so the two never draw over each other. */
+    const cut = root.querySelector(`${root.querySelector("g[data-wire]")!.getAttribute("clip-path")!.slice(4, -1)} path`)!;
+    expect(cut.getAttribute("clip-rule")).toBe("evenodd");
+    expect(cut.getAttribute("d")).toContain("M384,120 H700 V880 H384 Z");
+    /* Twelve pixels wide, butt-capped, the only part of the layer that takes the pointer. */
+    const css = readFileSync(join(import.meta.dir, "kanbanBoard.css"), "utf8");
+    const rule = css.match(/\[data-orchestrator-wires\] \.oa-hit \{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toContain("stroke-width: 12;");
+    expect(rule).toContain("stroke-linecap: butt;");
+    expect(rule).toContain("pointer-events: stroke;");
+    expect(css).toMatch(/\[data-orchestrator-wires\] \{[^}]*pointer-events: none;/);
+  });
+
+  test("hover marks the wire and both its ends, dims the rest and names the task; leaving clears it", () => {
+    const hovers: [string | null, Element | null][] = [];
+    const { layer, root, node } = board({ host: { onHover: (taskId, anchor) => hovers.push([taskId, anchor]) } });
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }, { kind: "pipeline", taskId: "b", pipelineId: "p2", at: Date.now() }]);
+    const { card } = hits(root);
+    fire(card!, "pointerover", { clientX: 391, clientY: 200 });
+    expect(hovers.map(([taskId]) => taskId)).toEqual(["a"]);
+    expect(hovers[0]![1]).not.toBeNull();
+    expect(node()!.hasAttribute("data-hovering")).toBe(true);
+    expect([...root.querySelectorAll("[data-hover]")].map((marked) => marked.getAttribute("data-wire") ?? marked.getAttribute("data-wire-end") ?? marked.getAttribute("class")).sort()).toEqual(["a", "a", "oa-port"]);
+    expect(root.querySelector('g[data-wire="b"]')!.hasAttribute("data-hover")).toBe(false);
+    /* From one piece to the other of the same wire, nothing changes. */
+    fire(card!, "pointerout", { relatedTarget: hits(root).seat });
+    fire(hits(root).seat!, "pointerover", { clientX: 380, clientY: 180 });
+    expect(hovers.at(-1)![0]).toBe("a");
+    fire(hits(root).seat!, "pointerout", { relatedTarget: document.body });
+    expect(hovers.at(-1)).toEqual([null, null]);
+    expect(root.querySelectorAll("[data-hover]").length).toBe(0);
+    expect(node()!.hasAttribute("data-hovering")).toBe(false);
+  });
+
+  test("a click, Enter and Space go to the task through the host; the card's piece is a link and the drawing is hidden from assistive technology", () => {
+    const jumps: string[] = [];
+    const { layer, root, node } = board({ host: { onJump: (taskId) => jumps.push(taskId), label: (taskId) => `Go to «${taskId}»` } });
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+    const { seat, card } = hits(root);
+    expect(card!.getAttribute("tabindex")).toBe("0");
+    expect(card!.getAttribute("role")).toBe("link");
+    expect(card!.getAttribute("aria-label")).toBe("Go to «a»");
+    expect(node()!.hasAttribute("aria-hidden")).toBe(false);
+    expect(node()!.querySelector("svg")!.getAttribute("aria-hidden")).toBe("true");
+    expect(seat!.hasAttribute("tabindex")).toBe(false);
+    fire(card!, "click");
+    expect(jumps).toEqual(["a"]);
+    fire(seat!, "click");
+    fire(card!, "keydown", { key: "Enter" });
+    fire(card!, "keydown", { key: " " });
+    fire(card!, "keydown", { key: "Tab" });
+    expect(jumps).toEqual(["a", "a", "a", "a"]);
+  });
+
+  test("a focused wire names its task at its port, and when it ends the focus goes back to the board", () => {
+    const hovers: [string | null, Element | null][] = [];
+    const { layer, root } = board({ host: { onHover: (taskId, anchor) => hovers.push([taskId, anchor]) } });
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+    const { card } = hits(root);
+    (card as unknown as HTMLElement).focus();
+    expect(document.activeElement).toBe(card as unknown as Element);
+    expect(hovers).toEqual([["a", root.querySelector("g[data-wire-end] .oa-port")]]);
+    layer.probe.advance(ORCHESTRATOR_WIRE_HOLD_MS);
+    expect(document.activeElement).toBe(root.querySelector(".board-frame"));
+    expect(hovers.at(-1)).toEqual([null, null]);
+  });
+
+  test("a count's dashed wire takes the pointer too, and leads to the hidden card nearest the column's edge", () => {
+    const jumps: string[] = [];
+    const { layer, root } = board({ host: { onJump: (taskId) => jumps.push(taskId) } });
+    root.querySelector<HTMLElement>('[data-id="task:b"]')!.getBoundingClientRect = () => rect(412, 1_500, 276, 120);
+    layer.act([{ kind: "stage", taskId: "far", pipelineId: null, at: Date.now() }, { kind: "stage", taskId: "b", pipelineId: null, at: Date.now() }]);
+    const hit = root.querySelector('path.oa-hit[data-oa-hit="count:assigned:below"]')!;
+    expect(hit.getAttribute("clip-path")).toMatch(/^url\(#oa-\d+-blocks\)$/);
+    /* It stops in the column's padding, short of the cards. */
+    expect(hit.getAttribute("d")!.endsWith("H403")).toBe(true);
+    fire(hit, "click");
+    expect(jumps).toEqual(["b"]);
+  });
+
+  test("ring() rings a wired card inside its column's box on the next pass", () => {
+    reduce = false;
+    for (const prototype of [dom.HTMLElement.prototype, dom.SVGElement.prototype]) {
+      Object.defineProperty(prototype, "animate", { configurable: true, value() {
+        return { currentTime: 0, playState: "running", finished: new Promise(() => {}), cancel() {}, pause() {}, play() {}, finish() {} };
+      } });
+    }
+    const { layer, root } = board();
+    layer.act([{ kind: "move", taskId: "a", pipelineId: null, at: Date.now() }]);
+    layer.probe.advance(1_000);
+    expect(root.querySelectorAll(".oa-ring").length).toBe(0);
+    layer.ring("a");
+    layer.probe.advance(0);
+    const ring = root.querySelector(".oa-ring")!;
+    expect(root.querySelector("[data-oa-clip]")!.contains(ring)).toBe(true);
+    expect(ring.getAttribute("x")).toBe("409");
+  });
+
+  test("a path's length is read from its own data: runs exactly, a rounded corner within a tenth of a pixel", () => {
+    expect(pathLength("M0,0 H10 V30")).toBe(40);
+    /* A corner of radius 6 as the routes draw it: the quadratic is 9.739 px long. */
+    expect(Math.abs(pathLength("M0,0 V10 Q0,16 6,16 H20") - (10 + 9.739 + 14))).toBeLessThan(0.1);
+  });
+
+  test("without ScrollTimeline nothing rides: the wire is drawn where the cards are, as before", () => {
+    const { layer, root } = board();
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+    expect(root.querySelectorAll("[data-oa-ride]").length).toBe(0);
+    for (const shift of root.querySelectorAll<HTMLElement>("[data-oa-shift]")) expect(shift.style.transform).toBe("");
+    expect(root.querySelector("g[data-wire-end] .oa-port")!.getAttribute("cy")).toBe("152");
+  });
+
+  test("the board scrolled sideways: a card out of its visible part has no wire, and the wires that stay are cut to that part", () => {
+    const { layer, root, drawn } = board();
+    /* The board shows from x 390: the column's gutter reaches 6 px past its edge, the cards stay in view. */
+    const boardNode = root.querySelector<HTMLElement>(".board")!;
+    for (const axis of ["overflow-x", "overflow-y"]) boardNode.style.setProperty(axis, "auto");
+    boardNode.getBoundingClientRect = () => rect(390, 70, 1050, 830);
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+    expect(drawn()).toEqual(["a"]);
+    const clip = root.querySelector<HTMLElement>("[data-oa-clip]")!;
+    expect([clip.style.left, clip.style.width]).toEqual(["390px", "310px"]);
+    /* The seat's piece is drawn from the seat's edge across the board's visible part, outside the column's box. */
+    const cut = root.querySelector(`${root.querySelector("g[data-wire]")!.getAttribute("clip-path")!.slice(4, -1)} path`)!.getAttribute("d")!;
+    expect(cut).toBe("M360,60 H1440 V900 H360 Z M390,120 H700 V880 H390 Z");
+    /* Scrolled on until the card's left edge is under the board's: its wire goes, and with it the layer's last wire. */
+    for (const id of ["a", "b"]) root.querySelector<HTMLElement>(`[data-id="task:${id}"]`)!.getBoundingClientRect = () => rect(392, id === "a" ? 130 : 262, 276, 120);
+    layer.sync();
+    layer.probe.advance(0);
+    expect(drawn()).toEqual([]);
+    expect(root.querySelectorAll("g[data-wire-end], .oa-stub").length).toBe(0);
+  });
+
+  describe("with ScrollTimeline", () => {
+    const timelines: { source: Element; axis: string }[] = [];
+    const animations: { node: Element; frames: Keyframe[]; options: Omit<KeyframeAnimationOptions, "timeline"> & { timeline?: { source: Element; axis: string } } }[] = [];
+    const rekeyed: Keyframe[][] = [];
+    beforeEach(() => {
+      timelines.length = animations.length = rekeyed.length = 0;
+      (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline = class { source: Element; axis: string; constructor(options: { source: Element; axis: string }) { this.source = options.source; this.axis = options.axis; timelines.push(options); } };
+      Object.defineProperty(dom.HTMLElement.prototype, "animate", { configurable: true, value(this: Element, frames: Keyframe[], options: KeyframeAnimationOptions) {
+        animations.push({ node: this, frames, options: options as (typeof animations)[number]["options"] });
+        return { currentTime: 0, playState: "running", timeline: options.timeline, finished: new Promise(() => {}), effect: { setKeyframes(next: Keyframe[]) { rekeyed.push(next); } }, cancel() {}, pause() {}, play() {}, finish() {} };
+      } });
+    });
+    afterEach(() => { delete (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline; });
+    const scroller = (node: HTMLElement, axis: "x" | "y", range: number, offset: number) => {
+      node.style.setProperty(axis === "y" ? "overflow-y" : "overflow-x", "auto");
+      const [size, client, at] = axis === "y" ? ["scrollHeight", "clientHeight", "scrollTop"] : ["scrollWidth", "clientWidth", "scrollLeft"];
+      Object.defineProperty(node, size, { configurable: true, get: () => 1_000 + range });
+      Object.defineProperty(node, client, { configurable: true, get: () => 1_000 });
+      Object.defineProperty(node, at, { configurable: true, writable: true, value: offset });
+    };
+
+    test("the card's piece rides its column's scroll and the board's, and the shift undoes the offsets the pass read", () => {
+      const { layer, root } = board();
+      const body = root.querySelector<HTMLElement>(".col-body")!;
+      const boardScroll = root.querySelector<HTMLElement>(".board.scroll")!;
+      scroller(body, "y", 900, 120);
+      scroller(boardScroll, "x", 300, 40);
+      layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+      const rides = animations.filter((call) => call.options.id === WIRE_RIDE_ID);
+      expect(rides.map((call) => [call.options.timeline!.source === body ? "col-body" : call.options.timeline!.source === boardScroll ? "board" : "?", call.options.timeline!.axis, call.frames.at(-1)!.transform])).toEqual([
+        ["board", "inline", "translateX(-300px)"],
+        ["col-body", "block", "translateY(-900px)"],
+      ]);
+      expect(rides.every((call) => call.options.fill === "both")).toBe(true);
+      const port = root.querySelector("g[data-wire-end] .oa-port")!;
+      const clip = root.querySelector("[data-oa-clip]")!;
+      const [boardRider, columnRider] = rides.map((call) => call.node);
+      /* Outermost first: the board's rider holds the column's box, the column's rider is inside it and holds the port. */
+      expect(boardRider!.contains(clip)).toBe(true);
+      expect(clip.contains(columnRider!)).toBe(true);
+      expect(columnRider!.contains(port)).toBe(true);
+      expect((boardRider!.querySelector("[data-oa-shift]") as HTMLElement).style.transform).toBe("translate(40px, 0px)");
+      expect((columnRider!.querySelector("[data-oa-shift]") as HTMLElement).style.transform).toBe("translate(0px, 120px)");
+      /* The port is drawn where the card is now; the shift and the riders cancel at this offset. */
+      expect(port.getAttribute("cy")).toBe("152");
+      /* The trunk starts at the top of the column's content, 120 px above its visible top, so a scroll up before the next pass still reaches the box's edge. */
+      expect(root.querySelector("g[data-wire-end] path.oa-wire")!.getAttribute("d")!.startsWith("M391,0 ")).toBe(true);
+      /* The seat's piece rides nothing: the seat is in neither scroller. */
+      expect(root.querySelector("g[data-wire]")!.closest("[data-oa-ride]")).toBeNull();
+      /* A render that grows the column re-keys its rider; nothing is rebuilt. */
+      scroller(body, "y", 1_400, 120);
+      layer.sync();
+      layer.probe.advance(0);
+      expect(rekeyed.map((frames) => frames.at(-1)!.transform)).toEqual(["translateY(-1400px)"]);
+      expect(animations.filter((call) => call.options.id === WIRE_RIDE_ID).length).toBe(2);
+    });
+
+    test("a column a script scrolled after the frame read its timeline holds the card's piece where the column is, until a frame reads it", () => {
+      const { layer, root } = board();
+      const body = root.querySelector<HTMLElement>(".col-body")!;
+      scroller(body, "y", 900, 120);
+      layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+      const column = animations.find((call) => call.options.id === WIRE_RIDE_ID && call.options.timeline!.source === body)!;
+      const timeline = column.options.timeline as { currentTime?: { value: number; unit: string } };
+      const reads = (offset: number) => { timeline.currentTime = { value: (offset / 900) * 100, unit: "percent" }; };
+      const pass = () => { layer.sync(); layer.probe.advance(0); };
+      const shift = () => (column.node.querySelector("[data-oa-shift]") as HTMLElement).style.transform;
+      const keys = () => rekeyed.map((frames) => frames.map((frame) => frame.transform));
+      /* The timeline reads where the column is: the rider rides, nothing is re-keyed. */
+      reads(120);
+      pass();
+      expect(keys()).toEqual([]);
+      /* A frame callback scrolled the column 13 px after the frame read the timeline: the rider stands at the
+         column's offset whichever of the two the frame is painted at, and the shift holds at it. */
+      body.scrollTop = 133;
+      pass();
+      expect(keys()).toEqual([["translateY(-133px)", "translateY(-133px)"]]);
+      expect(shift()).toBe("translate(0px, 133px)");
+      body.scrollTop = 146;
+      reads(133);
+      pass();
+      expect(keys().at(-1)).toEqual(["translateY(-146px)", "translateY(-146px)"]);
+      /* The next frame reads the timeline where the column is: the rider rides the scroll again. */
+      reads(146);
+      pass();
+      expect(keys().at(-1)).toEqual(["none", "translateY(-900px)"]);
+      pass();
+      expect(keys().length).toBe(3);
+      expect(animations.filter((call) => call.options.id === WIRE_RIDE_ID).length).toBe(1);
+    });
+
+    test("a scroller that holds the seat and the columns both carries the whole wire", () => {
+      const { layer, root } = board();
+      const page = document.createElement("div");
+      page.className = "kb-page";
+      page.getBoundingClientRect = () => rect(0, 0, 1440, 900);
+      root.before(page);
+      page.append(root);
+      scroller(page, "y", 500, 60);
+      layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+      const rides = animations.filter((call) => call.options.id === WIRE_RIDE_ID);
+      expect(rides.map((call) => call.options.timeline!.source)).toEqual([page]);
+      expect(rides[0]!.node.contains(root.querySelector("g[data-wire]"))).toBe(true);
+      expect(rides[0]!.node.contains(root.querySelector("g[data-wire-end]"))).toBe(true);
+      expect((rides[0]!.node.querySelector("[data-oa-shift]") as HTMLElement).style.transform).toBe("translate(0px, 60px)");
+    });
+  });
 });
 
 describe("route geometry across the board's layouts", () => {
@@ -456,6 +724,31 @@ describe("route geometry across the board's layouts", () => {
     const d = wire("a")!;
     expect(bends(d)).toBe(3);
     expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("no hit stroke of the seat's pieces covers a column link", () => {
+    const { act, spec } = layout({ ...SCROLL, placement: "top", cards: { a: ["assigned", [569, 840, 1023, 1150]] } });
+    act("a");
+    const cut = document.querySelector(`${document.querySelector("g[data-wire] path.oa-hit")!.getAttribute("clip-path")!.slice(4, -1)} path`)!.getAttribute("d")!;
+    for (const [left, top, right, bottom] of spec.links!) expect(cut).toContain(`M${left},${top} H${right} V${bottom} H${left} Z`);
+  });
+
+  /* The column tabs beside a 12 px hit stroke with the seat at the side and on the phone: routes take no
+     notice of them, as before, and only the hit strokes are cut there (1440-side, 390). */
+  const cuts = (root: ParentNode) => {
+    const of = (node: Element) => root.querySelector(`${node.getAttribute("clip-path")!.slice(4, -1)} path`)!.getAttribute("d")!;
+    const group = root.querySelector("g[data-wire]")!;
+    return { wire: of(group), hit: of(group.querySelector("path.oa-hit")!) };
+  };
+  test("seat at the side: the bus runs under the row of column tabs as before, and its hit stroke is cut at each tab", () => {
+    const { act, wire, spec } = layout({ ...SIDE, placement: "side", cards: { a: ["assigned", [735, 435, 1189, 702]] } });
+    act("a");
+    expect(wire("a")).toBe("M414,91 H707 Q713,91 713,97 V451 Q713,457 719,457 H731.5");
+    const cut = cuts(document);
+    for (const [left, top, right, bottom] of spec.links!) {
+      expect(cut.hit).toContain(`M${left},${top} H${right} V${bottom} H${left} Z`);
+      expect(cut.wire).not.toContain(`M${left},${top} H${right} V${bottom} H${left} Z`);
+    }
   });
 
   test("a row of column links clear of the gutter: one elbow", () => {
@@ -705,6 +998,26 @@ describe("route geometry across the board's layouts", () => {
     const d = wire("a")!;
     expect(bends(d)).toBe(2);
     expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("the phone: the margin's hit stroke is cut at the tabs, the wire itself is not", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<section data-mobile2-seat-card></section><nav>${["inbox", "assigned"].map((status) => `<button data-phone-kanban-tab="${status}"></button>`).join("")}</nav>
+      <div data-phone-kanban-column="assigned"><article data-phone-card="task:a"></article></div>`;
+    document.body.append(root);
+    const place = (selector: string, at: R) => { root.querySelector<HTMLElement>(selector)!.getBoundingClientRect = () => box(at); };
+    place("[data-mobile2-seat-card]", [12, 58, 378, 116]);
+    place('[data-phone-kanban-tab="inbox"]', [6, 124, 98, 168]);
+    place('[data-phone-kanban-tab="assigned"]', [102, 124, 193, 168]);
+    place("[data-phone-kanban-column]", [0, 169, 390, 787]);
+    place("[data-phone-card]", [12, 327, 378, 413]);
+    const layer = createOrchestratorWires({ root, phone: true });
+    layers.push(layer);
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p", at: Date.now() }]);
+    expect(root.querySelector("g[data-wire] path.oa-wire")!.getAttribute("d")).toBe("M12,102 H11 Q5,102 5,108 V343.5 Q5,347 8.5,347 H8.5");
+    const cut = cuts(root);
+    expect(cut.hit).toContain("M6,124 H98 V168 H6 Z");
+    expect(cut.wire).not.toContain("M6,124 H98 V168 H6 Z");
   });
 
   test("the phone: the last corner never runs past the card's port", () => {

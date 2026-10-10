@@ -5,7 +5,9 @@ import { createContext, useContext, useEffect, useReducer, useRef, useState, typ
 import { TooltipBubble } from "@/components/TooltipBubble";
 
 /** How long a pointer rests on the control before the bubble shows. */
-const SHOW_DELAY_MS = 150;
+export const SHOW_DELAY_MS = 150;
+/** The hint's bubble, for a surface that shows one without wrapping a control in `Hint`. */
+export const HINT_BUBBLE_CLASS = "whitespace-nowrap rounded-[7px] bg-primary px-2 py-1 text-[10.5px] font-semibold text-white shadow-1";
 
 /** Why the bubble is up, and whether the operator has already answered it. */
 interface HintState {
@@ -195,7 +197,7 @@ export function Hint({
           anchorRef={anchorRef}
           side={side}
           align={align}
-          className="whitespace-nowrap rounded-[7px] bg-primary px-2 py-1 text-[10.5px] font-semibold text-white shadow-1"
+          className={HINT_BUBBLE_CLASS}
         >
           {label}
         </TooltipBubble>

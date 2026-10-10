@@ -44,7 +44,7 @@ export function TooltipBubble({
   className,
   children,
 }: {
-  anchorRef: RefObject<HTMLElement | null>;
+  anchorRef: RefObject<Element | null>;
   side?: "top" | "bottom";
   align?: "center" | "left" | "right";
   className: string;
