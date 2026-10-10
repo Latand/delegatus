@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { ExternalRelayError, relayCall } from "./client";
-import { toolCallResultSchema, type ExternalRelayRequest, type ExternalRelayRequester, type RoundCall, type ToolCallResult } from "./protocol";
+import { isOwnerTool, ownerRateLimitSchema, RELAY_OWNER_TOOLS, toolCallResultSchema, type ExternalRelayRequest, type ExternalRelayRequester, type RoundCall, type ToolCallResult } from "./protocol";
+import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
 
@@ -49,7 +50,10 @@ export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> 
 export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest, lease: {
   signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>;
 }, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void) {
+  // I8/C8 admission and the authoritative index belong to the service. The
+  // feature gates only the amended owner semantics; legacy 2a owner reads stay.
   const tools = callableTools(request);
+  const ownerToolsEnabled = readRelaySwitches().owner_tools && relay.features?.includes(RELAY_OWNER_TOOLS);
   const effectOf = (name: string) => request.input.tools?.find((tool) => tool.name === name)?.effect;
   const cache = new Map<string, Promise<{ result: ToolCallResult | null; code?: string; output?: string; unknown?: boolean }>>();
   const cursors = new Map<string, string>();
@@ -62,6 +66,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
   let outputBytes = 0;
   let terminal = false;
   let actionSent = false;
+  const possibleOwnerActions = new Set<string>();
   let sawUnknown = false;
   // Authorization/version rejection stops siblings without ending the lease.
   let rejectionCode: string | undefined;
@@ -78,6 +83,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
     lease.signal.throwIfAborted();
     const action = effectOf(tool) === "action";
+    const owner = ownerToolsEnabled && isOwnerTool(tools.find((item) => item.name === tool)!);
     const unknown = () => {
       terminal = true; sawUnknown = true;
       return { result: null, unknown: true, output: "The service did not confirm whether this action happened." };
@@ -90,17 +96,22 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     let failures = 0;
     let unavailable = 0;
     let pending = false;
+    let onlyRateLimited = true;
     while (!lease.signal.aborted) {
       if (rejectionCode) return refused(rejectionCode);
       if (pending && now() - started >= 330_000) return unfinished();
       try {
-        if (action) actionSent = true;
+        if (action) {
+          if (owner) possibleOwnerActions.add(body.call_id);
+          else actionSent = true;
+        }
         const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
           relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal });
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
         if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
         const result = parsed.data;
+        onlyRateLimited = false;
         // Concurrent responses and historical replays must never replenish the budget.
         if (!result.replayed) remaining = Math.min(remaining, result.calls_remaining);
         // R6 zero ends new actions even on replay; an admitted pending call still polls below.
@@ -145,14 +156,25 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           if ([400, 401, 413, 426].includes(error.status) || !action && error.status === 409)
             return refused(error.code);
           if (error.status === 429) {
-            if (++failures > 3) return refused(error.code);
-            await wait(Math.min(60, Math.max(1, error.retryAfterSeconds ?? 1)) * 1000);
-            continue;
+            const nonAdmission = ownerRateLimitSchema.safeParse(error.payload);
+            if (!owner || nonAdmission.success) {
+              if (++failures > 3) {
+                if (owner && onlyRateLimited) {
+                  sent--;
+                  possibleOwnerActions.delete(body.call_id);
+                }
+                return refused(error.code);
+              }
+              await wait((owner && nonAdmission.success ? nonAdmission.data.error.retry_after_s
+                : Math.min(60, Math.max(1, error.retryAfterSeconds ?? 1))) * 1000);
+              continue;
+            }
           }
         }
         // Only the wire-defined refusals above prove non-admission. Any other
         // response (including a redirect or HTTP timeout) leaves fate unresolved.
         ambiguous = true;
+        onlyRateLimited = false;
         if (++failures > 3) return action ? unknown() : refused();
         await wait(1000 * 2 ** (failures - 1));
       }
@@ -272,5 +294,5 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     }
     if (!calls.length) terminal = true;
   }
-  return { tools, results, records, callsLeft, runCalls, get actionSent() { return actionSent; }, get sawUnknown() { return sawUnknown; } };
+  return { tools, results, records, callsLeft, runCalls, get actionSent() { return actionSent || possibleOwnerActions.size > 0; }, get sawUnknown() { return sawUnknown; } };
 }

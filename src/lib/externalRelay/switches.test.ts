@@ -7,7 +7,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-switches-"));
 process.env.LLV_STATE_DIR = root;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 test("dark switches fail closed and compact requires conversations on the next read", () => {
-  const off = { chat_conversations: false, compact: false };
+  const off = { chat_conversations: false, compact: false, owner_tools: false };
   expect(readRelaySwitches()).toEqual(off);
   setRelaySwitch("compact", true);
   expect(readRelaySwitches()).toEqual(off);
@@ -20,4 +20,13 @@ test("dark switches fail closed and compact requires conversations on the next r
   fs.rmSync(path.join(root, "external-relay/switches.json"));
   fs.mkdirSync(path.join(root, "external-relay/switches.json"));
   expect(readRelaySwitches()).toEqual(off);
+});
+test("relay:owner_tools:enabled is independent, explicit and default OFF", () => {
+  fs.rmSync(path.join(root, "external-relay/switches.json"), { recursive: true, force: true });
+  expect(setRelaySwitch("relay:owner_tools:enabled", true)).toEqual({ chat_conversations: false, compact: false, owner_tools: true });
+  expect(setRelaySwitch("relay:owner_tools:enabled", false).owner_tools).toBe(false);
+  for (const value of ["true", 1, null]) {
+    fs.writeFileSync(path.join(root, "external-relay/switches.json"), JSON.stringify({ v: 1, "relay:owner_tools:enabled": value }));
+    expect(readRelaySwitches().owner_tools).toBe(false);
+  }
 });
