@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { accountWeeklyLeft, WeeklyMeter, weeklyLeftAria, weeklyLeftHint } from "@/components/accountWeekly";
 import { ReasoningControls, type SpeedChoice } from "@/components/ReasoningControls";
-import { Select } from "@/components/ui/Select";
 import { engineTintOf } from "@/components/utils";
+import { useEngineAccounts } from "@/hooks/useEngineAccounts";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
 import { defaultModelFor } from "@/lib/agent/models";
@@ -345,10 +347,45 @@ export function EngineRadioGroup({
   );
 }
 
+/** How far a sideways chip row scrolls so one chip stands inside it with
+    `pad` to spare on the side it came in from; the row's own offset when the
+    chip is already in sight. Rectangles are viewport coordinates. */
+export function revealScrollLeft(
+  row: { left: number; width: number; scrollLeft: number },
+  chip: { left: number; width: number },
+  pad = 24,
+): number {
+  const start = chip.left - row.left;
+  const end = start + chip.width;
+  if (start < pad) return Math.max(0, row.scrollLeft + start - pad);
+  if (end > row.width - pad) return row.scrollLeft + end - row.width + pad;
+  return row.scrollLeft;
+}
+
+/** The mask that fades a sideways row out at an edge more chips are hidden behind. */
+function edgeFade(start: boolean, end: boolean): React.CSSProperties | undefined {
+  if (!start && !end) return undefined;
+  const image = `linear-gradient(to right, ${start ? "transparent, #000 20px" : "#000"}, ${end ? "#000 calc(100% - 24px), transparent" : "#000"})`;
+  return { maskImage: image, WebkitMaskImage: image };
+}
+
+/** How long a finger rests on a chip before its hint shows instead of a pick. */
+const LONG_PRESS_MS = 500;
+
 /**
- * The stored-account picker (issue #40). Renders nothing while the engine has
- * no catalog: the launch then runs on whatever the CLI's own active profile is,
- * which is what every surface did before accounts existed.
+ * The stored-account picker (issue #40), as the operator chose it on
+ * 2026-10-10: every account of the engine is a chip in one row, a radio group,
+ * and nothing opens. A chip names the account, what is left of its weekly
+ * limit and that share as a bar, read from the same per-account readings the
+ * sidebar footer draws ({@link accountWeeklyLeft}). The chosen chip carries the
+ * accent border; the engine's active account carries the green dot. A
+ * signed-out account stays in the row, dashed and marked, and cannot be picked
+ * until it signs back in via Accounts. The phone scrolls the row sideways and
+ * fades the edge more chips hide behind; the desktop wraps it.
+ *
+ * Renders nothing while the engine has no catalog: the launch then runs on
+ * whatever the CLI's own active profile is, which is what every surface did
+ * before accounts existed.
  */
 export function LaunchAccountSelect({
   draft,
@@ -362,31 +399,148 @@ export function LaunchAccountSelect({
   className?: string;
 }) {
   const { t } = useLocale();
-  if (!draft.accounts.length) return null;
+  const phone = useIsMobile();
+  /* The readings come from the one accounts store the footer reads; Copilot has none there, so no bar. */
+  const readings = useEngineAccounts(draft.engine === "codex" ? "codex" : "claude").accounts;
+  const [now] = useState(() => Date.now() / 1000);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const chipRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [edges, setEdges] = useState({ start: false, end: false });
+  const press = useRef<{ id: string; timer: number; fired: boolean } | null>(null);
+  const tint = engineTintOf(draft.engine).color;
+  const selected = draft.launchAccountId;
+  const count = draft.accounts.length;
+
+  const measureEdges = useCallback(() => {
+    const row = rowRef.current;
+    if (!row || !phone) { setEdges((value) => (value.start || value.end ? { start: false, end: false } : value)); return; }
+    const start = row.scrollLeft > 1;
+    const end = row.scrollLeft + row.clientWidth < row.scrollWidth - 1;
+    setEdges((value) => (value.start === start && value.end === end ? value : { start, end }));
+  }, [phone]);
+
+  /* The chosen chip is in sight when the row first shows and whenever the engine changes. */
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    const chip = chipRefs.current.get(selected);
+    if (phone && row && chip) {
+      const box = row.getBoundingClientRect();
+      const rect = chip.getBoundingClientRect();
+      row.scrollLeft = revealScrollLeft({ left: box.left, width: box.width, scrollLeft: row.scrollLeft }, { left: rect.left, width: rect.width });
+    }
+    measureEdges();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- revealed on the engine and on the catalog's arrival, not on every pick
+  }, [draft.engine, count, phone]);
+
+  useEffect(() => {
+    if (!phone) return;
+    window.addEventListener("resize", measureEdges);
+    return () => window.removeEventListener("resize", measureEdges);
+  }, [phone, measureEdges]);
+
+  useEffect(() => () => { if (press.current) window.clearTimeout(press.current.timer); }, []);
+
+  if (!count) return null;
+
+  const chips = draft.accounts.map((account) => {
+    const weekly = draft.engine === "copilot" ? null : accountWeeklyLeft(readings.find((entry) => entry.id === account.id)?.limits, now, tint);
+    const pickable = account.authPresent && !account.signedOut;
+    const active = account.id === draft.activeAccountId;
+    const name = [account.label, active ? t("accounts.active") : null, account.signedOut ? t("kanban.account.tagSignedOut") : null, weekly ? weeklyLeftAria(t, weekly) : null].filter(Boolean).join(" · ");
+    const title = [account.label, active ? t("accounts.active") : null, account.signedOut ? t("kanban.account.tagSignedOut") : null, weekly ? weeklyLeftHint(t, weekly, now) : null].filter(Boolean).join(" · ");
+    return { account, weekly, pickable, active, name, title };
+  });
+  const tabStop = chips.some((chip) => chip.account.id === focusId) ? focusId : chips.some((chip) => chip.account.id === selected) ? selected : chips[0]!.account.id;
+
+  const pick = (id: string) => {
+    const chip = chips.find((entry) => entry.account.id === id);
+    if (!chip?.pickable || disabled) return;
+    setHint(null);
+    draft.setAccountId(id);
+  };
+  const moveFocus = (index: number) => {
+    const chip = chips[(index + chips.length) % chips.length]!;
+    setFocusId(chip.account.id);
+    chipRefs.current.get(chip.account.id)?.focus();
+  };
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    const index = chips.findIndex((chip) => chip.account.id === tabStop);
+    switch (event.key) {
+      case "ArrowRight": case "ArrowDown": event.preventDefault(); moveFocus(index + 1); break;
+      case "ArrowLeft": case "ArrowUp": event.preventDefault(); moveFocus(index - 1); break;
+      case "Home": event.preventDefault(); moveFocus(0); break;
+      case "End": event.preventDefault(); moveFocus(chips.length - 1); break;
+      case "Enter": case " ": event.preventDefault(); pick(tabStop!); break;
+      default: break;
+    }
+  };
+  const size = phone ? "min-h-11 px-2.5 text-body" : roomy ? "h-8 px-2 text-ui" : "h-7 px-1.5 text-ui";
+
   return (
-    <Select
-      value={draft.launchAccountId}
-      disabled={disabled}
-      roomy={roomy}
-      className={className}
-      onChange={(event) => draft.setAccountId(event.target.value)}
-      aria-label={t("draft.accountAria", { engine: launchEngineLabel(draft.engine) })}
-    >
-      {draft.accounts.map((account) => (
-        /* The engine's active account is the default for future launches; a
-           signed-out profile stays listed (history preserved) but can't be
-           picked until it signs back in via Accounts. It says so even when it
-           is the active one: «Main · active» on an account that cannot launch
-           is what sent a newcomer's first launch into a failure (#2170). */
-        <option key={account.id} value={account.id} disabled={!account.authPresent}>
-          {account.signedOut
-            ? t("draft.accountNeedsLogin", { label: account.label })
-            : account.id === draft.activeAccountId
-              ? t("draft.accountDefault", { label: account.label })
-              : account.label}
-        </option>
-      ))}
-    </Select>
+    <div className={`flex min-w-0 flex-col gap-1 ${className ?? ""}`} data-launch-account-chips>
+      <div
+        ref={rowRef}
+        role="radiogroup"
+        aria-label={t("draft.accountAria", { engine: launchEngineLabel(draft.engine) })}
+        aria-disabled={disabled || undefined}
+        onKeyDown={onKeyDown}
+        onScroll={phone ? measureEdges : undefined}
+        onPointerDown={() => setHint(null)}
+        data-launch-account-row={phone ? "scroll" : "wrap"}
+        style={phone ? edgeFade(edges.start, edges.end) : undefined}
+        className={`flex min-w-0 items-center gap-1 ${phone ? "overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" : "flex-wrap"}`}
+      >
+        {chips.map(({ account, weekly, pickable, active, name, title }) => {
+          const chosen = account.id === selected;
+          return (
+            <button
+              key={account.id}
+              ref={(element) => { if (element) chipRefs.current.set(account.id, element); else chipRefs.current.delete(account.id); }}
+              type="button"
+              role="radio"
+              aria-checked={chosen}
+              aria-disabled={!pickable || undefined}
+              aria-label={name}
+              title={title}
+              disabled={disabled}
+              tabIndex={account.id === tabStop ? 0 : -1}
+              data-launch-account={account.id}
+              data-launch-account-pickable={pickable ? "true" : "false"}
+              onFocus={() => setFocusId(account.id)}
+              onClick={() => {
+                if (press.current?.fired && press.current.id === account.id) { press.current = null; return; }
+                pick(account.id);
+              }}
+              onPointerDown={(event) => {
+                if (event.pointerType !== "touch") return;
+                if (press.current) window.clearTimeout(press.current.timer);
+                const entry = { id: account.id, fired: false, timer: 0 };
+                entry.timer = window.setTimeout(() => { entry.fired = true; setHint(title); }, LONG_PRESS_MS);
+                press.current = entry;
+              }}
+              onPointerUp={() => { if (press.current && !press.current.fired) window.clearTimeout(press.current.timer); }}
+              onPointerCancel={() => { if (press.current) { window.clearTimeout(press.current.timer); press.current = null; } }}
+              onContextMenu={(event) => { if (press.current?.id === account.id) event.preventDefault(); }}
+              className={`${size} inline-flex max-w-full shrink-0 select-none items-center gap-1.5 whitespace-nowrap rounded-control border text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
+                chosen ? "border-accent bg-accent-soft" : pickable ? "border-border bg-card hover:bg-sunken" : "cursor-not-allowed border-dashed border-border bg-transparent"
+              }`}
+            >
+              {active ? <span aria-hidden data-launch-account-active className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" /> : null}
+              {/* The whole name: a chip is only cut short when it would be wider than its row. */}
+              <span className={`min-w-0 truncate ${chosen ? "font-semibold text-primary" : pickable ? "font-medium text-secondary" : "text-muted"}`}>{account.label}</span>
+              {account.signedOut ? (
+                <span className="shrink-0 text-caption font-semibold text-warning" data-launch-account-signed-out>{t("kanban.account.tagSignedOut")}</span>
+              ) : null}
+              {weekly && pickable ? <WeeklyMeter weekly={weekly} /> : null}
+            </button>
+          );
+        })}
+      </div>
+      {/* A phone has no hover: a long press shows the hint a pointer reads, the reset included. */}
+      {hint ? <p className="text-label leading-snug text-muted" role="status" data-launch-account-hint>{hint}</p> : null}
+    </div>
   );
 }
 

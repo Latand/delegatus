@@ -369,7 +369,7 @@ test("tapping the create row opens the fullscreen sheet with the prefilled manda
   const change = panel!.querySelector("[data-orchestrator-runs-on-change]") as HTMLButtonElement;
   expect(change.className).toContain("min-h-11");
   flushSync(() => change.click());
-  const engines = [...panel!.querySelectorAll('[role="radio"]')].map((node) => node.textContent);
+  const engines = [...panel!.querySelector('[role="radiogroup"]')!.querySelectorAll('[role="radio"]')].map((node) => node.textContent);
   expect(engines).toEqual(["Claude", "Codex"]);
   const launchControls = panel!.querySelector('[role="radiogroup"]')!.closest("[class*='min-h-11']");
   expect(launchControls).not.toBeNull();

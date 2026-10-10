@@ -3062,6 +3062,31 @@ if (SEAT_CLS) files.splice(0, files.length);
 if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: null, pendingQuestion: null });
 Object.assign(window, { launchRun });
 
+/* The account picker's driver block (kanbanBoard.browser.test.tsx, "account chips with the weekly limit left"):
+   `&accountpicker=1` gives any scenario the accounts the build's brief names. Each session window is looser than
+   its weekly one, so the sidebar footer's line (the tightest window) and the chip name the same number. */
+const ACCOUNT_PICKER = new URLSearchParams(location.search).has("accountpicker");
+const pickerReading = (weeklyUsed: number | null, sessionUsed: number) => ({
+  state: "fresh", checkedAt: iso(5 * MIN),
+  session: { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
+  weekly: weeklyUsed === null ? null : { usedPercent: weeklyUsed, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 },
+});
+const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<typeof pickerReading> | null, signedOut = false) => ({
+  id, label, kind: "managed", authPresent: !signedOut, loginPending: false, loginState: signedOut ? "idle" : "authenticated", deviceAuth: null,
+  auth: { state: signedOut ? "signed_out" : "authenticated", plan }, limits,
+});
+const pickerAccounts = {
+  claude: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Main", "Max", pickerReading(8, 5)), pickerRow("work", "Work", "Max", pickerReading(59, 44)),
+    pickerRow("backup", "Backup", "Pro", pickerReading(93, 70)), pickerRow("old", "Old login", "Pro", null, true),
+    pickerRow("team", "Review lanes · shared team workspace (night shift)", "Max", pickerReading(36, 12)),
+  ] },
+  codex: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Personal", "Pro", pickerReading(22, 20)), pickerRow("review", "Review", "Plus", pickerReading(77, 51)),
+    pickerRow("fresh", "Fresh", "Plus", pickerReading(null, 4)),
+  ] },
+};
+
 /* The header menu's driver block (kanbanBoard.browser.test.tsx, "the header's menu, built"): `&header=1`
    hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
 const HEADER_MENU = new URLSearchParams(location.search).has("header");
@@ -3072,6 +3097,14 @@ const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") return json(pickerAccounts);
+  if (ACCOUNT_PICKER && url.pathname === "/api/limits") {
+    const engine = (row: (typeof pickerAccounts.claude.accounts)[number]) => ({ session: row.limits!.session, weekly: row.limits!.weekly, plan: row.auth.plan, capturedAt: Math.floor(Date.now() / 1000) - 300 });
+    return json({
+      claude: engine(pickerAccounts.claude.accounts[0]!), codex: engine(pickerAccounts.codex.accounts[0]!), claudeAccountId: "default", codexAccountId: "default",
+      provenance: { claude: { source: "live", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null } }, staleSince: null,
+    });
+  }
   if (SCENARIO === "role-defaults" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => {
     const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
     return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, X, Zap } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useAccountName, useEngineAccounts } from "@/hooks/useEngineAccounts";
+import { type AccountLimits, useAccountName, useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { usePipelineRecord } from "@/hooks/useFiles";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -20,11 +20,13 @@ import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { RuntimeSettingsCapability } from "@/lib/runtime/contracts";
 import type { FileEntry, RateLimitState } from "@/lib/types";
 
+import { accountWeeklyLeft, WeeklyMeter, weeklyLeftAria, weeklyLeftHint, type WeeklyLeft } from "./accountWeekly";
 import type { StripSurface } from "./agentCapabilities";
 import { browserPipelinePorts } from "./kanban/pipelinePorts";
 import type { RuntimeSession } from "./runtime/runtimeModel";
 import { stagePipelineId, stageRunOf, stageSwitchRequest, switchFailureText, switchOpen, switchRefusalText, type StageRun } from "./stageRuntimeSwitch";
 import { pushTaskToast } from "./tasks/taskToast";
+import { engineTintOf } from "./utils";
 import {
   adoptRuntimeProfile,
   defaults,
@@ -1089,12 +1091,13 @@ export function RuntimePopover({
   /* Read only once the Account panel opens, so the ordinary popover subscribes to no accounts store. */
   const [storeAccounts, setAccountOptions] = useState<readonly AccountOption[] | null>(null);
   const accountOptions = ownAccounts ?? storeAccounts;
+  const [now] = useState(() => Date.now() / 1000);
 
   // Rows for the current panel (document order), each with an enabled flag.
   const rows = useMemo(() => buildRows({
     t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
-    onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf, accountStart,
-  }), [accountStart, t, engine, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
+    onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf, accountStart, now,
+  }), [accountStart, now, t, engine, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
     onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
 
   const focusableIndexes = useMemo(
@@ -1230,12 +1233,18 @@ interface Row {
   reason?: string;
   submenu?: "model" | "speed" | "account";
   role: "menuitemradio" | "menuitem";
+  /** An account row's weekly limit left, drawn as the footer draws it; absent without a weekly reading. */
+  weekly?: WeeklyLeft | null;
+  /** The pointer's hint: the weekly window with its reset. */
+  hint?: string;
   activate: () => void;
 }
 
 export interface AccountOption {
   id: string;
   label: string;
+  /** The account's own readings from the accounts store, which the sidebar footer draws too. */
+  limits?: AccountLimits | null;
 }
 
 /** Feeds the popover's Account panel the engine's signed-in accounts while that panel is open. */
@@ -1247,18 +1256,20 @@ function EngineAccountsFeed({ engine, onAccounts }: {
   useEffect(() => {
     onAccounts(state.accounts
       .filter((option) => option.authPresent && (option.authHealth ?? "unknown") !== "signed_out" && !option.loginPending)
-      .map((option) => ({ id: option.id, label: option.label })));
+      .map((option) => ({ id: option.id, label: option.label, limits: option.limits ?? null })));
   }, [onAccounts, state.accounts]);
   return null;
 }
 
 function buildRows({
   t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
-  onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf, accountStart,
+  onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf, accountStart, now,
 }: Omit<PanelProps, "onClose" | "account" | "accessibleLabel"> & {
   panel: Panel;
   onOpenPanel: (panel: Panel) => void;
   accountOptions?: readonly AccountOption[] | null;
+  /** The moment the weekly readings are judged at (Unix seconds). */
+  now: number;
 }): Row[] {
   const back = (label: string): Row => ({
     key: "back", kind: "back", label, checked: false, enabled: true, role: "menuitem",
@@ -1286,30 +1297,38 @@ function buildRows({
     /* The account it runs on is always a row, so a waiting pick can be taken back even when that account is
        the legacy home the accounts list does not enumerate. */
     const options = accountOptions ?? [];
-    const listed = options.some((option) => option.id === accountChoice.runsOn)
+    const listed: readonly AccountOption[] = options.some((option) => option.id === accountChoice.runsOn)
       ? options
       : [{ id: accountChoice.runsOn, label: nameOf(accountChoice.runsOn) }, ...options];
+    const tint = engineTintOf(engine).color;
     return [
       back(t("mobile2.composer.accountGroup")),
-      ...listed.map((option): Row => ({
-        key: `account-${option.id}`,
-        kind: "account",
-        label: option.label,
+      ...listed.map((option): Row => {
+        const weekly = engine === "copilot" ? null : accountWeeklyLeft(option.limits, now, tint);
         /* While a pick waits, the running account is the way back, and says so as the action it is: the head
            above already names it as the one the conversation runs on (#1846 critique). */
-        ...(option.id !== accountChoice.runsOn || accountStart !== null
+        const detail: Pick<Row, "detail" | "detailAction"> = option.id !== accountChoice.runsOn || accountStart !== null
           ? {}
           : accountChoice.next === accountChoice.runsOn
             ? { detail: t("mobile2.composer.accountCurrent") }
             : accountChoice.applying
               ? { detail: t("mobile2.composer.accountSwitching") }
-              : { detail: t("mobile2.composer.accountCancelSwitch"), detailAction: true }),
-        checked: option.id === accountChoice.next,
-        /* A move under way cannot be taken back, so the account it leaves is not a choice until it lands. */
-        enabled: !(accountChoice.applying && option.id === accountChoice.runsOn && accountChoice.next !== accountChoice.runsOn),
-        role: "menuitemradio",
-        activate: () => accountChoice.pick(option.id),
-      })),
+              : { detail: t("mobile2.composer.accountCancelSwitch"), detailAction: true };
+        return {
+          key: `account-${option.id}`,
+          kind: "account",
+          label: option.label,
+          ...detail,
+          /* The weekly limit left, as the footer and the launch chips draw it; the name says it in words. */
+          weekly,
+          ...(weekly ? { hint: weeklyLeftHint(t, weekly, now), ariaLabel: [option.label, weeklyLeftAria(t, weekly), detail.detail].filter(Boolean).join(" · ") } : {}),
+          checked: option.id === accountChoice.next,
+          /* A move under way cannot be taken back, so the account it leaves is not a choice until it lands. */
+          enabled: !(accountChoice.applying && option.id === accountChoice.runsOn && accountChoice.next !== accountChoice.runsOn),
+          role: "menuitemradio",
+          activate: () => accountChoice.pick(option.id),
+        };
+      }),
     ];
   }
   if (panel === "speed") {
@@ -1392,8 +1411,8 @@ function MenuRow({
       aria-disabled={!row.enabled || undefined}
       disabled={!row.enabled}
       tabIndex={active ? 0 : -1}
-      aria-label={row.reason ? accessibleName : undefined}
-      title={row.reason}
+      aria-label={row.reason ? accessibleName : row.ariaLabel}
+      title={row.reason ?? row.hint}
       onClick={row.activate}
       data-runtime-row={row.kind}
       data-runtime-value={row.key}
@@ -1402,6 +1421,7 @@ function MenuRow({
       }`}
     >
       <span className="min-w-0 flex-1 truncate">{row.label}</span>
+      {row.weekly ? <WeeklyMeter weekly={row.weekly} /> : null}
       {row.detail ? (
         <span className={`shrink-0 text-caption ${row.detailAction ? "font-semibold text-accent" : "text-muted"}`} data-runtime-row-detail={row.detailAction ? "action" : undefined}>{row.detail}</span>
       ) : null}
@@ -1614,6 +1634,8 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
 }) {
   const state = useEngineAccounts(engine);
   const reset = limit ? limitResetClock(limit) : null;
+  const [now] = useState(() => Date.now() / 1000);
+  const tint = engineTintOf(engine).color;
   /* The wall first, then the account this conversation runs on, then the rest
      in the order the accounts screen lists them. */
   const rank = (id: string) => (limit && id === limit.accountId ? 0 : id === account ? 1 : 2);
@@ -1651,6 +1673,22 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
         const switching = leaving && choice!.applying;
         const cancels = leaving && !switching;
         const inert = blocked || next || switching || (!authenticated && !signInReachable);
+        /* The weekly limit left, as the footer and the launch chips draw it; an account that cannot take a
+           message shows its state instead. */
+        const weekly = authenticated ? accountWeeklyLeft(option.limits, now, tint) : null;
+        const stateName = blocked
+          ? t("mobile2.composer.accountAtLimit", { account: option.label, time: reset ?? "" }).trim()
+          : !authenticated
+            ? t("mobile2.composer.accountSignInAria", { account: option.label })
+            : next
+              ? start !== null ? option.label : t(choice?.immediate ? "mobile2.composer.accountStageAria" : "mobile2.composer.accountNextAria", { account: option.label })
+              : switching
+                ? t("mobile2.composer.accountSwitchingAria", { account: option.label })
+                : cancels
+                ? t("mobile2.composer.accountCancelSwitchAria", { account: option.label })
+                : start !== null
+                ? t("draft.accountStartAria", { account: option.label })
+                : t(choice?.immediate ? "mobile2.composer.accountStageReadyAria" : "mobile2.composer.accountReadyAria", { account: option.label });
         return (
           <button
             key={option.id}
@@ -1660,19 +1698,8 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
             data-runtime-account-next={next ? "true" : undefined}
             disabled={inert || (!choice && state.mutation !== null)}
             aria-disabled={inert || undefined}
-            aria-label={blocked
-              ? t("mobile2.composer.accountAtLimit", { account: option.label, time: reset ?? "" }).trim()
-              : !authenticated
-                ? t("mobile2.composer.accountSignInAria", { account: option.label })
-                : next
-                  ? start !== null ? option.label : t(choice?.immediate ? "mobile2.composer.accountStageAria" : "mobile2.composer.accountNextAria", { account: option.label })
-                  : switching
-                    ? t("mobile2.composer.accountSwitchingAria", { account: option.label })
-                    : cancels
-                    ? t("mobile2.composer.accountCancelSwitchAria", { account: option.label })
-                    : start !== null
-                    ? t("draft.accountStartAria", { account: option.label })
-                    : t(choice?.immediate ? "mobile2.composer.accountStageReadyAria" : "mobile2.composer.accountReadyAria", { account: option.label })}
+            aria-label={weekly ? `${stateName} · ${weeklyLeftAria(t, weekly)}` : stateName}
+            title={weekly ? weeklyLeftHint(t, weekly, now) : undefined}
             onClick={() => {
               if (inert) return;
               /* An account that is not signed in goes to the device sign-in and
@@ -1686,6 +1713,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
             } ${inert ? "" : "active:bg-sunken"}`}
           >
             <span className="min-w-0 flex-1 truncate">{option.label}</span>
+            {weekly ? <WeeklyMeter weekly={weekly} /> : null}
             {/* Where the conversation runs, wherever that row ends up. */}
             {current && start === null ? (
               <span className="shrink-0 text-label font-semibold text-muted" data-runtime-account-current-tag>

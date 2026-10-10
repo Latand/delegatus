@@ -407,11 +407,11 @@ test("Rotate opens the seat's configuration prefilled from the incumbent, and th
   expect(panel.textContent).toContain("Replace this project's orchestrator");
   /* The shared launch module: engine radios, the account the incumbent runs
      under, and the 44px floor applied from outside it. */
-  const engines = [...panel.querySelectorAll('[role="radio"]')].map((node) => node.textContent);
+  const engines = [...panel.querySelector('[role="radiogroup"]')!.querySelectorAll('[role="radio"]')].map((node) => node.textContent);
   expect(engines).toEqual(["Claude", "Codex"]);
-  const account = panel.querySelector('select[aria-label*="Claude"]') as HTMLSelectElement;
+  const account = panel.querySelector('[role="radiogroup"][aria-label*="Claude"] [role="radio"][aria-checked="true"]');
   expect(account).not.toBeNull();
-  expect(account.value).toBe("spare");
+  expect(account!.getAttribute("data-launch-account")).toBe("spare");
   const model = panel.querySelector('select[aria-label="Agent model"]') as HTMLSelectElement;
   expect(model.value).toBe("opus");
   expect(panel.querySelector('[role="radiogroup"]')!.closest("[class*='min-h-11']")).not.toBeNull();
@@ -443,11 +443,9 @@ test("confirming a rotation posts to the ROTATE route once — never the seat ro
 
   type(sheet(host)!.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement, "You run Atlas now. Talk to me here.");
   /* Adjust a seat setting end to end: the account this seat will run under.
-     A native `change` on the select reaches React's own change plugin (a
-     happy-dom select is a Proxy, so its React props are not enumerable). */
-  const account = sheet(host)!.querySelector('select[aria-label*="Claude"]') as HTMLSelectElement;
-  account.value = "primary";
-  flushSync(() => account.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event));
+     One tap on its chip picks it. */
+  const account = sheet(host)!.querySelector('[role="radiogroup"][aria-label*="Claude"] [data-launch-account="primary"]') as HTMLButtonElement;
+  flushSync(() => account.click());
 
   flushSync(() => confirmButton(host).click());
   await settle(root, view(files), 3);
