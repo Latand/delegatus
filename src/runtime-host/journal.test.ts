@@ -3548,6 +3548,7 @@ test("a delivered kill retains its original admission boundary through compactio
     conversationId: "conversation_boundary",
     operationId: "op-kill-boundary",
     idempotencyKey: "op-kill-boundary",
+    origin: { kind: "operator" },
     sessionKey: { engine: "claude", sessionId: "session-boundary" },
   });
   const admissionEventSeq = journal.effectBatch(100, ["runtime.kill"])[0]!.eventSeq;
@@ -3557,13 +3558,17 @@ test("a delivered kill retains its original admission boundary through compactio
 
   expect(journal.effectBatch()).toEqual([]);
   expect(journal.effectBatch(100, ["runtime.kill-boundary"])).toEqual([{
-    id: "kill-boundary:conversation_boundary",
+    id: "kill-boundary:conversation_boundary:operator",
     kind: "runtime.kill-boundary",
     eventSeq: admissionEventSeq,
     payload: {
       operationId: "op-kill-boundary",
       conversationId: "conversation_boundary",
       admissionEventSeq,
+      origin: "operator",
+      originAuthenticated: true,
+      admittedAt: expect.any(String),
+      sessionRevision: 3,
     },
   }]);
   journal.compact(1);
@@ -3574,6 +3579,173 @@ test("a delivered kill retains its original admission boundary through compactio
     expect.objectContaining({ eventSeq: admissionEventSeq }),
   ]);
   journal.close();
+});
+
+test.each(["operator", "system"].flatMap(origin => [false, true].map(legacy => ({ origin, legacy }))))
+("kill authorship survives receipt compaction and reopen ($origin, legacy=$legacy)", ({ origin, legacy }) => {
+  const dir = sandbox("kill-authorship-compaction");
+  const filename = path.join(dir, "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => 1000 });
+  const conversationId = "conversation_retained_stop";
+  const sessionKey = { engine: "codex" as const, sessionId: "retained-stop-session" };
+  journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+    conversationId, sessionKey, host: "hosted", turn: "idle", activeTurnId: null, writerClaim: "fixture-writer", attentionIds: [],
+  } });
+  const admission = journal.executeOperation({ kind: "kill", operationId: "retained-stop", idempotencyKey: "retained-stop",
+    conversationId, sessionKey, origin: { kind: origin === "system" ? "agent" : "operator" }, ...(origin === "system" ? { onlyIfIdle: {
+      revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture-writer",
+    } } : {}) });
+  journal.transitionOperation("retained-stop", "delivering");
+  journal.transitionOperation("retained-stop", "delivered");
+  journal.close();
+  if (legacy) {
+    const database = new Database(filename);
+    database.exec("UPDATE outbox SET payload_json = json_remove(payload_json, '$.origin', '$.admittedAt') WHERE kind = 'runtime.kill-boundary'");
+    database.close();
+  }
+  journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => 2000 });
+  journal.append({ scope: runtimeScope("session", conversationId), kind: "delta", payload: { text: "later history" } });
+  journal.compact(1);
+  expect(journal.operationResult("retained-stop")).toBeNull();
+  journal.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  expect(journal.effectBatch(100, ["runtime.kill-boundary"])[0]!.payload).toMatchObject({
+    origin, admittedAt: admission.receipt.admittedAt,
+  });
+  journal.close();
+});
+
+test.each((["operator", "agent"] as const).flatMap(origin => (["running", "idle"] as const).map(turn => ({ origin, turn }))))
+("interrupt custody survives replay, compaction and reopen ($origin, $turn)", ({ origin, turn }) => {
+  const dir = sandbox("interrupt-custody");
+  const filename = path.join(dir, "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => 1000 });
+  const conversationId = "conversation_interrupt_custody";
+  journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+    conversationId, sessionKey: { engine: "codex", sessionId: "interrupt-custody" }, host: "hosted", turn,
+    activeTurnId: turn === "running" ? "turn-interrupt" : null, attentionIds: [],
+  } });
+  const command = { kind: "interrupt" as const, operationId: "interrupt-custody", idempotencyKey: "interrupt-custody", conversationId,
+    origin: { kind: origin as "operator" | "agent" } };
+  const admitted = journal.executeOperation(command);
+  expect(journal.effectBatch(100, ["runtime.interrupt-boundary"])[0]!.payload).toMatchObject({
+    origin: origin === "operator" ? "operator" : "system", admittedAt: admitted.receipt.admittedAt,
+  });
+  if (turn === "running") {
+    journal.transitionOperation(command.operationId, "delivering");
+    journal.transitionOperation(command.operationId, "interrupted");
+  }
+  expect(journal.executeOperation({ ...command, origin: { kind: origin === "operator" ? "agent" : "operator" } }).receipt.origin)
+    .toBe(origin === "operator" ? "operator" : "system");
+  journal.append({ scope: runtimeScope("session", conversationId), kind: "delta", payload: { text: "later history" } });
+  journal.compact(1);
+  expect(journal.operationResult(command.operationId)).toBeNull();
+  journal.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  expect(journal.effectBatch(100, ["runtime.interrupt-boundary"])[0]!.payload).toMatchObject({
+    origin: origin === "operator" ? "operator" : "system", admittedAt: admitted.receipt.admittedAt,
+  });
+  journal.close();
+});
+
+test("a base-release interrupt keeps its cancellation fence after upgrade and compaction", async () => {
+  const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+  const filename = path.join(sandbox("legacy-stop-upgrade"), "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  journal.close();
+  // Operation and completed effect generated by the frozen base journal.
+  const database = new Database(filename);
+  const request = '{"conversationId":"conversation_legacy_stop","idempotencyKey":"legacy-interrupt","kind":"interrupt"}';
+  const receipt = { admittedAt: "1970-01-01T00:00:01.000Z", at: "1970-01-01T00:00:01.000Z", conversationId: "conversation_legacy_stop",
+    idempotencyKey: "legacy-interrupt", kind: "interrupt", operationId: "legacy-interrupt", queuePosition: null, reason: null,
+    revision: 3, status: "interrupted", text: null, turnId: "legacy-turn" };
+  database.query("INSERT INTO operations(operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run("legacy-interrupt", "conversation_legacy_stop", "legacy-interrupt", "48290c8f31095ea255c0f69e65582998b3602f619fe137ecf3a1a3ce683a1710", request, JSON.stringify(receipt), 5);
+  database.query("INSERT INTO outbox(id, kind, payload_json, event_seq, state) VALUES (?, ?, ?, ?, ?)")
+    .run("effect:legacy-interrupt", "runtime.interrupt", "{}", 2, "completed");
+  database.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const client = { effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor),
+    operationStatus: async id => journal.operationResult(id) } as import("@/lib/runtime/client").RuntimeHostClient;
+  const since = "1970-01-01T00:00:01.000Z";
+  try {
+    expect(journal.effectBatch(100, ["runtime.stop-boundary"])[0]!.payload).toMatchObject({ origin: "unknown", admittedAt: since });
+    await expect(hasRuntimeSwitchKill(client, "conversation_legacy_stop", since, [], true)).rejects.toThrow("legacy stop authorship");
+    expect(await hasRuntimeSwitchKill(client, "conversation_legacy_stop", since, ["legacy-interrupt"], true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(client, "conversation_legacy_stop", "1970-01-01T00:00:01.001Z", [], true)).toBe(false);
+    for (let n = 0; n < 7; n++) journal.append({ scope: runtimeScope("session", "conversation_legacy_stop"), kind: "delta", payload: { text: "later history" } });
+    journal.compact(1);
+    expect(journal.operationResult("legacy-interrupt")).toBeNull();
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    await expect(hasRuntimeSwitchKill(client, "conversation_legacy_stop", since, [], true)).rejects.toThrow("legacy stop authorship");
+  } finally { journal.close(); }
+});
+
+test.each(["kill", "interrupt"] as const)("legacy %s custody survives a later excluded controller stop", async kind => {
+  const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+  const filename = path.join(sandbox("legacy-stop-ownership"), "events.sqlite");
+  const conversationId = "conversation_legacy_stop_ownership";
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  for (let n = 0; n < 8; n++) journal.append({ scope: runtimeScope("session", conversationId), kind: "delta", payload: { text: "base history" } });
+  journal.close();
+  const database = new Database(filename);
+  for (const [index, operationId] of ["operator-stop", "switch-owned-stop"].entries()) {
+    const request = { conversationId, idempotencyKey: operationId, kind };
+    const at = new Date(1000 + index).toISOString();
+    const receipt = { admittedAt: at, at, conversationId, idempotencyKey: operationId, kind, operationId,
+      origin: "operator", queuePosition: null, reason: null, revision: 3, status: kind === "kill" ? "delivered" : "interrupted", text: null, turnId: "legacy-turn" };
+    database.query("INSERT INTO operations(operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(operationId, conversationId, operationId, "legacy-stop-fixture", JSON.stringify(request), JSON.stringify(receipt), 5 + index);
+  }
+  database.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const client = { effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor),
+    operationStatus: async id => journal.operationResult(id) } as import("@/lib/runtime/client").RuntimeHostClient;
+  try {
+    journal.compact(1);
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(journal.operationResult("operator-stop")).toBeNull();
+    expect(journal.operationResult("switch-owned-stop")).toBeNull();
+    await expect(hasRuntimeSwitchKill(client, conversationId, new Date(1000).toISOString(), ["switch-owned-stop"], true)).rejects.toThrow("legacy stop authorship");
+    expect(await hasRuntimeSwitchKill(client, conversationId, new Date(1000).toISOString(), ["operator-stop", "switch-owned-stop"], true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(client, conversationId, new Date(1001).toISOString(), ["switch-owned-stop"], true)).toBe(false);
+  } finally { journal.close(); }
+});
+
+test("legacy inferred operator custody never becomes authenticated cancellation", async () => {
+  const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+  const filename = path.join(sandbox("legacy-inferred-kill"), "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => 1000 });
+  // Rows below match a fixture generated by the frozen base journal for its
+  // automatic host-death kill: inferred operator custody without an actor.
+  journal.executeOperation({ kind: "kill", operationId: "legacy-auto-kill", idempotencyKey: "legacy-auto-kill",
+    conversationId: "conversation_legacy_kill", sessionKey: { engine: "codex", sessionId: "legacy-stage" } });
+  journal.transitionOperation("legacy-auto-kill", "delivering");
+  journal.transitionOperation("legacy-auto-kill", "delivered");
+  expect(journal.operationResult("legacy-auto-kill")?.receipt).toMatchObject({ origin: "operator" });
+  journal.close();
+  const database = new Database(filename);
+  database.exec("DELETE FROM outbox WHERE kind IN ('runtime.stop-boundary', 'runtime.interrupt-boundary')");
+  database.exec("UPDATE outbox SET id = 'kill-boundary:conversation_legacy_kill', payload_json = json_remove(payload_json, '$.origin', '$.originAuthenticated', '$.admittedAt', '$.sessionRevision') WHERE kind = 'runtime.kill-boundary'");
+  expect(database.query<{ request_hash: string }, []>("SELECT request_hash FROM operations").get()!.request_hash)
+    .toBe("2e001c91aa9dbe51474198b8d316b3f148f9a7a57b65c3de1bf755b2c0967786");
+  database.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const client = { effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor),
+    operationStatus: async id => journal.operationResult(id) } as import("@/lib/runtime/client").RuntimeHostClient;
+  const since = "1970-01-01T00:00:01.000Z";
+  try {
+    expect(journal.effectBatch(100, ["runtime.stop-boundary"])[0]!.payload).toMatchObject({ origin: "unknown", originAuthenticated: 0 });
+    await expect(hasRuntimeSwitchKill(client, "conversation_legacy_kill", since, [], true)).rejects.toThrow("authorship");
+    expect(await hasRuntimeSwitchKill(client, "conversation_legacy_kill", since, ["legacy-auto-kill"], true)).toBe(false);
+    journal.append({ scope: runtimeScope("session", "conversation_legacy_kill"), kind: "delta", payload: { text: "later history" } });
+    journal.compact(1);
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    await expect(hasRuntimeSwitchKill(client, "conversation_legacy_kill", since, [], true)).rejects.toThrow("authorship");
+  } finally { journal.close(); }
 });
 
 test("issue 367: a failed structured kill leaves the live projection untouched", () => {
@@ -4183,6 +4355,114 @@ test.each(["unchanged", "active", "answered", "writer", "queued"] as const)("idl
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+
+test.each(["admission", "execution"].flatMap(timing => ["operator", "agent"].flatMap(origin =>
+  ["queued", "failed"].map(status => ({ timing, origin, status })))))
+("idle continuation retains stop intent at $timing ($origin, $status)", ({ timing, origin, status }) => {
+  const filename = path.join(sandbox("idle-stop-intent"), "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const conversationId = "conversation_idle_stop_intent";
+  const sessionKey = { engine: "codex" as const, sessionId: "idle-stop-generation" };
+  journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+    conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null, writerClaim: "idle-stop-writer", attentionIds: [],
+    capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+  } });
+  const revision = journal.readSession({ conversationId })!.revision;
+  const command = { kind: "send" as const, conversationId, operationId: "idle-resume", idempotencyKey: "idle-resume",
+    text: "continue", policy: "queue" as const, turnId: null, onlyIfIdle: { revision, writerClaim: "idle-stop-writer" } };
+  if (timing === "execution") expect(journal.executeOperation(command).receipt.status).toBe("queued");
+  journal.executeOperation({ kind: "kill", conversationId, sessionKey, operationId: "operator-stop-intent", idempotencyKey: "operator-stop-intent",
+    origin: { kind: origin as "operator" | "agent" } });
+  if (status === "failed") journal.transitionOperation("operator-stop-intent", "failed", { reason: "termination unavailable" });
+  expect(journal.readSession({ conversationId })!.turn).toBe("idle");
+  if (origin === "agent") expect(journal.readSession({ conversationId })!.revision).toBe(revision);
+  if (timing === "admission") command.onlyIfIdle.revision = journal.readSession({ conversationId })!.revision;
+  journal.append({ scope: runtimeScope("session", "conversation_unrelated"), kind: "delta", payload: { text: "later history" } });
+  journal.compact(1);
+  journal.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try {
+    const receipt = timing === "admission" ? journal.executeOperation(command).receipt
+      : journal.transitionOperation("idle-resume", "delivering").receipt;
+    expect(receipt.status).toBe(origin === "agent" ? timing === "admission" ? "queued" : "delivering"
+      : timing === "admission" ? "rejected" : "failed");
+    if (origin === "operator") {
+      expect(receipt.reason).toBe(timing === "admission" ? "idle-continuation-cancelled" : "idle-continuation-pre-execution-refused");
+      expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+    }
+  } finally { journal.close(); }
+});
+
+test("older kill acknowledgements preserve the newer idle stop at the same timestamp", () => {
+  const filename = path.join(sandbox("stop-admission-order"), "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => 1000 });
+  const conversationId = "conversation_stop_order";
+  const sessionKey = { engine: "codex" as const, sessionId: "stop-order-generation" };
+  const publish = () => journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+    conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+    writerClaim: "stop-order-writer", attentionIds: [], capabilities: { steer: true, structuredAttention: true },
+  } });
+  publish();
+  for (const operationId of ["older-stop", "newer-stop"]) {
+    if (operationId === "newer-stop") publish();
+    journal.executeOperation({ kind: "kill", conversationId, sessionKey, operationId, idempotencyKey: operationId, origin: { kind: "operator" } });
+  }
+  const revision = journal.readSession({ conversationId })!.revision;
+  journal.transitionOperation("older-stop", "failed", { reason: "late termination failure" });
+  journal.compact(1);
+  journal.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try {
+    expect(journal.effectBatch(100, ["runtime.stop-boundary"])[0]!.payload).toMatchObject({ operationId: "newer-stop", sessionRevision: revision });
+    expect(journal.executeOperation({ kind: "send", conversationId, operationId: "automatic-after-stop", idempotencyKey: "automatic-after-stop",
+      text: "continue", policy: "queue", turnId: null, onlyIfIdle: { revision, writerClaim: "stop-order-writer" } }).receipt.status).toBe("rejected");
+  } finally { journal.close(); }
+});
+
+test.each([false, true])("a base-release failed stop fences its admitted continuation after upgrade (compact=%s)", compact => {
+  const filename = path.join(sandbox("legacy-pending-continuation"), "events.sqlite");
+  const conversationId = "conversation_legacy_pending";
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+    conversationId, sessionKey: { engine: "codex", sessionId: "legacy-pending-generation" }, hostKind: "codex-app-server",
+    host: "hosted", turn: "idle", activeTurnId: null, writerClaim: "legacy-pending-writer", attentionIds: [],
+    capabilities: { steer: true, structuredAttention: true },
+  } });
+  journal.close();
+  // Operation and outbox rows generated by the base journal. Its failed kill
+  // kept the idle revision and still allowed the earlier send to be claimed.
+  const database = new Database(filename);
+  const send = { contentDigest: "951e6180e1d2ba01a89db907bbe4e03707e3c111f15005e6731c067cac598376", conversationId,
+    idempotencyKey: "legacy-pending-send", kind: "send", onlyIfIdle: { revision: 1, writerClaim: "legacy-pending-writer" }, policy: "queue", text: "continue", turnId: null };
+  const stamp = { admittedAt: "1970-01-01T00:00:01.000Z", at: "1970-01-01T00:00:01.000Z", conversationId, turnId: null };
+  const rows = [
+    { id: "legacy-pending-send", seq: 2, hash: "b0b000e96d1e5b39ab7f17ad8c0bb6586434acdd01f4d6b61eadab7eac04c103", request: send,
+      receipt: { ...stamp, idempotencyKey: "legacy-pending-send", imageCount: 0, kind: "send", operationId: "legacy-pending-send",
+        queuePosition: 1, reason: null, revision: 1, status: "queued", text: "continue" } },
+    { id: "legacy-pending-stop", seq: 4, hash: "f8f3abacdfd4b775405e09dcdcb8f45c8674c0470aabab939cec046794a9b868",
+      request: { conversationId, idempotencyKey: "legacy-pending-stop", kind: "kill", sessionKey: { engine: "codex", sessionId: "legacy-pending-generation" } },
+      receipt: { ...stamp, idempotencyKey: "legacy-pending-stop", kind: "kill", operationId: "legacy-pending-stop", origin: "operator",
+        queuePosition: null, reason: "termination unavailable", revision: 2, status: "failed", text: null } },
+  ];
+  for (const row of rows) database.query("INSERT INTO operations(operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(row.id, conversationId, row.id, row.hash, JSON.stringify(row.request), JSON.stringify(row.receipt), row.seq);
+  database.query("INSERT INTO outbox(id, kind, payload_json, event_seq, state) VALUES (?, ?, ?, ?, ?)")
+    .run("effect:legacy-pending-send", "runtime.send", JSON.stringify({ ...send, operationId: "legacy-pending-send" }), 2, "pending");
+  database.query("INSERT INTO outbox(id, kind, payload_json, event_seq, state) VALUES (?, ?, ?, ?, ?)")
+    .run("effect:legacy-pending-stop", "runtime.kill", "{}", 3, "completed");
+  database.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try {
+    if (compact) {
+      for (let n = 0; n < 5; n++) journal.append({ scope: runtimeScope("session", "conversation_other"), kind: "delta", payload: { text: "later history" } });
+      journal.compact(1);
+      expect(journal.operationResult("legacy-pending-stop")).toBeNull();
+    }
+    expect(journal.readSession({ conversationId })!.revision).toBe(1);
+    expect(journal.transitionOperation("legacy-pending-send", "delivering").receipt).toMatchObject({ status: "failed", reason: "idle-continuation-pre-execution-refused" });
+    expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+  } finally { journal.close(); }
+});
 
 test("provider recovery authority survives normalized kill cold journal reopen", () => {
   const dir = sandbox("provider-retirement");

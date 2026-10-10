@@ -18,7 +18,7 @@ process.env.LLV_STRUCTURED_HOSTS = "0";
 fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-type KillRequest = { conversationId: string; transcriptPath: string; action: string };
+type KillRequest = { conversationId: string; transcriptPath: string; action: string; actor?: { kind: "agent"; conversationId: string } };
 const killed: KillRequest[] = [];
 let killResult: { status: number; body: Record<string, unknown> } = { status: 200, body: { ok: true, structured: true } };
 
@@ -114,6 +114,16 @@ test("a resident stage host is terminated through the conversation kill control 
   expect(result).toEqual({ outcome: "stopped" });
   expect(killed).toEqual([{ conversationId: fixture.conversationId, transcriptPath: fixture.path, action: "kill" }]);
   setAgentRegistryForTests(null);
+});
+
+test("an automatic stage retirement stamps its control actor", async () => {
+  const fixture = hostedConversation();
+  killResult = { status: 200, body: { ok: true, structured: true, operationId: "automatic-stop", receipt: { status: "delivered" } } };
+  try {
+    expect(await defaultPipelinePorts().stopStageAgent(target(fixture.conversationId), { automatic: true })).toEqual({ outcome: "stopped" });
+    expect(killed).toEqual([{ conversationId: fixture.conversationId, transcriptPath: fixture.path, action: "kill",
+      actor: { kind: "agent", conversationId: fixture.conversationId } }]);
+  } finally { setAgentRegistryForTests(null); }
 });
 
 test("an attempt whose conversation id no longer resolves is found by its transcript (#670)", async () => {

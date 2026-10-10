@@ -21,8 +21,8 @@ import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellRea
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
-import { DEMO_IDS, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
-import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
+import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
+import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
@@ -151,6 +151,7 @@ const voice = { delivered: new URLSearchParams(location.search).get("delivered")
 const voiceSettings = {
   enabled: false, monthlyCapUsd: 20,
   keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
+  lastSession: { usd: 0.4, seconds: 471, endedAt: Date.UTC(2026, 9, 10), incomplete: false },
   month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
 };
 const VOICE_RELAY_UUID = "engine_message_voice_delegation";
@@ -3867,25 +3868,50 @@ function voiceCompanionScene() {
   const script = params.get("script");
   const failure = params.get("failure");
   const readsTranscript = params.get("transcript") === "1";
+  const clock = realClock();
+  let pauseFrame = false;
   const adapter = createSimulatedCompanion({
+    clock: { ...clock, frame: async () => { if (pauseFrame) { pauseFrame = false; await clock.sleep(SCENARIO_PLAYBACK_PAUSE.long.silenceMs); } await clock.frame(); } },
     script: scenarioScript(isScenario(script) ? script : "delegation", UK ? "uk" : "en"),
     recipient: { project: PROJECT, conversationId: orchestrator.conversationId ?? "conversation_orchestrator", seatEpoch: 1, engine: orchestrator.engine === "codex" ? "codex" : "claude" },
     dispatch: () => { voice.dispatches += 1; voice.delivered = true; },
   });
-  adapter.subscribe((event) => {
-    if (event.type !== "playback.level") voice.events.push(event);
-    if (event.type === "orchestrator.answer") voice.answered = true;
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  let seq = 0, pausedOnce = false;
+  let paused: Extract<CompanionEvent, { type: "playback.level" }> | null = null;
+  const publish = (event: CompanionEvent) => {
+    const normalized = { ...event, seq: ++seq } as CompanionEvent;
+    if (normalized.type !== "playback.level") voice.events.push(normalized);
+    if (normalized.type === "orchestrator.answer") voice.answered = true;
+    for (const emit of listeners) emit(normalized);
+  };
+  adapter.subscribe(event => {
+    if (event.type === "session.ready") { pausedOnce = false; paused = null; seq = 0; }
+    if (paused && event.type === "playback.level") {
+      publish({ ...paused, type: "playback.started", eventId: `${paused.eventId}:resume`, atMs: event.atMs });
+      paused = null;
+    }
+    publish(event);
+    if (script === "long" && !pausedOnce && event.type === "playback.level" && event.playedMs >= SCENARIO_PLAYBACK_PAUSE.long.afterMs) {
+      pausedOnce = true; paused = event; pauseFrame = true;
+      publish({ ...event, type: "playback.stopped", reason: "ended", eventId: `${event.eventId}:pause` });
+    }
   });
   void adapter.finished.then(() => { voice.finished = true; });
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
-  const shown: VoiceCompanionAdapter = !sendLost && !readsTranscript ? adapter : {
-    mode: adapter.mode, start: (options) => adapter.start(options), subscribe: (emit) => adapter.subscribe(emit), close: () => adapter.close(),
-    command: async (command) => {
+  const shown: VoiceCompanionAdapter = {
+    mode: adapter.mode, start: options => adapter.start(options), subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); }, close: () => adapter.close(),
+    command: async command => {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
     },
-    ...(readsTranscript ? { transcript: async () => sampleTranscript(UK ? "uk" : "en", PROJECT) } : {}),
+    ...(readsTranscript ? { transcript: async () => {
+      const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
+      record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
+        data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });
+      return { ...record, usage: { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
+    } } : {}),
   };
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
      the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */

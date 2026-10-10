@@ -1867,7 +1867,7 @@ export class CodexAppServerHost implements EngineHost {
     return entry;
   }
 
-  async steer(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence) {
+  async steer(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void) {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredSendRefusedError("dead-host");
     }
@@ -1889,6 +1889,7 @@ export class CodexAppServerHost implements EngineHost {
         normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
         normalized.selectedContext, normalized.origin, codexDeliveryDedup(normalized.id)) },
     ];
+    authorizeDispatch?.();
     const result = await this.rpc("turn/steer", {
       threadId: this.identity.threadId, expectedTurnId: currentTurn, input, clientUserMessageId: entry.id,
     });
@@ -1927,7 +1928,7 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
-  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
+  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -1946,7 +1947,7 @@ export class CodexAppServerHost implements EngineHost {
     let reject!: (error: unknown) => void;
     const promise = new Promise<DeliveryReceipt>((fulfill, fail) => { resolve = fulfill; reject = fail; });
     this.sendingDeliveries.set(normalized.id, { contentDigest: normalized.contentDigest, promise });
-    void this.sendOnce(normalized, firstDispatch).then(resolve, reject);
+    void this.sendOnce(normalized, firstDispatch, authorizeDispatch).then(resolve, reject);
     try {
       return await promise;
     } finally {
@@ -1956,7 +1957,7 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
-  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
+  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -1986,6 +1987,7 @@ export class CodexAppServerHost implements EngineHost {
         ),
       },
     ];
+    authorizeDispatch?.();
     if (currentTurn) {
       if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
       try {

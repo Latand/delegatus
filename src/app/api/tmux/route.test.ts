@@ -226,6 +226,30 @@ test("/api/tmux records a validated direct browser message and refuses an agent 
   }
 });
 
+test.each(["interrupt", "kill"].flatMap(action => ["browser", "service", "api-client", "agent"].map(caller => ({ action, caller }))))
+("conversation-host $action controls retain $caller custody", async ({ action, caller }) => {
+  const { internalServiceHeaders, setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
+  const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
+  const { POST: conversationHostPOST } = await import("../conversation-host/route");
+  const previous = process.env.LLV_STRUCTURED_HOSTS;
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  structuredControlResult = { status: 202, body: { ok: true, structured: true, target: "conversation_stage", operationId: "control-custody", receipt: { operationId: "control-custody", status: "queued" } } };
+  setCallerConversationResolverForTests(() => "conversation_agent");
+  const headers: Record<string, string> = caller === "browser" ? { "sec-fetch-site": "same-origin" }
+    : caller === "service" ? { ...internalServiceHeaders("monitor"), "sec-fetch-site": "same-origin" }
+      : caller === "agent" ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : {};
+  try {
+    const response = await conversationHostPOST(post({ path: PATHNAME, action, operationId: "control-custody", origin: { kind: "operator" } }, headers));
+    expect(response.status).toBe(202);
+    expect(structuredControlRequest).toMatchObject({ action, controlOrigin: caller === "browser" ? { kind: "operator" }
+      : caller === "agent" ? { kind: "agent", conversationId: "conversation_agent" } : { kind: "agent" } });
+  } finally {
+    structuredControlResult = null;
+    setCallerConversationResolverForTests(null);
+    if (previous === undefined) delete process.env.LLV_STRUCTURED_HOSTS; else process.env.LLV_STRUCTURED_HOSTS = previous;
+  }
+});
+
 test("/api/tmux excludes authenticated monitor and MCP producers while one browser gesture records once", async () => {
   const { internalServiceHeaders } = await import("@/lib/agent/operatorAuthority");
   operatorActivityRequests = [];

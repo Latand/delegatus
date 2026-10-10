@@ -19,6 +19,8 @@ export type RelayTargetSettings = {
   hardCapMinutes: number;
   /** Answers per member per hour in each chat (§B.8); absent is the default, null or 0 no limit. */
   memberLimitPerHour?: number | null;
+  /** Absent is off; only the operator can enable full owner agent runs. */
+  ownerTier?: boolean;
 };
 export type PairedRelay = {
   id: string;
@@ -63,6 +65,10 @@ export type RelayStore = {
   pending: PendingRelay[];
 };
 export type RunRecord = {
+  /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
+  conversationId?: string;
+  /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
+  ownerTurn?: { clientAttemptId: string; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
   requestId: string;
   leaseId: string;
   relayId: string;

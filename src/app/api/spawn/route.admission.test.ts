@@ -322,3 +322,43 @@ test("an operator capability caller without src proceeds as a silent root (#341)
   });
   expect(snapshot.lineageEdges[body.conversationId]).toBeUndefined();
 });
+
+
+test("owner relay authorization is rechecked under actual spawn admission after account resolution", async () => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "owner-admission-"));
+  let authorized = true, launches = 0;
+  const deps = dependencies(cwd);
+  const resolve = deps.resolveHealthySpawnAccount;
+  deps.resolveHealthySpawnAccount = async (...args) => { const account = await resolve!(...args); authorized = false; return account; };
+  deps.authorizeAutonomousLaunch = () => { if (!authorized) throw Error("owner relay revoked"); };
+  deps.spawnStructuredConversation = async () => { launches++; throw Error("revoked launch ran"); };
+  const attempt = `relay-owner-${crypto.randomUUID()}`;
+  const request = agentRequest(rotateOperatorSpawnCapability(), {
+    engine: "claude", model: "sonnet", cwd, prompt: "Owner instruction", clientAttemptId: attempt,
+  });
+  request.headers.set("sec-fetch-site", "same-origin"); request.headers.set("origin", "http://127.0.0.1:8898");
+  const response = await POST.withDependencies(request, deps);
+  expect(response.status).toBeGreaterThanOrEqual(400);
+  expect(launches).toBe(0);
+  expect(agentRegistry().spawnReceiptForClientAttempt(attempt)).toBeNull();
+});
+
+test("owner relay cutoff fences accepted deferred admission before host start", async () => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "owner-deferred-"));
+  let authorized = true, launches = 0;
+  const work: (() => void | Promise<void>)[] = [];
+  const deps = dependencies(cwd);
+  deps.authorizeAutonomousLaunch = () => { if (!authorized) throw Error("owner relay revoked"); };
+  deps.defer = fn => { work.push(fn); };
+  deps.spawnStructuredConversation = async () => { launches++; throw Error("revoked launch ran"); };
+  const attempt = `relay-owner-${crypto.randomUUID()}`;
+  const request = agentRequest(rotateOperatorSpawnCapability(), {
+    engine: "claude", model: "sonnet", cwd, prompt: "Owner instruction", clientAttemptId: attempt,
+  });
+  request.headers.set("sec-fetch-site", "same-origin"); request.headers.set("origin", "http://127.0.0.1:8898");
+  const response = await POST.withDependencies(request, deps);
+  expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 202 }); expect(work).toHaveLength(1);
+  authorized = false; await work[0]!();
+  expect(launches).toBe(0);
+  expect(agentRegistry().spawnReceiptForClientAttempt(attempt)?.state).toBe("failed");
+});

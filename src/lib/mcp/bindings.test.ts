@@ -2530,7 +2530,7 @@ test("pipeline close acknowledges pending teardown and get_pipeline reads final 
   const target = { stageId: "build", attempt: 1, conversationId: "conversation_build", agentPath: null, paneId: null };
   const close = { status: "pending", pending: [target], stopped: [], alreadyStopped: [], unconfirmed: [],
     acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
-  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  const { buildPipeline, savePipelines, findPipelineRecord } = await import("@/lib/pipelines/store");
   const pipeline = buildPipeline({ id: "pipeline_close_pending", task: "Close pending", project: "viewer", repoDir: "/repo", stages: [{
     id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null },
   }],
@@ -2539,6 +2539,7 @@ test("pipeline close acknowledges pending teardown and get_pipeline reads final 
   pipeline.cursor = null;
   pipeline.closedAt = "2026-09-20T00:00:00Z";
   const bindings = viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: findPipelineRecord,
     patchPipeline: async () => ({ pipeline, close }),
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
   } as never);
