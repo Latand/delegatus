@@ -50,8 +50,14 @@ beforeEach(() => {
   resetResourcesForTests();
 });
 
-afterEach(() => {
-  for (const child of children.splice(0)) child.kill("SIGKILL");
+afterEach(async () => {
+  /* Reaped before the file's teardown counts this test's children. */
+  await Promise.all(children.splice(0).map((child) => {
+    if (child.exitCode !== null || child.signalCode !== null) return undefined;
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill("SIGKILL");
+    return exited;
+  }));
   setAgentRegistryForTests(null);
   resetResourcesForTests();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;

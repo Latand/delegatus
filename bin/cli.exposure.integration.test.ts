@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -172,6 +172,9 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     mkdir(state, { recursive: true }),
   ]);
   await Promise.all([
+    /* The tailnet banner prints its QR code with it; without it the launcher
+       died on the banner and left its Viewer and runtime host running. */
+    symlink(path.resolve("node_modules/qrcode-terminal"), path.join(fixture, "node_modules", "qrcode-terminal"), "dir"),
     copyFile(path.resolve("bin/cli.mjs"), path.join(bin, "cli.mjs")),
     copyFile(path.resolve("bin/telemetry-notice.mjs"), path.join(bin, "telemetry-notice.mjs")),
     copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(bin, "agent-binaries.mjs")),
