@@ -564,9 +564,11 @@ guarantees for the 1.x series.
   transcribes one second of audio before it reports ready ([#2651]).
 
 ### Security
-- Two dependencies were updated for published security advisories:
-  `@modelcontextprotocol/sdk` to 1.31.0 (GHSA-6qxp-vccf-f47h) and `sharp`
-  to 0.35.5 (GHSA-wq5f-xc86-pv6w).
+- Three dependencies were updated for published security advisories:
+  `@modelcontextprotocol/sdk` to 1.31.0 (GHSA-6qxp-vccf-f47h), `sharp` to
+  0.35.5 (GHSA-wq5f-xc86-pv6w) and Next.js to 16.3.8
+  (GHSA-cjq9-62q9-8jv4). Delegatus's own fix to Next.js's client manifest
+  carries over to 16.3.8 unchanged.
 
 ### Maintainer notes
 - Main and release-tag image builds run in a publication slot of their own,

@@ -346,8 +346,8 @@ Start a Claude Code, Codex or GitHub Copilot agent from a task or the
 and reasoning in its runtime pill, type or dictate, and send; the pane then
 becomes the conversation. Send messages, images and files from the same
 composer. In the conversation of a running pipeline stage, the runtime pill
-switches the stage itself to another model, effort, speed or account. The agent's window has buttons to interrupt,
-resume or stop it. In a Codex conversation, the composer's **Context** toggle
+switches the stage itself to another model, effort, speed or account. The
+agent's window has buttons to interrupt, resume or stop it. In a Codex conversation, the composer's **Context** toggle
 sends the draft into the running turn as context: Auto follows the turn, and a
 press overrides it for that card. A Codex agent can also run on a service tier
 you set per launch, stage or role. Agents use the bundled [MCP server](#mcp-server-for-agents)
@@ -381,8 +381,8 @@ share left and when it resets. Switch to another account before
 one runs out, or move a single agent to a different account. Agents you
 start after a switch use the new active account. When a pipeline stage hits
 a usage limit, Delegatus moves it to another allowed account of the same
-engine; when none has room, the stage waits for the reset and carries on. A Claude account can also point at any service
-that speaks the Anthropic Messages API: **Add compatible provider** takes its
+engine; when none has room, the stage waits for the reset and carries on.
+A Claude account can also point at any service that speaks the Anthropic Messages API: **Add compatible provider** takes its
 address, token and models.
 
 The **Activity** page, at the top of the sidebar's ⋯ menu, shows your time and your agents'
