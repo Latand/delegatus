@@ -2,15 +2,45 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 import { VIEWER_CONTROL_TOKEN_ENV } from "@/lib/mcp/controlEndpoint";
 import { MCP_TOOL_NAMES } from "@/lib/mcp/server";
+import { MCP_HEALTH_PROBE_CAPABILITY_ENV } from "@/lib/mcp/healthProbeAdmission";
 
 import { RuntimeHost } from "./host";
 import { RuntimeJournal } from "./journal";
 import { McpHealthProbeAdmissions } from "./mcpHealthProbeAdmission";
 import { mcpProbeCallFailures, mcpProbeFailureDetail, probeControlUrl, probeMcpRuntime, VIEWER_CONTROL_URL_ENV } from "./mcpRuntimeProbe";
 import { serveRuntimeHost } from "./socket";
+import { McpProbeStdioTransport } from "./mcpProbeStdioTransport";
+
+const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
+
+/* Ordinary sessions can read the board under B+. A read outside the health
+   surface distinguishes a redeemed probe from an ordinary session without
+   writing a task or invoking an agent action. */
+async function probeIdentityCode(env: Record<string, string>, capability?: string, admissions?: McpHealthProbeAdmissions): Promise<unknown> {
+  const environment = { ...env };
+  delete environment[MCP_HEALTH_PROBE_CAPABILITY_ENV];
+  if (capability) environment[MCP_HEALTH_PROBE_CAPABILITY_ENV] = capability;
+  const transport = new McpProbeStdioTransport({
+    command: process.execPath,
+    args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
+    cwd: process.cwd(),
+    env: environment,
+    ...(admissions ? { healthAdmissions: admissions } : {}),
+  });
+  const client = new Client({ name: "health-admission-fixture", version: "1.0.0" });
+  try {
+    await client.connect(transport, { timeout: 5_000 });
+    const result = await client.callTool({ name: "get_task", arguments: { taskId: "missing-health-task" } }, undefined, { timeout: 5_000 });
+    const structured = result.structuredContent;
+    return structured && typeof structured === "object" && "code" in structured ? structured.code : undefined;
+  } finally {
+    await client.close().finally(() => transport.close());
+  }
+}
 
 /* The probed runtime reads through the control endpoint it is handed. Unset, it
    resolves to the fixed loopback address, which belongs to whichever Viewer is
@@ -28,6 +58,7 @@ function candidateControl() {
 }
 
 test("host-admitted managed MCP probes discover the complete surface, call required reads, and exit", async () => {
+  if (!NODE_BIN) throw new Error("the MCP probe fixture requires Node on PATH");
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-"));
   const socketPath = path.join(sandbox, "runtime.sock");
   const journal = new RuntimeJournal(path.join(sandbox, "runtime.sqlite"));
@@ -56,7 +87,7 @@ test("host-admitted managed MCP probes discover the complete surface, call requi
     for (const host of ["claude", "codex"]) {
       let processId: number | null = null;
       const evidence = await probeMcpRuntime({
-        command: host === "claude" ? process.execPath : "/usr/bin/node",
+        command: host === "claude" ? process.execPath : NODE_BIN,
         args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
         cwd: process.cwd(),
         env: { ...environment, LLV_TEST_HOST: host },
@@ -94,7 +125,8 @@ test("host-admitted managed MCP probes discover the complete surface, call requi
   }
 }, 20_000);
 
-test("a release target naming a runtime this host never staged falls back to the bundled surface", async () => {
+test("a release target with no staged bundle is refused within the probe timeout", async () => {
+  if (!NODE_BIN) throw new Error("the MCP probe fixture requires Node on PATH");
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-missing-"));
   const socketPath = path.join(sandbox, "runtime.sock");
   const journal = new RuntimeJournal(path.join(sandbox, "runtime.sqlite"));
@@ -137,18 +169,22 @@ test("a release target naming a runtime this host never staged falls back to the
   environment[VIEWER_CONTROL_URL_ENV] = control.url.origin;
 
   try {
+    const startedAt = performance.now();
     const evidence = await probeMcpRuntime({
-      command: "/usr/bin/node",
+      command: NODE_BIN,
       args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
       cwd: process.cwd(),
       env: environment,
       runtime,
       healthProbeCapability: admissions.issue(),
       healthProbeAdmissions: admissions,
+      timeoutMs: 500,
     });
 
-    expect(evidence).toMatchObject({ ok: true, processReady: true });
-    expect(evidence.tools).toHaveLength(MCP_TOOL_NAMES.length);
+    expect(evidence).toMatchObject({ ok: false, processReady: false,
+      calls: { deploymentStatus: false, boardSnapshot: false }, tools: [] });
+    expect(evidence.detail).toContain("timed out");
+    expect(performance.now() - startedAt).toBeLessThan(5_000);
   } finally {
     control.stop(true);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -182,36 +218,19 @@ test("absent, forged, expired, and replayed health admissions cannot imitate the
   environment.LLV_CLAUDE_HOME = path.join(sandbox, "claude");
   const control = candidateControl();
   environment[VIEWER_CONTROL_URL_ENV] = control.url.origin;
-  const runtime = {
-    source: "managed" as const,
-    revision: "7".repeat(40),
-    releaseId: "deploy-adversarial",
-    artifactDigest: "a".repeat(64),
-    stagedAt: "2026-07-23T08:00:00.000Z",
-  };
-  const run = async (healthProbeCapability?: string) => {
-    return await probeMcpRuntime({
-      command: process.execPath,
-      args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
-      cwd: process.cwd(),
-      env: environment,
-      runtime,
-      ...(healthProbeCapability ? { healthProbeCapability } : {}),
-      healthProbeAdmissions: admissions,
-    });
-  };
+  const run = (capability?: string) => probeIdentityCode(environment, capability, admissions);
 
   try {
-    expect((await run()).calls).toEqual({ deploymentStatus: false, boardSnapshot: false });
-    expect((await run("A".repeat(43))).calls).toEqual({ deploymentStatus: false, boardSnapshot: false });
+    expect(await run()).toBe("tool_failed");
+    expect(await run("A".repeat(43))).toBe("tool_failed");
 
     const expired = admissions.issue();
     now = 110;
-    expect((await run(expired)).calls).toEqual({ deploymentStatus: false, boardSnapshot: false });
+    expect(await run(expired)).toBe("tool_failed");
 
     const legitimate = admissions.issue();
-    expect((await run(legitimate)).calls).toEqual({ deploymentStatus: true, boardSnapshot: true });
-    expect((await run(legitimate)).calls).toEqual({ deploymentStatus: false, boardSnapshot: false });
+    expect(await run(legitimate)).toBe("tool_not_permitted");
+    expect(await run(legitimate)).toBe("tool_failed");
   } finally {
     control.stop(true);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -223,9 +242,11 @@ test("absent, forged, expired, and replayed health admissions cannot imitate the
 test("the final launcher rejects capability approval from a caller-selected runtime socket", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-forged-socket-"));
   const socketPath = path.join(sandbox, "forged-runtime.sock");
+  let admissionRequests = 0;
   const server = serveRuntimeHost(socketPath, {
     async handle(request) {
       if (request.method === "mcp-health-probe-admission") {
+        admissionRequests++;
         return { id: request.id, ok: true, result: true };
       }
       if (request.method === "snapshot") {
@@ -247,23 +268,8 @@ test("the final launcher rejects capability approval from a caller-selected runt
   environment[VIEWER_CONTROL_URL_ENV] = control.url.origin;
 
   try {
-    const evidence = await probeMcpRuntime({
-      command: process.execPath,
-      args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
-      cwd: process.cwd(),
-      env: environment,
-      runtime: {
-        source: "managed",
-        revision: "7".repeat(40),
-        releaseId: "deploy-forged-socket",
-        artifactDigest: "a".repeat(64),
-        stagedAt: "2026-07-23T08:00:00.000Z",
-      },
-      healthProbeCapability: "A".repeat(43),
-    });
-
-    expect(evidence.calls).toEqual({ deploymentStatus: false, boardSnapshot: false });
-    expect(evidence.ok).toBe(false);
+    expect(await probeIdentityCode(environment, "A".repeat(43))).toBe("tool_failed");
+    expect(admissionRequests).toBe(0);
   } finally {
     control.stop(true);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

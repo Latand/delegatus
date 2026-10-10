@@ -25,6 +25,8 @@ const { readRequests } = await import("@/lib/activity/requestLedger");
 const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
 const { statePath } = await import("@/lib/configDir");
+const { taskRevision } = await import("@/lib/tasks/revision");
+const { loadTasks } = await import("@/lib/tasks/store");
 
 const DESKTOP = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
 const headers = (extra: Record<string, string> = {}) => ({ "content-type": "application/json", host: "localhost", "user-agent": DESKTOP, ...extra });
@@ -74,6 +76,10 @@ test("a colour or a hide instructs no agent and is not recorded", async () => {
   const task = await createTask("Tidy the board");
   fs.rmSync(ledgerDir(), { recursive: true, force: true });
   expect((await patch(task.id, { color: "teal" })).status).toBe(200);
+  const stored = loadTasks().find((row) => row.id === task.id)!;
+  const response = await patch(task.id, { hide: true, expectedProject: task.project, expectedRevision: taskRevision(stored) });
+  expect(response.status).toBe(200);
+  expect((await response.json()).task.groupHidden).toBeDefined();
   expect(rows()).toEqual([]);
 });
 

@@ -76,8 +76,12 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
   fs.writeFileSync(filename, JSON.stringify(state));
   let loads = 0;
   let rows = 0;
+  const rowReads: Record<string, number> = {};
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite",
-    onSqliteSnapshotLoad: () => loads++, onSqliteRowPayloadRead: (_collection, count) => { rows += count; } });
+    onSqliteSnapshotLoad: () => loads++, onSqliteRowPayloadRead: (collection, count) => {
+      rows += count;
+      rowReads[collection] = (rowReads[collection] ?? 0) + count;
+    } });
   registry.readOnlySnapshot();
   /* The shared whole-file view is frozen, so the keyed path is proven not to
      reach it by its one exit rather than by a counter written into it. */
@@ -88,6 +92,7 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
   const globalJournalRead = spyOn(journal, "snapshotJson");
   try {
     loads = rows = 0;
+    for (const collection of Object.keys(rowReads)) delete rowReads[collection];
     const large: number[] = [];
     for (let i = 0; i < 25; i++) {
       const start = performance.now();
@@ -107,6 +112,7 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
       expect(response.status).toBe(202);
       admission.push(performance.now() - start);
     }
+    console.log(JSON.stringify({ sessions: 6_001, smallReadP95Ms: p95(small), populatedReadP95Ms: p95(large), admissionP95Ms: p95(admission), rowPayloadReads: rows, rowReads }));
     expect(snapshotSpy).not.toHaveBeenCalled();
     expect(globalRegistryRead).not.toHaveBeenCalled();
     expect(globalJournalRead).not.toHaveBeenCalled();
@@ -115,9 +121,8 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
     expect(rows).toBeLessThan(12_000);
     expect(p95(large)).toBeLessThan(250);
     expect(p95(admission)).toBeLessThan(250);
-    console.log(JSON.stringify({ sessions: 6_001, smallReadP95Ms: p95(small), populatedReadP95Ms: p95(large), admissionP95Ms: p95(admission), rowPayloadReads: rows }));
   } finally {
-    snapshotSpy.mockRestore(); factory.mockRestore(); globalRegistryRead.mockRestore(); globalJournalRead.mockRestore();
+    cachedViewRead.mockRestore(); snapshotSpy.mockRestore(); factory.mockRestore(); globalRegistryRead.mockRestore(); globalJournalRead.mockRestore();
     await new Promise<void>(resolve => server.close(() => resolve()));
     registry.close(); journal.close();
   }

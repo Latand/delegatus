@@ -2083,3 +2083,96 @@ pre-install attempt are excluded from these behavioral results.
 `bunx tsc --noEmit`, `git diff --check` and the fingerprint-aware privacy
 gate with `--check-commits` pass. The normal merge pre-commit hook reported
 privacy PASS and zero introduced or baseline ESLint errors.
+
+## Launch and board server follow-up, 2026-10-11
+
+The historical launch/board backlog and the #2489 keyed-admission result were
+rechecked at main `e5cd0ff3d7e5d2c58225f908ad5c0bb475d2ccd2` before changing
+code. Each test path ran separately through `scripts/gate-slot.sh`, with
+isolated `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR` under an OS-temp
+root and a closed-port Viewer control endpoint. Bun 1.4.0. Installed
+dependencies and a rebuilt MCP bundle preceded the behavioral measurements.
+The earlier whole-repository inventory remains a historical measurement.
+
+| Historical test path | Main pass / fail |
+| --- | --- |
+| `src/app/api/spawn/route.admission.test.ts` | 10 / 0 |
+| `src/lib/agent/failedSpawnDelivery.test.ts` | 9 / 0 |
+| `src/app/api/tasks/route.test.ts` | 6 / 0 |
+| `src/lib/tasks/revision.test.ts` | 5 / 0 |
+| `src/lib/tasks/taskColorGroupHide.test.ts` | 11 / 1 |
+| `src/lib/accounts/claude.test.ts` | 35 / 0 |
+| `src/lib/accounts/codex.test.ts` | 25 / 0 |
+| `src/lib/accounts/removal.test.ts` | 30 / 0 |
+| `src/lib/accounts/manager.interprocess.test.ts` | 4 / 0 |
+| `src/app/api/board/route.test.ts` | 66 / 0 |
+| `src/lib/accounts/migration/coordinator.test.ts` | 123 / 0 |
+| `src/lib/reaperRuntime.test.ts` | 59 / 0 |
+| `src/lib/mcp/writerConcurrency.test.ts` | 4 / 1 |
+| `src/lib/mcp/orchestratorTools.test.ts` | 76 / 0 |
+| `src/runtime-host/mcpRuntimeProbe.test.ts` | 8 / 4 |
+| `src/lib/runtime/structuredMessageDelivery.keyed.test.ts` | 0 / 1 |
+
+### Remaining failures and changes
+
+- Keyed HTTP admission still read **242380** row payloads against `<12000`.
+  The added admission-order regression read **617** against `<100`. Sequence
+  allocation and the earlier-assigned-delivery guard each enumerated every
+  held delivery. Both now use the existing conversation-indexed selector,
+  including historical aliases. The regression requires sequence 8 after an
+  aliased sequence 7, refuses the newer delivery until its predecessor is
+  claimed, and keeps 200 unrelated reservations outside the read budget.
+  The HTTP row and latency limits are unchanged; its diagnostic now records
+  reads per collection even when an assertion fails.
+- The missing-process-identity writer fixture also hid its parent's identity,
+  so the owned-process guard exited before its barrier. The fixture now hides
+  only its own identity and retains the real lookup for its parent.
+- The hide-path import check classified the route's actor-authority import as
+  lifecycle actuation. It now permits exactly that import on the REST task
+  route; registry and other lifecycle imports remain forbidden. The real
+  activity-ledger test now sends a fenced hide request and verifies it writes
+  no work request.
+- The MCP probe fixture hard-coded a Node installation path and expected
+  invalid health admissions to deny ordinary board reads. Node is now resolved
+  from PATH. Under the current B+ policy ordinary sessions can read the board;
+  the adversarial probes instead call a read outside the health surface and
+  distinguish ordinary task failure from the health-only permission refusal.
+  Absent, forged, expired and replayed admissions cannot acquire that identity;
+  a caller-selected socket receives zero admission requests. The existing
+  positive probe still requires the complete tool list and both health reads.
+- A valid release pointer with an unstaged bundle waits for its own release,
+  as documented in `docs/design/mcp-stdio-survival.md`. After correcting Node,
+  its stale fallback expectation timed out after 20 seconds: initialization
+  had not received the configured probe timeout. The probe now passes that
+  timeout to `Client.connect`; the test requires a failed, uninitialized
+  result within five seconds with a 500 ms initialization budget.
+
+### Keyed-admission measurement after the fix
+
+With 6001 sessions, HTTP admission reads **1980** row payloads: 970 held
+deliveries, 780 operation owners, 145 conversations and 85 entries. Admission
+p95 is **46.6 ms**, populated keyed-read p95 **7.5 ms**, and small keyed-read
+p95 **0.8 ms**. The existing `<12000` row and `<250 ms` admission assertions
+pass. The new alias-ordering test also passes its `<100` row assertion.
+
+### Exact-path validation after the changes
+
+| Test path | Pass / fail |
+| --- | --- |
+| `src/lib/agent/registry.deliveryRead.test.ts` | 6 / 0 |
+| `src/lib/runtime/structuredMessageDelivery.keyed.test.ts` | 1 / 0 |
+| `src/lib/tasks/taskColorGroupHide.test.ts` | 12 / 0 |
+| `src/app/api/tasks/activityLedger.test.ts` | 4 / 0 |
+| `src/lib/mcp/writerConcurrency.test.ts` | 5 / 0 |
+| `src/runtime-host/mcpRuntimeProbe.test.ts` | 12 / 0 |
+
+The six changed behavioral paths total **40 pass, 0 fail**. The unstaged-release
+probe returns in **531 ms**. The runtime host rehearsal under pinned Bun 1.4.0
+also passes: succession completes, and the stable listener and runtime socket
+each answer **27/27** requests over 15 seconds while half the clients abandon
+their replies. All fixtures run under the same isolated-state and owned-runner
+constraints as the baseline.
+
+`bunx tsc --noEmit` through the shared gate, `git diff --check`, and the
+fingerprint-aware privacy gate against the merge base with `--check-commits`
+pass.

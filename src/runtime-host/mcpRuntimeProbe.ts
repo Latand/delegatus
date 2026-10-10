@@ -165,7 +165,7 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
   let deploymentStatus = false;
   let boardSnapshot = false;
   try {
-    await client.connect(transport);
+    await client.connect(transport, { timeout });
     processReady = true;
     if (transport.pid !== null) options.onProcessReady?.(transport.pid);
     const listed = await client.listTools(undefined, { timeout });

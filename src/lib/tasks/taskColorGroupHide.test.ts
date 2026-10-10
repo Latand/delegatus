@@ -112,17 +112,24 @@ function resolvedImports(file: string): string[] {
 }
 
 const LIFECYCLE = /^src\/lib\/(runtime|flows|delivery|monitor|lifecycle|proc|agent)(\/|$)|^src\/lib\/pipelines\/(engine|controller)$|^src\/lib\/tasks\/(send|reconcile)$/;
+const ACTIVITY_AUTHORITY = "src/lib/agent/operatorAuthority";
 
 test("the hide path reaches no lifecycle code: the modules it runs through import no runtime, pipeline engine, flow, delivery or process module, relative or aliased", () => {
   /* The resolver itself: a relative sibling and an alias both land on the repo path the rule names. */
   expect(LIFECYCLE.test(path.posix.normalize(path.posix.join("src/lib/tasks", "./send")))).toBe(true);
   expect(LIFECYCLE.test(path.posix.join("src", "lib/runtime/commands"))).toBe(true);
+  expect(LIFECYCLE.test("src/lib/agent/registry")).toBe(true);
   /* The scanner reads these modules' real imports (the lane helper has only a type import, so none). */
   expect(resolvedImports("src/lib/tasks/commands.ts")).toContain("src/lib/tasks/groupHide");
   expect(resolvedImports("src/lib/pipelines/laneMovement.ts")).toEqual([]);
   for (const file of ["src/lib/tasks/commands.ts", "src/lib/tasks/seatHolding.ts", "src/lib/tasks/groupHide.ts", "src/lib/pipelines/laneMovement.ts", "src/app/api/tasks/[id]/route.ts"]) {
     const imports = resolvedImports(file);
-    expect({ file, lifecycleImports: imports.filter((target) => LIFECYCLE.test(target)) }).toEqual({ file, lifecycleImports: [] });
+    // The route classifies its team actor and attributes work edits. Its
+    // activity-ledger test proves a hide records no request. Other agent
+    // imports remain banned by this boundary.
+    const lifecycleImports = imports.filter((target) => LIFECYCLE.test(target)
+      && !(file === "src/app/api/tasks/[id]/route.ts" && target === ACTIVITY_AUTHORITY));
+    expect({ file, lifecycleImports }).toEqual({ file, lifecycleImports: [] });
   }
 });
 
