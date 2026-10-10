@@ -22,6 +22,7 @@ import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import { RISE_FRAME_SHARE, RISE_MS } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
+import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { browserCase, caseChromium as chromium, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
@@ -19505,7 +19506,7 @@ describe("parallel ask idle fallback", () => {
  * buttons, and is answered by voice with no tap; that a read call and the
  * delegation are told apart; the failures in plain words; the settings rows and the
  * product mount; the delegated message's own tint in the production conversation pane;
- * and the eleven scripted scenarios, each measured and then recorded at both widths,
+ * and the twelve scripted scenarios, each measured and then recorded at both widths,
  * in both languages and both themes.
  *
  * `LLV_VOICE_COMPANION_HANDOFF=<dir>` is where the recordings and screenshots go (they
@@ -21444,7 +21445,7 @@ describe("floating voice companion", () => {
     });
   }, 900_000);
 
-  /* The eleven scripted scenarios, each at 1440 and 1000, in en and uk, light and dark: eight runs a scenario.
+  /* The twelve scripted scenarios, each at 1440 and 1000, in en and uk, light and dark: eight runs a scenario.
      Each runs twice: once measured (no recording, no screenshot,
      no sampler, so the frame clock reads the page alone) and once recorded as a video with screenshots and the
      geometry sampler. Every measured run comes before the first recording. */
@@ -21501,6 +21502,8 @@ describe("floating voice companion", () => {
             return {
               spend: [...spend.querySelector<HTMLElement>("[data-spend-amounts]")!.children].map(node => (node as HTMLElement).innerText).join(" · "),
               spendHeight: view.querySelector<HTMLElement>("[data-companion-spend]")?.getBoundingClientRect().height ?? 0,
+              spendEmphasis: Object.fromEntries([...spend.querySelectorAll<HTMLElement>("[data-spend-amounts] [data-spend-value]")].map(node => [node.dataset.spendValue, { text: node.innerText, weight: getComputedStyle(node).fontWeight, color: getComputedStyle(node).color }])),
+              spendWords: getComputedStyle(spend).color,
               spendFooter: { belowBody: spendBox.top >= body.getBoundingClientRect().bottom - 1, atFoot: Math.abs(spendBox.bottom - box.bottom) <= 2,
                 meterHeight: meterBox.height, meterAfterAmounts: meterBox.top >= spend.querySelector("[data-spend-amounts]")!.getBoundingClientRect().bottom,
                 inside: meterBox.left >= spendBox.left && meterBox.right <= spendBox.right && meterBox.bottom <= spendBox.bottom,
@@ -21526,6 +21529,11 @@ describe("floating voice companion", () => {
           await page.screenshot({ path: path.join(out, `transcript-${label}-2-collapsed.png`) });
           expect(reading.spend, `${label}: call and month spend`).toBe(lang === "uk" ? "Ця розмова $0.19 · жовтень $0.51 із $20.00" : "This call $0.19 · October $0.51 of $20.00");
           expect(reading.spendHeight, `${label}: sums and thin meter fit the footer`).toBeLessThanOrEqual(48);
+          /* Variant 2's emphasis: the two sums spent are bold, the cap is muted and set apart from both the sums and the words. */
+          const emphasis = reading.spendEmphasis as Record<string, { text: string; weight: string; color: string }>;
+          expect(Object.fromEntries(Object.entries(emphasis).map(([role, value]) => [role, [value.text, Number(value.weight) >= 600]])), `${label}: the sums spent bold, the cap not`)
+            .toEqual({ usd: ["$0.19", true], spent: ["$0.51", true], cap: ["$20.00", false] });
+          expect([emphasis.cap!.color === emphasis.spent!.color, emphasis.cap!.color === reading.spendWords, emphasis.usd!.color === emphasis.spent!.color], `${label}: the cap muted apart from the sums and the words`).toEqual([false, false, true]);
           expect({ belowBody: reading.spendFooter.belowBody, atFoot: reading.spendFooter.atFoot, meterAfterAmounts: reading.spendFooter.meterAfterAmounts, inside: reading.spendFooter.inside }, `${label}: variant 2 geometry`).toEqual({ belowBody: true, atFoot: true, meterAfterAmounts: true, inside: true });
           expect(reading.spendFooter.meterHeight, `${label}: a thin meter`).toBe(3);
           expect(reading.spendFooter.monthShare).toBeCloseTo(0.51 / 20, 3);
@@ -21606,6 +21614,7 @@ describe("floating voice companion", () => {
         const reads = name === "read" || name === "reads" || name === "readLong" || name === "burst";
         const toolsShown = new Set<string>();
         let delegationCards = 0;
+        let reportsRead: unknown = null;
         const { context, page, pageErrors } = await openVoice(browser, server.base, `&script=${name}`, { viewport, scheme, lang, ...(recorded ? { video: path.join(OUT, "video"), init: appearanceProbe } : {}) });
         try {
           const shots: string[] = [];
@@ -21630,6 +21639,59 @@ describe("floating voice companion", () => {
             };
             requestAnimationFrame(tick);
           });
+          /* The standalone reports, read every frame: the held report cards in lane order, each first sighting with
+             whether the companion was speaking then, each departure with how many newer cards stood beside it, and
+             the operator's bubble as it read while the reports came in. */
+          if (name === "reports") await page.evaluate(({ prefix }) => {
+            const probe = { frames: 0, firstSeen: [] as Array<{ id: string; at: number; speaking: boolean; operator: string | null }>, orderFaults: [] as string[], returned: [] as string[],
+              departures: [] as Array<{ id: string; heldMs: number; newerHeld: number; olderHeld: number; scriptFinished: boolean; neededPx: number; roomPx: number; before: string[]; after: string[] }>, maxHeld: 0, operator: [] as string[] };
+            (window as unknown as { __voiceReports: typeof probe }).__voiceReports = probe;
+            const number = (id: string) => Number(id.slice(prefix.length));
+            let held: string[] = [];
+            /* The lane as the previous frame showed it: each element's height and arrival, and the room the lane gives. */
+            let shown: Array<{ key: string; arrival: number; height: number }> = [];
+            let roomPx = 0;
+            const gone = new Set<string>();
+            const tick = () => {
+              const root = document.querySelector<HTMLElement>("[data-voice-companion]");
+              const ids = [...(root?.querySelectorAll<HTMLElement>('.vc-stack > [data-floater^="report:"]') ?? [])].map((node) => node.dataset.floater!.slice("report:".length));
+              const voice = (window as unknown as { voiceCompanion: { finished: boolean; events: Array<{ type: string; speaker?: string }> } }).voiceCompanion;
+              const operatorNode = root?.querySelector<HTMLElement>('.vc-stack > [data-floater^="operator:item_op_1#"]');
+              const now = [...(root?.querySelectorAll<HTMLElement>(".vc-stack > [data-floater]") ?? [])].map((node) => ({ key: node.dataset.floater!, arrival: Number(node.dataset.arrival ?? Infinity), height: node.offsetHeight }));
+              const operator = operatorNode ? `${operatorNode.dataset.floater}@${operatorNode.dataset.arrival}:${(operatorNode.textContent ?? "").replace(/\s+/g, " ").trim()}` : null;
+              if (ids.length || held.length) {
+                probe.frames += 1;
+                if (ids.some((id, index) => index > 0 && number(id) <= number(ids[index - 1]!))) probe.orderFaults.push(ids.join(","));
+                for (const id of ids) {
+                  if (gone.has(id)) probe.returned.push(id);
+                  if (!probe.firstSeen.some((seen) => seen.id === id)) {
+                    const playback = voice.events.filter((event) => event.type === "playback.started" || event.type === "playback.stopped").at(-1);
+                    probe.firstSeen.push({ id, at: performance.now(), speaking: playback?.type === "playback.started", operator });
+                  }
+                }
+                for (const id of held) if (!ids.includes(id)) {
+                  gone.add(id);
+                  /* What it and everything newer needed, against the lane's room: more than the room means the lane
+                     could not hold them all, so the oldest left from the far end. */
+                  const was = shown.find((entry) => entry.key === `report:${id}`);
+                  /* It, what newer stood beside it, and what arrived as it left: those that left with it in the same frame count. */
+                  const stayed = was ? [was, ...shown.filter((entry) => entry.arrival > was.arrival), ...now.filter((entry) => entry.arrival > was.arrival && !shown.some((other) => other.key === entry.key))] : [];
+                  const neededPx = Math.round(stayed.reduce((sum, entry) => sum + entry.height, 0) + Math.max(0, stayed.length - 1) * 8);
+                  const lane = (list: typeof now) => list.map((entry) => `${entry.key}@${entry.arrival}:${entry.height}`);
+                  probe.departures.push({ id, neededPx, roomPx: Math.round(roomPx), before: lane(shown), after: lane(now), heldMs: Math.round(performance.now() - (probe.firstSeen.find((seen) => seen.id === id)?.at ?? 0)), newerHeld: ids.filter((other) => number(other) > number(id)).length, olderHeld: ids.filter((other) => number(other) < number(id)).length, scriptFinished: voice.finished });
+                }
+              }
+              /* Read from the moment the operator's words are final. */
+              if (operator && !probe.operator.includes(operator) && voice.events.some((event) => event.type === "transcript.final" && event.speaker === "operator")) probe.operator.push(operator);
+              held = ids;
+              shown = now;
+              const lane = root?.querySelector<HTMLElement>("[data-companion-lane]");
+              roomPx = lane ? lane.getBoundingClientRect().height - 26 : 0;
+              probe.maxHeld = Math.max(probe.maxHeld, ids.length);
+              if (!voice.finished || ids.length) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }, { prefix: DEMO_IDS.burstReportPrefix });
           const idleFrom = await page.evaluate(() => performance.now());
           await page.waitForTimeout(1_500);
           const idleTo = await page.evaluate(() => performance.now());
@@ -21705,7 +21767,7 @@ describe("floating voice companion", () => {
           });
           await page.locator("[data-companion-talk]").click();
           let peak = 0;
-          /* `proposal` stays null: no scenario of the eleven asks the operator to confirm. */
+          /* `proposal` stays null: no scenario of the twelve asks the operator to confirm. */
           const proposal: unknown = null;
           let sent: { firstStageShown: string | null; taps: 0 } | null = null;
           let buttonsOffered = 0;
@@ -21796,6 +21858,33 @@ describe("floating voice companion", () => {
             expect(called, `${label}: read calls`).toBe(name === "read" || name === "readLong" ? 1 : name === "reads" ? 3 : 4);
             expect(after.events.findLastIndex((event) => event.type === "tool.result"), `${label}: the answer follows the last result`).toBeLessThan(after.events.findLastIndex((event) => event.type === "response.started"));
           }
+          /* More standalone reports than the lane holds, arriving while the companion speaks: every one is shown, in
+             arrival order, as many as the cap together; one leaves only from the far end, never to come back, and the
+             operator's bubble reads the same throughout. The transcript keeps all of them, in order. */
+          if (name === "reports") {
+            await page.waitForFunction(() => !document.querySelector('[data-voice-companion] .vc-stack > [data-floater^="report:"]'), null, { timeout: 60_000, polling: 100 });
+            const probe = await page.evaluate(() => (window as unknown as { __voiceReports: { firstSeen: Array<{ id: string; at: number; speaking: boolean; operator: string | null }>; orderFaults: string[]; returned: string[]; departures: Array<{ id: string; heldMs: number; newerHeld: number; olderHeld: number; scriptFinished: boolean; neededPx: number; roomPx: number; before: string[]; after: string[] }>; maxHeld: number; operator: string[] } }).__voiceReports);
+            reportsRead = { firstSeen: probe.firstSeen.map(({ id, speaking, operator }) => ({ id, speaking, operatorShown: operator !== null })), departures: probe.departures, maxHeld: probe.maxHeld, orderFaults: probe.orderFaults, returned: probe.returned, operatorReadings: probe.operator.length };
+            const expected = scenarioText(lang).reports.map((_, index) => `${DEMO_IDS.burstReportPrefix}${index + 1}`);
+            expect(expected.length, `${label}: more reports than the lane holds`).toBeGreaterThan(REPORT_CAP);
+            expect(probe.firstSeen.map((seen) => seen.id), `${label}: every report shown, in arrival order`).toEqual(expected);
+            expect(probe.firstSeen.filter((seen) => !seen.speaking).map((seen) => seen.id), `${label}: reports that arrived while the companion was silent`).toEqual([]);
+            expect({ orderFaults: probe.orderFaults, returned: probe.returned }, `${label}: in order, none back after leaving`).toEqual({ orderFaults: [], returned: [] });
+            /* The cap shown together where the lane is tallest; a shorter lane holds what fits, never more than the cap. */
+            expect(probe.maxHeld, `${label}: report cards shown together, never more than the cap`).toBeLessThanOrEqual(REPORT_CAP);
+            if (viewport.width === VIEWPORT.width) expect(probe.maxHeld, `${label}: the cap shown together in the tallest lane`).toBe(REPORT_CAP);
+            expect(probe.departures.filter((left) => left.olderHeld > 0), `${label}: a report left while an older one stayed`).toEqual([]);
+            /* Mid-call, a report leaves only once the cap's worth of newer ones stands beside it, its time is up, or it
+               and what stayed after it need more than the lane's room. Speech said after it never sends it away. */
+            expect(probe.departures.filter((left) => !left.scriptFinished && left.newerHeld < REPORT_CAP && left.heldMs < DELEGATION_LINGER_MS - 250 && left.neededPx <= left.roomPx), `${label}: a report left the lane mid-call with room for it, before the cap or its time sent it`).toEqual([]);
+            /* The operator's bubble reads one way for as long as it is shown. Being older than the reports, it is what
+               leaves first when they need the room: in the tallest lane it still stands beside the first report. */
+            expect(probe.operator.length, `${label}: the operator's bubble unchanged (${probe.operator.join(" | ")})`).toBe(1);
+            if (viewport.width === VIEWPORT.width) expect(probe.firstSeen[0]?.operator, `${label}: the operator's bubble beside the first report`).toBe(probe.operator[0]);
+            expect(probe.operator[0]!.endsWith(scenarioText(lang).reportsAsk), `${label}: the operator's bubble says what was asked`).toBe(true);
+            const spoken = after.events.filter((event) => event.type === "transcript.final" && event.speaker === "companion").length;
+            expect(spoken, `${label}: one spoken line for each report, after the acknowledgement`).toBe(expected.length + 1);
+          }
           if (name === "interrupt") expect(await page.locator("[data-companion-cut]").count() + (await page.locator("[data-companion-transcript] li").allInnerTexts()).filter((text) => text.includes(translate(lang, "voiceCompanion.cutAfter", { s: "" }).split(" ")[0]!)).length, `${label}: the cut is marked`).toBeGreaterThan(0);
           expect(pageErrors, label).toEqual([]);
           const placement = await readCompanion(page);
@@ -21867,7 +21956,7 @@ describe("floating voice companion", () => {
             await context.close();
             await video.saveAs(path.join(HANDOFF, `scenario-${label}.webm`));
             await video.delete();
-            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, travel, appearance, glowAtLaneEndWhenScriptEnded: glow, stoodWhileRecorded: stood, afterLaneEmptied, ...(relay ? { delegatedRowAsItAppeared: relay, requestAndAnswerShown: shownAt } : {}) });
+            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, travel, appearance, glowAtLaneEndWhenScriptEnded: glow, stoodWhileRecorded: stood, afterLaneEmptied, ...(relay ? { delegatedRowAsItAppeared: relay, requestAndAnswerShown: shownAt } : {}), ...(reportsRead ? { reports: reportsRead } : {}) });
             continue;
           }
           const meter = await page.evaluate(() => {
@@ -21924,7 +22013,7 @@ describe("floating voice companion", () => {
             label, scenario: name, viewport: `${viewport.width}x${viewport.height}`, lang, scheme, look: "final", measuredOnAttempt: attempt, motion: "no-preference", recordingDuringMeasurement: false,
             idle: { frames: idle.length, medianMs: two(frame), p95Ms: two(percentile(idle, 0.95)), maxMs: two(Math.max(...idle)) },
             windows, conversation, afterScript, hiddenTabSamples: meter.hidden,
-            contract: { dispatches: after.dispatches, events: after.events.length, proposal, ...(sent ? { sent } : {}) }, stood,
+            contract: { dispatches: after.dispatches, events: after.events.length, proposal, ...(sent ? { sent } : {}) }, stood, ...(reportsRead ? { reports: reportsRead } : {}),
           });
         } finally { await context.close().catch(() => undefined); }
       }
@@ -21971,7 +22060,7 @@ describe("floating voice companion", () => {
       missedFramesEstimate: "sum over intervals of max(0, round(dt / T) - 1); an estimate of missed animation opportunities, read from the frame clock; no compositor trace and no video frame counter was taken",
       look: "one final look: the character in a lit halo, glass bubbles with a tail on the newest, call cards with an icon tile, the delegation as a rounded teal card",
       matrix: "every scenario at 1440x900 and 1000x800, in en and uk, light and dark: eight measured runs and eight recorded runs a scenario",
-      scenarios: "the operator's eight, and three with the read-only board tools: read (one read call answers a question about the board), reads (several), readLong (a long spoken answer after one); none of the three delegates",
+      scenarios: "the operator's eight, three with the read-only board tools: read (one read call answers a question about the board), reads (several), readLong (a long spoken answer after one); none of the three delegates; and reports: more standalone orchestrator reports than the lane's report cap arriving while the companion speaks, each spoken once after",
       windowFaults,
       remeasured: { rule: "a measured run with an animation window off target is measured again, up to three attempts; the case holds the first attempt with every window on target (measuredOnAttempt), each discarded attempt is listed here with the windows it showed off target and the longest frame of its idle reference, and a scenario with no clean attempt is a windowFault", attempts: remeasured },
       limits: { bubbleMaxWidthPx: 280, bubbleMaxLines: 4, bubbleMaxChars: 116, speechBubblesShown: 4, callElementsShown: 4, laneHeightsPx: LANE_HEIGHTS, narrowLaneWidthsPx: NARROW_LANE_WIDTHS, narrowLane: "where no place holds a lane of a bubble's full width (at 1000 once a request is sent and the feed is kept clear whole), a narrower lane is taken before the tile, and the lines said while it stands there are split shorter for its width" },

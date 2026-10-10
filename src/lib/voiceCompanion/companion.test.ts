@@ -12,6 +12,7 @@ import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CONTROL_SELECTOR, defa
 const TEXT_FOR_NARROW = "The orchestrator replied. The plan holds, with one gap: last month's saved exports need a migration test before the merge, and the old keys stay readable for anyone who still has them.";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
 import { DEMO_IDS, SCENARIOS, scenarioScript, scenarioText, type ScenarioName } from "./scenarios";
+import { REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { createSimulatedCompanion, syntheticLevel, virtualClock, type ScriptStep } from "./simulator";
 
 const RECIPIENT: Recipient = { project: "atlas", conversationId: "conversation_orchestrator", seatEpoch: 1, engine: "claude" };
@@ -598,6 +599,20 @@ describe("every scenario plays out on the contract", () => {
         expect(run.events.some((event) => event.type.startsWith("delegation."))).toBe(false);
         const answered = run.events.findIndex((event) => event.type === "response.started");
         expect(run.events.findLastIndex((event) => event.type === "tool.result")).toBeLessThan(answered);
+      }
+      /* More standalone reports than the lane holds arrive while the companion speaks, each kept once in arrival order. */
+      if (name === "reports") {
+        const reports = run.state().orchestratorReports;
+        expect(reports.map((report) => report.reportId)).toEqual(scenarioText(locale).reports.map((_, index) => `${DEMO_IDS.burstReportPrefix}${index + 1}`));
+        expect(reports.length).toBeGreaterThan(REPORT_CAP);
+        expect(reports.map((report) => report.text)).toEqual(scenarioText(locale).reports.map(([, text]) => text));
+        /* Every report arrives while the companion's answers are under way. */
+        const arrivals = run.events.flatMap((event, index) => (event.type === "orchestrator.report" ? [index] : []));
+        expect(arrivals[0]).toBeGreaterThan(run.events.findIndex((event) => event.type === "response.started"));
+        expect(arrivals.at(-1)).toBeLessThan(run.events.findLastIndex((event) => event.type === "playback.stopped"));
+        expect(run.state().lines.filter((line) => line.speaker === "companion").map((line) => line.text).slice(1)).toEqual([...scenarioText(locale).reportsSpoken]);
+        expect(run.state().lines.filter((line) => line.speaker === "operator").map((line) => line.text)).toEqual([scenarioText(locale).reportsAsk]);
+        expect(run.events.some((event) => event.type.startsWith("delegation.") || event.type.startsWith("tool."))).toBe(false);
       }
       if (name === "readLong") expect(splitSpeech(run.state().lines.at(-1)!.text).length).toBeGreaterThan(4);
       if (name === "many") expect(run.state().lines.length).toBe(10);

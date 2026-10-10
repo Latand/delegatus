@@ -3,7 +3,7 @@
   "variant": 2,
   "rule": "call and month sums sit at the foot of the transcript above a thin monthly-cap meter; the call's share is teal",
   "processes": {
-    "started": 8,
+    "started": 5,
     "leftAfterClose": 0
   },
   "readings": [
@@ -13,6 +13,24 @@
       "scheme": "light",
       "spend": "This call $0.19 · October $0.51 of $20.00",
       "spendHeight": 44,
+      "spendEmphasis": {
+        "usd": {
+          "text": "$0.19",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "spent": {
+          "text": "$0.51",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "cap": {
+          "text": "$20.00",
+          "weight": "400",
+          "color": "rgb(108, 108, 121)"
+        }
+      },
+      "spendWords": "rgb(85, 85, 95)",
       "spendFooter": {
         "belowBody": true,
         "atFoot": true,
@@ -74,6 +92,24 @@
       "scheme": "dark",
       "spend": "This call $0.19 · October $0.51 of $20.00",
       "spendHeight": 44,
+      "spendEmphasis": {
+        "usd": {
+          "text": "$0.19",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "spent": {
+          "text": "$0.51",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "cap": {
+          "text": "$20.00",
+          "weight": "400",
+          "color": "rgb(139, 139, 152)"
+        }
+      },
+      "spendWords": "rgb(162, 162, 174)",
       "spendFooter": {
         "belowBody": true,
         "atFoot": true,
@@ -135,6 +171,24 @@
       "scheme": "light",
       "spend": "Ця розмова $0.19 · жовтень $0.51 із $20.00",
       "spendHeight": 44,
+      "spendEmphasis": {
+        "usd": {
+          "text": "$0.19",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "spent": {
+          "text": "$0.51",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "cap": {
+          "text": "$20.00",
+          "weight": "400",
+          "color": "rgb(108, 108, 121)"
+        }
+      },
+      "spendWords": "rgb(85, 85, 95)",
       "spendFooter": {
         "belowBody": true,
         "atFoot": true,
@@ -196,6 +250,24 @@
       "scheme": "dark",
       "spend": "Ця розмова $0.19 · жовтень $0.51 із $20.00",
       "spendHeight": 44,
+      "spendEmphasis": {
+        "usd": {
+          "text": "$0.19",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "spent": {
+          "text": "$0.51",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "cap": {
+          "text": "$20.00",
+          "weight": "400",
+          "color": "rgb(139, 139, 152)"
+        }
+      },
+      "spendWords": "rgb(162, 162, 174)",
       "spendFooter": {
         "belowBody": true,
         "atFoot": true,
@@ -257,6 +329,24 @@
       "scheme": "light",
       "spend": "This call $0.19 · October $0.51 of $20.00",
       "spendHeight": 44,
+      "spendEmphasis": {
+        "usd": {
+          "text": "$0.19",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "spent": {
+          "text": "$0.51",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "cap": {
+          "text": "$20.00",
+          "weight": "400",
+          "color": "rgb(108, 108, 121)"
+        }
+      },
+      "spendWords": "rgb(85, 85, 95)",
       "spendFooter": {
         "belowBody": true,
         "atFoot": true,
@@ -318,6 +408,24 @@
       "scheme": "dark",
       "spend": "This call $0.19 · October $0.51 of $20.00",
       "spendHeight": 44,
+      "spendEmphasis": {
+        "usd": {
+          "text": "$0.19",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "spent": {
+          "text": "$0.51",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "cap": {
+          "text": "$20.00",
+          "weight": "400",
+          "color": "rgb(139, 139, 152)"
+        }
+      },
+      "spendWords": "rgb(162, 162, 174)",
       "spendFooter": {
         "belowBody": true,
         "atFoot": true,
@@ -379,6 +487,24 @@
       "scheme": "light",
       "spend": "Ця розмова $0.19 · жовтень $0.51 із $20.00",
       "spendHeight": 44,
+      "spendEmphasis": {
+        "usd": {
+          "text": "$0.19",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "spent": {
+          "text": "$0.51",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "cap": {
+          "text": "$20.00",
+          "weight": "400",
+          "color": "rgb(108, 108, 121)"
+        }
+      },
+      "spendWords": "rgb(85, 85, 95)",
       "spendFooter": {
         "belowBody": true,
         "atFoot": true,
@@ -440,6 +566,24 @@
       "scheme": "dark",
       "spend": "Ця розмова $0.19 · жовтень $0.51 із $20.00",
       "spendHeight": 44,
+      "spendEmphasis": {
+        "usd": {
+          "text": "$0.19",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "spent": {
+          "text": "$0.51",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "cap": {
+          "text": "$20.00",
+          "weight": "400",
+          "color": "rgb(139, 139, 152)"
+        }
+      },
+      "spendWords": "rgb(162, 162, 174)",
       "spendFooter": {
         "belowBody": true,
         "atFoot": true,

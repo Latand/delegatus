@@ -166,6 +166,33 @@ test("Escape and the close control close it", async () => {
   expect(closed).toBe(2);
 });
 
+test("a copy where the clipboard API refuses keeps focus in the panel, so Escape still closes it", async () => {
+  let closed = 0;
+  const { view } = await open(() => { closed += 1; });
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard")!;
+  const exec = document.execCommand;
+  const textarea = Object.getPrototypeOf(document.createElement("textarea")) as HTMLTextAreaElement;
+  const select = textarea.select;
+  /* A browser with no clipboard permission rejects writeText and the copy falls back to a selected textarea,
+     which takes focus as a browser's select() does. */
+  Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("NotAllowedError"); } }, configurable: true });
+  document.execCommand = () => true;
+  textarea.select = function (this: HTMLTextAreaElement) { this.focus(); select.call(this); };
+  try {
+    const button = view.querySelector<HTMLButtonElement>('[data-kind="speech"] button')!;
+    button.focus();
+    await click(button);
+    expect(button.getAttribute("aria-label")).toBe("copied");
+    expect(document.activeElement).toBe(button);
+    await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(closed).toBe(1);
+  } finally {
+    Object.defineProperty(navigator, "clipboard", clipboard);
+    document.execCommand = exec;
+    textarea.select = select;
+  }
+});
+
 test("a spoken confirmation and a retried request are lines of their own that open to their own arguments and result", async () => {
   const { transcriptRows: rowsOf } = await import("./CompanionTranscript");
   const json = (value: unknown) => JSON.stringify(value, null, 2);
@@ -310,6 +337,11 @@ test("the transcript footer shows live, settled and incomplete spend with the mo
       const line = () => host.querySelector<HTMLElement>("[data-companion-spend]")!;
       expect(line().textContent).toBe(locale === "en" ? "This call $0.19 October $0.51 of $20.00" : "Ця розмова $0.19 жовтень $0.51 із $20.00");
       expect(line().previousElementSibling?.hasAttribute("data-transcript-body")).toBe(true);
+      /* Variant 2's emphasis: both sums spent carry the weight, the cap is muted. */
+      const valued = (role: string) => line().querySelector<HTMLElement>(`[data-spend-amounts] [data-spend-value="${role}"]`)!;
+      expect([valued("usd"), valued("spent"), valued("cap")].map((node) => [node.className, node.textContent])).toEqual([["vc-tr-spend-value", "$0.19"], ["vc-tr-spend-value", "$0.51"], ["vc-tr-spend-cap", "$20.00"]]);
+      expect(TRANSCRIPT_CSS).toMatch(/\.vc-tr-spend-value\s*\{[^}]*font-weight:\s*600/);
+      expect(TRANSCRIPT_CSS).toMatch(/\.vc-tr-spend-cap\s*\{[^}]*color:\s*var\(--color-muted\)/);
       expect(line().parentElement!.lastElementChild).toBe(line());
       const meter = () => line().querySelector<HTMLElement>('[data-companion-spend-meter][role="meter"]')!;
       const share = (kind: "call" | "month") => Number(line().querySelector<HTMLElement>(`[data-spend-${kind}-fill]`)!.style.transform.slice(7, -1));

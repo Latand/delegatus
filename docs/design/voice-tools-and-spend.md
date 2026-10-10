@@ -411,6 +411,15 @@ Operator bubbles: no change to their path.
 - Rendered: the existing driver, `LLV_VOICE_COMPANION_ONLY=long,burst` (both
   widths), with frame times; the scenario script in `scenarios.ts` for `long`
   gains one 300 ms output pause inside a line. No new driver.
+- Rendered, the report lane: a twelfth scenario, `reports`
+  (`LLV_VOICE_COMPANION_ONLY=reports`, 1440 and 1000, en and uk, light and
+  dark). Six standalone reports, more than the shared cap of 4, arrive 350 ms
+  apart while the companion speaks its acknowledgement, through a `reports`
+  step of the simulator that emits `orchestrator.report`; the companion then
+  speaks each once. The driver reads the lane every frame: every report is
+  shown in arrival order, four together at the peak, a report leaves only
+  from the far end (by the cap or its linger) and never comes back, and the
+  operator's bubble reads the same beside each report.
 
 ## (d) `member_required` and delivery after a rotation
 
@@ -574,7 +583,8 @@ The settings answer gains `lastSession: { usd, seconds, endedAt, incomplete }`.
 - **Desktop, the voice window.** The transcript panel is the voice's window:
   the character opens it (`CompanionTranscript.tsx:114-230`). Selected variant 2
   puts the two sums at its foot, under the scrolling body, full width,
-  11.5 px, tabular numbers, secondary colour, the amounts in primary. A 3 px
+  11.5 px, tabular numbers, secondary colour, the two sums spent in primary
+  at weight 600 and the cap in the muted colour, as variant 2's frames set them. A 3 px
   meter below them shows month spend against the cap and overlays the call's
   share in teal. Shares are bounded to the meter; the sums keep their actual
   values at and above the cap.
@@ -717,7 +727,7 @@ card and is spoken once. It gains no invented operation receipt.
 | `src/lib/voiceCompanion/liveAdapter.ts`, `src/components/voiceCompanion/VoiceCompanion.tsx`, `CompanionTranscript.tsx`, `VoiceCompanionSetting.tsx`, `src/lib/i18n/en.ts`, `uk.ts` | pause hold, monotonic bubbles, caps, report cards, spend line, last call |
 | `src/app/api/voice-companion/session/route.ts`, `settings/route.ts` | `startedBy`, `usage`, `lastSession` |
 | `src/components/headerMenu/HeaderMenu.tsx`, `headerMenuModel.ts` | reachable voice settings on the phone |
-| `src/lib/voiceCompanion/scenarios.ts`, the driver's transcript and settings cases | a pause in `long`, the spend assertions, 390 px |
+| `src/lib/voiceCompanion/scenarios.ts`, `simulator.ts`, the driver's scenario, transcript and settings cases | a pause in `long`, the `reports` burst, the spend assertions and emphasis, 390 px |
 
 Fences: no file of lane 1a9164da (the conversation view and the client's seat
 switching), #2609 (role memory) or #2668 (needs-you, dismissal overlay) is

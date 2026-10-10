@@ -804,6 +804,44 @@ test("one poll preserves the order of standalone reports and answers to differen
   expect([...document.querySelectorAll('.vc-stack > [data-floater] [data-companion-answer]')].map(node => node.textContent)).toEqual(["First", "Second", "Third"]);
 });
 
+test("a burst of reports holds the lane against the speech after it: older reports leave only from the far end, by their cap", async () => {
+  const { VoiceCompanion, REPORT_CAP } = await import("./VoiceCompanion");
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  let seq = 0;
+  const publish = (payload: Payload) => {
+    const event = { ...payload, version: 1 as const, sessionId: "report-room", generation: 1, seq: ++seq, eventId: `room-${seq}`, atMs: seq } as CompanionEvent;
+    for (const listener of listeners) listener(event);
+  };
+  const emit = async (payload: Payload) => act(async () => { publish(payload); await settle(); });
+  const adapter: VoiceCompanionAdapter = { mode: "simulated", subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    start: async () => { publish({ type: "session.ready", mode: "simulated" }); }, command: async () => {}, close: async () => {} };
+  /* Every element 72 px tall: four report cards fill a lane of at most 360 px, so the speech that follows finds no room. */
+  const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get(this: HTMLElement) { return this.matches("[data-floater]") ? 72 : height.get!.call(this); } });
+  try {
+    await mount(<VoiceCompanion adapter={adapter} project="atlas" locale="en" />);
+    await click(document.querySelector("[data-companion-talk]"));
+    const held = () => [...document.querySelectorAll<HTMLElement>('.vc-stack > [data-floater^="report:"]')].map(node => node.dataset.floater!.slice("report:".length));
+    await emit({ type: "transcript.final", speaker: "operator", itemId: "ask", text: "Read me the reports." });
+    for (let index = 1; index <= REPORT_CAP + 2; index++) {
+      await emit({ type: "orchestrator.report", reportId: `r${index}`, status: "result", text: `Report ${index}`, at: index, project: "atlas" });
+      expect(held(), `after report ${index}`).toEqual(Array.from({ length: Math.min(index, REPORT_CAP) }, (_, at) => `r${Math.max(0, index - REPORT_CAP) + at + 1}`));
+    }
+    for (let index = 1; index <= 3; index++) {
+      await emit({ type: "response.started", responseId: `said-${index}`, itemId: `said-${index}` });
+      await emit({ type: "transcript.final", speaker: "companion", itemId: `said-${index}`, responseId: `said-${index}`, text: `Report ${index + 2} said aloud.` });
+      await emit({ type: "playback.started", responseId: `said-${index}`, itemId: `said-${index}` });
+      await emit({ type: "playback.stopped", responseId: `said-${index}`, itemId: `said-${index}`, playedMs: 1_200, reason: "ended" });
+      expect(held(), `after the companion's line ${index}`).toEqual(["r3", "r4", "r5", "r6"]);
+    }
+    /* The operator's own words take their room as before: the oldest report leaves from the far end and the newest holds. */
+    await emit({ type: "transcript.final", speaker: "operator", itemId: "next", text: "And the billing lane?" });
+    expect(document.querySelector('.vc-stack > [data-floater^="operator:next#"]'), "the operator's new words are shown").toBeTruthy();
+    expect(held().at(-1)).toBe("r6");
+    expect(held()[0], "an older report left from the far end").not.toBe("r3");
+  } finally { Object.defineProperty(HTMLElement.prototype, "offsetHeight", height); }
+});
+
 test("phone settings retain the month and last call in both languages, including incomplete usage", async () => {
   const { setLocale } = await import("@/lib/i18n");
   try {

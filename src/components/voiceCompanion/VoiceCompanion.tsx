@@ -831,15 +831,20 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
        that waits for the operator's answer does not leave for want of room: what is older than it may, and
        what arrives after it and does not fit beside it is withheld instead. The orchestrator's answer holds
        the same way against what arrives after it (the companion's own words about it, which are heard and
-       kept in the transcript), so a short lane keeps the answer in view; it gives way only to what already
-       stands beside it, should that grow past the room. */
+       kept in the transcript), so a short lane keeps the answer in view. Against the companion's words every
+       answer and report in the lane holds so, the older ones as the newest: what is older than the first of
+       them may leave for room, and they give way only from the far end, oldest first, to what already stands
+       beside them, should that grow past the room. The operator's own words take their room as they always
+       did: only the newest answer or report holds against them. */
     const room = shownLane.rect.height - EXIT_ROOM - END_ROOM;
     let excess = nodes.reduce((sum, node) => sum + node.offsetHeight, 0) + Math.max(0, nodes.length - 1) * 8 - room;
     let sent = 0;
     const waits = nodes.findIndex((node) => node.dataset.awaiting !== undefined);
-    const holds = waits !== -1 ? waits : nodes.findLastIndex((node) => node.dataset.kind === "answer" || node.dataset.kind === "report");
+    const reported = (node: HTMLElement) => node.dataset.kind === "answer" || node.dataset.kind === "report";
+    const holds = waits !== -1 ? waits : nodes.findLastIndex(reported);
+    const operatorArrives = holds !== -1 && nodes.slice(holds + 1).some((node) => node.dataset.speaker === "operator" && !before.has(node.dataset.floater!));
     for (const node of nodes.slice(0, holds === -1 ? -1 : holds)) {
-      if (excess <= 0) break;
+      if (excess <= 0 || (waits === -1 && !operatorArrives && reported(node))) break;
       if (node.dataset.kind === "more") continue;
       excess -= node.offsetHeight + 8;
       sent = Math.max(sent, arrived(node) ?? 0);
@@ -848,8 +853,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       const unseen = nodes.slice(holds + 1).filter((node) => !before.has(node.dataset.floater!)).map((node) => node.dataset.floater!);
       if (unseen.length) { setWithheld((current) => new Set([...current, ...unseen])); return; }
       if (waits === -1) {
-        for (const node of nodes.slice(holds, -1)) {
+        for (const node of nodes.slice(0, -1)) {
           if (excess <= 0) break;
+          if (node.dataset.kind === "more" || (arrived(node) ?? Number.POSITIVE_INFINITY) <= sent) continue;
           excess -= node.offsetHeight + 8;
           sent = Math.max(sent, arrived(node) ?? 0);
         }

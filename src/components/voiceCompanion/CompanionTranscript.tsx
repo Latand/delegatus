@@ -272,7 +272,8 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-spend-meter > span { position: absolute; inset: 0; transform-origin: left; }
 .vc-tr-spend-meter [data-spend-month-fill] { background: color-mix(in srgb, var(--color-secondary) 40%, transparent); }
 .vc-tr-spend-meter [data-spend-call-fill] { background: var(--vc-teal-ink); }
-.vc-tr-spend-value { color: var(--color-primary); }
+.vc-tr-spend-value { color: var(--color-primary); font-weight: 600; }
+.vc-tr-spend-cap { color: var(--color-muted); }
 .vc-tr-spend [data-tone="warning"], .vc-tr-spend [data-tone="warning"] .vc-tr-spend-value { color: var(--color-warning); }
 .vc-tr-spend [data-tone="danger"], .vc-tr-spend [data-tone="danger"] .vc-tr-spend-value { color: var(--color-danger); }
 .vc-tr-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; user-select: text; padding: 10px 12px 12px; }

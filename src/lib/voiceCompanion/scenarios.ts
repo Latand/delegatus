@@ -7,7 +7,9 @@ import type { ScriptStep } from "./simulator";
  * one with `&script=<name>`. The first eight are the operator's list. The next
  * three came with the read-only board tools (operator amendment 2026-10-06): a
  * question about the board answered from one read call, from several, and a
- * long spoken answer after one, none of which delegates. Every call carries a
+ * long spoken answer after one, none of which delegates. `reports` brings more
+ * standalone orchestrator reports than the lane's report cap in quick succession
+ * while the companion speaks, and the companion speaks each once. Every call carries a
  * name from the tool registry (`tools.ts`). The rest exist for the browser
  * driver (a quick way to a confirmation that waits, one answered by voice, a
  * fill of speech and calls for the edge readings, a withdrawal, a whole
@@ -20,7 +22,7 @@ import type { ScriptStep } from "./simulator";
 /** A false output stop inside the long answer, replayed by the existing browser fixture. */
 export const SCENARIO_PLAYBACK_PAUSE = { long: { afterMs: 3_500, silenceMs: 300 } } as const;
 
-export const SCENARIOS = ["short", "three", "paragraph", "long", "many", "burst", "delegation", "interrupt", "read", "reads", "readLong"] as const;
+export const SCENARIOS = ["short", "three", "paragraph", "long", "many", "burst", "delegation", "interrupt", "read", "reads", "readLong", "reports"] as const;
 export const DRIVER_SCENARIOS = ["proposal", "voiceConfirm", "edge", "withdraw", "demo", "demoNoSeat", "readThenAsk", "readThenAskLong", "unconfirmed"] as const;
 export type ScenarioName = (typeof SCENARIOS)[number] | (typeof DRIVER_SCENARIOS)[number];
 
@@ -56,6 +58,24 @@ const TEXT = {
     readLongAsk: "Walk me through everything that's running.",
     readLongCall: ["agent_activity", "Who is running now", "4 agents working, 1 waiting for you"],
     readLongAnswer: "Four agents are working, and one is waiting for you. First, the search builder is on its second fix round and has two findings left, both about the retry test. Second, the export reviewer is reading the presets change and has asked nothing so far. Third, the billing migration is paused until the outside audit confirms the reconciliation, so nothing moves there today. Fourth, the release notes agent is collecting the merged changes since this morning. The one waiting for you is the account lock fix: it asks which of two anchors should win. That is the short version. Tell me which one you want in detail.",
+    reportsAsk: "Read me what the orchestrator reports while I listen.",
+    reportsAck: "I'll read each report out as it arrives.",
+    reports: [
+      ["progress", "Search lane: review round two has started."],
+      ["result", "Export presets merged into main."],
+      ["question", "Billing asks which audit date to reconcile against."],
+      ["blocked", "Release notes are blocked: the changelog is missing."],
+      ["result", "The noon deploy finished clean."],
+      ["progress", "Account lock fix: a builder picked it up."],
+    ],
+    reportsSpoken: [
+      "First, search started its second review round.",
+      "Export presets are merged.",
+      "Billing asks which audit date to use.",
+      "Release notes are blocked on a missing changelog.",
+      "The noon deploy finished clean.",
+      "And the account lock fix has a builder now.",
+    ],
     hello: "Hi Delegatus. Are you there?",
     here: "I'm here. What's on your mind?",
     idea: "I'm thinking about folding the export toggles into three presets. Does that sound sane?",
@@ -111,6 +131,24 @@ const TEXT = {
     readLongAsk: "Розкажи про все, що зараз працює.",
     readLongCall: ["agent_activity", "Хто зараз працює", "4 агенти працюють, 1 чекає на вас"],
     readLongAnswer: "Працюють чотири агенти, і один чекає на вас. Перше: будівник пошуку на другому колі виправлень, лишилося два зауваження, обидва про тест повтору. Друге: рев’юер експорту читає зміну пресетів і поки нічого не питав. Третє: міграція платежів стоїть, доки зовнішній аудит не підтвердить звірку, тож сьогодні там нічого не зрушить. Четверте: агент нотаток релізу збирає злиті від ранку зміни. На вас чекає виправлення блокування акаунта: воно питає, який із двох якорів має перемогти. Це коротка версія. Скажіть, про що розповісти докладніше.",
+    reportsAsk: "Читай мені, що звітує оркестратор, я слухаю.",
+    reportsAck: "Читатиму кожен звіт, щойно він прийде.",
+    reports: [
+      ["progress", "Смуга пошуку: почалося друге коло рев’ю."],
+      ["result", "Пресети експорту злито в main."],
+      ["question", "Платежі питають, з якою датою аудиту звіряти."],
+      ["blocked", "Нотатки релізу заблоковано: бракує журналу змін."],
+      ["result", "Опівденний деплой пройшов чисто."],
+      ["progress", "Блокування акаунта: будівник узяв задачу."],
+    ],
+    reportsSpoken: [
+      "Перше: пошук почав друге коло рев’ю.",
+      "Пресети експорту злито.",
+      "Платежі питають, яку дату аудиту брати.",
+      "Нотатки релізу стоять: бракує журналу змін.",
+      "Опівденний деплой пройшов чисто.",
+      "І блокування акаунта вже має будівника.",
+    ],
     hello: "Привіт, Делегатусе. Ти тут?",
     here: "Я тут. Що в тебе на думці?",
     idea: "Думаю згорнути перемикачі експорту в три пресети. Звучить розумно?",
@@ -147,6 +185,8 @@ export const DEMO_IDS = {
   clientMessageId: "voice-delegation-1",
   operationId: "operation_voice_1",
   reportId: "report_voice_1",
+  /** The standalone reports of the `reports` scenario are `report_burst_<n>`, numbered from 1 in arrival order. */
+  burstReportPrefix: "report_burst_",
   criticalAskItem: "item_op_critical",
   criticalCallId: "call_delegate_2",
   criticalProposalId: "proposal_2",
@@ -247,6 +287,15 @@ export function scenarioScript(name: ScenarioName, locale: Locale): ScriptStep[]
     /* A long spoken answer after one read call: the pace and the split into bubbles can be watched. */
     case "readLong":
       return [pause(400), operator(1, t.readLongAsk), reads("long", [t.readLongCall], [1200]), companion(1, t.readLongAnswer)];
+    /* More standalone orchestrator reports than the lane's report cap, arriving 350 ms apart while the companion
+       speaks; it then speaks each once, in the order they came. Nothing is delegated and nothing is read. */
+    case "reports":
+      return [
+        pause(400), operator(1, t.reportsAsk),
+        { kind: "reports", reports: t.reports.map(([status, text], index) => ({ reportId: `${DEMO_IDS.burstReportPrefix}${index + 1}`, status, text, afterMs: 400 + index * 350 })) },
+        companion("ack", t.reportsAck),
+        ...t.reportsSpoken.map((text, index) => companion(`report${index + 1}`, text)),
+      ];
     /* A whole conversation for the driver: a greeting, a board question answered from a read call, a request sent
        to the orchestrator at once with its answer, then one the model asks about first and the operator confirms
        by voice. With no orchestrator seat it stops before the delegation. */
