@@ -6,6 +6,7 @@
 export const MERGE_REASONS = {
   conflict: "conflict with the base branch",
   noChecks: "no checks reported on this head",
+  noPr: "no pull request is linked to this lane; open or attach its PR, then try the merge again",
   checksTimeout: "checks did not finish in 90 min",
   draft: "the PR is a draft",
   closed: "the PR was closed",

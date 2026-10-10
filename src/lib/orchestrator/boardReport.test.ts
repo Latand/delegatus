@@ -284,6 +284,17 @@ test("each close rule fires on its evidence and holds back without it", () => {
   expect(text).not.toMatch(/t-notice-lone.*duplicate-notice/);
 });
 
+test("a completed lane with an unsettled merge is not recommended for task closure when no PR is open", () => {
+  for (const state of ["blocked", "queued", "cancelled"]) {
+    const report = composeBoardReport(facts({
+      lanes: [lane("awaiting-merge", { state: "completed", open: false, completed: true, taskIds: ["t-awaiting-merge"], merge: { state, prNumber: null, mergedAt: null } })],
+      tasks: [task("t-awaiting-merge", { laneIds: ["awaiting-merge"] })],
+      pullRequests: { ok: true, pullRequests: [] },
+    }));
+    expect(report.text).not.toContain("finished, every lane completed and no pull request of theirs is open");
+  }
+});
+
 test("a candidate held only by the operator's own session says ask first; an agent-started one does not", () => {
   const report = composeBoardReport(facts({
     tasks: [

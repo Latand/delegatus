@@ -55,7 +55,7 @@ export interface ReportLane {
   movedAt: string;
   branch: string;
   taskIds: string[];
-  merge: { state: string; prNumber: number; mergedAt: string | null } | null;
+  merge: { state: string; prNumber: number | null; mergedAt: string | null } | null;
 }
 
 /** One open task of this project. */
@@ -402,7 +402,7 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
         tasksWithMergedLanes.push(row(`task ${task.id} [${task.status}] ${title(task.title)}: every lane completed, pull request #${last.merge!.prNumber} merged${when ? ` ${when} ago` : ""}`));
         continue;
       }
-      if (pullRequests && taskLanes.every((lane) => lane.merge?.state === "merged" || !laneRequest(lane, pullRequests))) {
+      if (pullRequests && taskLanes.every((lane) => lane.merge?.state === "merged" || (!lane.merge && !laneRequest(lane, pullRequests)))) {
         candidate(task, "finished", "every lane completed and no pull request of theirs is open");
         continue;
       }

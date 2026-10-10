@@ -2508,6 +2508,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineBlock.merge.reason": "Мердж зупинено: {reason}.",
   "pipelineBlock.mergeReason.conflict": "конфлікт з базовою гілкою",
   "pipelineBlock.mergeReason.noChecks": "на цьому коміті немає жодної перевірки",
+  "pipelineBlock.mergeReason.noPr": "до цієї лінії не прив’язано PR; відкрийте або прив’яжіть його й повторіть злиття",
   "pipelineBlock.mergeReason.checksTimeout": "перевірки не завершились за 90 хв",
   "pipelineBlock.mergeReason.draft": "PR — чернетка",
   "pipelineBlock.mergeReason.closed": "PR закрито",

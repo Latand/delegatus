@@ -2551,6 +2551,7 @@ export const en = {
   "pipelineBlock.merge.reason": "Merge stopped: {reason}.",
   "pipelineBlock.mergeReason.conflict": "conflict with the base branch",
   "pipelineBlock.mergeReason.noChecks": "no checks reported on this head",
+  "pipelineBlock.mergeReason.noPr": "no pull request is linked to this lane; open or attach its PR, then try the merge again",
   "pipelineBlock.mergeReason.checksTimeout": "checks did not finish in 90 min",
   "pipelineBlock.mergeReason.draft": "the PR is a draft",
   "pipelineBlock.mergeReason.closed": "the PR was closed",

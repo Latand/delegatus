@@ -14,7 +14,7 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-merge-store-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
-const { MERGE_POLL_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge } = await import("./autoMerge");
+const { MERGE_POLL_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
 const { patchPipeline } = await import("@/lib/pipelines/engine");
 const { loadPipelines, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
@@ -22,6 +22,8 @@ const { laneNeed } = await import("@/components/attention/needReason");
 const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
 const { refreshLifecycleJournal } = await import("@/lib/lifecycle/projector");
 const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+const { createTask } = await import("@/lib/tasks/commands");
+const { loadTasks, mutateTasks } = await import("@/lib/tasks/store");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -148,7 +150,7 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
 
   refreshLifecycleJournal({ pipelines: [merged] }, { force: true });
   const events = queryLifecycleEvents({ pipelineId: "pipe-merge", limit: 50 }).events;
-  expect(events.filter((event) => event.type === "pipeline_merged").map((event) => event.summary)).toEqual(["pull request #7 merged by Delegatus"]);
+  expect(events.filter((event) => event.type === "pipeline_merged").map((event) => event.summary)).toEqual([`pull request #7 merged by Delegatus, head ${HEAD} — ship the merge runner`]);
 });
 
 test("Leave the PR open clears the need and the record stays blocked", async () => {
@@ -163,4 +165,80 @@ test("Leave the PR open clears the need and the record stays blocked", async () 
   const need = laneNeed(dismissed.pipeline!);
   expect(need?.cleared).not.toBeNull();
   expect(pipelineAnswers(dismissed.pipeline!, (stage) => stage.id)).toBeNull();
+});
+
+test("a completed lane with no PR keeps its task open, persists a visible block, and retry-merge waits for a real PR", async () => {
+  resetAutoMergeForTests();
+  setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+  const task = mutateTasks((tasks) => {
+    const created = createTask(tasks, { project: PROJECT, text: "Deliver the reviewed change", placement: "unplaced" });
+    if (!created.ok) throw new Error(created.error);
+    return { tasks: created.tasks, result: created.task };
+  });
+  const lane = completedLane("pipe-no-pr");
+  lane.baseRef = "b".repeat(40);
+  lane.taskIds = [task.id];
+  lane.finishesTaskIds = [task.id];
+  lane.publishedCommit = HEAD;
+  lane.delivery = {
+    target: { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: `refs/heads/${lane.branch}` },
+    disposition: "owner", publish: "disabled", ownerId: lane.id, epoch: 1, active: false, journal: [],
+  };
+  savePipelines([lane]);
+  let clock = T0;
+  let merged = false;
+  const calls: string[][] = [];
+  const ports = productionAutoMergePorts({
+    now: () => clock, loadPipelines, cachedState: () => null,
+    run: async (args) => {
+      calls.push(args);
+      if (args[0] === "pr" && args[1] === "view") {
+        expect(args[2]).toBe("7");
+        return JSON.stringify({
+          state: merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: HEAD, baseRefName: "main",
+          mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? iso(clock) : null,
+        });
+      }
+      if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
+      if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+      if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
+      throw new Error(`unexpected gh ${args.join(" ")}`);
+    },
+  });
+  ports.write = (args) => ports.run(args);
+
+  await sweepAutoMerge(ports);
+  await sweepTaskFinishes(ports);
+  const blocked = loadPipelines()[0]!;
+  expect(blocked.merge).toMatchObject({ state: "blocked", prNumber: null, reason: "no pull request is linked to this lane; open or attach its PR, then try the merge again" });
+  expect(laneNeed(blocked)?.need.kind).toBe("lane-merge");
+  expect(pipelineAnswers(blocked, (stage) => stage.id)?.choices.map((choice) => choice.action)).toContain("retry-merge");
+  expect(loadTasks().find((item) => item.id === task.id)?.status).toBe("inbox");
+  expect(blocked.taskFinishes).toBeUndefined();
+  await sweepAutoMerge(ports);
+  expect(loadPipelines()[0]!.merge).toEqual(blocked.merge);
+  expect(calls).toEqual([]);
+
+  const retried = await patchPipeline(lane.id, { action: "retry-merge" }, { now: () => iso(clock) } as never);
+  expect(retried.error).toBeUndefined();
+  await sweepAutoMerge(ports);
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", prNumber: null, attempts: 1 });
+  expect(calls).toEqual([]);
+
+  const attached = loadPipelines()[0]!;
+  attached.delivery!.target.pr = 7;
+  savePipelines([attached]);
+  const withPr = await patchPipeline(lane.id, { action: "retry-merge" }, { now: () => iso(clock) } as never);
+  expect(withPr.error).toBeUndefined();
+  for (let step = 0; step < 6; step += 1) {
+    clock += MERGE_POLL_MS;
+    await sweepAutoMerge(ports);
+    await sweepTaskFinishes(ports);
+    if (!merged) expect(loadTasks().find((item) => item.id === task.id)?.status).toBe("inbox");
+  }
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", prNumber: 7, attempts: 2, mergedHead: HEAD });
+  expect(loadTasks().find((item) => item.id === task.id)?.status).toBe("done");
+  expect(calls.filter((args) => args[1] === "merge")).toHaveLength(1);
 });
