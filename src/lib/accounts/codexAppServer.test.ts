@@ -137,13 +137,13 @@ test("headerless app-server responses, notifications, and requests keep the clie
   const client = await start();
   const notifications: string[] = [];
   client.onNotification((message) => notifications.push(message.method));
-  client.onRequest(() => ({ accepted: true }));
+  client.onRequest(() => ({ answers: {} }));
   child.output('{"method":"account/rateLimits/updated","params":{}}\n');
   child.output('{"id":"request-1","method":"item/tool/requestUserInput","params":{}}\n');
   await expect(client.readAccount()).resolves.toEqual({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(notifications).toEqual(["account/rateLimits/updated"]);
-  expect(JSON.parse(child.writes.at(-1)!)).toEqual({ jsonrpc: "2.0", id: "request-1", result: { accepted: true } });
+  expect(JSON.parse(child.writes.at(-1)!)).toEqual({ jsonrpc: "2.0", id: "request-1", result: { answers: {} } });
   client.close();
 });
 
@@ -167,14 +167,18 @@ test("out-of-order responses stay attached to their request ids", async () => {
   client.close();
 });
 
-test("response ids require an exact numeric correlation and duplicate replies fail the transport", async () => {
+test("response ids require exact correlation while unknown and duplicate replies are quarantined", async () => {
   const mismatched = clientWith((fake, message) => {
     if (message.method === "initialize") fake.respond(requestId(message), {});
-    if (message.method === "account/read") fake.output(JSON.stringify({ id: String(requestId(message)), result: {} }) + "\n");
+    if (message.method === "account/read") {
+      fake.output(JSON.stringify({ id: String(requestId(message)), result: { account: { type: "wrong-id" }, requiresOpenaiAuth: false } }) + "\n");
+      fake.respond(requestId(message), { account: null, requiresOpenaiAuth: true });
+    }
   });
   const first = await mismatched.start();
-  await expect(first.readAccount()).rejects.toThrow("response has an invalid id");
-  expect(mismatched.child.signals).toContain("SIGTERM");
+  await expect(first.readAccount()).resolves.toEqual({ account: null, requiresOpenaiAuth: true });
+  expect(mismatched.child.signals).toEqual([]);
+  first.close();
 
   const duplicate = clientWith((fake, message) => {
     if (message.method === "initialize") fake.respond(requestId(message), {});
@@ -186,7 +190,9 @@ test("response ids require an exact numeric correlation and duplicate replies fa
   });
   const second = await duplicate.start();
   await expect(second.readAccount()).resolves.toEqual({ account: null, requiresOpenaiAuth: true });
-  expect(duplicate.child.signals).toContain("SIGTERM");
+  expect(duplicate.child.signals).toEqual([]);
+  await expect(second.readAccount()).resolves.toEqual({ account: null, requiresOpenaiAuth: true });
+  second.close();
 });
 
 test("device-code login validates official challenge fields and forwards completion notifications safely", async () => {
@@ -216,7 +222,7 @@ test("successor thread methods use the structured fork, resume, read, name, and 
     else if (message.method === "thread/read") fake.respond(requestId(message), { thread: { id: "fork-1", path: "/target/fork-1.jsonl" } });
     else fake.respond(requestId(message), {});
   });
-  const client = await start();
+  const client = await start({ protocolProfile: "thread-control" });
   await expect(client.forkThread("source-1")).resolves.toEqual({ id: "fork-1", path: "/source/fork-1.jsonl" });
   await expect(client.resumeThread("fork-1", { path: "/target/fork-1.jsonl", cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", approvalPolicy: "never", sandbox: "read-only" }))
     .resolves.toEqual({ id: "fork-1", path: null });
@@ -342,11 +348,11 @@ test("structured server requests receive a response and leave the app-server tra
   const client = await start();
   client.onRequest((request) => {
     expect(request.method).toBe("item/tool/requestUserInput");
-    return { answers: { size: "small" } };
+    return { answers: { size: { answers: ["small"] } } };
   });
   child.output('{"jsonrpc":"2.0","id":77,"method":"item/tool/requestUserInput","params":{"questions":[]}}\n');
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(JSON.parse(child.writes.at(-1)!)).toEqual({ jsonrpc: "2.0", id: 77, result: { answers: { size: "small" } } });
+  expect(JSON.parse(child.writes.at(-1)!)).toEqual({ jsonrpc: "2.0", id: 77, result: { answers: { size: { answers: ["small"] } } } });
   await expect(client.readAccount()).resolves.toEqual({ account: null, requiresOpenaiAuth: true });
   client.close();
 });

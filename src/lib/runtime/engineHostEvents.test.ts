@@ -7,6 +7,14 @@ import { coalesceReadyEngineDeltas, projectEngineHostEvent, type CoalescedEngine
 import { normalizeRuntimeLiveTurn, projectRuntimeLiveTurnItem, runtimeLiveTurnItems } from "./liveTurn";
 
 describe("projectEngineHostEvent", () => {
+  test("routes legacy Codex command and patch requests by exact method", () => {
+    for (const method of ["execCommandApproval", "applyPatchApproval"]) {
+      const projected = projectEngineHostEvent("conversation_one", "codex:thread-one", {
+        kind: "attention", id: "request-one", method, attention: { command: "echo approved" }, seq: 1,
+      });
+      expect(projected).toMatchObject({ payload: { kind: "approval" } });
+    }
+  });
   test("projects a Codex user-input request into a question card", () => {
     const projected = projectEngineHostEvent("conversation_one", "codex:thread-one", {
       kind: "attention",

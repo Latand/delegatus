@@ -10,6 +10,22 @@ import { runtimeScope } from "@/lib/runtime/contracts";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-session-read-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+test("the Codex protocol and capability receipt survives journal restart and keyed reads", () => {
+  const filename = path.join(root, "protocol.sqlite");
+  const protocol = { schemaVersion: "0.162.1", schemaDigest: "a".repeat(64), experimentalApi: true,
+    provider: { webSearch: true, imageGeneration: false }, models: [{ id: "text-model", inputModalities: ["text"] }], anomalies: 2 };
+  let journal = new RuntimeJournal(filename);
+  try {
+    journal.append({ scope: runtimeScope("session", "conversation_protocol"), kind: "session-status", payload: {
+      hostKind: "codex-app-server", diagnostics: { executable: "codex", version: "0.162.1", protocol },
+    } });
+    expect(journal.snapshot().sessions[0]?.diagnostics?.protocol).toEqual(protocol);
+    journal.close();
+    journal = new RuntimeJournal(filename);
+    expect(journal.readSession({ conversationId: "conversation_protocol" })?.diagnostics?.protocol).toEqual(protocol);
+  } finally { journal.close(); }
+});
+
 test("keyed RPC shares snapshot normalization, identity precedence and absence semantics", async () => {
   const journal = new RuntimeJournal(path.join(root, "session.sqlite"));
   for (const id of ["conversation_first", "conversation_second"]) journal.append({

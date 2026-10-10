@@ -91,12 +91,17 @@ class CompactAppServer extends EventEmitter {
     if (method === "model/list") {
       return this.respond(message.id, { data: [{ id: "gpt-5.3-codex-spark", isDefault: true, inputModalities: ["text"] }] });
     }
+    if (method === "modelProvider/capabilities/read") return this.respond(message.id, { webSearch: false, imageGeneration: false });
     if (method === "config/read") return this.respond(message.id, { config: { mcp_servers: {} } });
     if (method === "thread/start") {
       return this.respond(message.id, { thread: { id: this.threadId, path: `/sessions/${this.threadId}.jsonl`, turns: [] } });
     }
     if (method === "thread/read") {
       return this.respond(message.id, { thread: { id: this.threadId, path: `/sessions/${this.threadId}.jsonl`, turns: [] } });
+    }
+    if (method === "thread/turns/list" || method === "thread/queue/list") {
+      this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "method not found" } })}\n`);
+      return;
     }
     if (method === "turn/start") {
       const turnId = `turn-${++this.turn}`;
@@ -119,7 +124,7 @@ class CompactAppServer extends EventEmitter {
   }
 
   private respondError(id: number, message: string): void {
-    this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { message } })}\n`);
+    this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message } })}\n`);
   }
 }
 
@@ -130,6 +135,7 @@ function spawnDouble(server: CompactAppServer) {
 async function startHost(server: CompactAppServer, options: Record<string, unknown> = {}) {
   return CodexAppServerHost.start({
     cwd: "/repo",
+    readProtocolVersion: () => "0.162.1",
     requestTimeoutMs: 500,
     eventStore: new MemoryEventStore(),
     spawnProcess: spawnDouble(server),

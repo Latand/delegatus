@@ -2,6 +2,7 @@ import { withoutUnsupportedApiCredentials } from "../environmentIsolation";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
+import { CodexPinnedProtocol, installedCodexVersion } from "./codexPinnedProtocol";
 
 import {
   CodexAppServerProtocolError,
@@ -39,6 +40,10 @@ export interface CodexAppServerOptions {
   shutdownGraceMs?: number;
   maxStdoutBufferBytes?: number;
   signalProcess?: ProcessSignal;
+  readProtocolVersion?: typeof installedCodexVersion;
+  /** Thread migration needs experimental path-based resume. Status/sign-in
+      clients stay on the stable surface. */
+  protocolProfile?: "account" | "thread-control";
 }
 
 export interface DeviceCodeChallenge {
@@ -241,6 +246,8 @@ interface PendingRequest {
  * account layer only sees account methods and never handles framing or pids.
  */
 export class CodexAppServerClient {
+  private protocol = new CodexPinnedProtocol();
+  private experimentalApi = false;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly notificationListeners = new Set<(notification: AppServerNotification) => void>();
   private readonly requestListeners = new Set<(request: AppServerRequest) => unknown | Promise<unknown>>();
@@ -276,6 +283,10 @@ export class CodexAppServerClient {
   }
 
   static async start(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
+    const protocol = new CodexPinnedProtocol((options.readProtocolVersion ?? installedCodexVersion)(codexAccountBinary(), process.env));
+    const capabilities = options.protocolProfile === "thread-control"
+      ? protocol.initializeCapabilities(["thread/fork", "thread/resume", "thread/read", "thread/name/set", "thread/goal/set"], [{ method: "thread/resume", field: "path" }])
+      : protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "account/login/start"]);
     const client = new CodexAppServerClient(
       (options.spawn ?? spawnCodexAppServer)(options.home, CODEX_ACCOUNT_APP_SERVER_ARGS),
       options.clock ?? defaultClock,
@@ -284,10 +295,12 @@ export class CodexAppServerClient {
       options.maxStdoutBufferBytes ?? DEFAULT_MAX_STDOUT_BUFFER_BYTES,
       options.signalProcess ?? process.kill,
     );
+    client.protocol = protocol;
+    client.experimentalApi = capabilities.experimentalApi;
     try {
       const response = await client.request("initialize", {
         clientInfo: { name: "agent-log-viewer", version: "0.11.7" },
-        capabilities: { experimentalApi: true },
+        capabilities,
       });
       if (!isRecord(response)) throw protocolError("initialize response must be an object");
       client.notify("initialized");
@@ -461,11 +474,13 @@ export class CodexAppServerClient {
   }
 
   private notify(method: string, params?: Record<string, unknown>): void {
+    this.protocol.assertNotification(method, params ?? {});
     this.write({ jsonrpc: "2.0", method, ...(params ? { params } : {}) });
   }
 
   private request(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (this.closed) return Promise.reject(new CodexAppServerError("Codex app-server client is closed"));
+    try { this.protocol.assertRequest(method, params ?? {}, this.experimentalApi); } catch (error) { return Promise.reject(error); }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timeout = this.clock.setTimeout(() => {
@@ -556,7 +571,10 @@ export class CodexAppServerClient {
         // Requests have one response owner. Additional listeners are observers
         // for notifications and never compete to answer a JSON-RPC request.
         Promise.resolve(listener({ id: parsed.id, method: parsed.method, params: parsed.params }))
-          .then((result) => this.write({ jsonrpc: "2.0", id: parsed.id, result: result ?? {} }))
+          .then((result) => {
+            this.protocol.assertServerResponse(parsed.method, result);
+            this.write({ jsonrpc: "2.0", id: parsed.id, result });
+          })
           .catch((error) => this.write({ jsonrpc: "2.0", id: parsed.id, error: { code: -32000, message: redactAppServerDetail(error instanceof Error ? error.message : "request handler failed") } }));
         return;
     }
@@ -569,12 +587,12 @@ export class CodexAppServerClient {
     }
     const id: AppServerRequestId = parsed.id;
     if (typeof id !== "number") {
-      this.fail(protocolError("response has an invalid id"));
+      console.warn("[codex app-server] quarantined unknown response id");
       return;
     }
     const pending = this.pending.get(id);
     if (!pending) {
-      this.fail(protocolError(`response id ${id} has no matching request`));
+      console.warn("[codex app-server] quarantined late or unknown response id");
       return;
     }
     this.pending.delete(id);

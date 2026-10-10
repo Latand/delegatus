@@ -10,6 +10,7 @@ import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStd
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
+import * as pinnedProtocol from "@/lib/accounts/codexPinnedProtocol";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
@@ -44,14 +45,18 @@ const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", co
 let metadataState: string;
 let previousMetadataState: string | undefined;
 let restoreFeatures: () => void;
+let restoreVersion: () => void;
 const DENIED_FEATURE_ARGS = ["-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"', "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.future_worker=false", "-c", "features.collab=false", "-c", "features.plugins=false"];
 beforeEach(() => {
+  const versionSpy = spyOn(pinnedProtocol, "installedCodexVersion").mockReturnValue("0.162.1");
+  restoreVersion = () => versionSpy.mockRestore();
   restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
   previousMetadataState = process.env.LLV_STATE_DIR;
   metadataState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-"));
   process.env.LLV_STATE_DIR = metadataState;
 });
 afterEach(() => {
+  restoreVersion();
   restoreFeatures();
   if (previousMetadataState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousMetadataState;
@@ -75,6 +80,83 @@ class MemoryEventStore implements RuntimeEventStore {
     this.events.set(threadId, events);
   }
 }
+
+test("rejects a command approval with the wrong decision before writing to Codex", async () => {
+  const server = new FakeAppServer("typed-approval");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    server.request("typed-request", "item/commandExecution/requestApproval", { command: "echo approval" });
+    const attention = (await host.health()).pendingAttention[0]!;
+    const writes = server.requests.length;
+    await expect(host.answer(attention, { decision: "approved" })).rejects.toThrow("decision");
+    expect(server.requests).toHaveLength(writes);
+    expect((await host.health()).pendingAttention).toEqual([attention]);
+    await host.answer(attention, { decision: "accept" });
+  } finally { await host.release(); }
+});
+
+test("negotiates provider and per-model capabilities independently of userAgent", async () => {
+  const server = new FakeAppServer("capability-receipt");
+  server.userAgent = "opaque future client identifier";
+  server.modelList = [
+    { id: "text-model", model: "text-model", isDefault: true, inputModalities: ["text"] },
+    { id: "image-model", model: "image-model", isDefault: false, inputModalities: ["text", "image"] },
+  ];
+  const host = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.159.0", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server), resolveImagePath: () => "/runtime-images/image.png" });
+  try {
+    expect((await host.health()).diagnostics?.protocol).toMatchObject({
+      schemaVersion: "0.159.0", experimentalApi: true, provider: { webSearch: true, imageGeneration: false },
+      models: [{ id: "text-model", inputModalities: ["text"] }, { id: "image-model", inputModalities: ["text", "image"] }],
+    });
+    const image = { sha256: "a".repeat(64), mime: "image/png" as const, bytes: 67 };
+    await expect(host.send({ id: "text-image", text: "inspect", images: [image], runtime: { model: "text-model" } })).rejects.toThrow("does not advertise image input");
+    expect(await host.send({ id: "switched-image", text: "inspect", images: [image], runtime: { model: "image-model" } })).toMatchObject({ outcome: "turn-started" });
+    expect(await host.send({ id: "inherited-image", text: "inspect again", images: [image], expectedTurnId: "turn-1" })).toMatchObject({ outcome: "steered" });
+    server.notify("model/rerouted", { threadId: "capability-receipt", turnId: "turn-1", fromModel: "image-model", toModel: "text-model", reason: "provider selection" });
+    await expect(host.send({ id: "steer-cannot-switch-model", text: "inspect", images: [image], expectedTurnId: "turn-1", runtime: { model: "image-model" } })).rejects.toThrow("does not advertise image input");
+  } finally { await host.release(); }
+});
+
+test("quarantines unknown notifications and late responses without killing a healthy host", async () => {
+  const server = new FakeAppServer("protocol-anomaly");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    server.notify("future/notification", { threadId: "protocol-anomaly" });
+    server.stdout.write(JSON.stringify({ id: "unknown-string-id", result: {} }) + "\n");
+    server.stdout.write(JSON.stringify({ id: 99999, result: {} }) + "\n");
+    expect((await host.health()).diagnostics?.protocol?.anomalies).toBe(3);
+    expect(await host.send({ id: "still-healthy", text: "continue" })).toMatchObject({ outcome: "turn-started" });
+    server.request("future-request", "future/requestApproval", {});
+    const attention = (await host.health()).pendingAttention[0]!;
+    await expect(host.answer(attention, {})).rejects.toThrow("raw answers are disabled");
+  } finally { await host.release(); }
+});
+
+test("bounds the capability receipt before publishing it into a journal event", async () => {
+  const server = new FakeAppServer("bounded-receipt");
+  server.modelList = Array.from({ length: 100 }, (_, index) => ({ id: `model-${index}-${"x".repeat(180)}`, inputModalities: ["text", "image", "audio"], isDefault: index === 0 }));
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    const receipt = (await host.health()).diagnostics?.protocol;
+    expect(Buffer.byteLength(JSON.stringify(receipt))).toBeLessThanOrEqual(4096);
+    expect(receipt?.modelsTruncated).toBe(true);
+  } finally { await host.release(); }
+});
+
+test("keeps simultaneous string and numeric approval IDs distinct", async () => {
+  const server = new FakeAppServer("typed-ids");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    server.request(42, "item/commandExecution/requestApproval", { command: "echo numeric" });
+    server.request("42", "item/commandExecution/requestApproval", { command: "echo string" });
+    const pending = (await host.health()).pendingAttention;
+    expect(pending).toHaveLength(2);
+    await host.answer(pending[0]!, { decision: "accept" });
+    expect((await host.health()).pendingAttention).toEqual([pending[1]!]);
+    await host.answer(pending[1]!, { decision: "decline" });
+    expect(server.requests.filter(request => "result" in request).map(request => request.id)).toEqual([42, "42"]);
+  } finally { await host.release(); }
+});
 
 test("read-only structured hosts receive one writable isolated scratch root", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-read-only-scratch-test-"));
@@ -155,7 +237,10 @@ test("fresh and adopted app-server hosts enforce native delegation with Telegram
       expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed },
         mcp_servers: { viewer: { enabled: true }, telegram: { enabled: connected } } });
       expect(captured.options?.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBe(session?.connectorToken);
-      if (!connected) expect(params?.developerInstructions).toBe(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+      if (!connected) {
+        if (resumed) expect(JSON.stringify(server.requests.find(request => request.method === "thread/inject_items")?.params)).toContain(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+        else expect(params?.developerInstructions).toBe(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+      }
       if (!allowed) {
         expect(config).toMatchObject({ approvals_reviewer: "user" });
         expect(config).toMatchObject({ features: { memory_tool: false, telepathy: false, connectors: false, unlisted_worker: false } });
@@ -373,7 +458,7 @@ class FakeAppServer extends EventEmitter {
     this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
   }
 
-  request(id: string, method: string, params: Record<string, unknown>): void {
+  request(id: string | number, method: string, params: Record<string, unknown>): void {
     this.serverRequestIds.add(id);
     this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
   }
@@ -421,6 +506,7 @@ class FakeAppServer extends EventEmitter {
       return this.respond(message.id, { turn });
     }
     if (method === "account/read") return this.respond(message.id, { account: { type: "chatgpt", planType: "pro" }, requiresOpenaiAuth: false });
+    if (method === "modelProvider/capabilities/read") return this.respond(message.id, { webSearch: true, imageGeneration: false });
     if (method === "model/list") {
       if (this.modelListFailuresRemaining > 0) {
         this.modelListFailuresRemaining -= 1;
@@ -469,6 +555,7 @@ class FakeAppServer extends EventEmitter {
       });
     }
     if (method === "thread/turns/list") {
+      if (!this.paginatedHistory) return this.respondError(message.id, "method not found");
       if (this.turnsError) return this.respondError(message.id, this.turnsError);
       if (this.readError) return this.respondError(message.id, this.readError);
       const turns = [...(this.readTurns ?? this.turns)];
@@ -613,7 +700,7 @@ class FakeAppServer extends EventEmitter {
   }
 
   private respondError(id: number, message: string): void {
-    this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { message } })}\n`);
+    this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: /method not found/.test(message) ? -32601 : -32603, message } })}\n`);
   }
 
   private completeUserMessage(message: Record<string, unknown>, turnId: string): void {
@@ -1862,7 +1949,7 @@ describe("CodexAppServerHost", () => {
       kind: "codex-app-server",
       endpoint: "stdio:4242",
       eventCursor: 8,
-      protocolVersion: "0.144.1",
+      protocolVersion: "0.162.1",
       writerClaimEpoch: 7,
       activeTurnRef: "turn-1",
       pendingAttention: [],
@@ -1875,8 +1962,8 @@ describe("CodexAppServerHost", () => {
     const overrideHost = await CodexAppServerHost.start({
       cwd: "/repo", effort: "medium", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(overrideServer),
     });
-    await overrideHost.send({ id: "with-override", text: "run hot", runtime: { effort: "ultra", fast: true } });
-    expect(overrideServer.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({ effort: "ultra" });
+    await overrideHost.send({ id: "with-override", text: "run hot", runtime: { effort: "xhigh", fast: true } });
+    expect(overrideServer.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({ effort: "xhigh" });
     await overrideHost.release();
 
     // Invalid explicit selections fail before the native write.
@@ -2115,7 +2202,7 @@ describe("CodexAppServerHost", () => {
       turnId: "persisted-turn",
     });
     expect(server.requests.some((request) => request.method === "turn/start" || request.method === "turn/steer")).toBeFalse();
-    expect(server.requests.some((request) => request.method === "thread/turns/list")).toBeFalse();
+    expect(server.requests.filter((request) => request.method === "thread/turns/list")).toHaveLength(1);
     expect((await host.health()).status).not.toBe("dead");
     await host.release();
   });
@@ -2774,7 +2861,7 @@ describe("CodexAppServerHost", () => {
 
   test("native-history transport refusals never authorize a first delivery", async () => {
     const server = new FakeAppServer("refused-first-thread");
-    server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+    server.paginatedHistory = true;
     server.readError = "permission denied";
     const host = await CodexAppServerHost.start({
       cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
@@ -2788,7 +2875,7 @@ describe("CodexAppServerHost", () => {
 
   test("journal first-dispatch evidence avoids a cold history scan while retaining collision checks", async () => {
     const server = new FakeAppServer("journal-first-thread");
-    server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+    server.paginatedHistory = true;
     const host = await CodexAppServerHost.start({cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server)});
     server.readError = "history transport is unavailable";
     try {
@@ -3005,7 +3092,7 @@ describe("CodexAppServerHost", () => {
     await expect(host.sessionMaterializationEvidence("operation-paginated")).resolves.toEqual({
       state: "materialized",
     });
-    expect(server.requests.some((request) => request.method === "thread/turns/list")).toBeFalse();
+    expect(server.requests.filter((request) => request.method === "thread/turns/list")).toHaveLength(1);
     const fallbackRead = server.requests.findLast((request) => request.method === "thread/read");
     expect((fallbackRead?.params as { includeTurns?: boolean }).includeTurns).toBeUndefined();
     await host.release();
@@ -3132,7 +3219,7 @@ describe("CodexAppServerHost", () => {
     const resumes = server.requests.filter((request) => request.method === "thread/resume");
     expect(resumes.length).toBe(2);
     expect((resumes[1]!.params as { excludeTurns?: boolean }).excludeTurns).toBeTrue();
-    expect(server.requests.some((request) => request.method === "thread/turns/list")).toBeFalse();
+    expect(server.requests.filter((request) => request.method === "thread/turns/list")).toHaveLength(1);
     expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
     await host.release();
   });
@@ -3214,7 +3301,7 @@ describe("CodexAppServerHost", () => {
       status: "attention",
       activeTurnRef: "approval-turn",
       pendingAttention: ["item/commandExecution/requestApproval:approval-crash"],
-      activeFlags: ["waitingForApproval"],
+      activeFlags: ["waitingForApproval", "native-inject", "native-turn-profile"],
     });
     await host.release();
   });
@@ -4002,7 +4089,7 @@ describe("CodexAppServerHost", () => {
     expect(await host.health()).toMatchObject({
       status: "active",
       activeTurnRef: activeTurnId,
-      activeFlags: ["running"],
+      activeFlags: ["running", "native-inject", "native-turn-profile"],
     });
     await host.release();
   });
@@ -4385,7 +4472,7 @@ describe("CodexAppServerHost", () => {
       eventCursor: terminal.eventCursor,
       activeTurnRef: null,
       pendingAttention: [],
-      activeFlags: [],
+      activeFlags: ["native-inject", "native-turn-profile"],
     });
     await host.release();
   });
@@ -4802,7 +4889,7 @@ describe("CodexAppServerHost", () => {
     expect(registry.snapshot().entries["codex:release-ledger-thread"]).toMatchObject({
       status: "unhosted",
       claimOwner: null,
-      structuredHost: { process: null, endpoint: "stdio:released", activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      structuredHost: { process: null, endpoint: "stdio:released", activeTurnRef: null, pendingAttention: [], activeFlags: ["native-inject", "native-turn-profile"] },
     });
   });
 

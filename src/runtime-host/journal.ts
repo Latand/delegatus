@@ -67,6 +67,7 @@ import {
 } from "@/lib/runtime/liveTurn";
 import { parseStructuredImageRefs, structuredContent } from "@/lib/runtime/structuredContent";
 import { runtimeImageCapability } from "@/lib/runtime/runtimeImageStore";
+import { normalizeCodexProtocolReceipt } from "@/lib/runtime/codexProtocolReceipt";
 
 function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperationReceipt["nativeQueue"]> {
   return { entryId: entry.entryId, nativeSubmissionId: entry.nativeSubmissionId, revision: entry.revision,
@@ -282,6 +283,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   const key = record(payload.sessionKey);
   const capabilities = record(payload.capabilities);
   const liveTurn = normalizeRuntimeLiveTurn(payload.liveTurn);
+  const protocol = normalizeCodexProtocolReceipt(record(payload.diagnostics).protocol);
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
@@ -333,6 +335,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
       nativeQueue: record(payload.diagnostics).nativeQueue === true,
       authRecovery: record(payload.diagnostics).authRecovery === "started" ? "started" as const
         : record(payload.diagnostics).authRecovery === "completed-unverified" ? "completed-unverified" as const : "unknown" as const,
+      ...(protocol ? { protocol } : {}),
     } } : {}),
     activeTurnId: typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
     pendingReconfigure: payload.pendingReconfigure && typeof payload.pendingReconfigure === "object"
