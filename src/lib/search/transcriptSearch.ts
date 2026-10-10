@@ -408,6 +408,11 @@ function scheduleSearchIndexBuild(filename: string): void {
   }
 }
 
+/** Background index builds this process started that have not exited yet. */
+export function pendingTranscriptSearchIndexBuilds(): number {
+  return scheduledSearchIndexes.size;
+}
+
 export function transcriptSearchWorkerPath(cwd = process.cwd()): string {
   const bundled = path.join(cwd, ".next/server/transcript-search-index-worker.js");
   return fs.existsSync(bundled) ? bundled : path.join(cwd, "src/lib/transcriptSearchIndex.worker.ts");

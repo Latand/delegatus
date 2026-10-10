@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,6 +16,7 @@ import {
   readTranscriptActivity,
   searchTranscripts,
   TRANSCRIPT_RELEVANCE_PAGE_BYTES,
+  pendingTranscriptSearchIndexBuilds,
   transcriptSearchWorkerPath,
   type TranscriptIndexSource,
   type TranscriptSearchItem,
@@ -42,6 +43,14 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = path.join(sandbox, `state-${++stateSequence}`);
   process.env.TMPDIR = path.join(sandbox, "tmp");
   fs.mkdirSync(process.env.TMPDIR, { recursive: true });
+});
+
+/* A test that schedules a background index build ends with it: the worker
+   runs under its lease beside this process and would otherwise outlive the
+   test that started it. */
+afterEach(async () => {
+  const deadline = performance.now() + 15_000;
+  while (pendingTranscriptSearchIndexBuilds() > 0 && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
 });
 
 afterAll(() => {
