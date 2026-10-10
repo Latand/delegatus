@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,22 +10,24 @@ import { discoverFilesWithProjectCatalog } from "@/lib/scanner/discover";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
 import { stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
+import { checkpointLegacyCollectionMirrorsForDemotion } from "@/lib/state/legacyCollections";
+import { closeStateMutationActivationForTests, withStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { completeViewerRuntimeActivation } from "@/lib/viewerInstrumentation";
 import { canonicalProject, resetProjectAliasesForTests } from "./aliases";
 import { directoryProjectId, projectIdentityFromRepositoryRoot } from "./identity";
 import { backfillWorktreeProjects, recoverWorktreeProjects, runWorktreeRecoveryAtStartup } from "./worktreeBackfill";
-import { readWorktreeRecoveries } from "./worktreeRecoveryStore";
+import { checkpointWorktreeRecoveryForDemotion, readWorktreeRecoveries } from "./worktreeRecoveryStore";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "automatic-worktree-recovery-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 let serial = 0;
-function fixture() {
+function fixture(defaultState = false) {
   const disk = path.join(root, String(++serial));
-  const state = path.join(disk, "state");
+  const state = defaultState ? path.join(disk, "config", "delegatus", "state") : path.join(disk, "state");
   const sessions = path.join(disk, "sessions");
   const repo = path.join(disk, "widgets");
   fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
-  fs.mkdirSync(state); fs.mkdirSync(sessions);
+  fs.mkdirSync(state, { recursive: true }); fs.mkdirSync(sessions);
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
   fs.writeFileSync(path.join(repo, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/widgets.git\n');
   fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "confirmed"), "a".repeat(40));
@@ -308,4 +310,150 @@ test("a complete request index refresh recovers projects and returns their canon
   expect(snapshot.projectCatalog.map(entry => entry.project)).toEqual([f.identity.project]);
   expect(snapshot.files.every(file => file.project === f.identity.project)).toBe(true);
   expect(readLifecycleJournal().events[0]?.summary).toContain("rescan");
+});
+
+test("demotion preserves recovery through a preceding-release catalog scan and journal append", async () => {
+  const f = fixture(); const cwd = f.repo + "-review";
+  f.transcript(cwd, { branch: "confirmed" }); f.write();
+  const source = directoryProjectId(cwd);
+  const boardFile = path.join(f.state, "board.json");
+  expect(patchBoard(source, 0, { manual: ["conversation_old"] }, boardFile).ok).toBe(true);
+  await runWorktreeRecoveryAtStartup(message => { throw Error(String(message)); }, async () => { await f.scan(); });
+  const recovery = readLifecycleJournal().events[0]!;
+  // Preserve unrelated legacy entries as well as the newly committed rows.
+  const mapFile = path.join(f.state, "worktree-map.json");
+  fs.writeFileSync(mapFile, JSON.stringify({ unrelated: { repo: f.repo, worktree: "unrelated" } }));
+  await checkpointLegacyCollectionMirrorsForDemotion();
+  expect(JSON.parse(fs.readFileSync(mapFile, "utf8"))).toEqual({
+    unrelated: { repo: f.repo, worktree: "unrelated" }, [cwd]: { repo: f.repo, worktree: "widgets-review" },
+  });
+  const projected = bytes(f.state);
+  await checkpointWorktreeRecoveryForDemotion();
+  expect(bytes(f.state)).toEqual(projected);
+
+  // Run the retained release's actual readers, rather than a mock of their
+  // formats. Export only its runtime sources into this test's private root.
+  const retained = path.join(root, "retained-release");
+  fs.mkdirSync(retained);
+  const archive = Bun.spawnSync(["git", "archive", "39f654248666faa6e5deb01d59eeae305e64573f", "src", "bin", "tsconfig.json", "package.json"],
+    { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+  expect(archive.exitCode).toBe(0);
+  const extract = Bun.spawnSync(["tar", "-x", "-C", retained], { stdin: archive.stdout, stdout: "pipe", stderr: "pipe" });
+  expect(extract.exitCode).toBe(0);
+  fs.symlinkSync(path.resolve("node_modules"), path.join(retained, "node_modules"), "junction");
+  const child = Bun.spawnSync([process.execPath, "-e", `
+    const { discoverFilesWithProjectCatalog } = await import("./src/lib/scanner/discover.ts");
+    const { boardFor } = await import("./src/lib/board/store.ts");
+    const { appendLifecycleEvents, readLifecycleJournal } = await import("./src/lib/lifecycle/journal.ts");
+    const scan = await discoverFilesWithProjectCatalog([["codex-sessions", ${JSON.stringify(path.dirname(Object.keys(f.files)[0]!))}]]);
+    const before = readLifecycleJournal();
+    appendLifecycleEvents([{ key: "retained-release-event", type: "project_moved", at: new Date().toISOString(), summary: "Retained release event" }]);
+    console.log(JSON.stringify({ complete: scan.complete, projects: scan.projectCatalog.map(row => row.project),
+      sourceManual: boardFor(${JSON.stringify(source)}, ${JSON.stringify(boardFile)}).prefs.manual,
+      targetManual: boardFor(${JSON.stringify(f.identity.project)}, ${JSON.stringify(boardFile)}).prefs.manual,
+      before, after: readLifecycleJournal() }));
+  `], { cwd: retained, env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  expect(child.stderr.toString()).toBe("");
+  expect(child.exitCode).toBe(0);
+  const old = JSON.parse(child.stdout.toString());
+  expect(old.complete).toBe(true);
+  expect(old.projects).toEqual([f.identity.project]);
+  expect(old.sourceManual).toEqual(["conversation_old"]);
+  expect(old.targetManual).toEqual(["conversation_old"]);
+  expect(old.before.lastSeq).toBe(recovery.seq);
+  expect(old.before.events).toEqual([recovery]);
+  expect(old.after.events.map((event: { seq: number }) => event.seq)).toEqual([recovery.seq, recovery.seq + 1]);
+
+  // Return to the candidate against the state the old release actually wrote.
+  await f.scan();
+  expect(canonicalProject(source)).toBe(f.identity.project);
+  expect(projectInfoFromCwd(path.join(cwd, "nested"))?.project).toBe(f.identity.project);
+  expect(boardFor(source, boardFile).prefs.manual).toEqual(["conversation_old"]);
+  expect(boardFor(f.identity.project, boardFile).prefs.manual).toEqual(["conversation_old"]);
+  expect(readLifecycleJournal()).toEqual(old.after);
+  const beforeRetry = bytes(f.state);
+  expect(recoverWorktreeProjects("startup").folded).toEqual([]);
+  expect(bytes(f.state)).toEqual(beforeRetry);
+}, 30_000);
+
+test.each(["worktree-map.json", "project-aliases.json", "lifecycle-journal.json"])("demotion refuses unreadable %s before publishing recovery, then retries", async filename => {
+  const f = fixture(); const cwd = f.repo + "-review";
+  f.transcript(cwd, { branch: "confirmed" }); f.write();
+  recoverWorktreeProjects("startup");
+  readWorktreeRecoveries(); // Warm the read-only SQLite connection before the byte snapshot.
+  const file = path.join(f.state, filename);
+  fs.writeFileSync(file, "broken");
+  const before = bytes(f.state);
+  await expect(checkpointWorktreeRecoveryForDemotion()).rejects.toThrow();
+  expect(bytes(f.state)).toEqual(before);
+  fs.unlinkSync(file);
+  await checkpointWorktreeRecoveryForDemotion();
+  expect(readLifecycleJournal().events).toHaveLength(1);
+  expect(canonicalProject(directoryProjectId(cwd))).toBe(f.identity.project);
+});
+
+test("demotion recovery projection is refused during a build and a no-recovery checkpoint initializes nothing", async () => {
+  const f = fixture();
+  const before = bytes(f.state);
+  await checkpointWorktreeRecoveryForDemotion();
+  expect(bytes(f.state)).toEqual(before);
+  f.transcript(f.repo + "-review", { branch: "confirmed" }); f.write();
+  recoverWorktreeProjects("startup");
+  readWorktreeRecoveries();
+  const recovered = bytes(f.state);
+  const previous = process.env.NEXT_PHASE;
+  process.env.NEXT_PHASE = "phase-production-build";
+  try { await expect(checkpointWorktreeRecoveryForDemotion()).rejects.toThrow("build phase"); }
+  finally {
+    if (previous === undefined) delete process.env.NEXT_PHASE; else process.env.NEXT_PHASE = previous;
+  }
+  expect(bytes(f.state)).toEqual(recovered);
+});
+
+test("the adapter projects recovery only within its demotion activation scope", async () => {
+  const f = fixture(true); const cwd = f.repo + "-review";
+  f.transcript(cwd, { branch: "confirmed" }); f.write();
+  recoverWorktreeProjects("startup");
+  readWorktreeRecoveries();
+  const before = bytes(f.state);
+  const names = ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_STATE_OWNER"] as const;
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  delete process.env.LLV_STATE_DIR;
+  process.env.XDG_CONFIG_HOME = path.dirname(path.dirname(f.state));
+  process.env.LLV_STATE_OWNER = "deploy-adapter";
+  closeStateMutationActivationForTests();
+  try {
+    await expect(checkpointWorktreeRecoveryForDemotion()).rejects.toThrow("release activation");
+    expect(bytes(f.state)).toEqual(before);
+    await withStateMutationActivation(checkpointWorktreeRecoveryForDemotion);
+    const projected = bytes(f.state);
+    expect(JSON.parse(fs.readFileSync(path.join(f.state, "lifecycle-journal.json"), "utf8")).lastSeq).toBe(1);
+    await expect(checkpointWorktreeRecoveryForDemotion()).rejects.toThrow("release activation");
+    expect(bytes(f.state)).toEqual(projected);
+  } finally {
+    for (const name of names) if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+  }
+});
+
+test("a failed mirror write blocks demotion and retries without losing or repeating the atomic recovery", async () => {
+  const f = fixture(); const cwd = f.repo + "-review";
+  f.transcript(cwd, { branch: "confirmed" }); f.write();
+  const source = directoryProjectId(cwd), boardFile = path.join(f.state, "board.json");
+  expect(patchBoard(source, 0, { manual: ["conversation_old"] }, boardFile).ok).toBe(true);
+  recoverWorktreeProjects("startup");
+  const rows = structuredClone(readWorktreeRecoveries());
+  const rename = fs.renameSync;
+  const fault = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (to === path.join(f.state, "project-aliases.json")) throw Error("induced mirror write failure");
+    rename(from, to);
+  });
+  try { await expect(checkpointLegacyCollectionMirrorsForDemotion()).rejects.toThrow("induced mirror write failure"); }
+  finally { fault.mockRestore(); }
+  expect(readWorktreeRecoveries()).toEqual(rows);
+  expect(boardFor(f.identity.project, boardFile).prefs.manual).toEqual(["conversation_old"]);
+  expect(canonicalProject(source)).toBe(f.identity.project);
+  await checkpointLegacyCollectionMirrorsForDemotion();
+  expect(readLifecycleJournal().events).toEqual(rows.map(row => row.event));
+  expect(readWorktreeRecoveries()).toEqual(rows);
+  expect(fs.readdirSync(f.state).some(name => name.endsWith(".tmp"))).toBe(false);
 });

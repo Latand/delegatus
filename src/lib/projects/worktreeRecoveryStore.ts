@@ -1,5 +1,10 @@
-import { statePath } from "@/lib/configDir";
+import fs from "node:fs";
+
+import { stateDir, statePath } from "@/lib/configDir";
 import type { LifecycleEvent } from "@/lib/lifecycle/journal";
+import { writeJsonDurably } from "@/lib/state/durableJson";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import {
   initializeStateCollections, readStateCollectionRows, SqliteStateCollection, stateDatabaseSignature,
 } from "@/lib/state/sqliteStateStore";
@@ -52,4 +57,41 @@ export function worktreeRecoveryCollection(): SqliteStateCollection<WorktreeReco
     decodeError: error => new Error("Worktree recovery record is unreadable", { cause: error }),
     busyMessage: "worktree recovery is busy",
   });
+}
+
+/** The retiring Viewer (or the adapter in its scoped activation) holds the
+    release fence until every mirror succeeds. Project the atomic recovery into
+    the files a retained release reads before it may resume writes. A failed
+    checkpoint blocks demotion and can be retried from the same SQLite rows. */
+export async function checkpointWorktreeRecoveryForDemotion(): Promise<void> {
+  if (!readWorktreeRecoveries().length) return;
+  assertStateMutationAllowed(stateDir());
+  const { projectAliasSnapshot } = await import("./aliases");
+  const { lifecycleJournalPath, readLifecycleJournal } = await import("@/lib/lifecycle/journal");
+  const mapFile = statePath("worktree-map.json");
+  const aliasesFile = statePath("project-aliases.json");
+  // Match recovery's lock order; ordinary writers cannot overwrite a projection
+  // between its read and write, or allocate an already used journal sequence.
+  withFileTransactionSync(mapFile, "worktree recovery is busy", () =>
+    withFileTransactionSync(aliasesFile, "project aliases are busy", () =>
+      withFileTransactionSync(lifecycleJournalPath(), "lifecycle journal is busy", () => {
+        let map: Record<string, { repo: string; worktree: string }> = {};
+        try { map = JSON.parse(fs.readFileSync(mapFile, "utf8")); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        if (!map || typeof map !== "object" || Array.isArray(map)
+          || Object.values(map).some(item => !item || typeof item.repo !== "string" || typeof item.worktree !== "string")) {
+          throw new Error("Worktree map is unreadable");
+        }
+        for (const { cwd, repo, worktree } of readWorktreeRecoveries()) {
+          if (map[cwd] && map[cwd]!.repo !== repo) throw new Error("Worktree recovery conflicts with a recorded mapping");
+          map[cwd] = { repo, worktree };
+        }
+        // Validate every projection before publishing any of them. These are
+        // compatibility files only; the live commit remains wholly in SQLite.
+        const aliases = projectAliasSnapshot({ strict: true });
+        const journal = readLifecycleJournal();
+        writeJsonDurably(mapFile, map, { space: 0 });
+        writeJsonDurably(aliasesFile, { schemaVersion: 1, ...aliases });
+        writeJsonDurably(lifecycleJournalPath(), journal);
+      })));
 }
