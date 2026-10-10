@@ -1199,8 +1199,11 @@ function sensitiveTextViews(text: string, publicMarker?: string): { error: boole
     // Preserve candidate context before HTML stripping can erase a marker.
     const boundary = publicMarker ? approvedPublicBoundaryView(decoded, publicMarker) : { error: false, text: decoded };
     boundaryError ||= boundary.error;
-    return [boundary.text,
-      visibleMarkdownText(boundary.text).replaceAll(/<[^>]*>/g, "").replaceAll(/[\[\]*_`~]/g, "")];
+    const visible = visibleMarkdownText(boundary.text).replaceAll(/<[^>]*>/g, "");
+    const unformatted = visible.replaceAll(/[\[\]*_`~]/g, "");
+    // Token prefixes need their delimiter after markup is removed.
+    const tokenVisible = visible.replaceAll(/[\[\]*`~]/g, "");
+    return [boundary.text, unformatted, ...(tokenVisible === unformatted ? [] : [tokenVisible])];
   });
   return { error: canonical.error || json.error || boundaryError, views, sourceViews };
 }

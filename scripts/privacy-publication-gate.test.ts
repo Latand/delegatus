@@ -212,7 +212,11 @@ function pngChunk(type: string, data: Buffer): Buffer {
 }
 
 function syntheticFineGrainedPat(): string {
-  return `${[["git", "hub"].join(""), "pat"].join("_")}_${"A".repeat(82)}`;
+  return [["git", "hub"].join(""), "pat", "A".repeat(22), "B".repeat(59)].join("_");
+}
+
+function syntheticShortGithubToken(kind: string, body = "aZ9".repeat(12)): string {
+  return [String.fromCharCode(103, 104) + kind, body].join("_");
 }
 
 function liveCapturePng(): Buffer {
@@ -1071,6 +1075,63 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   }, 15000);
 
+  test("template markup does not form a split GitHub token", () => {
+    const markup = [
+      '<span class="badge ${h.runtime === "live" ? "b-success" : "b-warning"}">',
+      '${h.runtime}</span>',
+    ].join("");
+    expect(sensitiveClasses(markup)).toEqual(new Set());
+    expect(sensitiveClasses(markup.repeat(2))).toEqual(new Set());
+  });
+
+  test("layout arithmetic does not form a split GitHub token", () => {
+    const arithmetic = [
+      'const width = Math.max(widest, owned.length ? Math.max(aspect * ring.h - ',
+      'ring.w - 2 * YX, Math.sqrt(area)) : widest);',
+    ].join("");
+    expect(sensitiveClasses(arithmetic)).toEqual(new Set());
+  });
+
+  test("split GitHub prefixes require a boundary, a delimiter and a complete base62 body", () => {
+    const token = syntheticShortGithubToken("p");
+    const split = [...token].join(" ");
+    const nonTokens = [
+      ...["ring", "_", "$", "α"].map((prefix) => prefix + split),
+      [...token.replace("_", " ")].join(" "),
+      [...syntheticShortGithubToken("p", "A".repeat(35))].join(" "),
+      [...syntheticShortGithubToken("r", "A".repeat(75))].join(" "),
+      [...syntheticFineGrainedPat().slice(0, -1)].join(" "),
+      [...syntheticShortGithubToken("p", "A".repeat(18) + "é" + "A".repeat(18))].join(" "),
+    ];
+    for (const text of nonTokens) expect(sensitiveClasses(text).has("credential")).toBe(false);
+  });
+
+  test.each(["p", "o", "u", "s", "r"])("detects synthetic GitHub %s tokens through splitting and obfuscation", (kind) => {
+    const body = kind === "r" ? "aZ9".repeat(25) + "a" : "aZ9".repeat(12);
+    const token = syntheticShortGithubToken(kind, body);
+    const split = [...token].join(" ");
+    const publications = [
+      token,
+      split,
+      token.replace(String.fromCharCode(103, 104), String.fromCharCode(103) + " " + String.fromCharCode(104)),
+      [...token].join("\u200B"),
+      [...split].map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`).join(""),
+      [...token].map((character) => JSON.stringify(character)).join(" + "),
+      `_${split}_`,
+      `__${split}__`,
+      `___${split}___`,
+      `_${token.replace(String.fromCharCode(103, 104), String.fromCharCode(103) + " " + String.fromCharCode(104))}_`,
+      `${token[0]} <b>${token[1]}</b> ${kind} _ ${body}`,
+    ];
+    for (const text of publications) expect(sensitiveClasses(text).has("credential")).toBe(true);
+  });
+
+  test("detects synthetic split GitHub installation tokens with a longer structured body", () => {
+    const body = ["0", ["A".repeat(24), "B".repeat(24), "C".repeat(24)].join(".")].join("_");
+    const token = syntheticShortGithubToken("s", body);
+    expect(sensitiveClasses([...token].join(" ")).has("credential")).toBe(true);
+  });
+
   test.concurrent("fails closed when required known-value fingerprints are unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
@@ -1106,7 +1167,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const splitKnownLabel = "fixture-<span>private</span>-project-**label**";
     const percentSlash = String.fromCharCode(37, 50, 70);
     const encodedHome = ["", "home", "fixture-person", "records"].join("/").replaceAll("/", encodeURIComponent(percentSlash));
-    const splitToken = `${String.fromCharCode(103)} ${String.fromCharCode(104)} ${String.fromCharCode(112)} _ syntheticfixturecredential123456`;
+    const splitToken = [...syntheticShortGithubToken("p")].join(" ");
     const passwordInput = ['<form><in', 'put type="password" value="synthetic-form-credential-123456"></form>'].join("");
     const encodedPasswordInput = passwordInput.replace("<", "&lt;");
     const authorizationHeader = ["Author", "ization: Bear", "er syntheticfixturecredential123456"].join("");

@@ -61,19 +61,44 @@ export function staticSensitiveClasses(
   if (matched("credential", /\b(?:github_pat_|gh[pousr]_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b/)) {
     findings.add("credential");
   }
-  const separator = String.raw`[^a-z0-9\r\n]{1,8}`;
-  const splitTokenPrefix = new RegExp([
+  const separator = String.raw`[^\p{L}\p{N}\r\n]{0,8}`;
+  const legacySeparator = String.raw`[^\p{L}\p{N}\r\n]{1,8}`;
+  const splitTokenPrefix = new RegExp(String.raw`(?<![\p{L}\p{N}_$])(_{1,3})?(?:` + [
     `g${separator}i${separator}t${separator}h${separator}u${separator}b${separator}p${separator}a${separator}t`,
     `g${separator}h${separator}[pousr]`,
-    `x${separator}o${separator}x${separator}[baprs]`,
-    `s${separator}k`,
-  ].join("|") + String.raw`[^a-z0-9\r\n]{0,8}?[_-][^a-z0-9\r\n]*`, "gi");
+    `x${legacySeparator}o${legacySeparator}x${legacySeparator}[baprs]`,
+    `s${legacySeparator}k`,
+  ].join("|") + String.raw`)[^\p{L}\p{N}\r\n]{0,8}?[_-][^\p{L}\p{N}\r\n]*`, "giu");
+  const splitTokenBody = /^[a-z0-9](?:[^\p{L}\p{N}\r\n]*[a-z0-9])*/iu;
   let lineStart = 0;
   for (const line of searchableText.split(/\n/)) {
+    let emphasisClosings: number[] | undefined;
     splitTokenPrefix.lastIndex = 0;
     for (let match = splitTokenPrefix.exec(line); match; match = splitTokenPrefix.exec(line)) {
-      const compactTail = compactSensitiveText(line.slice(match.index));
-      if (/^(?:githubpat|gh[pousr]|xox[baprs]|sk)[a-z0-9]{12,}/i.test(compactTail)) {
+      let bodyEnd = line.length;
+      if (match[1]) {
+        // An opening emphasis marker must have a closing boundary. Cache a
+        // single scan: repeated unclosed markers cannot rescan the whole line.
+        if (!emphasisClosings) {
+          emphasisClosings = [-1, -1, -1, -1];
+          for (const marker of line.matchAll(/_+/g)) {
+            const end = marker.index + marker[0].length;
+            if (/^[\p{L}\p{N}_$]/u.test(line.slice(end, end + 2))) continue;
+            for (let length = 1; length <= Math.min(3, marker[0].length); length += 1) {
+              const start = end - length;
+              if (start > 0 && !/\s/u.test(line[start - 1])) emphasisClosings[length] = start;
+            }
+          }
+        }
+        bodyEnd = emphasisClosings[match[1].length];
+        if (bodyEnd <= splitTokenPrefix.lastIndex) continue;
+      }
+      // A non-base62 letter or number ends the candidate body. GitHub bodies
+      // need their full base62 length after compaction; longer formats also match.
+      const body = splitTokenBody.exec(line.slice(splitTokenPrefix.lastIndex, bodyEnd));
+      if (!body) continue;
+      const compactTail = compactSensitiveText(match[0] + body[0]);
+      if (/^(?:gh[pous][a-z0-9]{36,}|ghr[a-z0-9]{76,}|githubpat[a-z0-9]{81,}|(?:xox[baprs]|sk)[a-z0-9]{12,})$/i.test(compactTail)) {
         onMatch?.("credential", lineStart + match.index, lineStart + line.length);
         findings.add("credential");
         break;
