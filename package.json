@@ -1,6 +1,6 @@
 {
   "name": "delegatus-cli",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "bin": {
     "delegatus": "bin/cli.mjs",
     "dlg": "bin/cli.mjs",
@@ -47,19 +47,19 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "@simplewebauthn/browser": "14.0.0",
     "@simplewebauthn/server": "14.0.3",
     "entities": "^8.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.23.0",
-    "next": "16.3.6",
+    "next": "16.3.8",
     "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -71,7 +71,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^10",
-    "eslint-config-next": "16.3.6",
+    "eslint-config-next": "16.3.8",
     "happy-dom": "^20.10.6",
     "playwright-core": "1.62.1",
     "tailwindcss": "^4",
@@ -108,7 +108,7 @@
     "fast-uri": "^3.1.6"
   },
   "patchedDependencies": {
-    "next@16.3.6": "patches/next-16.3.6.patch",
+    "next@16.3.8": "patches/next-16.3.8.patch",
     "braces@3.0.3": "patches/braces-3.0.3.patch"
   }
 }

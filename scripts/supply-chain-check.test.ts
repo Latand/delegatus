@@ -25,7 +25,7 @@ test("frozen install rejects a dependency manifest that disagrees with the old l
   writeFileSync(join(root, "package.json"), readFileSync(join(import.meta.dir, "../package.json")));
   writeFileSync(join(root, "bun.lock"), `${readFileSync(join(import.meta.dir, "../bun.lock"), "utf8")}\n`);
   mkdirSync(join(root, "patches"));
-  writeFileSync(join(root, "patches/next-16.3.6.patch"), readFileSync(join(import.meta.dir, "../patches/next-16.3.6.patch")));
+  writeFileSync(join(root, "patches/next-16.3.8.patch"), readFileSync(join(import.meta.dir, "../patches/next-16.3.8.patch")));
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { dependencies: Record<string, string> };
   manifest.dependencies.entities = "7.0.0";
   writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
