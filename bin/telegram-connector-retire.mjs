@@ -1,15 +1,15 @@
-/* The launcher's last step before the service stops: the Telegram connector
-   runner the stopped Viewer started must be gone first. With KillMode=process
-   systemd signals only the launcher, and a runner left behind keeps the
+/* Part of the launcher's retirement of each Viewer that exits: the Telegram
+   connector runner that Viewer started must be gone first. With
+   KillMode=process systemd signals only the launcher, and a runner left behind keeps the
    service's cgroup populated, so the next start reuses that old cgroup path
    instead of the configured slice (2026-10-10). The runner ends on its own when
    its Viewer's stdin lease closes; this waits for that, and only then signals
    the recorded process, by its kernel start identity and exact command line.
 
-   Only the stopped Viewer's own runner: the record must name, as its owner, a
-   process identity the launcher read from that Viewer's process tree before
-   stopping it. The record is shared state, and a successor that recorded its
-   own runner meanwhile is never touched. A record without an owner was
+   Only the exited Viewer's own runner: the record must name, as its owner,
+   the start identity the launcher read when it started that Viewer. The
+   record is shared state, and a successor that recorded its own runner
+   meanwhile is never touched. A record without an owner was
    written before leases; nothing proves whose it is, so it is left to the
    Viewer that owns traffic, which replaces it, and to the deployer's
    leftover check. */
@@ -70,7 +70,7 @@ function signal(record, name) {
  * the launcher can say so; it never throws. The record is read once: a later
  * replacement of the file does not change which process this waits for.
  * @param {string} stateDirectory
- * @param {Array<{ pid: number, identity: string }>} owners the stopped Viewer's process tree (viewerProcessTree)
+ * @param {Array<{ pid: number, identity: string }>} owners the exited Viewer generation (viewerGeneration)
  * @param {{ leaseMs?: number, termMs?: number, killMs?: number, pollMs?: number }} [options]
  * @returns {Promise<"none" | "foreign" | "exited" | "terminated" | "killed" | "survived">}
  */

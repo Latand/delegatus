@@ -7,7 +7,6 @@ import path from "node:path";
 import { procBackend } from "@/lib/proc";
 
 import { retireTelegramConnector } from "./telegram-connector-retire.mjs";
-import { viewerProcessTree } from "./viewer-helpers-retire.mjs";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-connector-retire-"));
 const PYTHON = Bun.which("python3")!;
@@ -32,9 +31,9 @@ async function end(child: ReturnType<typeof spawn>) {
   await ended;
 }
 
-/* The stopped Viewer, as the launcher read it before stopping it: this test
-   process stands in for it. */
-const STOPPED = viewerProcessTree(process.pid);
+/* The exited Viewer's generation, as the launcher read it when it started
+   that Viewer: this test process stands in for it. */
+const STOPPED = [{ pid: process.pid, identity: procBackend.processIdentity(process.pid)! }];
 const OWNER = { ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid)!, lease: "stdin" };
 
 /* A runner whose lease did not end it (one that never reads its stdin), so

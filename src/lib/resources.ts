@@ -33,6 +33,7 @@ import { overlayResourceSessionTitles } from "@/lib/session/titleProjection";
 import { readTranscriptHosts, type TranscriptHost, type TranscriptHostSnapshot } from "@/lib/agent/transcriptHost";
 import { captureTmuxAttachReferences, type TmuxAttachReference } from "@/lib/tmux";
 import { statePath } from "@/lib/configDir";
+import { recordHelperGroup } from "@/lib/helperLease";
 import { fsyncPath } from "@/lib/state/durableJson";
 
 import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, type ResourcesPayload, type ResourcesViewer } from "./types";
@@ -1479,6 +1480,9 @@ async function collectResourcesInWorker(
       env: { ...withoutUnsupportedApiCredentials(process.env), [RESOURCE_WORKER_OWNER_ENV]: workerOwner },
     },
   );
+  /* Its group ends with this Viewer's generation even when the Viewer dies
+     before the deadline below would have ended it. */
+  recordHelperGroup("resource-collector", worker);
   return new Promise<CollectedResources>((resolve, reject) => {
     const pid = worker.pid;
     const expectedIdentity = typeof pid === "number" ? processRuntime.processIdentity(pid) : null;

@@ -34,7 +34,7 @@ let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNo
 let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
 let lockLauncherStartup;
-let retireTelegramConnector, retireViewerDescendants, retireViewerHelpers, viewerProcessTree;
+let retireTelegramConnector, retireViewerGroup, retireViewerHelpers, viewerGeneration, viewerGenerationSpawnOptions;
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -459,17 +459,46 @@ function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, ex
 /* `launch.restarting` marks a web process started by a self-update restart
    (#2007): until it is ready, its exit is the restart's failure to handle,
    never a reason to stop the whole launcher. */
+/* Everything an exited Viewer generation started that is not an agent: its
+   Telegram connector, its leased and recorded helpers, and every process left
+   in the process group it led. All of it must be gone before this launcher
+   starts the next Viewer or exits and the service manager starts the next
+   generation: with KillMode=process, a process left in the service's cgroup
+   makes systemd reuse that old cgroup path (2026-10-10). */
+async function retireViewerGeneration(stateDirectory, generation) {
+  if (!generation) return;
+  const owners = [generation];
+  const [connector, helpers, group] = await Promise.all([
+    stateDirectory ? retireTelegramConnector(stateDirectory, owners) : "none",
+    stateDirectory ? retireViewerHelpers(stateDirectory, owners) : { survived: [] },
+    retireViewerGroup(generation),
+  ]);
+  if (connector === "survived") console.error("[delegatus] the Telegram connector did not stop with the Viewer");
+  if (helpers.survived.length) console.error(`[delegatus] helpers did not stop with the Viewer: ${helpers.survived.join(", ")}`);
+  if (group.survived.length) console.error(`[delegatus] processes did not stop with the Viewer: ${group.survived.join(", ")}`);
+}
+
 function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostSupervisor, packageRoot, runtimeHostEnvironment, launch = {}) {
-  const child = spawn(server.command, server.args, viewerChildProcessOptions({
+  /* The Viewer leads a process group of its own: its generation, which every
+     non-agent process it starts stays in, and which is retired when it exits,
+     however it exits. Agents start detached and outlive it. */
+  const child = spawn(server.command, server.args, viewerGenerationSpawnOptions(viewerChildProcessOptions({
     cwd: server.cwd,
     env: buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, launch.extraEnv),
     stdio: ["ignore", "pipe", "pipe"],
-  }));
+  })));
+  const generation = viewerGeneration(child.pid);
 
   const state = {
     sawAddressInUse: false,
     stopping: false,
     restarting: launch.restarting === true,
+    /* Settles once this Viewer has exited and its generation is retired. */
+    retired: child.pid === undefined ? Promise.resolve() : new Promise((resolve) => {
+      child.once("exit", () => {
+        retireViewerGeneration(launch.stateDirectory, generation).catch(() => {}).finally(resolve);
+      });
+    }),
   };
 
   /* Attached first, so a failed spawn is always reported by it (#2178). A
@@ -515,7 +544,7 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
     if (tailscaleProcessRef?.current) {
       await stopChild(tailscaleProcessRef.current);
     }
-    await runtimeHostSupervisor.stop();
+    await Promise.all([runtimeHostSupervisor.stop(), state.retired]);
 
     if (state.sawAddressInUse) {
       process.exit(1);
@@ -867,6 +896,7 @@ async function stopChild(processHandle) {
   if (state.spawnError && child.pid === undefined) return;
 
   if (child.exitCode !== null || child.signalCode !== null) {
+    await state.retired;
     return;
   }
 
@@ -886,46 +916,37 @@ async function stopChild(processHandle) {
       child.kill("SIGTERM");
     }
   });
+  /* A Viewer is stopped once its generation is retired. */
+  await state.retired;
 }
 
-async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor, stateDirectory) {
-  /* Read while the Viewer runs: only what this Viewer started is finished
-     below, never what a successor sharing the state directory recorded. */
-  const owners = serverProcess ? viewerProcessTree(serverProcess.child.pid) : [];
+/* Stopping the Viewer waits for its generation's retirement (stopChild). */
+async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor) {
   await Promise.all([
     serverProcess ? stopChild(serverProcess) : Promise.resolve(),
     tailscaleProcess ? stopChild(tailscaleProcess) : Promise.resolve(),
     runtimeHostSupervisor ? runtimeHostSupervisor.stop() : Promise.resolve(),
   ]);
-  /* After the Viewer: its Telegram connector, its leased helpers and every
-     other process it left in its own process group end with it, and must be
-     gone before this process exits and the service manager starts the next
-     one. Agents lead groups of their own and are never among them. */
-  const [connector, helpers, descendants] = await Promise.all([
-    retireTelegramConnector(stateDirectory, owners),
-    retireViewerHelpers(stateDirectory, owners),
-    retireViewerDescendants(serverProcess?.child.pid, owners),
-  ]);
-  if (connector === "survived") console.error("[delegatus] the Telegram connector did not stop with the Viewer");
-  if (helpers.survived.length) console.error(`[delegatus] helpers did not stop with the Viewer: ${helpers.survived.join(", ")}`);
-  if (descendants.survived.length) console.error(`[delegatus] processes did not stop with the Viewer: ${descendants.survived.join(", ")}`);
 }
 
 /* `serverRef.current` is whichever web process runs at shutdown: a
    self-update restart (#2007) replaces the one startup launched. */
-function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, stateDirectory, onShutdown = () => {}) {
+function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, onShutdown = () => {}) {
   let stopping = false;
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
     relaunch?.requestStop();
     onShutdown();
-    await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor, stateDirectory);
+    await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
     process.exit(0);
   };
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  /* The Viewer leads a session of its own and no longer hears the terminal
+     hang up: this launcher stops it. */
+  process.on("SIGHUP", shutdown);
 }
 
 async function prepareRuntime(options) {
@@ -1070,7 +1091,7 @@ async function main() {
     stop: () => {
       recoverWeb = null;
       pauseWebRecovery();
-      return stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor, runtimeHostConfig.stateDirectory);
+      return stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
     } });
   await relaunch.recoverPending();
   /* Everything started below inherits the choice (#2168). */
@@ -1173,6 +1194,7 @@ async function main() {
       runtimeHostEnvironment,
       {
         restarting,
+        stateDirectory: runtimeHostConfig.stateDirectory,
         extraEnv: { LLV_SELF_UPDATE_RECORD: selfUpdate.record },
         onUnexpectedExit: (child) => {
           record.set("web", { state: "failed", error: exitError(child, handle.startedAt) });
@@ -1193,7 +1215,7 @@ async function main() {
   };
   const serverProcess = launchWeb(serverRef.release, relaunch.isReplacementStart());
   let restartRequests = null;
-  installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, runtimeHostConfig.stateDirectory, () => {
+  installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, () => {
     recoverWeb = null;
     pauseWebRecovery();
     restartRequests?.stop();
@@ -1214,7 +1236,7 @@ async function main() {
       if (page) throw new Error(page);
     }
   } catch (error) {
-    await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor, runtimeHostConfig.stateDirectory);
+    await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
     fail(error instanceof Error ? error.message : m.serverNotReady());
   }
 
@@ -1233,11 +1255,11 @@ async function main() {
       }
       exposedAddress = newlyBoundNonLoopbackAddress(bindStateBeforeLaunch, bindStateAfterLaunch);
     } catch (error) {
-      await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor, runtimeHostConfig.stateDirectory);
+      await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
       fail(m.bindCheckFail(error instanceof Error ? error.message : String(error)));
     }
     if (exposedAddress !== null) {
-      await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor, runtimeHostConfig.stateDirectory);
+      await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
       fail(m.unexpectedNonLocalBind(exposedAddress));
     }
   }
@@ -1270,6 +1292,9 @@ async function main() {
       if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
         return "port-in-use";
       }
+      if (!recoverWeb) return "shutdown";
+      /* A Viewer that crashed is replaced only once its generation is retired. */
+      await serverRef.current?.state.retired;
       if (!recoverWeb) return "shutdown";
       const handle = launchWeb(release, true);
       try {
@@ -1553,7 +1578,7 @@ async function checkoutLauncher() {
   ({ assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost } = await import("./launcher-adoption.mjs"));
   ({ lockLauncherStartup } = await import("./launcher-lock.mjs"));
   ({ retireTelegramConnector } = await import("./telegram-connector-retire.mjs"));
-  ({ retireViewerDescendants, retireViewerHelpers, viewerProcessTree } = await import("./viewer-helpers-retire.mjs"));
+  ({ retireViewerGroup, retireViewerHelpers, viewerGeneration, viewerGenerationSpawnOptions } = await import("./viewer-helpers-retire.mjs"));
   delete process.env.LLV_LAUNCHER_REEXEC;
   delete process.env.LLV_LAUNCHER_CHECKOUT;
   await main();

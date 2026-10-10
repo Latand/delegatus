@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { loadFlows } from "@/lib/flows/store";
+import { endLeasedHelper, spawnLeasedHelper } from "@/lib/helperLease";
 import type { Flow } from "@/lib/flows/types";
 import { loadPipelinesForList, pipelineRegistryHealth } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -91,20 +92,23 @@ function parseReads(output: string): ObservedReads {
 export async function readWorkOffThread(options: { launch?: WorkReadsLaunch; timeoutMs?: number } = {}): Promise<ObservedReads> {
   const launch = options.launch ?? workReadsWorkerLaunch();
   const timeoutMs = options.timeoutMs ?? WORK_READS_TIMEOUT_MS;
-  const { spawn } = await import("node:child_process");
-  const child = spawn(launch.executable, [launch.workerPath, ...(launch.args ?? [])], {
-    cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"],
+  /* Leased: the worker ends with this Viewer however it exits, and a
+     candidate's own observation waits on it, so it does not follow release
+     traffic. */
+  const child = spawnLeasedHelper("work-reads", {
+    command: launch.executable, args: [launch.workerPath, ...(launch.args ?? [])], cwd: process.cwd(),
     env: { ...process.env, ...(process.env[STATE_OWNER_ENV] ? { [STATE_OWNER_ENV]: "tool" } : {}) },
-  });
+  }, undefined, { stdout: "pipe", stderr: "inherit", followRelease: false });
+  const stdout = child.stdout!;
   return new Promise<ObservedReads>((resolve, reject) => {
     let output = "";
     const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
+      endLeasedHelper(child);
       reject(new Error(`the work reads worker ran past ${timeoutMs} ms and was stopped`));
     }, timeoutMs);
     timeout.unref?.();
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { output += chunk; });
+    stdout.setEncoding("utf8");
+    stdout.on("data", (chunk: string) => { output += chunk; });
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);

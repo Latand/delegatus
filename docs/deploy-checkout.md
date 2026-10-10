@@ -63,22 +63,32 @@ that cannot be read whole, or a member whose identity changes while it is
 read, refuses as well.
 
 The Viewer's own helpers do not reach that refusal in normal operation. The
-Telegram connector holds its Viewer's stdin as a lease and ends at end of file.
-The connector provisioner, the transcript search index worker, the file scan
-worker, the state backup pass and local transcription run under
-`bin/helper-lease.mjs`, which ends the helper's whole process group when the
-Viewer exits, however it exits. The provisioner and the index worker also end
-when their Viewer hands release traffic to a successor. A worker that reads a
-request on its standard input gets it on the guardian's fd 3, so the lease is
-never the request pipe. When the launcher stops its Viewer, it waits for those
-processes and signals any that remain. It acts only on records whose owner
-identity it read from that Viewer's process tree before the stop, so a
-successor's runner and helpers are left alone. The same tree read also covers
-everything else the Viewer started without detaching it, such as a git or gh
-command: what is still running in the Viewer's process group after the stop
-gets three seconds to finish, then is terminated and killed. Agents,
-structured hosts, workflow setup commands and sign-ins start detached, in a
-group of their own, and are never among them.
+launcher starts each Viewer leading a process group of its own: that group is
+the Viewer's generation. Everything the Viewer starts without detaching it,
+such as a git or gh command or a worker, stays in that group, and so does
+everything those processes fork later. Agents, structured hosts, workflow
+setup commands and sign-ins start detached, in a group of their own, and are
+never members.
+
+The Telegram connector holds its Viewer's stdin as a lease and ends at end of
+file. The connector provisioner, the transcript search index worker, the file
+scan worker, the state backup pass, the update drain's work reads and local
+transcription run under `bin/helper-lease.mjs`, which ends the helper's whole
+process group when the Viewer exits, however it exits. The provisioner and the
+index worker also end when their Viewer hands release traffic to a successor.
+A worker that reads a request on its standard input gets it on the guardian's
+fd 3, so the lease is never the request pipe. A self-update step and the
+resource collector lead groups of their own so their deadlines can end them;
+they are recorded with their Viewer under `<state>/helpers`.
+
+Whenever a Viewer exits (stopped, replaced by a web restart, or crashed), the
+launcher retires its generation before it starts the next Viewer or exits:
+it waits for the connector and the recorded helpers whose owner is that
+Viewer, and for the members of the group it led, which it reads afresh on
+every poll, so a child forked after the Viewer stopped is found too. What is
+still running after three seconds is terminated, then killed, each process by
+its start identity, never the group as a whole. A successor leads its own
+group and records its own helpers, so it is left alone.
 
 Validate without publishing or restarting:
 

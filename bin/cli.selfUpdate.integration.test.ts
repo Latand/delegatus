@@ -870,6 +870,116 @@ test("the serving web is recovered with backoff after an unexpected exit", async
   expect(child.exitCode).toBeNull();
 }, 30_000);
 
+/* 2026-10-10: a process an old Viewer left in the service's cgroup made
+   systemd start every replacement in that old cgroup path. Each Viewer here
+   starts a helper that ignores SIGTERM and, once its Viewer is gone, forks a
+   child that ignores it too and exits: nothing read while the Viewer ran can
+   name that child. It also starts an agent, detached, which must live on. */
+const GENERATION_STUCK = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n";
+const GENERATION_HELPER = `
+import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+const viewer = process.ppid;
+const timer = setInterval(() => {
+  if (process.ppid === viewer) return;
+  clearInterval(timer);
+  const late = spawn(process.execPath, [process.argv[2]], { stdio: "ignore" });
+  const stat = readFileSync("/proc/" + late.pid + "/stat", "utf8");
+  writeFileSync(process.argv[3], late.pid + ":" + stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]);
+  process.exit(0);
+}, 25);
+`;
+const GENERATION_VIEWER = `
+import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const state = process.env.LLV_STATE_DIR;
+const identity = (pid) => { const stat = readFileSync("/proc/" + pid + "/stat", "utf8"); return pid + ":" + stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]; };
+const helper = spawn(process.execPath, [join(state, "generation-helper.mjs"), join(state, "generation-stuck.mjs"), join(state, "generation-late-" + process.pid)], { stdio: "ignore" });
+const agent = spawn(process.execPath, [join(state, "generation-stuck.mjs")], { stdio: "ignore", detached: true });
+agent.unref();
+writeFileSync(join(state, "generation-" + process.pid + ".json"), JSON.stringify({ helper: identity(helper.pid), agent: identity(agent.pid) }));
+`;
+
+test.if(process.platform === "linux")("every Viewer generation's non-agent processes end before the next one starts, forks made after it stopped included", async () => {
+  const fixture = install();
+  writeFileSync(path.join(fixture.state, "generation-stuck.mjs"), GENERATION_STUCK);
+  writeFileSync(path.join(fixture.state, "generation-helper.mjs"), GENERATION_HELPER);
+  writeFileSync(path.join(fixture.state, "fixture-generation.mjs"), GENERATION_VIEWER);
+  const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  const live = (recorded: string) => {
+    const [pid, start] = recorded.split(":").map(Number);
+    return isAlive(pid!) && readStartIdentity(pid!) === String(start);
+  };
+  /* Every helper, late child and agent this case's Viewers started. */
+  const recordedProcesses: string[] = [];
+  const generation = async (webPid: number) => {
+    const report = await until(() => {
+      try { return JSON.parse(readFileSync(path.join(fixture.state, `generation-${webPid}.json`), "utf8")) as { helper: string; agent: string }; } catch { return null; }
+    });
+    recordedProcesses.push(report.helper, report.agent);
+    return report;
+  };
+  /* What the generation of `webPid` left: its helper, the child that helper
+     forked after the Viewer was gone, and its agent. */
+  const leftovers = (webPid: number, report: { helper: string; agent: string }) => {
+    let late: string | null = null;
+    try { late = readFileSync(path.join(fixture.state, `generation-late-${webPid}`), "utf8"); } catch { /* never forked */ }
+    if (late) recordedProcesses.push(late);
+    return { helper: live(report.helper), late: late === null ? null : live(late), agent: live(report.agent) };
+  };
+  let launcher: ReturnType<typeof spawn> | null = null;
+  try {
+    const { child } = await start(fixture);
+    launcher = child;
+    const first = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+    const firstReport = await generation(first.web.pid!);
+
+    /* Replaced by a web restart: retired before its successor is started. */
+    request(first, "web", "generation-restart");
+    const second = await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.requestId === "generation-restart" && record.web.state === "healthy" && record.web.pid !== first.web.pid ? record : null;
+    }, 30_000);
+    expect(leftovers(first.web.pid!, firstReport)).toEqual({ helper: false, late: false, agent: true });
+    const secondReport = await generation(second.web.pid!);
+
+    /* Crashed: no shutdown of its own ran, and recovery starts the next one
+       only once this generation is retired. */
+    process.kill(second.web.pid!, "SIGKILL");
+    const third = await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.state === "healthy" && record.web.pid !== second.web.pid ? record : null;
+    }, 30_000);
+    expect(leftovers(second.web.pid!, secondReport)).toEqual({ helper: false, late: false, agent: true });
+    const thirdReport = await generation(third.web.pid!);
+
+    /* Stopped with the service: retired before the launcher exits. */
+    child.kill("SIGTERM");
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    expect(leftovers(third.web.pid!, thirdReport)).toEqual({ helper: false, late: false, agent: true });
+    expect(third.launcher.pid).toBe(first.launcher.pid);
+  } finally {
+    /* On a launcher that retires nothing, a helper forks only once its Viewer
+       is gone: stop the launcher first, then end everything recorded. */
+    if (launcher && launcher.exitCode === null && launcher.signalCode === null) {
+      const exited = new Promise<void>((resolve) => launcher!.once("exit", () => resolve()));
+      launcher.kill("SIGTERM");
+      await Promise.race([exited, Bun.sleep(15_000)]);
+    }
+    await Bun.sleep(300);
+    for (const name of readdirSync(fixture.state)) {
+      if (name.startsWith("generation-late-")) recordedProcesses.push(readFileSync(path.join(fixture.state, name), "utf8"));
+      else if (/^generation-\d+\.json$/.test(name)) {
+        const report = JSON.parse(readFileSync(path.join(fixture.state, name), "utf8")) as { helper: string; agent: string };
+        recordedProcesses.push(report.helper, report.agent);
+      }
+    }
+    for (const recorded of recordedProcesses) if (live(recorded)) process.kill(Number(recorded.split(":")[0]), "SIGKILL");
+  }
+}, 90_000);
+
 for (const intervening of ["none", "runtime-host", "relaunch"] as const) {
 test(`a foreign port owner is left alone and recovery survives ${intervening}`, async () => {
   const fixture = install();

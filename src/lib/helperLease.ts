@@ -98,3 +98,58 @@ export function unrefLeasedHelper(child: ChildProcess): void {
   child.unref();
   for (const stream of child.stdio) (stream as unknown as { unref?: () => void } | null)?.unref?.();
 }
+
+/* `[state, parent, group, …, start ticks]` of a live Linux process, or null. */
+function linuxStat(pid: number): { group: number; identity: string } | null {
+  if (process.platform !== "linux") return null;
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    if (fields[0] === "Z" || fields[0] === "X") return null;
+    return { group: Number(fields[2]), identity: `${pid}:${fields[19]}` };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Records a helper this Viewer started detached, leading a process group of
+ * its own that its own code signals (a step of a self-update, the resource
+ * collector), the way bin/helper-lease.mjs records a guardian: under
+ * `<state>/helpers`, with this process's identity and the process group it
+ * runs in. When this Viewer exits, however it exits, the launcher ends the
+ * helper's group (bin/viewer-helpers-retire.mjs). The record goes when the
+ * helper exits with its group empty; else the next retirement prunes it. Linux only: elsewhere there is no /proc to prove the group by.
+ */
+export function recordHelperGroup(name: string, child: ChildProcess, stateDirectory = leaseStateDirectory()): void {
+  const pid = child.pid;
+  if (!stateDirectory || pid === undefined || process.platform !== "linux") return;
+  const helper = linuxStat(pid);
+  const owner = linuxStat(process.pid);
+  if (!helper || !owner || helper.group !== pid) return;
+  const directory = path.join(stateDirectory, "helpers");
+  const file = path.join(directory, `${pid}.json`);
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({
+      version: 1, name, pid, identity: helper.identity, ownerPid: process.pid, ownerIdentity: owner.identity,
+      group: pid, groupIdentity: helper.identity, leaseGroup: owner.group,
+    }), { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch {
+    return;
+  }
+  /* Kept while anything the helper forked is still in its group: that is
+     what the launcher would have to end. */
+  child.once("exit", () => {
+    try {
+      process.kill(-pid, 0);
+      return;
+    } catch { /* the group is empty */ }
+    try {
+      const recorded = JSON.parse(fs.readFileSync(file, "utf8")) as { identity?: unknown };
+      if (recorded.identity === helper.identity) fs.rmSync(file, { force: true });
+    } catch { /* already gone */ }
+  });
+}

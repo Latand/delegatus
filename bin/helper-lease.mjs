@@ -22,8 +22,9 @@
    `process.ppid` reports live.
 
    Each guardian records itself in `<state>/helpers/<pid>.json` with its
-   owner's start identity, so the launcher that stops that Viewer can wait for
-   it and finish what it could not (bin/viewer-helpers-retire.mjs). Nothing
+   owner's start identity and the process group it was started in, so the
+   launcher can wait for it once that Viewer exits and finish what it could
+   not (bin/viewer-helpers-retire.mjs). Nothing
    from the application graph is imported here. */
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -62,6 +63,18 @@ function identity(pid) {
   }
 }
 
+/* The process group this guardian was started in: its Viewer's generation
+   (bin/viewer-helpers-retire.mjs), however deep in that Viewer's tree. */
+function processGroup(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const group = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
+    return Number.isInteger(group) && group > 1 ? group : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const ownerPid = process.ppid;
 const ownerIdentity = identity(ownerPid);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -87,6 +100,7 @@ function writeRecord() {
     const tmp = `${recordFile}.tmp`;
     writeFileSync(tmp, JSON.stringify({
       version: 1, name, pid: process.pid, identity: self, ownerPid, ownerIdentity, group, groupIdentity,
+      leaseGroup: processGroup(process.pid),
     }), { mode: 0o600 });
     renameSync(tmp, recordFile);
   } catch {

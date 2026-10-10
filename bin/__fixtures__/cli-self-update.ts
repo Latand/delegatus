@@ -104,6 +104,9 @@ export const server = Bun.serve({
 export const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
+/* A case that needs this Viewer to start processes of its own puts them here. */
+const generation = join(process.env.LLV_STATE_DIR ?? "", "fixture-generation.mjs");
+if (process.env.LLV_STATE_DIR && existsSync(generation)) await import(generation);
 `;
 
 export const STUB_HOST = `

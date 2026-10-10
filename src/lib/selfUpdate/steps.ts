@@ -10,6 +10,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, write
 import { join } from "node:path";
 import { setPriority } from "node:os";
 
+import { recordHelperGroup } from "@/lib/helperLease";
 import { wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
@@ -335,6 +336,9 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
         } finally { waiting = null; }
       }
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      /* Detached so abort() can end its group; recorded so that group also
+         ends with the Viewer generation running this update. */
+      recordHelperGroup("self-update-step", child);
       const result = { ended: false, code: null as number | null };
       completion = result;
       const exited = new Promise<number | null>((resolve) => {

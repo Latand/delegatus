@@ -250,6 +250,71 @@ test.if(process.platform === "linux")("a state backup pass ends when the Viewer 
   expect(() => process.kill(line.agent!, 0)).not.toThrow();
 }, 30_000);
 
+/* The display reading of the update drain (#2594): an observation that was
+   in flight when its Viewer crashed left this worker behind, and a later
+   retirement of the successor could not know it. */
+test.if(process.platform === "linux")("a work reads worker ends when the Viewer that started it dies", async () => {
+  const report = path.join(SANDBOX, "work-reads.json");
+  const worker = waitingHelper(path.join(SANDBOX, "work-reads", "worker.mjs"), report);
+  const { viewer, line } = await startViewer("observing-viewer", [
+    "import { spawn } from 'node:child_process';",
+    `const { readWorkOffThread } = await import(${JSON.stringify(path.join(REPO, "src/lib/selfUpdate/workReads.ts"))});`,
+    `void readWorkOffThread({ launch: { executable: process.execPath, workerPath: ${JSON.stringify(worker)} }, timeoutMs: 300_000 }).catch(() => {});`,
+    ...AGENT,
+    "process.stdout.write(JSON.stringify({ agent: agent.pid }) + '\\n');",
+  ], { env: { LLV_STATE_DIR: path.join(SANDBOX, "work-reads-state"), LLV_HELPER_LEASE_ENTRY: LEASE_ENTRY } });
+  const helper = await readReport(report);
+  viewer.kill("SIGKILL");
+  expect(await gone([helper.helper, helper.child])).toBe(true);
+  expect(() => process.kill(line.agent!, 0)).not.toThrow();
+}, 30_000);
+
+/* A self-update step leads a process group of its own, so the runner's abort
+   can end it; nothing ended it when its Viewer died mid-build. It is
+   recorded, and the launcher ends its group with the Viewer's generation. */
+test.if(process.platform === "linux")("a self-update step's group ends with the Viewer generation that ran it", async () => {
+  const { retireViewerHelpers, viewerGeneration, viewerGenerationSpawnOptions } = await import("../../bin/viewer-helpers-retire.mjs");
+  const state = path.join(SANDBOX, "step-state");
+  fs.mkdirSync(state, { recursive: true, mode: 0o700 });
+  const script = path.join(SANDBOX, "stepping-viewer.mjs");
+  fs.writeFileSync(script, [
+    "import { spawn } from 'node:child_process';",
+    `const { realPorts } = await import(${JSON.stringify(path.join(REPO, "src/lib/selfUpdate/steps.ts"))});`,
+    ...AGENT,
+    "const ports = realPorts(() => {});",
+    "void ports.run(['/bin/sh', '-c', 'trap \"\" TERM; sleep 300 & echo $$ $!; wait'], { cwd: process.cwd(), env: process.env, onLine: (text) => {",
+    "  const [step, child] = text.trim().split(' ').map(Number);",
+    "  process.stdout.write(JSON.stringify({ step, child, agent: agent.pid }) + '\\n');",
+    "} });",
+    "setInterval(() => {}, 1000);",
+    "",
+  ].join("\n"));
+  const viewer = spawn(process.execPath, [script], viewerGenerationSpawnOptions({
+    cwd: REPO, stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, LLV_STATE_DIR: state },
+  }));
+  owned.push({ pid: viewer.pid!, identity: procBackend.processIdentity(viewer.pid!)! });
+  const generation = viewerGeneration(viewer.pid)!;
+  const line = await Promise.race([
+    new Promise<{ step: number; child: number; agent: number }>((resolve) => {
+      let buffered = "";
+      viewer.stdout!.on("data", (chunk: Buffer) => {
+        buffered += chunk.toString();
+        if (buffered.includes("\n")) resolve(JSON.parse(buffered.split("\n")[0]!));
+      });
+    }),
+    Bun.sleep(8_000).then(() => { throw new Error("the step never started"); }),
+  ]);
+  for (const pid of [line.step, line.child, line.agent]) owned.push({ pid, identity: procBackend.processIdentity(pid)! });
+  expect(fs.readdirSync(path.join(state, "helpers"))).toEqual([`${line.step}.json`]);
+  viewer.kill("SIGKILL");
+  await new Promise((resolve) => viewer.once("exit", resolve));
+  const outcome = await retireViewerHelpers(state, [generation], { leaseMs: 200, termMs: 300, killMs: 2_000 });
+  expect(outcome.survived).toEqual([]);
+  expect(await gone([line.step, line.child], 100)).toBe(true);
+  expect(() => process.kill(line.agent, 0)).not.toThrow();
+  expect(fs.readdirSync(path.join(state, "helpers"))).toEqual([]);
+}, 30_000);
+
 const PYTHON = Bun.which("python3");
 
 test.if(process.platform === "linux" && PYTHON !== null)("a local transcription ends when the Viewer that started it dies", async () => {
