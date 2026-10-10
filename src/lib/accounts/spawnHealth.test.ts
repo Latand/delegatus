@@ -516,31 +516,39 @@ test.each(["revision", "busy"] as const)("automatic bound-project admission pres
   const { createManagedClaudeAccount } = await import("./claude");
   const { bindAccountToProject } = await import("./projectBindings");
   const { resolveHealthySpawnAccount } = await import("./manager");
-  const { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, ACCOUNT_STORE_BUSY_MESSAGE } = await import("./accountMutation");
+  const mutation = await import("./accountMutation");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = mutation;
   const { foreignAccountHolder } = await import("./accountMutation.fixture");
   const created = createManagedClaudeAccount("Bound admission fixture");
   fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
   const project = `repo-bound-admission-${failure}`;
   expect(bindAccountToProject("claude", created.id, project).ok).toBe(true);
   let holder: Awaited<ReturnType<typeof foreignAccountHolder>> | undefined;
+  const mutationLock = spyOn(mutation, "withAccountMutationLockAsync");
   providerReply = async () => {
     if (failure === "revision") createManagedClaudeAccount("Concurrent bound-project writer");
     else {
+      // Hold until admission refuses; a timed release races a slow runner.
       holder = await foreignAccountHolder();
-      holder.releaseAfter(ACCOUNT_MUTATION_ADMISSION_WAIT_MS + 150);
     }
     return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
   };
   try {
-    const started = performance.now();
     const error = await resolveHealthySpawnAccount("claude", undefined, project).then(() => null, (caught: unknown) => caught);
     expect(error).toMatchObject({
       name: failure === "revision" ? "AccountAdmissionChangedError" : "AccountMutationBusyError",
       message: failure === "revision" ? "The account changed while preparing the launch; try again shortly." : ACCOUNT_STORE_BUSY_MESSAGE,
     });
     expect((error as Error).message).not.toMatch(/pid|claude|codex|held by|account mutation/i);
-    if (failure === "busy") expect(performance.now() - started).toBeLessThan(3_000);
+    if (failure === "busy") {
+      // This named caller selects the 2 s admission budget. Guard against
+      // the unnamed 10 s wait without including setup in a wall-clock bound.
+      expect(mutationLock).toHaveBeenCalledWith(expect.any(Function), {
+        holder: "Claude validity recheck", caller: "spawn health",
+      });
+    }
   } finally {
+    mutationLock.mockRestore();
     providerReply = null;
     await holder?.close();
   }
