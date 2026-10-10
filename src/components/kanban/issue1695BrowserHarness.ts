@@ -1,7 +1,9 @@
+import { test } from "bun:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
-import type { Browser } from "playwright-core";
+import { chromium, type Browser, type ConnectOptions, type Page } from "playwright-core";
 import postcss from "postcss";
 
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
@@ -12,6 +14,97 @@ import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
    so every #1695 caller is unchanged; another surface's driver passes its own.
    It also answers `/api/task-icons` the way the Viewer does (#2102), so a
    fixture draws lucide's real icons. */
+
+/* One case of a browser driver, run so that its timeout fails that case and
+   nothing after it. Bun's own per-test timeout abandons the body and kills the
+   processes it spawned, so a wait still pending on the killed browser rejected
+   later as "Unhandled error between tests" and a merge gate read the whole
+   file as broken (2026-10-07). Here the case owns a deadline of its own, ahead
+   of Bun's: when it passes, every browser and fixture server the case opened
+   is closed, which settles its pending waits as failures of this case, and
+   only then does the case fail. A body still running after its deadline cannot
+   open another browser into the next case.
+
+   The deadline is the declared timeout scaled for a loaded machine (load 25-35
+   on 24 cores runs a case several times slower than an idle one) with a floor
+   that covers bundling the fixture and starting Chromium. A hang costs the
+   longer wait; a passing case is not slowed. LLV_BROWSER_TIMEOUT_SCALE
+   overrides the factor. */
+const BROWSER_TIMEOUT_SCALE = Number(process.env.LLV_BROWSER_TIMEOUT_SCALE) > 0 ? Number(process.env.LLV_BROWSER_TIMEOUT_SCALE) : 2;
+const BROWSER_TIMEOUT_FLOOR = 90_000;
+/* How long a timed-out body gets to unwind its own `finally` blocks once its
+   browsers are gone, and how long each close may take. */
+const SETTLE_MS = 15_000;
+
+type CaseScope = { closers: (() => unknown)[]; expired: boolean };
+const caseScope = new AsyncLocalStorage<CaseScope>();
+
+function adopt(close: () => unknown) {
+  caseScope.getStore()?.closers.push(close);
+}
+
+function openable(): CaseScope | undefined {
+  const scope = caseScope.getStore();
+  if (scope?.expired) throw new Error("this browser case has timed out; it cannot open another browser");
+  return scope;
+}
+
+async function owned<T>(open: () => Promise<T>, close: (value: T) => unknown): Promise<T> {
+  const scope = openable();
+  const value = await open();
+  scope?.closers.push(() => close(value));
+  if (scope?.expired) {
+    await close(value);
+    throw new Error("this browser case timed out while its browser was starting");
+  }
+  return value;
+}
+
+async function closeAll(scope: CaseScope) {
+  const closers = scope.closers.splice(0).reverse();
+  await Promise.all(closers.map(async (close) => {
+    await Promise.race([Promise.resolve().then(close).catch(() => undefined), Bun.sleep(SETTLE_MS)]);
+  }));
+}
+
+/* The drivers launch through this, so the case that opened a browser can close it. */
+export const caseChromium = {
+  launch: (...args: Parameters<typeof chromium.launch>) => owned(() => chromium.launch(...args), (browser) => browser.close()),
+  launchServer: (...args: Parameters<typeof chromium.launchServer>) => owned(() => chromium.launchServer(...args), (server) => server.kill()),
+  connect: (wsEndpoint: string, options?: ConnectOptions) => owned(() => chromium.connect(wsEndpoint, options), (browser) => browser.close()),
+};
+
+export function browserCaseDeadline(declared: number): number {
+  return Math.max(Math.round(declared * BROWSER_TIMEOUT_SCALE), BROWSER_TIMEOUT_FLOOR);
+}
+
+/** `test` for a gated browser driver; a disabled gate skips every case. */
+export function browserCase(enabled: boolean) {
+  return (name: string, body: () => void | Promise<unknown>, declared = 5_000) => {
+    if (!enabled) return test.skip(name, body);
+    const deadline = browserCaseDeadline(declared);
+    test(name, async () => {
+      const scope: CaseScope = { closers: [], expired: false };
+      const run = caseScope.run(scope, () => Promise.resolve().then(body));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expiry = new Promise<"expired">((resolve) => { timer = setTimeout(() => resolve("expired"), deadline); });
+      try {
+        if (await Promise.race([run.then(() => "done" as const), expiry]) === "expired") {
+          scope.expired = true;
+          // The wait the case was stuck on rejects once its browser closes; its call log names it.
+          const stuck = run.then(() => null, (error: unknown) => error);
+          await closeAll(scope);
+          const reason = await Promise.race([stuck, Bun.sleep(SETTLE_MS).then(() => null)]);
+          const where = reason instanceof Error ? `\n${reason.message}` : "";
+          throw new Error(`browser case timed out after ${deadline} ms; its browsers and fixture servers were closed before the next case${where}`);
+        }
+      } finally {
+        clearTimeout(timer);
+        await closeAll(scope);
+      }
+    }, deadline + 3 * SETTLE_MS);
+  };
+}
 
 export async function serveEvidenceFixture(
   outDir: string,
@@ -56,6 +149,7 @@ export async function serveEvidenceFixture(
       );
     },
   });
+  adopt(() => server.stop(true));
   return { base: `http://127.0.0.1:${server.port}/`, stop: () => server.stop(true) };
 }
 
@@ -90,6 +184,19 @@ export async function openFixture(
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(url);
   return { context, page, pageErrors };
+}
+
+/** Waits until an opened `<details>` shows all of its content. The board's
+ * sections ease their content open from no height under `overflow: clip`, so
+ * a control near the end is clipped for a moment; a click there lands on the
+ * card behind it. */
+export async function waitForSectionOpen(page: Page, selector: string, timeout = 20_000): Promise<void> {
+  await page.waitForFunction((target) => {
+    const details = document.querySelector<HTMLDetailsElement>(target);
+    if (!details?.open) return false;
+    const last = details.lastElementChild;
+    return !last || last.getBoundingClientRect().bottom <= details.getBoundingClientRect().bottom + 0.5;
+  }, selector, { timeout, polling: "raf" });
 }
 
 /** Shared fast-speech case for the existing phone and desktop drivers. The
@@ -166,19 +273,22 @@ export async function captureFastTtsHeaders(browser: Browser, mobile: boolean): 
           await control.click(); expect(await row.getAttribute("data-tts-phase")).toBe("idle");
         }
         if (!mobile) {
+          /* The link opened the conversation in the agent window, where its header plays. */
           await control.click(); await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="playing"]'));
-          await page.locator('[data-reader-full-toggle="conversation_export-impl"]').click();
-          const full = page.locator('[data-kanban-reader="conversation_export-impl"] [data-tts-header]');
-          expect(await full.getAttribute("data-tts-phase")).toBe("playing");
-          await page.screenshot({ path: path.join(out, `${prefix}-full-window-playing.png`) });
-          await full.click(); await page.locator('[data-reader-full-toggle="conversation_export-impl"]').click();
+          const inWindow = page.locator('[data-agent-window] [data-kanban-reader="conversation_export-impl"] [data-tts-header]');
+          expect(await inWindow.getAttribute("data-tts-phase")).toBe("playing");
+          await page.screenshot({ path: path.join(out, `${prefix}-agent-window-playing.png`) });
+          /* The seat lies under the window's scrim: the window closes first, and its pill brings it back after. */
+          await inWindow.click(); await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
           const incumbent = page.locator('[data-orchestrator-incumbent]');
           await incumbent.scrollIntoViewIfNeeded();
           const seat = incumbent.locator('[data-tts-header]'); await seat.waitFor();
           await page.waitForFunction(() => document.querySelector('[data-orchestrator-incumbent] [data-tts-header]:enabled'));
           const seatRect = await seat.boundingBox(); expect(seatRect!.width).toBeGreaterThan(0);
           await page.screenshot({ path: path.join(out, `${prefix}-orchestrator.png`) });
-          await control.scrollIntoViewIfNeeded();
+          await page.locator("[data-open-agents-pill]").click();
+          await page.waitForSelector('[data-agent-window] [data-kanban-reader="conversation_export-impl"] [data-tts-header]:enabled');
         }
         // Loading is stoppable even on a cache hit, and a permanent provider
         // refusal returns the header to idle with a dismissible alert.
@@ -469,6 +579,11 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
         }
         await page.locator("[data-orchestrator-confirm]").first().click();
         await page.locator("[data-mandate-card]").first().waitFor();
+        /* Until the launch's own record arrives the card holds the mandate the
+           page expected to send, and a section opened then keeps that text
+           until it is reopened (MandateCard). The fixture's seat delivers a
+           one-line mandate of its own: open the card once it shows that. */
+        await page.waitForFunction(() => /·\s*1\s+\S+\s*·/.test(document.querySelector("[data-mandate-card] .text-muted")?.textContent ?? ""));
         await page.locator("[data-mandate-card] summary").first().click();
         await page.waitForFunction(() => document.querySelector("[data-mandate-card] details[open] > div")?.textContent?.includes("Keep the project moving."));
         await page.evaluate(() => {
@@ -537,4 +652,45 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
     }
   fs.mkdirSync("evidence/first-message", { recursive: true });
   fs.writeFileSync(`evidence/first-message/${surface}-handover.json`, JSON.stringify({ surface, width: mobile ? 390 : 1440, frames }, null, 2) + "\n");
+}
+
+
+/** Shared questionnaire readings for the board and phone evidence drivers. */
+export async function capturePrototypeQuestions(page: Page, phone: boolean) {
+  return page.evaluate((phone) => {
+    const frame = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review]" : "[data-prototype-review] [role=dialog]")!;
+    const questions = document.querySelector<HTMLElement>("[data-prototype-questions]")!;
+    const stage = document.querySelector<HTMLElement>("[data-prototype-stage]");
+    const bounds = frame.getBoundingClientRect();
+    const options = [...document.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]")];
+    const pillOverflow = [...document.querySelectorAll<HTMLElement>("[data-prototype-recommended]")].filter(pill => {
+      const box = pill.getBoundingClientRect(); const row = pill.closest("button")!.getBoundingClientRect();
+      return box.left < row.left || box.right > row.right + 0.5;
+    }).length;
+    const actions = [...document.querySelectorAll<HTMLElement>("[data-prototype-save], [data-prototype-skip]")].map(button => {
+      const b = button.getBoundingClientRect(); return { text: button.textContent, visible: b.top >= bounds.top && b.bottom <= bounds.bottom + 0.5, x: b.x, y: b.y, width: b.width };
+    });
+    const marks = [...document.querySelectorAll<HTMLElement>("[data-prototype-mark]")].map(mark => {
+      const box = mark.getBoundingClientRect();
+      return { multiple: mark.closest("button")!.getAttribute("role") === "checkbox", radius: parseFloat(getComputedStyle(mark).borderTopLeftRadius), width: box.width };
+    });
+    /* A button is as tall as its words need (44 at least): the recommended pill adds nothing. */
+    const heightExcess = Math.max(...options.map(button => {
+      const style = getComputedStyle(button); const words = button.querySelector<HTMLElement>("span:not([data-prototype-mark])")!.getBoundingClientRect().height;
+      const need = words + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+      return button.getBoundingClientRect().height - Math.max(44, need);
+    }));
+    const unpicked = options.filter(o => o.getAttribute("aria-checked") === "false");
+    const decision = document.querySelector<HTMLElement>("[data-prototype-decision]");
+    return { heightExcess, markLetters: [...document.querySelectorAll("[data-prototype-mark]")].filter(m => (m.textContent ?? "").trim() !== "").length,
+      hints: document.querySelectorAll("[data-prototype-hint]").length,
+      unpickedFaded: unpicked.length > 0 && unpicked.every(o => parseFloat(getComputedStyle(o).opacity) < 1),
+      statusLine: decision ? decision.querySelector("span")?.textContent ?? null : null, decisionText: decision?.textContent ?? null,
+      title: document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review] h2" : "[role=dialog] header p")?.textContent ?? null,
+      sideways: frame.scrollWidth - frame.clientWidth, questionWidth: questions.getBoundingClientRect().width,
+      stageWidth: stage?.getBoundingClientRect().width ?? null, questionCount: document.querySelectorAll("[data-prototype-question]").length,
+      optionHeight: Math.min(...options.map(o => o.getBoundingClientRect().height)), pillOverflow, marks, actions,
+      actionsWidth: document.querySelector<HTMLElement>("[data-prototype-actions]")?.getBoundingClientRect().width ?? null,
+      readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(document.querySelector("[data-prototype-skipped]")) };
+  }, phone);
 }

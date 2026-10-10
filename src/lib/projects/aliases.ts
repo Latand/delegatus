@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { readWorktreeRecoveries } from "./worktreeRecoveryStore";
+
 import { statePath } from "@/lib/configDir";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 import {
   isRepositoryProjectId,
@@ -62,7 +65,7 @@ function stringRecord(value: unknown): Record<string, string> | null {
     : null;
 }
 
-function readSnapshot(requireComplete = false): ProjectAliasSnapshot {
+function readLegacySnapshot(requireComplete = false): ProjectAliasSnapshot {
   const file = aliasesFile();
   let stat: fs.Stats;
   try {
@@ -89,6 +92,22 @@ function readSnapshot(requireComplete = false): ProjectAliasSnapshot {
     cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, snapshot };
     return snapshot;
   }
+}
+
+function readSnapshot(requireComplete = false): ProjectAliasSnapshot {
+  const legacy = readLegacySnapshot(requireComplete);
+  const recovered = readWorktreeRecoveries();
+  if (!recovered.length) return legacy;
+  const aliases = { ...legacy.aliases };
+  const displayNames = { ...legacy.displayNames };
+  for (const row of recovered) {
+    if (aliases[row.source] && resolveAlias(aliases[row.source]!, aliases) !== resolveAlias(row.target, aliases)) {
+      throw new Error("Worktree recovery conflicts with a project alias");
+    }
+    aliases[row.source] = row.target;
+    displayNames[row.target] = row.displayName;
+  }
+  return { aliases, displayNames };
 }
 
 function resolveAlias(project: string, aliases: Readonly<Record<string, string>>): string {
@@ -307,6 +326,13 @@ export function projectAliasesCanAccept(registrations: readonly ProjectAliasRegi
 }
 
 export function persistProjectAliases(registrations: readonly ProjectAliasRegistration[]): boolean {
+  if (registrations.length === 0) return true;
+  try {
+    return withFileTransactionSync(aliasesFile(), "project aliases are busy", () => persistProjectAliasesUnlocked(registrations));
+  } catch { return false; }
+}
+
+function persistProjectAliasesUnlocked(registrations: readonly ProjectAliasRegistration[]): boolean {
   if (registrations.length === 0) return true;
   const merged = mergeRegistrations(registrations);
   if (!merged) return false;

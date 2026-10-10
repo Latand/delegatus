@@ -1,3 +1,4 @@
+import { setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 import { afterAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -5,7 +6,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { buildEphemeralCommand, runEphemeralAgent, type EphemeralAgentRequest } from "./ephemeral";
-import { answerSchema } from "@/lib/externalRelay/protocol";
+import { answerSchema, roundSchema, replyAnswerSchema } from "@/lib/externalRelay/protocol";
+import { callableReads } from "@/lib/externalRelay/toolLoop";
+import { x1Request } from "@/lib/externalRelay/toolLoop.fixture";
 import type { AccountContext } from "@/lib/accounts/contracts";
 
 const root = fs.mkdtempSync(path.join("/tmp", "relay-profile-probe-"));
@@ -13,6 +16,10 @@ process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const marker = "PERSONAL_INSTRUCTION_MARKER";
 const probe = process.env.LLV_ANSWER_PROFILE_PROBE === "1" ? test : test.skip;
+if (process.env.LLV_ANSWER_PROFILE_PROBE === "1") {
+  const restoreFeatures = setCodexFeatureReaderForTest(undefined);
+  afterAll(restoreFeatures);
+}
 
 async function captureModelRequest(request: EphemeralAgentRequest) {
   const paths: string[] = [];
@@ -93,7 +100,7 @@ function account(engine: "codex" | "claude"): AccountContext {
   fs.writeFileSync(path.join(home, "auth.json"), "{}");
   if (engine === "codex") {
     const installed = JSON.parse(fs.readFileSync(
-      path.join(os.homedir(), ".codex", "models_cache.json"), "utf8",
+      process.env.LLV_ANSWER_PROFILE_MODEL_CATALOG ?? path.join(os.homedir(), ".codex", "models_cache.json"), "utf8",
     )) as { models: { slug: string }[] };
     const model = installed.models.find((item) => item.slug === "gpt-6-sol");
     if (!model) throw new Error("installed Codex model catalog lacks probe model");
@@ -200,3 +207,33 @@ claudeProbe("installed Claude with web search offers StructuredOutput and WebSea
   expect(names.sort()).toEqual(["StructuredOutput", "WebSearch"]);
   expect(JSON.stringify(body)).not.toContain(marker);
 }, 30_000);
+
+for (const engine of ["codex", "claude"] as const)
+  (engine === "codex" ? codexProbe : claudeProbe)(`${engine} accepts the relay round schema with the hardened profile`, async () => {
+    const schema = roundSchema(callableReads(x1Request("member")));
+    const body = await captureModelRequest({ ...request(engine), schema });
+    if (engine === "claude") {
+      const tools = body.tools as { name: string; input_schema: unknown }[];
+      expect(tools.map((tool) => tool.name)).toEqual(["StructuredOutput"]);
+      expect(tools[0]!.input_schema).toEqual(schema);
+    } else {
+      const format = (body.text as { format: { schema: unknown; strict: boolean } }).format;
+      expect(format.schema).toEqual(schema);
+      expect(format.strict).toBe(true);
+      const input = body.input as { type?: string; tools?: { name: string; tools: { name: string }[] }[] }[];
+      const namespaces = input.find((item) => item.type === "additional_tools")!.tools!;
+      expect(namespaces.map((item) => item.name)).toEqual(["functions"]);
+      expect(namespaces[0]!.tools.map((tool) => tool.name).sort()).toEqual(["exec", "request_user_input_async", "wait"]);
+    }
+    expect(JSON.stringify(body)).not.toContain(marker);
+  }, 30_000);
+
+for (const engine of ["codex", "claude"] as const)
+  for (const [name, schema] of Object.entries({ action_round: roundSchema(callableReads(x1Request("member")), { handoff: false }), unknown_reply: replyAnswerSchema }))
+    (engine === "codex" ? codexProbe : claudeProbe)(`${engine} accepts the 2b ${name} schema`, async () => {
+      const body = await captureModelRequest({ ...request(engine), schema });
+      const sent = engine === "claude" ? (body.tools as { input_schema: unknown }[])[0]!.input_schema
+        : (body.text as { format: { schema: unknown } }).format.schema;
+      expect(sent).toEqual(schema);
+      expect(JSON.stringify(body)).not.toContain(marker);
+    }, 30_000);

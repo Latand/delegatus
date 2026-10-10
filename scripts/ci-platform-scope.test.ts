@@ -101,7 +101,7 @@ test("deleting a module the job still imports runs it", () => {
 
 test("the workflow, the lockfile, the manifests and the named directories always run it", () => {
   const root = fixture();
-  for (const file of [WORKFLOW, "package.json", "bun.lock", "bunfig.toml", "tsconfig.json", "scripts/ci-platform-scope.ts"]) {
+  for (const file of [WORKFLOW, "package.json", "bun.lock", "bunfig.toml", "tsconfig.json", "tsconfig.production.json", "scripts/ci-platform-scope.ts"]) {
     expect({ file, run: decide(root, [file]).run }).toEqual({ file, run: true });
   }
   expect(decide(root, ["src/lib/proc/new.ts"]).run).toBe(false);

@@ -23,7 +23,16 @@ const safeId = /^[A-Za-z0-9_-]{1,64}$/;
 export type RelayAnswerDelivery = "accepted" | "refused" | "unconfirmed";
 /** Who asked, as the service's requester block says. Recorded, never trusted for access. */
 export type RelayAnswerRequester = ExternalRelayRequester;
+export type RelayToolCallRecord = {
+  effect?: "action";
+  round: number; tool: string; page: boolean; status: string; code: string | null;
+  audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
+};
 export type RelayAnswerRecord = {
+  conversationId?: string;
+  compaction?: { member: string; owner: string };
+  rounds?: number;
+  toolCalls?: RelayToolCallRecord[];
   v: 1;
   requestId: string;
   relayId: string;
@@ -160,7 +169,13 @@ export function answerRecorder(base: {
         logFailure("write", error);
       }
     },
-    finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery">) {
+    bindConversation(conversationId: string) {
+      record = { ...record, conversationId };
+      if (begun) {
+        try { writeRecord(file, record); } catch (error) { logFailure("write", error); }
+      }
+    },
+    finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery"> & Partial<Pick<RelayAnswerRecord, "rounds" | "toolCalls" | "compaction">>) {
       if (finished) return;
       finished = true;
       const now = Date.now();
@@ -186,14 +201,19 @@ export function answerRecorder(base: {
 export type AnswerRecorder = NonNullable<ReturnType<typeof answerRecorder>>;
 
 /** Settles a record a dead owner left running, as the orphan sweep settles its lease. */
-export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery): void {
+export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery, conversationId?: string): void {
   try {
     for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
       const record = readRecord(file);
-      if (!record || record.state !== "running") continue;
+      if (!record) continue;
+      if (record.state !== "running") {
+        if (conversationId && record.conversationId !== conversationId) writeRecord(file, { ...record, conversationId });
+        continue;
+      }
       const now = Date.now();
       writeRecord(file, {
         ...record,
+        ...(conversationId ? { conversationId } : {}),
         state: "finished",
         outcome: "failed:install_restarted",
         delivery,
@@ -323,6 +343,7 @@ export function countMemberAnswers(scope: {
   requesterKey: string;
   sinceMs: number;
 }): { count: number; oldestMs: number | null } {
+  const counted = new Set<string>();
   let count = 0;
   let oldestMs: number | null = null;
   if (!safeId.test(scope.relayId) || !safeId.test(scope.targetId)) return { count, oldestMs };
@@ -338,7 +359,10 @@ export function countMemberAnswers(scope: {
       exemptFromMemberLimit(record.requester) ||
       (record.chatKey ?? null) !== scope.chatKey
     ) continue;
-    count += 1;
+    if (!counted.has(record.requestId)) {
+      counted.add(record.requestId);
+      count += 1;
+    }
     oldestMs = started;
   }
   return { count, oldestMs };

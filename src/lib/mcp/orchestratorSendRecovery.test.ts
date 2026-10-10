@@ -57,6 +57,7 @@ function fixture(label: string) {
   let callerId = caller!.id;
   const domain = {
     registrySnapshot: () => registry.readOnlySnapshot(),
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project, displayName: project, smt: 1, conversations: 4 }], complete: true } }),
     attentionAuthority: () => ({ kind: "worker", conversationId: callerId }),
     callerAttribution: () => ({ kind: "gateway", conversationId: callerId }),
     recoveryPredecessors: () => [],

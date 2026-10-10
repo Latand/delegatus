@@ -195,13 +195,22 @@ export function IncumbentHeader({
            and 186 px in Ukrainian, and left the Ukrainian model name at 37 px
            of its 111 px at 1280 px and at 19 px at 1048 px. The dock's row
            wraps, so there the link is a line of its own and costs the identity
-           nothing; it keeps its words. */
+           nothing; it keeps its words.
+
+           Inline it also wears the row's button frame, at the row's height and
+           centred on it: a bare glyph pinned to the top of the row sat 5 px
+           above the bordered buttons beside it and read as a stray icon, not
+           as the way back to the predecessor. */
         <a
           href={"#c=" + encodeURIComponent(predecessorConversationId)}
           data-orchestrator-predecessor={predecessorConversationId}
           aria-label={inline ? t("orchPanel.predecessor") : undefined}
           title={inline ? `${t("orchPanel.predecessor")}\n${t("orchPanel.predecessorTitle")}` : t("orchPanel.predecessorTitle")}
-          className="inline-flex min-w-0 items-center gap-1 self-start text-caption text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className={`inline-flex min-w-0 items-center gap-1 text-caption text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            inline
+              ? "h-6 w-6 shrink-0 justify-center self-center rounded-control border border-border bg-card text-secondary hover:border-accent/45"
+              : "self-start"
+          }`}
         >
           <CornerDownRight className="h-3 w-3 shrink-0" aria-hidden />
           {inline ? null : <span className="truncate">{t("orchPanel.predecessor")}</span>}
@@ -217,12 +226,13 @@ export function IncumbentHeader({
     fallback so both surfaces show one number for one seat. */
 export function boardContext(file: FileEntry | null): IncumbentContext | null {
   const ctx = file?.ctx;
-  if (!ctx) return null;
+  if (!ctx) return file ? { tokens: null, limit: null, percent: null, estimated: true, basis: "" } : null;
   return {
     tokens: ctx.usedTokens,
     limit: ctx.windowTokens,
     percent: ctx.pct,
-    estimated: ctx.confidence !== "exact",
+    // The usage is provider-reported even when registry capacity is approximate.
+    estimated: false,
     basis: "",
   };
 }
@@ -232,8 +242,8 @@ export function boardContext(file: FileEntry | null): IncumbentContext | null {
  * fullness scale: the line that matters for an orchestrator is the one the
  * server would recommend rotating at, so the bar turns amber exactly there.
  *
- * An inferred number is marked «~» and says why in its own tooltip — a guess
- * must never be readable as a provider-reported count.
+ * Unconfirmed usage is labelled while the next provider reading is awaited;
+ * its tooltip preserves the basis of any CLI estimate.
  *
  * The DESKTOP's meter, and only the desktop's: it fills with what is USED,
  * which is the dock's own reading. The phone fills every meter with what
@@ -242,12 +252,14 @@ export function boardContext(file: FileEntry | null): IncumbentContext | null {
  */
 function ContextMeter({ context }: { context: IncumbentContext | null }) {
   const { t } = useLocale();
-  if (!context || context.tokens === null) return null;
-  const { percent, estimated } = context;
-  /* An estimate stops at amber: red claims a measured, nearly full window. */
+  if (!context) return null;
+  if (context.estimated || context.tokens === null) {
+    return <span data-orchestrator-context="unconfirmed" className="text-caption text-muted" title={context.basis || undefined}>{t("orchPanel.ctxUnconfirmed")}</span>;
+  }
+  const { percent } = context;
   const tone = percent === null || percent < ROTATION_CONTEXT_PERCENT
     ? { text: "text-secondary", bar: "bg-secondary/50" }
-    : percent >= 90 && !estimated
+    : percent >= 90
       ? { text: "text-danger", bar: "bg-danger" }
       : { text: "text-warning", bar: "bg-warning" };
   const title = [
@@ -269,7 +281,6 @@ function ContextMeter({ context }: { context: IncumbentContext | null }) {
       aria-label={percent === null ? t("orchPanel.ctxAriaUnknown") : t("orchPanel.ctxAria", { percent: String(percent) })}
     >
       <span className={`text-caption font-semibold tabular-nums ${tone.text}`}>
-        {estimated ? "~" : ""}
         {percent === null ? shortTokens(context.tokens) : `${percent}%`}
       </span>
       {percent === null ? null : (

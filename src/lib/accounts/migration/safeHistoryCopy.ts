@@ -29,7 +29,7 @@ export class HistorySecurityError extends Error {
 export class MigrationTargetUnavailableError extends Error {
   readonly code = "target-account-unavailable";
 
-  constructor(readonly detail: "not-authenticated" | "unsafe-home", message: string) {
+  constructor(readonly detail: "not-authenticated" | "unsafe-home" | "not-allowed", message: string) {
     super(message);
     this.name = "MigrationTargetUnavailableError";
   }
@@ -600,7 +600,9 @@ export function sanitizeProviderError(error: unknown): { code: string; message: 
       code: error.code,
       message: error.detail === "not-authenticated"
         ? "target account is not signed in; sign it in or switch to another account"
-        : "target account home failed safety checks; repair it or switch to another account",
+        : error.detail === "not-allowed"
+          ? "target account is no longer allowed on this project; the conversation stays on its account"
+          : "target account home failed safety checks; repair it or switch to another account",
     };
   }
   return { code: "provider-failed", message: "successor provider failed a recoverable preflight" };

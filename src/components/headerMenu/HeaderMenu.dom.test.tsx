@@ -37,6 +37,7 @@ globalThis.fetch = (async (input: unknown) => {
 
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("./HeaderMenu");
 const { RailHeaderMenu } = await import("@/components/ProjectRail");
+const { OPEN_VOICE_COMPANION_SETTINGS_EVENT } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
 
 let root: Root | undefined;
 afterEach(() => {
@@ -68,7 +69,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.textContent).toContain(translate(lang, "headerMenu.settings"));
   expect(settings.querySelector("[data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.short", { state: translate(lang, "memoryState.short.working") }));
-  expect(settings.textContent).toContain("9");
+  expect(settings.textContent).toContain("10");
   /* Nothing of the settings page shows at rest, and no entry appears twice. */
   expect(host.querySelector("[data-rail-menu-agent-mapping]")).toBeNull();
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
@@ -106,6 +107,36 @@ test("Install ping closes the menu and opens the ping's own dialog", async () =>
   expect([opened, closed]).toEqual([1, 1]);
 });
 
+test("Voice Delegatus closes the menu and opens the voice companion's own settings dialog", async () => {
+  let opened = 0;
+  const open = () => { opened += 1; };
+  window.addEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open);
+  let closed = 0;
+  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => { closed += 1; }} />);
+  await click(host.querySelector("[data-rail-menu-settings]"));
+  expect(host.querySelector("[data-rail-menu-voice-companion]")!.textContent).toBe(translate("en", "voiceCompanion.settings.label"));
+  await click(host.querySelector("[data-rail-menu-voice-companion]"));
+  window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open);
+  expect([opened, closed]).toEqual([1, 1]);
+});
+
+test("phone: Voice Delegatus is reachable through Settings and closes the sheet", async () => {
+  dom.innerWidth = 390;
+  let opened = 0;
+  let closed = 0;
+  const open = () => { opened += 1; };
+  window.addEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open);
+  try {
+    const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
+    await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => { closed += 1; }} />);
+    await click(document.querySelector('[data-mobile2-menu-row="settings"]'));
+    const row = document.querySelector('[data-mobile2-menu-row="voice-companion"]')!;
+    expect(row.textContent).toBe(translate("en", "voiceCompanion.settings.label"));
+    await click(row);
+    expect([opened, closed]).toEqual([1, 1]);
+  } finally { window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open); }
+});
+
 test("Help and learning opens in place under its own row", async () => {
   const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
   const help = host.querySelector("[data-rail-menu-help]")!;
@@ -122,7 +153,7 @@ test("the overview has no project: Settings carries no memory state and its page
   const host = await mount(<HeaderMenuPanel project={null} onClose={() => {}} />);
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.querySelector("[data-memory-state]")).toBeNull();
-  expect(settings.textContent).toContain("8");
+  expect(settings.textContent).toContain("9");
   await click(settings);
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
   expect(host.querySelector("[data-rail-menu-key]")).not.toBeNull();
@@ -152,7 +183,7 @@ test("phone: create cells, the board's rows, the header's cells and rows, and th
   await click(sheet.querySelector("[data-mobile2-menu-row='back']"));
   await click(sheet.querySelector("[data-mobile2-menu-row='settings']"));
   const page = [...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
-  expect(page).toEqual(["back", "memory", "key", "agent-mapping", "dictation", "linked-settings", "external-relay", "ping"]);
+  expect(page).toEqual(["back", "memory", "key", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping"]);
   expect(sheet.textContent).toContain(translate("en", "mobile2.menu.sound"));
   await click(sheet.querySelector("[data-mobile2-menu-row='memory']"));
   expect(sheet.querySelector("[data-memory-page]")).not.toBeNull();

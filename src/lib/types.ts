@@ -398,6 +398,7 @@ export interface FileEntry {
 }
 
 export interface StuckDelivery {
+  origin?: import("@/lib/runtime/messageOrigin").MessageOrigin;
   /** Immutable reservation admission time. */
   since: string;
   attempts: number;
@@ -444,6 +445,9 @@ export interface ProjectCatalogEntry {
   smt: number;
   /** Lightweight count from the full candidate scan. */
   conversations: number;
+  /** Conversations the recent file set does not carry are still current (a
+      relay service's chats): the sidebar draws the entry at full contrast. */
+  recent?: boolean;
 }
 
 export interface FilesResponse {
@@ -879,6 +883,12 @@ export type ResourcesViewerUnavailable = "not-the-viewer" | "measurement-failed"
 
 /** GET /api/resources response. `system` is null when no platform probe worked. */
 export interface ResourcesPayload {
+  /** Free space on the volumes Delegatus writes to, and the open pressure episode. */
+  diskPressure?: import("./state/diskPressure").DiskPressure;
+  /** The last worktree sweep, counts and bytes per reason. */
+  worktreeSweep?: ReturnType<typeof import("./pipelines/worktreeSweep").worktreeSweepStatus>;
+  /** Temp cleanup's Git and inspection holds, with counts and bytes. */
+  tempSweep?: ReturnType<typeof import("./tempSweep").tempSweepStatus>;
   system: ResourcesSystem | null;
   sessions: ResourceSession[];
   /** When the session table was captured. The system block carries its own

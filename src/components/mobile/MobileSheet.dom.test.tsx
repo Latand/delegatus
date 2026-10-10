@@ -221,6 +221,8 @@ test("a fullscreen sheet has no handle and never drags", () => {
   expect(host.querySelector("[data-mobile2-grab]")).toBeNull();
   const dialog = host.querySelector('[data-mobile2-sheet="rotate"]') as unknown as HTMLElement;
   expect(dialog.className).toContain("h-full");
+  /* The body takes the height left over, so the footer stands at the screen's foot. */
+  expect((host.querySelector("[data-mobile2-sheet-body]") as unknown as HTMLElement).className.split(" ")).toContain("flex-1");
   const header = host.querySelector("[data-mobile2-sheet-header]") as unknown as HTMLElement;
   flushSync(() => header.dispatchEvent(pointer("pointerdown", 100)));
   flushSync(() => header.dispatchEvent(pointer("pointermove", 400)));

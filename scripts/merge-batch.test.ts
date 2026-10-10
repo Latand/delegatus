@@ -1,13 +1,14 @@
 import { expect, test, afterAll, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, chmodSync, copyFileSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, chmodSync, copyFileSync, symlinkSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
-import { report, attributeBatchTests, compareBatchTests, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
+import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
+import { isolatedEnvironment } from "./local-gate";
 import * as merger from "./merge-batch";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
@@ -17,8 +18,8 @@ const recorded = (failures: TestSite[] = [], passed: TestSite[] = []): TestRun =
 
 test("batch comparison permits pre-existing failures and judges new tests on the candidate", () => {
   const existing = site("existing"), added = site("added"), newFile = site("new file", "added.test.ts");
-  expect(compareBatchTests(recorded([existing]), recorded([existing]))).toEqual({ preExisting: [existing], introduced: [] });
-  expect(compareBatchTests(recorded([existing]), recorded([added, newFile]))).toEqual({ preExisting: [], introduced: [added, newFile] });
+  expect(compareBatchTests(recorded([existing]), recorded([existing]))).toEqual({ preExisting: [existing], introduced: [], uncompared: [] });
+  expect(compareBatchTests(recorded([existing]), recorded([added, newFile]))).toEqual({ preExisting: [], introduced: [added, newFile], uncompared: [] });
 });
 
 test("recorded batch results name one culprit among three after bounded confirmation", async () => {
@@ -89,25 +90,78 @@ test("late discoveries exhaust a bounded confirmation budget and cannot approve"
   expect(runs).toBe(MAX_TEST_CONFIRMATION_RUNS);
 });
 
-test("between-test errors discovered during confirmation remain hard failures", async () => {
-  const failure = site("initial"), error: TestSite = { ...site("load error"), kind: "error" };
-  await expect(attributeBatchTests(recorded(), recorded([failure]), [12], async () => recorded([error], [failure]),
-    async () => { throw new Error("must not attribute"); })).rejects.toThrow("between-test error");
+test("a between-test error first seen during confirmation is confirmed and attributed like a failing case", async () => {
+  const failure = site("initial"), error = fileFault("example.test.ts", "<between-tests error> Error: late");
+  const decision = await attributeBatchTests(recorded([], [failure]), recorded([failure]), [12, 13],
+    async () => recorded([failure, error]), async removed => removed.includes(13) ? recorded([], [failure]) : recorded([failure, error]));
+  expect(decision.attributed.map(entry => [entry.test.kind, entry.prs])).toEqual([["test", [13]], ["error", [13]]]);
 });
 
 test("a failure without clearing removal evidence holds the batch", async () => {
   const failure = site("new feature", "feature.test.ts");
   await expect(attributeBatchTests(recorded(), recorded([failure]), [12, 13, 14],
     async () => recorded([failure]), async () => recorded([failure])))
-    .rejects.toThrow("Cannot establish attribution for feature.test.ts > suite > new feature");
+    .rejects.toThrow("Cannot establish attribution for feature.test.ts > suite > new feature; detectors retained; batch not gated"
+      + " (rule: no removal clears it and it is no stale reviewed detector, so nothing narrows it to a PR)");
 });
 
-test("between-test errors and missing confirmation tests remain hard failures", async () => {
-  const failure = site("failure"), error: TestSite = { ...site("load error"), kind: "error" };
-  expect(() => compareBatchTests(recorded([error]), recorded([failure]))).toThrow("baseline: between-test error");
-  expect(() => compareBatchTests(recorded(), recorded([error]))).toThrow("candidate: between-test error");
+test("a stale detector's failure no removal clears is classified stale; a genuine one still holds the batch", async () => {
+  const old = site("old assertion", "limit.test.ts"), genuine = site("new feature", "feature.test.ts");
+  const calls: number[][] = [];
+  const stale = (test: TestSite) => test.file === "limit.test.ts" ? { pr: 12, reason: "stale reviewed detector: limit.test.ts" } : undefined;
+  const decision = await attributeBatchTests(recorded(), recorded([old]), [12, 13], async () => recorded([old]),
+    async removed => { calls.push(removed); return recorded([old]); }, undefined, stale);
+  expect(decision.attributed).toEqual([]);
+  expect(decision.stale!.map(entry => [entry.test, entry.prs, entry.reason])).toEqual([[old, [12], "stale reviewed detector: limit.test.ts"]]);
+  expect(decision.stale![0]!.removals.map(sample => [sample.removed, sample.outcome])).toEqual([[[12], "fail"], [[13], "fail"], [[12, 13], "fail"]]);
+  // One all-removed control serves every failure no single removal clears.
+  expect(calls).toEqual([[12], [13], [12, 13]]);
+  await expect(attributeBatchTests(recorded(), recorded([old, genuine]), [12, 13], async () => recorded([old, genuine]),
+    async () => recorded([old, genuine]), undefined, stale)).rejects.toThrow("Cannot establish attribution for feature.test.ts > suite > new feature;");
+});
+
+test("(a) native main's own file faults and failures are pre-existing; the same fault on a clean main file is new", async () => {
+  const assertion = site("fails on main"), mainError = fileFault("example.test.ts", "<between-tests error> Error: page closed");
+  const candidateError = fileFault("example.test.ts", "<between-tests error> waitFor: Target page, context or browser has been closed");
+  expect(compareBatchTests(recorded([assertion, mainError]), recorded([assertion, candidateError])))
+    .toEqual({ preExisting: [assertion, candidateError], introduced: [], uncompared: [] });
+  expect(compareBatchTests(recorded([], [assertion]), recorded([candidateError])).introduced).toEqual([candidateError]);
+  // Missing confirmations are no passing evidence: attribution cannot be proven.
+  const failure = site("failure");
   await expect(attributeBatchTests(recorded(), recorded([failure]), [12], async () => recorded(),
-    async () => recorded())).rejects.toThrow("incomplete test file");
+    async () => recorded())).rejects.toThrow("Cannot establish attribution");
+});
+
+test("(a) a file native main cannot complete is compared only on the cases both sides completed", async () => {
+  const incomplete = fileFault("browser.test.ts", INCOMPLETE_FILE), unreported = site("unreported on main", "browser.test.ts");
+  // `passed` stands for what main's rerun of the named cases reported.
+  const salvaged = site("main passed", "browser.test.ts"), candidateFault = fileFault("browser.test.ts", INCOMPLETE_FILE);
+  const base = { ...recorded([incomplete], [salvaged]), completed: [] };
+  const candidate = recorded([unreported, salvaged, candidateFault]);
+  expect(compareBatchTests(base, candidate)).toEqual({ preExisting: [candidateFault], introduced: [salvaged], uncompared: [unreported] });
+  const decision = await attributeBatchTests(base, recorded([unreported, candidateFault]), [12],
+    async () => { throw new Error("nothing new to confirm"); }, async () => { throw new Error("must not attribute"); });
+  expect(decision).toEqual({ preExisting: [candidateFault], intermittent: [], attributed: [], uncompared: [unreported] });
+});
+
+test("(a)(c) native main's named cases rerun alone when its file aborts, and decide the comparison", async () => {
+  const incomplete = fileFault("value.test.ts", INCOMPLETE_FILE);
+  const shared = site("shared invariant", "value.test.ts"), mainRed = site("red on main", "value.test.ts"), candidateOnly = site("new case", "value.test.ts");
+  const base = { ...recorded([incomplete]), completed: [] };
+  const probes: TestSite[][] = [], removals: TestSite[][] = [];
+  const decision = await attributeBatchTests(base, recorded([shared, mainRed, candidateOnly]), [12, 13],
+    async () => recorded([shared, mainRed, candidateOnly]),
+    async (removed, _files, focus) => {
+      removals.push(focus);
+      // Removing #13 restores main's abort: only the named case reports.
+      return removed.includes(13) ? { ...recorded([incomplete], [shared]), completed: [] } : recorded([shared, mainRed, candidateOnly]);
+    },
+    async sites => { probes.push(sites); return { ...recorded([mainRed], [shared]), completed: [] }; });
+  expect(probes).toEqual([[shared, mainRed, candidateOnly]]);
+  expect(removals).toEqual([[shared], [shared]]);
+  expect(decision.preExisting).toEqual([mainRed]);
+  expect(decision.uncompared).toEqual([candidateOnly]);
+  expect(decision.attributed.map(entry => [entry.test.name, entry.prs, entry.reason])).toEqual([["shared invariant", [13], "test regression"]]);
 });
 
 const octoberSixFailures: TestSite[] = [
@@ -164,7 +218,7 @@ function testResult(file: string, failures: string[] = [], passed: string[] = ["
     ${cases.map(test => `<testcase file="${escape(file)}" classname="suite" name="${escape(test.name)}">${test.failed ? '<failure message="assertion"/>' : ""}</testcase>`).join("")}</testsuites>` };
 }
 function successfulCommand(args: string[]) {
-  return args[1] === "bun" && args[2] === "test" ? testResult(args[3]!.replace(/^\.\//, "")) : { code: 0, output: "" };
+  return args[2] === "bun" && args[3] === "test" ? testResult(args[4]!.replace(/^\.\//, "")) : { code: 0, output: "" };
 }
 
 function fixture() {
@@ -240,8 +294,8 @@ test("merger lints baseline commits without the helper and upgrades persisted ol
   f.seed("eslint.config.mjs", 'export default [{ rules: { "no-unused-vars": "error" } }];\n');
   f.seed("example.js", "function example() { const old = 1; } example();\n");
   const head = f.addPr(12, "example.js", "\nfunction example() { const old = 1; } example();\n");
-  const runner: CommandRunner = async (cwd, args, env) => args[2]?.endsWith("eslint-changes.ts")
-    ? commandRunner(cwd, args.slice(1), env) : { code: 0, output: "" };
+  const runner: CommandRunner = async (cwd, args, env) => args[3]?.endsWith("eslint-changes.ts")
+    ? commandRunner(cwd, args.slice(2), env) : { code: 0, output: "" };
   const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
   const state = await batch.build(`12@${head}`);
   const lint = localGateCommands(state.work, state.base).find(gate => gate.id === "eslint")!;
@@ -286,9 +340,12 @@ test("a type-check gate that cannot run stops the batch without accusing a PR", 
   const a = f.addPr(12, "a.txt", "good");
   const bad = f.addPr(13, "bad.txt", "bad");
   const c = f.addPr(14, "c.txt", "good");
-  const runner: CommandRunner = async (cwd, args) => ({
-    code: args[1] === "bunx" && args[2] === "tsc" && existsSync(join(cwd, "bad.txt")) ? 1 : 0, output: "",
-  });
+  const runner: CommandRunner = async (cwd, args, env) => {
+    if (args[0] === "git" && args[1] === "bisect") {
+      return commandRunner(cwd, ["git", "bisect", "run", "node", "-e", "process.exit(require('node:fs').existsSync('bad.txt') ? 1 : 0)"], env);
+    }
+    return { code: args[2] === "bunx" && args[3] === "tsc" && existsSync(join(cwd, "bad.txt")) ? 1 : 0, output: "" };
+  };
   const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
   await batch.build(`12@${a},13@${bad},14@${c}`);
   await expect(batch.gate()).rejects.toThrow("tsc gate cannot run");
@@ -304,8 +361,8 @@ test("batch gate samples fresh native main for every candidate after removal", a
   const c = f.addPr(14, "existing.test.ts", "candidate test version");
   let baselineRuns = 0, validatedRemainder = false;
   const runner: CommandRunner = async (cwd, args) => {
-    if (args[1] === "bun" && args[2] === "test") {
-      const file = args[3]!.replace(/^\.\//, "");
+    if (args[2] === "bun" && args[3] === "test") {
+      const file = args[4]!.replace(/^\.\//, "");
       const native = readFileSync(join(cwd, file), "utf8") === "baseline test version";
       if (native) baselineRuns++;
       else if (!existsSync(join(cwd, "bad.txt"))) validatedRemainder = true;
@@ -329,7 +386,7 @@ test("a hard gate refusal invalidates a previously gated tip", async () => {
   const f = fixture();
   const head = f.addPr(12, "healthy.txt", "healthy");
   let broken = false;
-  const runner: CommandRunner = async (_cwd, args) => broken && args[1] === "bunx"
+  const runner: CommandRunner = async (_cwd, args) => broken && args[2] === "bunx"
     ? { code: 1, output: "type checker unavailable" } : successfulCommand(args);
   const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
   await batch.build(`12@${head}`);
@@ -346,8 +403,8 @@ test("full batch gate withholds a regression discovered while the initial failur
   const culprit = f.addPr(13, "bad.ts", "regression");
   let candidateRuns = 0;
   const runner: CommandRunner = async (cwd, args) => {
-    if (args[1] === "bun" && args[2] === "test") {
-      const file = args[3]!.replace(/^\.\//, "");
+    if (args[2] === "bun" && args[3] === "test") {
+      const file = args[4]!.replace(/^\.\//, "");
       if (!existsSync(join(cwd, "bad.ts"))) return testResult(file, [], ["A", "B"]);
       if (++candidateRuns === 1) return testResult(file, ["A"], []);
       return testResult(file, ["B"], ["A"]);
@@ -366,6 +423,103 @@ test("full batch gate withholds a regression discovered while the initial failur
   expect(existsSync(join(state.work, "bad.ts"))).toBeFalse();
 }, 30_000);
 
+function betweenTestError(result: ReturnType<typeof testResult>, message: string) {
+  return { ...result, code: 1, output: `# Unhandled error between tests\n-------------------------------\nerror: ${message}\n-------------------------------\n 1 error\n` };
+}
+
+test("(a)(c)(d) main's own red never stops the batch; a newly broken case drops only its PR; gates run one at a time through gate-slot.sh", async () => {
+  const f = fixture();
+  f.seed("board.ts", "export const board = 1;\n");
+  f.seed("board.test.ts", "native board detector");
+  f.seed("panel.ts", "export const panel = 1;\n");
+  f.seed("panel.test.ts", "native panel detector");
+  const healthy = f.addPr(12, "board.ts", "export const board = 2;\n");
+  extendPr(f, 12, { "panel.ts": "export const panel = 2;\n", "healthy.txt": "healthy" });
+  const reviewed = f.views.get(12)!.headRefOid as string;
+  const culprit = f.addPr(13, "bad.txt", "bad");
+  const other = f.addPr(14, "other.txt", "other");
+  let inFlight = 0, maxInFlight = 0;
+  const wrappers = new Set<string>(), testEnvs: NodeJS.ProcessEnv[] = [];
+  const runner: CommandRunner = async (cwd, args, env) => {
+    expect(args[0]).toBe("/bin/bash"); wrappers.add(args[1]!);
+    inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+    await Bun.sleep(1);
+    inFlight--;
+    if (args[2] !== "bun" || args[3] !== "test") return successfulCommand(args);
+    testEnvs.push(env!);
+    const file = args[4]!.replace(/^\.\//, "");
+    const main = !existsSync(join(cwd, "healthy.txt")) && !existsSync(join(cwd, "bad.txt")) && !existsSync(join(cwd, "other.txt"));
+    if (file === "panel.test.ts") {
+      // Native main's browser-backed run dies before writing its report.
+      return main ? { code: 1, output: "error: Target page, context or browser has been closed\n" }
+        : testResult(file, ["never completed on main"], ["panel"]);
+    }
+    const broken = existsSync(join(cwd, "bad.txt"));
+    return betweenTestError(testResult(file, ["main red", ...(broken ? ["regression"] : [])], broken ? [] : ["regression"]),
+      "waitFor: Target page, context or browser has been closed");
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  await batch.build(`12@${reviewed},13@${culprit},14@${other}`);
+  const state = await batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit", "clean"]);
+  expect(state.gated?.candidate.prs.map(pr => pr.number)).toEqual([12, 14]);
+  expect(state.attributionLog.map(entry => [entry.test.name, entry.prs, entry.reason])).toEqual([["regression", [13], "test regression"]]);
+  const text = report(state);
+  expect(text).toContain("Pre-existing failures (permitted):\n- board.test.ts > suite > main red\n- board.test.ts >  > <between-tests error>");
+  expect(text).toContain("Not compared (native main could not complete the file):\n- panel.test.ts > suite > never completed on main");
+  expect([...wrappers]).toEqual([GATE_SLOT]);
+  expect(maxInFlight).toBe(1);
+  for (const env of testEnvs) {
+    expect(env.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:9");
+    expect(env.HOME).toBe(join(dirname(env.LLV_STATE_DIR!), "home"));
+    expect(env.LLV_STATE_OWNER).toBeUndefined();
+  }
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(culprit);
+}, 60_000);
+
+test("(d) concurrent gate requests still run one at a time inside the slot wrapper", async () => {
+  const f = fixture();
+  const head = f.addPr(12, "a.txt", "a");
+  let inFlight = 0, maxInFlight = 0;
+  const order: string[] = [];
+  const runner: CommandRunner = async (_cwd, args) => {
+    inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+    order.push(`start ${args.at(-1)}`);
+    await Bun.sleep(5);
+    order.push(`end ${args.at(-1)}`);
+    inFlight--;
+    return { code: args.at(-1) === "first" ? 1 : 0, output: "" };
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  await batch.build(`12@${head}`);
+  const results = await Promise.all(["first", "second", "third"].map(name => batch.bisectSubject({ id: "tsc", args: ["bunx", "tsc", name] })));
+  expect(results.map(result => result.code)).toEqual([1, 0, 0]);
+  expect(maxInFlight).toBe(1);
+  expect(order).toEqual(["start first", "end first", "start second", "end second", "start third", "end third"]);
+});
+
+test("(e) full browser campaigns are opt-in and are named as skipped by default", async () => {
+  const f = fixture();
+  f.seed("kanban.browser.test.tsx", "browser driver");
+  const head = f.addPr(12, "kanban.browser.test.tsx", "browser driver with a new describe block");
+  const sampled: string[] = [];
+  const runner: CommandRunner = async (_cwd, args) => {
+    if (args[2] === "bun" && args[3] === "test") sampled.push(args[4]!);
+    return successfulCommand(args);
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  await batch.build(`12@${head}`);
+  const lean = await batch.gate({ browser: false });
+  expect(sampled).toEqual([]);
+  expect(lean.gated!.notApplicable).toEqual([{ source: "native candidate", file: "kanban.browser.test.tsx",
+    reason: "full browser campaign: opt in with gate --browser" }]);
+  expect(localGateCommands(lean.work, lean.base).some(gate => gate.id === "tests")).toBeFalse();
+  expect(localGateCommands(lean.work, lean.base, true).find(gate => gate.id === "tests")!.args).toEqual(["bun", "test", "./kanban.browser.test.tsx"]);
+  const opted = await batch.gate({ browser: true });
+  expect(opted.gated!.notApplicable).toEqual([]);
+  expect(sampled).toContain("./kanban.browser.test.tsx");
+});
+
 function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner,
   setupRun?: (data: ReturnType<typeof fixture>) => CommandRunner) {
   const f = fixture();
@@ -378,7 +532,12 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   const commands: string[][] = [];
   const defaultRun: CommandRunner = async (_cwd, args, env) => {
     commands.push(args);
-    if (env?.LLV_STATE_DIR) expect(env.LLV_STATE_DIR).toStartWith("/var/tmp/");
+    if (env?.LLV_STATE_DIR) {
+      expect(env.LLV_STATE_DIR).toStartWith("/var/tmp/");
+      expect(env.HOME).toBe(join(dirname(env.LLV_STATE_DIR), "home"));
+      expect(env.XDG_CONFIG_HOME).toBe(join(dirname(env.LLV_STATE_DIR), "xdg_config_home"));
+      expect(env.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
+    }
     return { code: 0, output: "" };
   };
   const run = runOverride ?? setupRun?.(f) ?? defaultRun;
@@ -467,7 +626,7 @@ test("one run lands healthy PRs in order and reports the unchanged culprit with 
   const f = landingFixture("green", undefined, fixture => {
     fixture.seed("check.test.ts", "native baseline");
     return async (cwd, args) => {
-      if (args[1] === "bun" && args[2] === "test") {
+      if (args[2] === "bun" && args[3] === "test") {
         return testResult("check.test.ts", existsSync(join(cwd, "bad.txt")) ? ["regression", "pre-existing"] : ["pre-existing"],
           existsSync(join(cwd, "bad.txt")) ? [] : ["regression"]);
       }
@@ -492,8 +651,8 @@ test("one run lands healthy PRs in order and reports the unchanged culprit with 
 
 for (const restored of ["assertion", "file"] as const) {
   test(`round 3 removal restores a native ${restored} and withholds both regressions before landing`, async () => {
-    const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
-      ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+    const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+      ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
     f.seed("a.js", "exports.value = 1;\n");
     f.seed("b.js", "exports.value = 1;\n");
     const aTest = "const { test, expect } = require('bun:test');\nconst a = require('./a.js');\ntest('A', () => expect(a.value).toBe(1));\n";
@@ -544,7 +703,7 @@ for (const outcome of ["regression", "pre-existing", "between-test error"] as co
         git(cwd, ["update-ref", "refs/bisect/bad", state.rows[0]!.commit]);
         return { code: 0, output: "" };
       }
-      if (args[1] === "bun" && args[2] === "test") return commandRunner(cwd, args.slice(1), env);
+      if (args[2] === "bun" && args[3] === "test") return commandRunner(cwd, args.slice(2), env);
       if (args.some(arg => arg.endsWith("/eslint-changes.ts")) && existsSync(join(cwd, "bad.js"))) return { code: 1, output: "fixture lint regression" };
       return successfulCommand(args);
     });
@@ -563,13 +722,8 @@ for (const outcome of ["regression", "pre-existing", "between-test error"] as co
     const second = f.addPr(13, "b.js", `exports.value = ${outcome === "pre-existing" ? 3 : 2};\n`);
     const healthy = f.addPr(14, "healthy.txt", "healthy");
     await f.batch.build(`12@${first},13@${second},14@${healthy}`);
-    if (outcome === "between-test error") {
-      await expect(f.batch.gate()).rejects.toThrow("between-test error");
-      expect(f.batch.read().gated).toBeNull();
-      await expect(f.batch.land()).rejects.toThrow("Run gate before land");
-      expect(f.calls.some(args => args[0] === "pr" && args[1] === "create")).toBeFalse();
-      return;
-    }
+    // A file fault main does not produce is a newly broken case: it is
+    // confirmed and drops only the PR whose removal clears it.
     const gated = await f.batch.gate();
     expect(gated.gated?.candidate.main).toBe(gated.base);
     if (outcome === "pre-existing") {
@@ -583,7 +737,7 @@ for (const outcome of ["regression", "pre-existing", "between-test error"] as co
     const landed = await f.batch.land();
     expect(landed.rows[2]!.status).toBe("merged");
     expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-12"]).split(/\s/)[0]).toBe(first);
-    if (outcome === "regression") expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(second);
+    if (outcome !== "pre-existing") expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(second);
   }, 30_000);
 }
 
@@ -591,12 +745,12 @@ for (const mode of ["green", "behind"] as const) {
   test(`native selection retains a deleted test path after a reviewed head moves (${mode})`, async () => {
     let moved = false;
     const f = landingFixture(mode, async (cwd, args, env) => {
-      if (args[1] === "bun" && args[2] === "test") {
+      if (args[2] === "bun" && args[3] === "test") {
         if (!moved && readFileSync(join(cwd, "a.js"), "utf8").includes("2")) {
           moved = true;
           f.views.get(12)!.headRefOid = f.base;
         }
-        return commandRunner(cwd, args.slice(1), env);
+        return commandRunner(cwd, args.slice(2), env);
       }
       return successfulCommand(args);
     });
@@ -633,10 +787,133 @@ for (const mode of ["green", "behind"] as const) {
   }, 60_000);
 }
 
+test("(a)(c) a case native main completes before aborting still names its culprit with the real sampler", async () => {
+  const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+    ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
+  f.seed("value.js", "exports.value = 1;\n");
+  f.seed("abort.txt", "main aborts this file\n");
+  f.seed("value.test.ts", "const { test, expect } = require('bun:test');\nconst { existsSync } = require('node:fs');\nconst { join } = require('node:path');\n"
+    + "test('shared invariant', () => expect(require('./value.js').value).toBe(1));\n"
+    + "test('main aborts', () => { if (existsSync(join(__dirname, 'abort.txt'))) process.exit(1); });\n");
+  const main = await commandRunner(f.repo, [process.execPath, "test", "./value.test.ts"]);
+  expect(main.code).toBe(1);
+  expect(main.output).not.toContain("1 pass");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  f.addPr(13, "value.js", "exports.value = 2;\n");
+  git(f.repo, ["checkout", "topic-13"]);
+  git(f.repo, ["rm", "-q", "abort.txt"]); git(f.repo, ["commit", "-m", "Stop aborting"]);
+  const regression = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "origin", `${regression}:refs/pull/13/head`, `${regression}:refs/heads/topic-13`]);
+  f.views.get(13)!.headRefOid = regression;
+  git(f.repo, ["checkout", "main"]);
+  await f.batch.build(`12@${healthy},13@${regression}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  const evidence = gated.attributionLog.find(entry => entry.test.name === "shared invariant")!;
+  expect(evidence.prs).toEqual([13]);
+  expect(evidence.confirmation).toEqual(["fail", "fail", "fail"]);
+  // Without #13 the file aborts again; the case it reached still passes.
+  expect(evidence.removals).toEqual([{ removed: [12], outcome: "fail" }, { removed: [13], outcome: "pass" }]);
+  // On the rebuilt candidate main's own abort is the only red, and pre-existing.
+  const final = gated.gated!.decisions.at(-1)!;
+  expect(final.attributed).toEqual([]);
+  expect(final.preExisting).toEqual([fileFault("value.test.ts", INCOMPLETE_FILE)]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 12 (#12)");
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(regression);
+  expect(report(landed)).toContain("#13 | culprit test regression: value.test.ts > ");
+}, 60_000);
+
+test("(a)(c) a named case main aborts on does not erase another named case's baseline with the real sampler", async () => {
+  const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+    ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
+  f.seed("value.js", "exports.value = 1;\n");
+  f.seed("value.test.ts", "const { test, expect } = require('bun:test');\nconst { value } = require('./value.js');\n"
+    + "test('shared invariant', () => expect(value).toBe(1));\n"
+    + "test('main aborts', () => { if (value === 1) process.exit(1); expect(value).toBe(1); });\n");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const regression = f.addPr(13, "value.js", "exports.value = 2;\n");
+  await f.batch.build(`12@${healthy},13@${regression}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  // Both named cases fail on the candidate; together they abort main again,
+  // so each runs alone there and the shared invariant keeps its pass.
+  const evidence = gated.attributionLog.find(entry => entry.test.name === "shared invariant")!;
+  expect(evidence.prs).toEqual([13]);
+  expect(evidence.removals).toEqual([{ removed: [12], outcome: "fail" }, { removed: [13], outcome: "pass" }]);
+  expect(gated.attributionLog.some(entry => entry.test.name === "main aborts")).toBe(false);
+  const final = gated.gated!.decisions.at(-1)!;
+  expect(final.attributed).toEqual([]);
+  expect(final.preExisting).toEqual([fileFault("value.test.ts", INCOMPLETE_FILE)]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 12 (#12)");
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(regression);
+}, 60_000);
+
+test("(a)(c) a namesake main aborts on does not erase a completed occurrence's baseline with the real sampler", async () => {
+  const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+    ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
+  f.seed("value.js", "exports.value = 1;\n");
+  f.seed("value.test.ts", "const { test, expect } = require('bun:test');\nconst { value } = require('./value.js');\n"
+    + "test('shared invariant', () => expect(value).toBe(1));\n"
+    + "test('shared invariant', () => { if (value === 1) process.exit(1); expect(value).toBe(1); });\n");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const regression = f.addPr(13, "value.js", "exports.value = 2;\n");
+  await f.batch.build(`12@${healthy},13@${regression}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  // A name filter runs both occurrences, so each runs without its namesake's
+  // body: the first keeps its pass on main, the one main aborts on stays
+  // uncompared.
+  const evidence = gated.attributionLog.filter(entry => entry.test.name === "shared invariant");
+  expect(evidence.map(entry => entry.test.occurrence)).toEqual([0]);
+  expect(evidence[0]!.prs).toEqual([13]);
+  expect(evidence[0]!.removals).toEqual([{ removed: [12], outcome: "fail" }, { removed: [13], outcome: "pass" }]);
+  const final = gated.gated!.decisions.at(-1)!;
+  expect(final.attributed).toEqual([]);
+  expect(final.preExisting).toEqual([fileFault("value.test.ts", INCOMPLETE_FILE)]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 12 (#12)");
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(regression);
+  expect(readdirSync(dirname(f.batch.stateFile)).filter(name => name.startsWith("merge-occurrence-"))).toEqual([]);
+}, 60_000);
+
+test("(a)(c) a skipped namesake does not shift the completed occurrence main runs alone with the real sampler", async () => {
+  const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+    ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
+  f.seed("value.js", "exports.value = 1;\n");
+  f.seed("value.test.ts", "const { test, expect } = require('bun:test');\nconst { value } = require('./value.js');\n"
+    + "test.skip('shared invariant', () => {});\n"
+    + "test('shared invariant', () => expect(value).toBe(1));\n"
+    + "test('shared invariant', () => { if (value === 1) process.exit(1); expect(value).toBe(1); });\n");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const regression = f.addPr(13, "value.js", "exports.value = 2;\n");
+  await f.batch.build(`12@${healthy},13@${regression}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  // JUnit numbers the skipped case 0, the preload never sees it: occurrence 1
+  // still runs alone on main and keeps its pass there.
+  const evidence = gated.attributionLog.filter(entry => entry.test.name === "shared invariant");
+  expect(evidence.map(entry => entry.test.occurrence)).toEqual([1]);
+  expect(evidence[0]!.prs).toEqual([13]);
+  expect(evidence[0]!.removals).toEqual([{ removed: [12], outcome: "fail" }, { removed: [13], outcome: "pass" }]);
+  const final = gated.gated!.decisions.at(-1)!;
+  expect(final.attributed).toEqual([]);
+  expect(final.preExisting).toEqual([fileFault("value.test.ts", INCOMPLETE_FILE)]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 12 (#12)");
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(regression);
+  expect(readdirSync(dirname(f.batch.stateFile)).filter(name => name.startsWith("merge-occurrence-"))).toEqual([]);
+}, 60_000);
+
 for (const mode of ["new", "modified"] as const) {
   test(`a healthy ${mode} feature detector retains the wrong implementation failure with real git and Bun`, async () => {
-    const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
-      ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+    const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+      ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
     f.seed("adder.js", "exports.existing = 1;\n");
     if (mode === "modified") f.seed("adder.test.ts", "const { test, expect } = require('bun:test');\ntest('double', () => expect(1).toBe(1));\n");
     const main = git(f.repo, ["rev-parse", "main"]);
@@ -674,15 +951,20 @@ function seedRealTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   copyFileSync(join(import.meta.dir, "privacy-publication-gate.ts"), join(f.repo, "scripts/privacy-publication-gate.ts"));
   copyFileSync(join(import.meta.dir, "privacy-text-preparation.ts"), join(f.repo, "scripts/privacy-text-preparation.ts"));
   copyFileSync(join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), join(f.repo, "scripts/generate-privacy-known-value-fingerprints.ts"));
+  copyFileSync(join(import.meta.dir, "privacy-text-preparation.ts"), join(f.repo, "scripts/privacy-text-preparation.ts"));
   copyFileSync(join(import.meta.dir, "privacy-known-value-fingerprints.json"), join(f.repo, "scripts/privacy-known-value-fingerprints.json"));
   copyFileSync(join(import.meta.dir, "../src/lib/environmentIsolation.ts"), join(f.repo, "src/lib/environmentIsolation.ts"));
+  mkdirSync(join(f.repo, "src", "lib", "privacy"), { recursive: true });
+  for (const file of ["canonicalText.ts", "mailbox.ts", "staticDetectors.ts"]) {
+    copyFileSync(join(import.meta.dir, "../src/lib/privacy", file), join(f.repo, "src/lib/privacy", file));
+  }
   f.seed("scripts/privacy-publication-gate.ts", readFileSync(join(f.repo, "scripts/privacy-publication-gate.ts"), "utf8"));
   symlinkSync(join(import.meta.dir, "../node_modules"), join(f.repo, "node_modules"), "dir");
 }
 
 function trustedPrivacyRunner(f: ReturnType<typeof fixture>, rejectedIdentity?: string, observed: string[] = [], candidates: string[] = []): CommandRunner {
   return async (cwd, args, env) => {
-    if (args[1] === "bun" && args[2] === "scripts/privacy-publication-gate.ts") {
+    if (args[2] === "bun" && args[3] === "scripts/privacy-publication-gate.ts") {
       observed.push(cwd);
       const candidate = args[args.indexOf("--repository") + 1]!;
       candidates.push(candidate);
@@ -702,9 +984,9 @@ function trustedPrivacyRunner(f: ReturnType<typeof fixture>, rejectedIdentity?: 
 
 function realBodyPrivacyRunner(): CommandRunner {
   return async (cwd, args, env) => {
-    if (args[1] === "bun" && args[2] === "scripts/privacy-publication-gate.ts" && args.includes("--paths")) {
+    if (args[2] === "bun" && args[3] === "scripts/privacy-publication-gate.ts" && args.includes("--paths")) {
       const result = Bun.spawnSync({
-        cmd: [process.execPath, join(cwd, args[2]!), ...args.slice(3)],
+        cmd: [process.execPath, join(cwd, args[3]!), ...args.slice(4)],
         cwd,
         env: { ...process.env, ...env },
         stderr: "pipe",
@@ -1023,14 +1305,14 @@ test("BEHIND rebuilds at most three times", async () => {
   await expect(f.batch.land()).rejects.toThrow("three times");
   expect(f.batch.read().refreshes).toBe(3);
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(0);
-});
+}, 15_000);
 
 test("main movement replaces the pinned test baseline before publication", async () => {
   const baselines: string[] = [];
   const f = landingFixture("behind", undefined, fixture => {
     fixture.seed("refresh.test.ts", "native baseline");
     return async (cwd, args) => {
-      if (args[1] === "bun" && args[2] === "test") {
+      if (args[2] === "bun" && args[3] === "test") {
         if (readFileSync(join(cwd, "refresh.test.ts"), "utf8") === "native baseline") baselines.push(git(cwd, ["rev-parse", "HEAD"]));
         return testResult("refresh.test.ts", ["pre-existing"], []);
       }
@@ -1126,8 +1408,8 @@ test("deferred resolutions run their own touched tests and block a failed resolu
   const testRuns: string[][] = [];
   let resolutionWork = "";
   const runner: CommandRunner = async (cwd, args) => {
-    if (args[1] === "bun" && args[2] === "test") {
-      const paths = args.slice(3).filter(path => /\.test\.ts$/.test(path));
+    if (args[2] === "bun" && args[3] === "test") {
+      const paths = args.slice(4).filter(path => /\.test\.ts$/.test(path));
       testRuns.push(paths);
       if (cwd === resolutionWork && paths.some((path) => path.includes("story.test.ts"))) {
         return { code: 1, output: "resolution test failed" };
@@ -1157,6 +1439,146 @@ test("deferred resolutions run their own touched tests and block a failed resolu
   expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(conflict);
 });
 
+for (const shape of ["pre-existing", "bundled-only", "file-error", "new-failure"] as const) {
+  test(`resolution native-main per-file comparison: ${shape}`, async () => {
+    const samples: { cwd: string; head: string; home: string; temp: string; state: string }[] = [];
+    const f = landingFixture("green", async (cwd, args, env) => {
+      // The gate invokes /bin/bash, GATE_SLOT, then the command. Execute the
+      // fixture tests in the enclosing test service, as the other real samplers do.
+      if (args[2] !== "bun" || args[3] !== "test") return successfulCommand(args);
+      expect(args.slice(0, 2)).toEqual(["/bin/bash", GATE_SLOT]);
+      const files = args.slice(4).filter(arg => /\.test\.ts$/.test(arg));
+      expect(files).toHaveLength(1);
+      expect(env!.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:9");
+      samples.push({ cwd, head: git(cwd, ["rev-parse", "HEAD"]), home: env!.HOME!, temp: env!.TMPDIR!, state: env!.LLV_STATE_DIR! });
+      return commandRunner(cwd, args.slice(2), env);
+    });
+    const imports = "const { test, expect, afterAll } = require('bun:test');\n";
+    const marker = imports + "globalThis.mergeBundleFixture = true;\ntest('setup', () => expect(true).toBe(true));\n";
+    const existing = shape === "pre-existing" ? ["what needs one project to write into is absent, never faked"]
+      : shape === "bundled-only" ? ["original-key payload checks"]
+      : shape === "file-error" ? Array.from({ length: 8 }, (_, i) => `switching main failure ${i}`) : [];
+    const artefacts = shape === "bundled-only" ? 8 : shape === "file-error" ? 16 : 0;
+    f.seed("story.js", "exports.value = 'first';\n");
+    f.seed("a.test.ts", marker);
+    f.seed("story.test.ts", imports
+      + (shape === "file-error" ? "afterAll(() => { if (globalThis.mergeBundleFixture) throw new Error('bundle-only file error'); });\n" : "")
+      + existing.map(name => `test(${JSON.stringify(name)}, () => expect(false).toBe(true));\n`).join("")
+      + Array.from({ length: artefacts }, (_, i) => `test('bundle-only assertion ${i}', () => expect(globalThis.mergeBundleFixture).toBeUndefined());\n`).join("")
+      + "test('resolution invariant', () => expect(require('./story.js').value).not.toBe('resolved regression'));\n");
+    f.addPr(13, "story.js", "exports.value = 'alternative';\n");
+    // Both files belong to the resolution's touched inventory.
+    git(f.repo, ["checkout", "topic-13"]);
+    writeFileSync(join(f.repo, "a.test.ts"), marker + "// Reviewed setup coverage.\n");
+    git(f.repo, ["commit", "-am", "Setup coverage"]);
+    const conflict = git(f.repo, ["rev-parse", "HEAD"]);
+    git(f.repo, ["push", "origin", `${conflict}:refs/pull/13/head`, `${conflict}:refs/heads/topic-13`]);
+    f.views.get(13)!.headRefOid = conflict;
+    f.seed("story.js", "exports.value = 'accepted';\n");
+    const clean = f.addPr(12, "healthy.txt", "healthy\n");
+    await f.batch.build(`12@${clean},13@${conflict}`);
+    await f.batch.gate(); await f.batch.land();
+    const state = await f.batch.resolve(13), work = state.resolving!.work;
+    const main = state.resolving!.main;
+    expect(main).not.toBe(state.base); // Landing moved main after the batch baseline.
+    writeFileSync(join(work, "story.js"), `exports.value = '${shape === "new-failure" ? "resolved regression" : "resolved"}';\n`);
+    git(work, ["add", "story.js"]);
+    if (artefacts) {
+      const sandbox = join(f.root, "bundled-control");
+      const env = { ...isolatedEnvironment(sandbox, process.env), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9" };
+      const bundled = await commandRunner(work, ["bun", "test", "./a.test.ts", "./story.test.ts"], env);
+      expect(bundled.code).not.toBe(0);
+      expect(bundled.output).toContain(shape === "file-error" ? "bundle-only file error" : "bundle-only assertion");
+    }
+    samples.length = 0;
+    if (shape === "new-failure") {
+      await expect(f.batch.resolve(13)).rejects.toThrow("Resolution failed tests; no branch pushed");
+    } else await f.batch.resolve(13);
+    const result = f.batch.read(), row = result.rows[1]!, receipt = row.resolutionTests!;
+    expect(receipt.main).toBe(main);
+    expect(receipt.tip).toBe(row.resolution!);
+    expect(receipt.files).toEqual(["a.test.ts", "story.test.ts"]);
+    expect(samples.filter(sample => sample.cwd !== work)).toHaveLength(2);
+    expect(new Set(samples.filter(sample => sample.cwd !== work).map(sample => sample.head))).toEqual(new Set([main]));
+    expect(new Set(samples.map(sample => sample.home)).size).toBe(samples.length);
+    expect(new Set(samples.map(sample => sample.temp)).size).toBe(samples.length);
+    expect(new Set(samples.map(sample => sample.state)).size).toBe(samples.length);
+    expect(receipt.decision.preExisting.map(site => site.name)).toEqual(existing);
+    expect(receipt.decision.uncompared).toEqual([]);
+    const summary = report(result);
+    expect(summary).toContain(`Resolution #13: ${row.resolution}; native main ${main}; per-file comparison:`);
+    for (const name of existing) expect(summary).toContain(name);
+    if (shape === "new-failure") {
+      expect(row.status).toBe("deferred");
+      expect(receipt.confirmed.map(entry => [entry.test.name, entry.confirmation]))
+        .toEqual([["resolution invariant", ["fail", "fail", "fail"]]]);
+      expect(summary).toContain("New resolution failures (publication withheld):\n- story.test.ts");
+      expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(conflict);
+      // A repair samples main again and replaces the failed attempt's receipt.
+      samples.length = 0;
+      writeFileSync(join(work, "story.js"), "exports.value = 'resolved';\n");
+      git(work, ["add", "story.js"]);
+      const repaired = await f.batch.resolve(13), repairedRow = repaired.rows[1]!;
+      expect(repairedRow.status).toBe("needs-review");
+      expect(repairedRow.resolution).not.toBe(row.resolution);
+      expect(repairedRow.resolutionTests!.tip).toBe(repairedRow.resolution!);
+      expect(repairedRow.resolutionTests!.confirmed).toEqual([]);
+      expect(samples.filter(sample => sample.cwd !== work)).toHaveLength(2);
+      expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(repairedRow.resolution!);
+    } else {
+      expect(row.status).toBe("needs-review");
+      expect(receipt.confirmed).toEqual([]);
+      expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(row.resolution!);
+      expect(summary).not.toContain("bundle-only file error");
+      expect(summary).not.toContain("bundle-only assertion");
+    }
+  }, 60_000);
+}
+
+for (const mainCase of ["absent", "unreported", "skipped"] as const) {
+  test(`resolution withholds a failing case in native main's incomplete file (${mainCase})`, async () => {
+    const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+      ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
+    const imports = "const { test, expect } = require('bun:test');\n";
+    f.seed("story.js", "exports.value = 'first';\n");
+    f.seed("story.test.ts", imports + (mainCase === "unreported"
+      ? "test('new resolution assertion', () => process.exit(1));\n"
+      : "test('main abort', () => process.exit(1));\n"
+        + (mainCase === "skipped" ? "test.skip('new resolution assertion', () => expect(false).toBe(true));\n" : "")));
+    f.addPr(13, "story.js", "exports.value = 'alternative';\n");
+    git(f.repo, ["checkout", "topic-13"]);
+    writeFileSync(join(f.repo, "story.test.ts"), imports + "test('new resolution assertion', () => expect(false).toBe(true));\n");
+    git(f.repo, ["commit", "-am", "New resolution assertion"]);
+    const conflict = git(f.repo, ["rev-parse", "HEAD"]);
+    git(f.repo, ["push", "origin", `${conflict}:refs/pull/13/head`, `${conflict}:refs/heads/topic-13`]);
+    f.views.get(13)!.headRefOid = conflict;
+    f.seed("story.js", "exports.value = 'accepted';\n");
+    const clean = f.addPr(12, "healthy.txt", "healthy\n");
+    await f.batch.build(`12@${clean},13@${conflict}`);
+    await f.batch.gate(); await f.batch.land();
+    const state = await f.batch.resolve(13), work = state.resolving!.work;
+    writeFileSync(join(work, "story.js"), "exports.value = 'resolved';\n");
+    git(work, ["add", "story.js"]);
+
+    await expect(f.batch.resolve(13)).rejects.toThrow(mainCase === "absent"
+      ? "Resolution failed tests; no branch pushed" : "Resolution test comparison incomplete; no branch pushed");
+    const result = f.batch.read(), row = result.rows[1]!, receipt = row.resolutionTests!;
+    expect(row.status).toBe("deferred");
+    expect(receipt.main).toBe(state.resolving!.main);
+    if (mainCase === "absent") {
+      expect(receipt.decision.uncompared).toEqual([]);
+      expect(receipt.confirmed.map(entry => [entry.test.name, entry.confirmation]))
+        .toEqual([["new resolution assertion", ["fail", "fail", "fail"]]]);
+      expect(report(result)).toContain("New resolution failures (publication withheld):\n- story.test.ts");
+    } else {
+      expect(receipt.decision.uncompared!.map(site => site.name)).toEqual(["new resolution assertion"]);
+      expect(receipt.confirmed).toEqual([]);
+      expect(report(result)).toContain("Unresolved resolution failures (publication withheld):\n- story.test.ts");
+    }
+    expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(conflict);
+  }, 60_000);
+}
+
 test("PR removal keeps the reviewed regression test when its author is healthy", async () => {
   const f = fixture();
   f.seed("adder.js", "exports.add = (a, b) => a + b;\n");
@@ -1171,8 +1593,8 @@ test("PR removal keeps the reviewed regression test when its author is healthy",
     if (args[0] === "git" && args[1] === "bisect") {
       return commandRunner(cwd, args, env);
     }
-    if (args[1] === "bun" && args[2] === "test") {
-      return commandRunner(cwd, args.slice(1), env);
+    if (args[2] === "bun" && args[3] === "test") {
+      return commandRunner(cwd, args.slice(2), env);
     }
     return { code: 0, output: "" };
   };
@@ -1186,8 +1608,8 @@ test("PR removal keeps the reviewed regression test when its author is healthy",
   expect(built.gated).toBeNull();
 });
 
-const realTests: CommandRunner = async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
-  ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args);
+const realTests: CommandRunner = async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+  ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args);
 
 test("a Bun preload retains a literal detector and refuses publication without proven attribution", async () => {
   const f = landingFixture("green", realTests);
@@ -1200,7 +1622,7 @@ test("a Bun preload retains a literal detector and refuses publication without p
   const contents = "const { test, expect } = require('bun:test');\ntest('feature invariant', () => expect(1).toBe(1));\n";
   const detector = f.addPr(14, "feature.test.ts", contents);
   await f.batch.build(`12@${implementation},14@${detector}`);
-  await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for feature\.test\.ts > .* > feature invariant; detectors retained; batch not gated/);
+  await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for feature\.test\.ts > .* > feature invariant; detectors retained; batch not gated \(rule: no removal clears it and it is no stale reviewed detector/);
   const state = f.batch.read();
   expect(state.gated).toBeNull();
   expect(state.rows.map(row => row.status)).toEqual(["clean", "clean"]);
@@ -1218,6 +1640,56 @@ test("a Bun preload retains a literal detector and refuses publication without p
     expect(git(f.repo, ["ls-remote", "origin", `refs/heads/topic-${number}`]).split(/\s/)[0]).toBe(head);
   }
 }, 30_000);
+
+const limitTest = (expected: number, extra = "") => "const { test, expect } = require('bun:test');\n"
+  + `const { limit } = require('./limit.js');\ntest('limit', () => expect(limit).toBe(${expected}));\n// one\n// two\n// three\n${extra}`;
+
+test("an older PR tree's stale copy of a test file main changed defers only that PR and the rest lands", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  // Branched before main changed the module and its test; it touches neither.
+  const older = f.addPr(12, "older.txt", "older");
+  f.seed("limit.js", "exports.limit = 2;\n");
+  f.seed("limit.test.ts", limitTest(2));
+  const changed = git(f.repo, ["rev-parse", "main"]);
+  const newer = f.addPr(13, "limit.test.ts", limitTest(2, "test('limit is positive', () => expect(limit > 0).toBe(true));\n"));
+  const healthy = f.addPr(14, "healthy.txt", "healthy");
+  await f.batch.build(`12@${older},13@${newer},14@${healthy}`);
+  const gated = await f.batch.gate();
+  const reason = `stale reviewed detector: branch predates ${changed.slice(0, 12)} that changed limit.test.ts; merge main into the branch`;
+  expect(gated.rows.map(row => [row.number, row.status, row.detail])).toEqual([[12, "deferred", reason], [13, "clean", ""], [14, "clean", ""]]);
+  expect(gated.gated!.candidate.prs.map(pr => pr.number)).toEqual([13, 14]);
+  expect(gated.attributionLog.map(entry => [entry.test.name, entry.prs, entry.reason, entry.stale])).toEqual([["limit", [12], reason, true]]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["deferred", "merged", "merged"]);
+  expect(git(f.repo, ["log", "--reverse", "--format=%s", `${landed.base}..HEAD`]).split("\n")).toEqual(["Feature 13 (#13)", "Feature 14 (#14)"]);
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-12"]).split(/\s/)[0]).toBe(older);
+  const summary = report(landed);
+  expect(summary).toContain(`| #12 | needs-review pending resolution (${reason}) |`);
+  expect(summary).toContain("Stale reviewed detectors (rule: the PR did not change the file and main changed it after the PR's base; only that PR is deferred):\n"
+    + `- #12: ${reason}: limit.test.ts > `);
+  expect(summary).toContain("Attributed failures (rule: a removal clears them; only the PRs it narrows to are held):");
+}, 60_000);
+
+test("a PR that changed the same main-changed test file keeps today's unattributable stop", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  // The PR's own reviewed copy carries its added case and main's old assertion.
+  const own = f.addPr(12, "limit.test.ts", limitTest(1, "test('limit is set', () => expect(limit).toBeDefined());\n"));
+  f.seed("limit.js", "exports.limit = 2;\n");
+  f.seed("limit.test.ts", limitTest(2));
+  const healthy = f.addPr(14, "healthy.txt", "healthy");
+  await f.batch.build(`12@${own},14@${healthy}`);
+  expect(f.batch.read().rows.map(row => row.status)).toEqual(["clean", "clean"]);
+  await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for limit\.test\.ts > .* > limit; detectors retained; batch not gated \(rule: no removal clears it and it is no stale reviewed detector/);
+  const state = f.batch.read();
+  expect(state.gated).toBeNull();
+  expect(state.rows.map(row => [row.status, row.detail])).toEqual([["clean", ""], ["clean", ""]]);
+  expect(state.attributionLog).toEqual([]);
+  expect(f.calls.some(args => args[0] === "pr" && ["create", "merge", "close"].includes(args[1]!))).toBeFalse();
+}, 60_000);
 
 function extendPr(f: ReturnType<typeof fixture>, number: number, changes: Record<string, string | null>): string {
   git(f.repo, ["checkout", `topic-${number}`]);
@@ -1268,7 +1740,7 @@ function unchangedCulprit(f: ReturnType<typeof landingFixture>, number: number, 
 test("round 1 landing confirms a newly discovered failure before publishing a fresh remainder", async () => {
   let runs = 0;
   const f = landingFixture("green", async (cwd, args, env) => {
-    if (args[1] === "bun" && args[2] === "test") {
+    if (args[2] === "bun" && args[3] === "test") {
       const bad = existsSync(join(cwd, "check.js"));
       return realTests(cwd, args, { ...(env ?? process.env), SAMPLE: bad && ++runs === 1 ? "first" : "later" });
     }
@@ -1308,7 +1780,7 @@ test("round 2 landing retains a healthy new feature detector through native abse
   await reviewedDetectorsGreen(f, [feature, bad, detector, healthy]);
 }, 30_000);
 
-test("round 4 main refresh revalidates a withheld reviewed detector before any new publication", async () => {
+test("(b) round 4 main refresh skips a withheld PR's reviewed detector with a note and lands the rest", async () => {
   const f = landingFixture("green", realTests);
   f.seed("config.js", "exports.adjust = x => x;\n");
   f.seed("b.js", "const { adjust } = require('./config.js');\nexports.value = adjust(1);\n");
@@ -1326,8 +1798,9 @@ test("round 4 main refresh revalidates a withheld reviewed detector before any n
     }
     if (args[0] === "pr" && args[1] === "edit") {
       const state = batch.read();
-      expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([14]);
-      expect(state.attributionLog.some(entry => entry.prs.includes(13) && entry.test.file === "b.test.ts")).toBeTrue();
+      expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([13, 14]);
+      expect(state.gated!.notApplicable).toEqual([{ source: `#12@${detector}`, file: "b.test.ts",
+        reason: "#12 is not in this candidate; its reviewed detector is skipped" }]);
     }
     return f.batch.gh(args);
   };
@@ -1335,12 +1808,10 @@ test("round 4 main refresh revalidates a withheld reviewed detector before any n
   await batch.build(`12@${detector},13@${bad},14@${healthy}`);
   await batch.gate();
   const state = await batch.land();
-  expect(state.rows.map(row => row.status)).toEqual(["head-moved", "culprit", "merged"]);
+  expect(state.rows.map(row => row.status)).toEqual(["head-moved", "merged", "merged"]);
   expect(state.rows[0]!.head).toBe(detector);
-  unchangedCulprit(f, 13, bad);
-  expect(state.attributionLog[0]!.candidate.main).toBe(state.base);
-  expect(state.attributionLog[0]!.confirmation).toEqual(["fail", "fail", "fail"]);
-  await reviewedDetectorsGreen(f, [detector, bad, healthy]);
+  expect(state.attributionLog).toEqual([]);
+  expect(report(state)).toContain(`Skipped test files:\n- #12@${detector}: b.test.ts: #12 is not in this candidate`);
 }, 30_000);
 
 test("reviewed patch scope survives main incorporating and then deleting its detector", async () => {
@@ -1369,12 +1840,11 @@ test("reviewed patch scope survives main incorporating and then deleting its det
   const originalBase = batch.read().rows[0]!.reviewBase;
   await batch.gate();
   const state = await batch.land();
-  expect(state.rows.map(row => row.status)).toEqual(["head-moved", "culprit", "merged"]);
+  // The withheld PR's detector stays in scope and is named as skipped.
+  expect(state.rows.map(row => row.status)).toEqual(["head-moved", "merged", "merged"]);
   expect(state.rows[0]!.reviewBase).toBe(originalBase);
   expect(git(f.repo, ["merge-base", state.base, detector])).toBe(detector);
-  expect(state.attributionLog[0]!.test.file).toBe("reviewed.test.ts");
-  unchangedCulprit(f, 13, bad);
-  await reviewedDetectorsGreen(f, [detector, bad, healthy]);
+  expect(state.gated!.notApplicable.map(entry => [entry.source, entry.file])).toEqual([[`#12@${detector}`, "reviewed.test.ts"]]);
 }, 30_000);
 
 test("random event sequences publish only the last fully validated candidate tuple", async () => {
@@ -1392,7 +1862,7 @@ test("random event sequences publish only the last fully validated candidate tup
     const f = landingFixture("green", async (cwd, args) => {
       const state = batch.read();
       if (cwd === state.work || args.includes("--paths")) event();
-      if (args[1] === "bun" && args[2] === "test") {
+      if (args[2] === "bun" && args[3] === "test") {
         const fails = failureFound && existsSync(join(cwd, "property.js"));
         return testResult("property.test.ts", fails ? ["regression"] : [], fails ? [] : ["regression"]);
       }
@@ -1446,10 +1916,10 @@ test("random event sequences publish only the last fully validated candidate tup
   expect(totals.validations).toBeGreaterThanOrEqual(12);
 }, 120_000);
 
-test("a withheld reviewed detector reports its missing reviewed module as not applicable", async () => {
+test("(b) a withheld reviewed detector with a missing module is skipped with a note", async () => {
   let moved = false;
   const f = landingFixture("green", async (cwd, args, env) => {
-    if (!moved && args[1] === "bun" && args[2] === "test") {
+    if (!moved && args[2] === "bun" && args[3] === "test") {
       moved = true; f.views.get(12)!.headRefOid = f.base;
     }
     return realTests(cwd, args, env);
@@ -1461,26 +1931,31 @@ test("a withheld reviewed detector reports its missing reviewed module as not ap
   await f.batch.build(`12@${reviewed},13@${healthy}`);
   const gated = await f.batch.gate();
   expect(gated.gated!.notApplicable).toEqual([{ source: `#12@${reviewed}`, file: "feature.test.ts",
-    reason: "reviewed detector cannot load without withheld PR code (missing module)" }]);
-  expect(report(gated)).toContain("Not applicable reviewed detectors:");
+    reason: "#12 is not in this candidate; its reviewed detector is skipped" }]);
+  expect(report(gated)).toContain("Skipped test files:");
   const state = await f.batch.land();
   expect(state.rows.map(row => row.status)).toEqual(["head-moved", "merged"]);
   expect(state.rows[0]!.head).toBe(reviewed);
 }, 30_000);
 
-for (const fault of ["package", "runtime"] as const) {
-  test(`a withheld detector's ${fault} load error remains a hard gate failure`, async () => {
+for (const fault of ["package", "runtime", "export"] as const) {
+  test(`(b) a withheld detector's ${fault} load error is skipped with a note and the healthy PR lands`, async () => {
     const f = landingFixture("green", realTests);
+    f.seed("feature.js", "exports.present = 1;\n");
     const contents = "const { test, expect } = require('bun:test');\n"
-      + (fault === "package" ? "require('fixture-package-that-does-not-exist');\n" : "throw new Error('fixture runtime error');\n")
+      + (fault === "package" ? "require('fixture-package-that-does-not-exist');\n"
+        : fault === "runtime" ? "throw new Error('fixture runtime error');\n"
+          : "const { absent } = require('./feature.js');\nif (!absent) throw new Error('export absent from the candidate');\n")
       + "test('fixture', () => expect(1).toBe(1));\n";
     const detector = f.addPr(12, "fault.test.ts", contents);
     const healthy = f.addPr(13, "healthy.txt", "healthy");
     f.views.get(12)!.isDraft = true;
     await f.batch.build(`12@${detector},13@${healthy}`);
-    await expect(f.batch.gate()).rejects.toThrow("between-test error");
-    expect(f.batch.read().gated).toBeNull();
-    expect(f.calls.some(args => args[0] === "pr" && ["create", "merge"].includes(args[1]!))).toBeFalse();
+    const gated = await f.batch.gate();
+    expect(gated.gated!.notApplicable).toEqual([{ source: `#12@${detector}`, file: "fault.test.ts",
+      reason: "#12 is not in this candidate; its reviewed detector is skipped" }]);
+    const state = await f.batch.land();
+    expect(state.rows.map(row => row.status)).toEqual(["head-moved", "merged"]);
   }, 30_000);
 }
 
@@ -1495,50 +1970,29 @@ test("a receipt for another tuple cannot publish even when the built tip matches
   expect(f.calls.some(args => args[0] === "pr" && ["create", "merge"].includes(args[1]!))).toBeFalse();
 }, 30_000);
 
-test("a retained PR deleting a main module cannot make a withheld detector not applicable", async () => {
+test("(c) a retained PR deleting a module a native test loads is the only culprit; the rest lands", async () => {
   const f = landingFixture("green", realTests);
   f.seed("feature.js", "exports.value = 1;\n");
-  const detector = f.addPr(12, "feature.test.ts", "const { test, expect } = require('bun:test');\n"
+  f.seed("feature.test.ts", "const { test, expect } = require('bun:test');\n"
     + "const feature = require('./feature.js');\ntest('feature', () => expect(feature.value).toBe(1));\n");
-  f.addPr(13, "healthy.txt", "healthy");
-  const deletion = extendPr(f, 13, { "feature.js": null });
-  f.views.get(12)!.isDraft = true;
-  await f.batch.build(`12@${detector},13@${deletion}`);
-  await expect(f.batch.gate()).rejects.toThrow("between-test error");
-  expect(f.batch.read().gated).toBeNull();
-  expect(f.calls.some(args => args[0] === "pr" && ["create", "merge"].includes(args[1]!))).toBeFalse();
-}, 30_000);
-
-
-test("main deletion of an inherited module remains a hard selected-detector error", async () => {
-  const f = landingFixture("green", realTests);
-  f.seed("feature.js", "exports.value = 1;\n");
-  const reviewed = f.addPr(12, "feature.test.ts", "const { test, expect } = require('bun:test');\n"
-    + "const feature = require('./feature.js');\ntest('feature', () => expect(feature.value).toBe(1));\n");
-  const healthy = f.addPr(13, "healthy.txt", "healthy");
-  let refreshed = false;
-  const gh = async (args: string[]): Promise<string> => {
-    if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && !refreshed) {
-      refreshed = true;
-      rmSync(join(f.repo, "feature.js"));
-      f.seed("advance.txt", "main advanced");
-      f.views.get(12)!.isDraft = true;
-      return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
-    }
-    return f.batch.gh(args);
-  };
-  const batch = new MergeBatch(f.repo, f.batch.stateFile, realTests, gh, async () => {});
-  await batch.build(`12@${reviewed},13@${healthy}`);
-  await batch.gate();
-  await expect(batch.land()).rejects.toThrow("between-test error");
-  expect(batch.read().gated).toBeNull();
-  expect(f.calls.some(args => args[0] === "pr" && args[1] === "merge")).toBeFalse();
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const deletion = f.addPr(13, "other.txt", "other");
+  extendPr(f, 13, { "feature.js": null });
+  const head = f.views.get(13)!.headRefOid as string;
+  await f.batch.build(`12@${healthy},13@${head}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  expect(gated.attributionLog.map(entry => [entry.test.kind, entry.test.file, entry.prs])).toEqual([["error", "feature.test.ts", [13]]]);
+  const state = await f.batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(deletion).not.toBe(head);
+  unchangedCulprit(f, 13, head);
 }, 30_000);
 
 test("a scoped batch lands in order despite an unrelated test load error on main", async () => {
   const sampled: string[] = [];
   const f = landingFixture("green", async (cwd, args, env) => {
-    if (args[1] === "bun" && args[2] === "test") sampled.push(args[3]!);
+    if (args[2] === "bun" && args[3] === "test") sampled.push(args[4]!);
     return realTests(cwd, args, env);
   });
   f.seed("unrelated.test.ts", "throw new Error('unrelated fixture load error');\n");

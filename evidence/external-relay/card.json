@@ -1,0 +1,4042 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "browser": {
+    "pid": 528110,
+    "closed": true
+  },
+  "readings": [
+    {
+      "label": "settings-paired-390-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [
+        427,
+        185
+      ],
+      "borderedBoxes": [
+        "button[More actions]",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "button[More actions]",
+        "span"
+      ],
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Asking the service for requests.",
+          "tone": "plain",
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "paused",
+          "text": "Paused. This install takes no requests from the service.",
+          "tone": "plain",
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Answered · 09:37",
+      "lastProgress": "Support bot · 09:36",
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 1 of 2 running · 10/h",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": "full agent for the owner",
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "summary": "GPT-6-Astra · 0 of 1 running",
+          "warned": true,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-3",
+          "summary": "Choose an engine and a model",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-4",
+          "summary": "Sonnet · 2 of 3 running · 25/h",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-5",
+          "summary": "Opus 5.5 · 4 of 4 running · 10/h",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-6",
+          "summary": "Sonnet · 0 of 1 running",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null,
+      "unfolded": {
+        "id": "bot-1",
+        "summary": "Opus 5.5 · 1 of 2 running · 10/h",
+        "warned": false,
+        "rowHeight": 446,
+        "open": true,
+        "engine": "Claude",
+        "settings": [
+          "opus",
+          "low",
+          "2"
+        ],
+        "settingsText": [
+          "Opus 5.5",
+          "low",
+          "2"
+        ],
+        "memberLimit": "10",
+        "ownerTier": {
+          "on": true,
+          "label": "Full agent for the owner · Support bot",
+          "caption": "full agent for the owner",
+          "box": {
+            "width": 48,
+            "height": 44
+          },
+          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once.",
+          "hintOverflow": false
+        },
+        "answeredHere": true,
+        "switchDisabled": false,
+        "noAccount": false
+      },
+      "unfoldedShortControls": [],
+      "unfoldedOverflow": false,
+      "menu": {
+        "rows": [
+          {
+            "text": "Pause",
+            "height": 44
+          },
+          {
+            "text": "Disconnect",
+            "height": 44
+          }
+        ],
+        "inside": true
+      }
+    },
+    {
+      "label": "settings-troubled-390-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [
+        184,
+        185
+      ],
+      "borderedBoxes": [
+        "button[More actions]",
+        "span",
+        "button[More actions]",
+        "span"
+      ],
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "The service no longer accepts this pairing. Disconnect and pair again.",
+          "tone": "danger",
+          "color": "rgb(198, 40, 40)",
+          "lines": 2,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "unreachable",
+          "text": "The service cannot be reached. Retrying.",
+          "tone": "warning",
+          "color": "rgb(138, 95, 0)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Failed: the agent stopped with an error · 08:41",
+      "lastProgress": null,
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-390-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "pending",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:50.\n\nCancel",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-390-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "awaiting_install",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nThe relay service says this is Person A (@person_a). Is this you?\n\nYes, pair\nNo, cancel",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": "The relay service says this is Person A (@person_a). Is this you?"
+    },
+    {
+      "label": "settings-ended-390-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "denied",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nThe relay service declined this pairing.\n\nThe owner declined this install in the relay service.\n\nStart again",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "guide-step-390-en-light",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 44,
+        "shortControls": []
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 44,
+        "shortControls": []
+      }
+    },
+    {
+      "label": "settings-paired-390-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [
+        427,
+        185
+      ],
+      "borderedBoxes": [
+        "button[More actions]",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "button[More actions]",
+        "span"
+      ],
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Asking the service for requests.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "paused",
+          "text": "Paused. This install takes no requests from the service.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Answered · 09:37",
+      "lastProgress": "Support bot · 09:36",
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 1 of 2 running · 10/h",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": "full agent for the owner",
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "summary": "GPT-6-Astra · 0 of 1 running",
+          "warned": true,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-3",
+          "summary": "Choose an engine and a model",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-4",
+          "summary": "Sonnet · 2 of 3 running · 25/h",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-5",
+          "summary": "Opus 5.5 · 4 of 4 running · 10/h",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-6",
+          "summary": "Sonnet · 0 of 1 running",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null,
+      "unfolded": {
+        "id": "bot-1",
+        "summary": "Opus 5.5 · 1 of 2 running · 10/h",
+        "warned": false,
+        "rowHeight": 446,
+        "open": true,
+        "engine": "Claude",
+        "settings": [
+          "opus",
+          "low",
+          "2"
+        ],
+        "settingsText": [
+          "Opus 5.5",
+          "low",
+          "2"
+        ],
+        "memberLimit": "10",
+        "ownerTier": {
+          "on": true,
+          "label": "Full agent for the owner · Support bot",
+          "caption": "full agent for the owner",
+          "box": {
+            "width": 48,
+            "height": 44
+          },
+          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once.",
+          "hintOverflow": false
+        },
+        "answeredHere": true,
+        "switchDisabled": false,
+        "noAccount": false
+      },
+      "unfoldedShortControls": [],
+      "unfoldedOverflow": false,
+      "menu": {
+        "rows": [
+          {
+            "text": "Pause",
+            "height": 44
+          },
+          {
+            "text": "Disconnect",
+            "height": 44
+          }
+        ],
+        "inside": true
+      }
+    },
+    {
+      "label": "settings-troubled-390-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [
+        184,
+        185
+      ],
+      "borderedBoxes": [
+        "button[More actions]",
+        "span",
+        "button[More actions]",
+        "span"
+      ],
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "The service no longer accepts this pairing. Disconnect and pair again.",
+          "tone": "danger",
+          "color": "rgb(240, 113, 113)",
+          "lines": 2,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "unreachable",
+          "text": "The service cannot be reached. Retrying.",
+          "tone": "warning",
+          "color": "rgb(224, 174, 69)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Failed: the agent stopped with an error · 08:41",
+      "lastProgress": null,
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-390-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "pending",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:50.\n\nCancel",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-390-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "awaiting_install",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nThe relay service says this is Person A (@person_a). Is this you?\n\nYes, pair\nNo, cancel",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": "The relay service says this is Person A (@person_a). Is this you?"
+    },
+    {
+      "label": "settings-ended-390-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "denied",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nThe relay service declined this pairing.\n\nThe owner declined this install in the relay service.\n\nStart again",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "guide-step-390-en-dark",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 44,
+        "shortControls": []
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 44,
+        "shortControls": []
+      }
+    },
+    {
+      "label": "settings-paired-1440-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 24,
+      "shortControls": [
+        "Connect Celestia",
+        "Other address…",
+        "More actions",
+        "Answered by this install · Support bot",
+        "Answered by this install · Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays",
+        "New botChoose an engine and a ",
+        "Answered by this install · New bot",
+        "Пошук по базі знань для нових ",
+        "Answered by this install · Пошук по базі знань для нових учасників чату магазину",
+        "Moderation helper for the retu",
+        "Answered by this install · Moderation helper for the returns and warranty chat",
+        "Відповіді про доставкуSonnet ·",
+        "Answered by this install · Відповіді про доставку",
+        "More actions",
+        "Support botSonnet · 0 of 1 run",
+        "Answered by this install · Support bot"
+      ],
+      "cardHeights": [
+        379,
+        167
+      ],
+      "borderedBoxes": [
+        "button[More actions]",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "button[More actions]",
+        "span"
+      ],
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Asking the service for requests.",
+          "tone": "plain",
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "paused",
+          "text": "Paused. This install takes no requests from the service.",
+          "tone": "plain",
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Answered · 09:37",
+      "lastProgress": "Support bot · 09:36",
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 1 of 2 running · 10/h",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": "full agent for the owner",
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "summary": "GPT-6-Astra · 0 of 1 running",
+          "warned": true,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-3",
+          "summary": "Choose an engine and a model",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-4",
+          "summary": "Sonnet · 2 of 3 running · 25/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-5",
+          "summary": "Opus 5.5 · 4 of 4 running · 10/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-6",
+          "summary": "Sonnet · 0 of 1 running",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null,
+      "unfolded": {
+        "id": "bot-1",
+        "summary": "Opus 5.5 · 1 of 2 running · 10/h",
+        "warned": false,
+        "rowHeight": 284,
+        "open": true,
+        "engine": "Claude",
+        "settings": [
+          "opus",
+          "low",
+          "2"
+        ],
+        "settingsText": [
+          "Opus 5.5",
+          "low",
+          "2"
+        ],
+        "memberLimit": "10",
+        "ownerTier": {
+          "on": true,
+          "label": "Full agent for the owner · Support bot",
+          "caption": "full agent for the owner",
+          "box": {
+            "width": 36,
+            "height": 24
+          },
+          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once.",
+          "hintOverflow": false
+        },
+        "answeredHere": true,
+        "switchDisabled": false,
+        "noAccount": false
+      },
+      "unfoldedShortControls": [
+        "Connect Celestia",
+        "Other address…",
+        "More actions",
+        "Answered by this install · Support bot",
+        "Claude",
+        "Codex",
+        "Model · Support bot",
+        "Effort · Support bot",
+        "At once · Support bot",
+        "Answers per member per hour · Support bot",
+        "Full agent for the owner · Support bot",
+        "Answered by this install · Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays",
+        "New botChoose an engine and a ",
+        "Answered by this install · New bot",
+        "Пошук по базі знань для нових ",
+        "Answered by this install · Пошук по базі знань для нових учасників чату магазину",
+        "Moderation helper for the retu",
+        "Answered by this install · Moderation helper for the returns and warranty chat",
+        "Відповіді про доставкуSonnet ·",
+        "Answered by this install · Відповіді про доставку",
+        "More actions",
+        "Support botSonnet · 0 of 1 run",
+        "Answered by this install · Support bot"
+      ],
+      "unfoldedOverflow": false,
+      "menu": {
+        "rows": [
+          {
+            "text": "Pause",
+            "height": 32
+          },
+          {
+            "text": "Disconnect",
+            "height": 32
+          }
+        ],
+        "inside": true
+      }
+    },
+    {
+      "label": "settings-troubled-1440-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 24,
+      "shortControls": [
+        "Connect Celestia",
+        "Other address…",
+        "More actions",
+        "Support botOpus 5.5 · 0 of 1 r",
+        "Answered by this install · Support bot",
+        "More actions",
+        "Support botSonnet · 0 of 1 run",
+        "Answered by this install · Support bot"
+      ],
+      "cardHeights": [
+        150,
+        167
+      ],
+      "borderedBoxes": [
+        "button[More actions]",
+        "span",
+        "button[More actions]",
+        "span"
+      ],
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "The service no longer accepts this pairing. Disconnect and pair again.",
+          "tone": "danger",
+          "color": "rgb(198, 40, 40)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "unreachable",
+          "text": "The service cannot be reached. Retrying.",
+          "tone": "warning",
+          "color": "rgb(138, 95, 0)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Failed: the agent stopped with an error · 08:41",
+      "lastProgress": null,
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-1440-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Cancel"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "pending",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:50.\n\nCancel",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-1440-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Yes, pair",
+        "No, cancel"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "awaiting_install",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nThe relay service says this is Person A (@person_a). Is this you?\n\nYes, pair\nNo, cancel",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": "The relay service says this is Person A (@person_a). Is this you?"
+    },
+    {
+      "label": "settings-ended-1440-en-light",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Start again"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "denied",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nThe relay service declined this pairing.\n\nThe owner declined this install in the relay service.\n\nStart again",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "guide-step-1440-en-light",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 28,
+        "shortControls": [
+          "<button type=\"button\" role=\"radio\" aria-checked=\"true\" data-onboarding-relay-engine=\"claude\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py",
+          "<button type=\"button\" role=\"radio\" aria-checked=\"false\" data-onboarding-relay-engine=\"codex\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py",
+          "<button type=\"button\" data-external-relay-connect-known=\"celestia\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand ",
+          "<button type=\"button\" data-external-relay-other-toggle=\"\" aria-expanded=\"false\" class=\"inline-flex items-center gap-0.5 font-semibold text-accent underline-offs",
+          "<button type=\"button\" data-onboarding-relay-skip=\"\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:ou"
+        ]
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 28,
+        "shortControls": [
+          "<button type=\"button\" role=\"radio\" aria-checked=\"false\" data-onboarding-relay-engine=\"claude\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 p",
+          "<button type=\"button\" role=\"radio\" aria-checked=\"true\" data-onboarding-relay-engine=\"codex\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py-",
+          "<button type=\"button\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-4 text-ui font-semibold text-primary hove",
+          "<button type=\"button\" data-external-relay-connect-known=\"celestia\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand ",
+          "<button type=\"button\" data-external-relay-other-toggle=\"\" aria-expanded=\"true\" class=\"inline-flex items-center gap-0.5 font-semibold text-accent underline-offse",
+          "<input aria-label=\"Relay service address\" placeholder=\"https://relay.example\" class=\"h-8 min-w-0 rounded-control border border-border bg-card px-2 text-ui text-",
+          "<button type=\"submit\" disabled=\"\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-ui font-semibold text-o",
+          "<button type=\"button\" data-onboarding-relay-skip=\"\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:ou"
+        ]
+      }
+    },
+    {
+      "label": "settings-paired-1440-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 24,
+      "shortControls": [
+        "Connect Celestia",
+        "Other address…",
+        "More actions",
+        "Answered by this install · Support bot",
+        "Answered by this install · Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays",
+        "New botChoose an engine and a ",
+        "Answered by this install · New bot",
+        "Пошук по базі знань для нових ",
+        "Answered by this install · Пошук по базі знань для нових учасників чату магазину",
+        "Moderation helper for the retu",
+        "Answered by this install · Moderation helper for the returns and warranty chat",
+        "Відповіді про доставкуSonnet ·",
+        "Answered by this install · Відповіді про доставку",
+        "More actions",
+        "Support botSonnet · 0 of 1 run",
+        "Answered by this install · Support bot"
+      ],
+      "cardHeights": [
+        379,
+        167
+      ],
+      "borderedBoxes": [
+        "button[More actions]",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "button[More actions]",
+        "span"
+      ],
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Asking the service for requests.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "paused",
+          "text": "Paused. This install takes no requests from the service.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Answered · 09:37",
+      "lastProgress": "Support bot · 09:36",
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 1 of 2 running · 10/h",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": "full agent for the owner",
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "summary": "GPT-6-Astra · 0 of 1 running",
+          "warned": true,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-3",
+          "summary": "Choose an engine and a model",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-4",
+          "summary": "Sonnet · 2 of 3 running · 25/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-5",
+          "summary": "Opus 5.5 · 4 of 4 running · 10/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-6",
+          "summary": "Sonnet · 0 of 1 running",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null,
+      "unfolded": {
+        "id": "bot-1",
+        "summary": "Opus 5.5 · 1 of 2 running · 10/h",
+        "warned": false,
+        "rowHeight": 284,
+        "open": true,
+        "engine": "Claude",
+        "settings": [
+          "opus",
+          "low",
+          "2"
+        ],
+        "settingsText": [
+          "Opus 5.5",
+          "low",
+          "2"
+        ],
+        "memberLimit": "10",
+        "ownerTier": {
+          "on": true,
+          "label": "Full agent for the owner · Support bot",
+          "caption": "full agent for the owner",
+          "box": {
+            "width": 36,
+            "height": 24
+          },
+          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once.",
+          "hintOverflow": false
+        },
+        "answeredHere": true,
+        "switchDisabled": false,
+        "noAccount": false
+      },
+      "unfoldedShortControls": [
+        "Connect Celestia",
+        "Other address…",
+        "More actions",
+        "Answered by this install · Support bot",
+        "Claude",
+        "Codex",
+        "Model · Support bot",
+        "Effort · Support bot",
+        "At once · Support bot",
+        "Answers per member per hour · Support bot",
+        "Full agent for the owner · Support bot",
+        "Answered by this install · Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays",
+        "New botChoose an engine and a ",
+        "Answered by this install · New bot",
+        "Пошук по базі знань для нових ",
+        "Answered by this install · Пошук по базі знань для нових учасників чату магазину",
+        "Moderation helper for the retu",
+        "Answered by this install · Moderation helper for the returns and warranty chat",
+        "Відповіді про доставкуSonnet ·",
+        "Answered by this install · Відповіді про доставку",
+        "More actions",
+        "Support botSonnet · 0 of 1 run",
+        "Answered by this install · Support bot"
+      ],
+      "unfoldedOverflow": false,
+      "menu": {
+        "rows": [
+          {
+            "text": "Pause",
+            "height": 32
+          },
+          {
+            "text": "Disconnect",
+            "height": 32
+          }
+        ],
+        "inside": true
+      }
+    },
+    {
+      "label": "settings-troubled-1440-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 24,
+      "shortControls": [
+        "Connect Celestia",
+        "Other address…",
+        "More actions",
+        "Support botOpus 5.5 · 0 of 1 r",
+        "Answered by this install · Support bot",
+        "More actions",
+        "Support botSonnet · 0 of 1 run",
+        "Answered by this install · Support bot"
+      ],
+      "cardHeights": [
+        150,
+        167
+      ],
+      "borderedBoxes": [
+        "button[More actions]",
+        "span",
+        "button[More actions]",
+        "span"
+      ],
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "The service no longer accepts this pairing. Disconnect and pair again.",
+          "tone": "danger",
+          "color": "rgb(240, 113, 113)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "unreachable",
+          "text": "The service cannot be reached. Retrying.",
+          "tone": "warning",
+          "color": "rgb(224, 174, 69)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Failed: the agent stopped with an error · 08:41",
+      "lastProgress": null,
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 of 1 running · 10/h",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-1440-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Cancel"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "pending",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:50.\n\nCancel",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-1440-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Yes, pair",
+        "No, cancel"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "awaiting_install",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nThe relay service says this is Person A (@person_a). Is this you?\n\nYes, pair\nNo, cancel",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": "The relay service says this is Person A (@person_a). Is this you?"
+    },
+    {
+      "label": "settings-ended-1440-en-dark",
+      "entry": {
+        "text": "Chat relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Start again"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "denied",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nThe relay service declined this pairing.\n\nThe owner declined this install in the relay service.\n\nStart again",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "guide-step-1440-en-dark",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 28,
+        "shortControls": [
+          "<button type=\"button\" role=\"radio\" aria-checked=\"true\" data-onboarding-relay-engine=\"claude\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py",
+          "<button type=\"button\" role=\"radio\" aria-checked=\"false\" data-onboarding-relay-engine=\"codex\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py",
+          "<button type=\"button\" data-external-relay-connect-known=\"celestia\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand ",
+          "<button type=\"button\" data-external-relay-other-toggle=\"\" aria-expanded=\"false\" class=\"inline-flex items-center gap-0.5 font-semibold text-accent underline-offs",
+          "<button type=\"button\" data-onboarding-relay-skip=\"\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:ou"
+        ]
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 28,
+        "shortControls": [
+          "<button type=\"button\" role=\"radio\" aria-checked=\"false\" data-onboarding-relay-engine=\"claude\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 p",
+          "<button type=\"button\" role=\"radio\" aria-checked=\"true\" data-onboarding-relay-engine=\"codex\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py-",
+          "<button type=\"button\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-4 text-ui font-semibold text-primary hove",
+          "<button type=\"button\" data-external-relay-connect-known=\"celestia\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand ",
+          "<button type=\"button\" data-external-relay-other-toggle=\"\" aria-expanded=\"true\" class=\"inline-flex items-center gap-0.5 font-semibold text-accent underline-offse",
+          "<input aria-label=\"Relay service address\" placeholder=\"https://relay.example\" class=\"h-8 min-w-0 rounded-control border border-border bg-card px-2 text-ui text-",
+          "<button type=\"submit\" disabled=\"\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-ui font-semibold text-o",
+          "<button type=\"button\" data-onboarding-relay-skip=\"\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:ou"
+        ]
+      }
+    },
+    {
+      "label": "settings-paired-390-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [
+        427,
+        185
+      ],
+      "borderedBoxes": [
+        "button[Більше дій]",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "button[Більше дій]",
+        "span"
+      ],
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Питаємо сервіс про запити.",
+          "tone": "plain",
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "paused",
+          "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
+          "tone": "plain",
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Відповіли · 09:37",
+      "lastProgress": "Support bot · 09:36",
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": "повний агент для власника",
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "summary": "GPT-6-Astra · 0 з 1 виконуються",
+          "warned": true,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-3",
+          "summary": "Оберіть рушій і модель",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-4",
+          "summary": "Sonnet · 2 з 3 виконуються · 25/год",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-5",
+          "summary": "Opus 5.5 · 4 з 4 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-6",
+          "summary": "Sonnet · 0 з 1 виконуються",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null,
+      "unfolded": {
+        "id": "bot-1",
+        "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
+        "warned": false,
+        "rowHeight": 462,
+        "open": true,
+        "engine": "Claude",
+        "settings": [
+          "opus",
+          "low",
+          "2"
+        ],
+        "settingsText": [
+          "Opus 5.5",
+          "низькі",
+          "2"
+        ],
+        "memberLimit": "10",
+        "ownerTier": {
+          "on": true,
+          "label": "Повний агент для власника · Support bot",
+          "caption": "повний агент для власника",
+          "box": {
+            "width": 48,
+            "height": 44
+          },
+          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді.",
+          "hintOverflow": false
+        },
+        "answeredHere": true,
+        "switchDisabled": false,
+        "noAccount": false
+      },
+      "unfoldedShortControls": [],
+      "unfoldedOverflow": false,
+      "menu": {
+        "rows": [
+          {
+            "text": "Призупинити",
+            "height": 44
+          },
+          {
+            "text": "Від’єднати",
+            "height": 44
+          }
+        ],
+        "inside": true
+      }
+    },
+    {
+      "label": "settings-troubled-390-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [
+        184,
+        185
+      ],
+      "borderedBoxes": [
+        "button[Більше дій]",
+        "span",
+        "button[Більше дій]",
+        "span"
+      ],
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
+          "tone": "danger",
+          "color": "rgb(198, 40, 40)",
+          "lines": 2,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "unreachable",
+          "text": "Сервіс недоступний. Повторюємо спробу.",
+          "tone": "warning",
+          "color": "rgb(138, 95, 0)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 08:41",
+      "lastProgress": null,
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-390-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "pending",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:50.\n\nСкасувати",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-390-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "awaiting_install",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nСервіс каже, що це Person A (@person_a). Це ви?\n\nТак, під’єднати\nНі, скасувати",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": "Сервіс каже, що це Person A (@person_a). Це ви?"
+    },
+    {
+      "label": "settings-ended-390-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "denied",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nСервіс відхилив це під’єднання.\n\nThe owner declined this install in the relay service.\n\nПочати знову",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "guide-step-390-uk-light",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 44,
+        "shortControls": []
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 44,
+        "shortControls": []
+      }
+    },
+    {
+      "label": "settings-paired-390-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [
+        427,
+        185
+      ],
+      "borderedBoxes": [
+        "button[Більше дій]",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "button[Більше дій]",
+        "span"
+      ],
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Питаємо сервіс про запити.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "paused",
+          "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Відповіли · 09:37",
+      "lastProgress": "Support bot · 09:36",
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": "повний агент для власника",
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "summary": "GPT-6-Astra · 0 з 1 виконуються",
+          "warned": true,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-3",
+          "summary": "Оберіть рушій і модель",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-4",
+          "summary": "Sonnet · 2 з 3 виконуються · 25/год",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-5",
+          "summary": "Opus 5.5 · 4 з 4 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-6",
+          "summary": "Sonnet · 0 з 1 виконуються",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null,
+      "unfolded": {
+        "id": "bot-1",
+        "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
+        "warned": false,
+        "rowHeight": 462,
+        "open": true,
+        "engine": "Claude",
+        "settings": [
+          "opus",
+          "low",
+          "2"
+        ],
+        "settingsText": [
+          "Opus 5.5",
+          "низькі",
+          "2"
+        ],
+        "memberLimit": "10",
+        "ownerTier": {
+          "on": true,
+          "label": "Повний агент для власника · Support bot",
+          "caption": "повний агент для власника",
+          "box": {
+            "width": 48,
+            "height": 44
+          },
+          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді.",
+          "hintOverflow": false
+        },
+        "answeredHere": true,
+        "switchDisabled": false,
+        "noAccount": false
+      },
+      "unfoldedShortControls": [],
+      "unfoldedOverflow": false,
+      "menu": {
+        "rows": [
+          {
+            "text": "Призупинити",
+            "height": 44
+          },
+          {
+            "text": "Від’єднати",
+            "height": 44
+          }
+        ],
+        "inside": true
+      }
+    },
+    {
+      "label": "settings-troubled-390-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [
+        184,
+        185
+      ],
+      "borderedBoxes": [
+        "button[Більше дій]",
+        "span",
+        "button[Більше дій]",
+        "span"
+      ],
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
+          "tone": "danger",
+          "color": "rgb(240, 113, 113)",
+          "lines": 2,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "unreachable",
+          "text": "Сервіс недоступний. Повторюємо спробу.",
+          "tone": "warning",
+          "color": "rgb(224, 174, 69)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 08:41",
+      "lastProgress": null,
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 45,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-390-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "pending",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:50.\n\nСкасувати",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-390-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "awaiting_install",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nСервіс каже, що це Person A (@person_a). Це ви?\n\nТак, під’єднати\nНі, скасувати",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": "Сервіс каже, що це Person A (@person_a). Це ви?"
+    },
+    {
+      "label": "settings-ended-390-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 44,
+      "shortControls": [],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "denied",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nСервіс відхилив це під’єднання.\n\nThe owner declined this install in the relay service.\n\nПочати знову",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "guide-step-390-uk-dark",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 44,
+        "shortControls": []
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 44,
+        "shortControls": []
+      }
+    },
+    {
+      "label": "settings-paired-1440-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 24,
+      "shortControls": [
+        "Під’єднати Celestia",
+        "Інша адреса…",
+        "Більше дій",
+        "Відповідає ця інсталяція · Support bot",
+        "Відповідає ця інсталяція · Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays",
+        "New botОберіть рушій і модель",
+        "Відповідає ця інсталяція · New bot",
+        "Пошук по базі знань для нових ",
+        "Відповідає ця інсталяція · Пошук по базі знань для нових учасників чату магазину",
+        "Moderation helper for the retu",
+        "Відповідає ця інсталяція · Moderation helper for the returns and warranty chat",
+        "Відповіді про доставкуSonnet ·",
+        "Відповідає ця інсталяція · Відповіді про доставку",
+        "Більше дій",
+        "Support botSonnet · 0 з 1 вико",
+        "Відповідає ця інсталяція · Support bot"
+      ],
+      "cardHeights": [
+        379,
+        167
+      ],
+      "borderedBoxes": [
+        "button[Більше дій]",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "button[Більше дій]",
+        "span"
+      ],
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Питаємо сервіс про запити.",
+          "tone": "plain",
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "paused",
+          "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
+          "tone": "plain",
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Відповіли · 09:37",
+      "lastProgress": "Support bot · 09:36",
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": "повний агент для власника",
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "summary": "GPT-6-Astra · 0 з 1 виконуються",
+          "warned": true,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-3",
+          "summary": "Оберіть рушій і модель",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-4",
+          "summary": "Sonnet · 2 з 3 виконуються · 25/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-5",
+          "summary": "Opus 5.5 · 4 з 4 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-6",
+          "summary": "Sonnet · 0 з 1 виконуються",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null,
+      "unfolded": {
+        "id": "bot-1",
+        "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
+        "warned": false,
+        "rowHeight": 300,
+        "open": true,
+        "engine": "Claude",
+        "settings": [
+          "opus",
+          "low",
+          "2"
+        ],
+        "settingsText": [
+          "Opus 5.5",
+          "низькі",
+          "2"
+        ],
+        "memberLimit": "10",
+        "ownerTier": {
+          "on": true,
+          "label": "Повний агент для власника · Support bot",
+          "caption": "повний агент для власника",
+          "box": {
+            "width": 36,
+            "height": 24
+          },
+          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді.",
+          "hintOverflow": false
+        },
+        "answeredHere": true,
+        "switchDisabled": false,
+        "noAccount": false
+      },
+      "unfoldedShortControls": [
+        "Під’єднати Celestia",
+        "Інша адреса…",
+        "Більше дій",
+        "Відповідає ця інсталяція · Support bot",
+        "Claude",
+        "Codex",
+        "Модель · Support bot",
+        "Зусилля · Support bot",
+        "Одночасно · Support bot",
+        "Відповідей на учасника за годину · Support bot",
+        "Повний агент для власника · Support bot",
+        "Відповідає ця інсталяція · Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays",
+        "New botОберіть рушій і модель",
+        "Відповідає ця інсталяція · New bot",
+        "Пошук по базі знань для нових ",
+        "Відповідає ця інсталяція · Пошук по базі знань для нових учасників чату магазину",
+        "Moderation helper for the retu",
+        "Відповідає ця інсталяція · Moderation helper for the returns and warranty chat",
+        "Відповіді про доставкуSonnet ·",
+        "Відповідає ця інсталяція · Відповіді про доставку",
+        "Більше дій",
+        "Support botSonnet · 0 з 1 вико",
+        "Відповідає ця інсталяція · Support bot"
+      ],
+      "unfoldedOverflow": false,
+      "menu": {
+        "rows": [
+          {
+            "text": "Призупинити",
+            "height": 32
+          },
+          {
+            "text": "Від’єднати",
+            "height": 32
+          }
+        ],
+        "inside": true
+      }
+    },
+    {
+      "label": "settings-troubled-1440-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 24,
+      "shortControls": [
+        "Під’єднати Celestia",
+        "Інша адреса…",
+        "Більше дій",
+        "Support botOpus 5.5 · 0 з 1 ви",
+        "Відповідає ця інсталяція · Support bot",
+        "Більше дій",
+        "Support botSonnet · 0 з 1 вико",
+        "Відповідає ця інсталяція · Support bot"
+      ],
+      "cardHeights": [
+        150,
+        167
+      ],
+      "borderedBoxes": [
+        "button[Більше дій]",
+        "span",
+        "button[Більше дій]",
+        "span"
+      ],
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
+          "tone": "danger",
+          "color": "rgb(198, 40, 40)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "unreachable",
+          "text": "Сервіс недоступний. Повторюємо спробу.",
+          "tone": "warning",
+          "color": "rgb(138, 95, 0)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 08:41",
+      "lastProgress": null,
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-1440-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Скасувати"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "pending",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:50.\n\nСкасувати",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-1440-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Так, під’єднати",
+        "Ні, скасувати"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "awaiting_install",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nСервіс каже, що це Person A (@person_a). Це ви?\n\nТак, під’єднати\nНі, скасувати",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": "Сервіс каже, що це Person A (@person_a). Це ви?"
+    },
+    {
+      "label": "settings-ended-1440-uk-light",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Почати знову"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "denied",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nСервіс відхилив це під’єднання.\n\nThe owner declined this install in the relay service.\n\nПочати знову",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "guide-step-1440-uk-light",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 28,
+        "shortControls": [
+          "<button type=\"button\" role=\"radio\" aria-checked=\"true\" data-onboarding-relay-engine=\"claude\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py",
+          "<button type=\"button\" role=\"radio\" aria-checked=\"false\" data-onboarding-relay-engine=\"codex\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py",
+          "<button type=\"button\" data-external-relay-connect-known=\"celestia\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand ",
+          "<button type=\"button\" data-external-relay-other-toggle=\"\" aria-expanded=\"false\" class=\"inline-flex items-center gap-0.5 font-semibold text-accent underline-offs",
+          "<button type=\"button\" data-onboarding-relay-skip=\"\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:ou"
+        ]
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 28,
+        "shortControls": [
+          "<button type=\"button\" role=\"radio\" aria-checked=\"false\" data-onboarding-relay-engine=\"claude\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 p",
+          "<button type=\"button\" role=\"radio\" aria-checked=\"true\" data-onboarding-relay-engine=\"codex\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py-",
+          "<button type=\"button\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-4 text-ui font-semibold text-primary hove",
+          "<button type=\"button\" data-external-relay-connect-known=\"celestia\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand ",
+          "<button type=\"button\" data-external-relay-other-toggle=\"\" aria-expanded=\"true\" class=\"inline-flex items-center gap-0.5 font-semibold text-accent underline-offse",
+          "<input aria-label=\"Адреса сервісу-ретранслятора\" placeholder=\"https://relay.example\" class=\"h-8 min-w-0 rounded-control border border-border bg-card px-2 text-u",
+          "<button type=\"submit\" disabled=\"\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-ui font-semibold text-o",
+          "<button type=\"button\" data-onboarding-relay-skip=\"\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:ou"
+        ]
+      }
+    },
+    {
+      "label": "settings-paired-1440-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 24,
+      "shortControls": [
+        "Під’єднати Celestia",
+        "Інша адреса…",
+        "Більше дій",
+        "Відповідає ця інсталяція · Support bot",
+        "Відповідає ця інсталяція · Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays",
+        "New botОберіть рушій і модель",
+        "Відповідає ця інсталяція · New bot",
+        "Пошук по базі знань для нових ",
+        "Відповідає ця інсталяція · Пошук по базі знань для нових учасників чату магазину",
+        "Moderation helper for the retu",
+        "Відповідає ця інсталяція · Moderation helper for the returns and warranty chat",
+        "Відповіді про доставкуSonnet ·",
+        "Відповідає ця інсталяція · Відповіді про доставку",
+        "Більше дій",
+        "Support botSonnet · 0 з 1 вико",
+        "Відповідає ця інсталяція · Support bot"
+      ],
+      "cardHeights": [
+        379,
+        167
+      ],
+      "borderedBoxes": [
+        "button[Більше дій]",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "span",
+        "button[Більше дій]",
+        "span"
+      ],
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Питаємо сервіс про запити.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "paused",
+          "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Відповіли · 09:37",
+      "lastProgress": "Support bot · 09:36",
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": "повний агент для власника",
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "summary": "GPT-6-Astra · 0 з 1 виконуються",
+          "warned": true,
+          "rowHeight": 48,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-3",
+          "summary": "Оберіть рушій і модель",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-4",
+          "summary": "Sonnet · 2 з 3 виконуються · 25/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-5",
+          "summary": "Opus 5.5 · 4 з 4 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-6",
+          "summary": "Sonnet · 0 з 1 виконуються",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null,
+      "unfolded": {
+        "id": "bot-1",
+        "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
+        "warned": false,
+        "rowHeight": 300,
+        "open": true,
+        "engine": "Claude",
+        "settings": [
+          "opus",
+          "low",
+          "2"
+        ],
+        "settingsText": [
+          "Opus 5.5",
+          "низькі",
+          "2"
+        ],
+        "memberLimit": "10",
+        "ownerTier": {
+          "on": true,
+          "label": "Повний агент для власника · Support bot",
+          "caption": "повний агент для власника",
+          "box": {
+            "width": 36,
+            "height": 24
+          },
+          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді.",
+          "hintOverflow": false
+        },
+        "answeredHere": true,
+        "switchDisabled": false,
+        "noAccount": false
+      },
+      "unfoldedShortControls": [
+        "Під’єднати Celestia",
+        "Інша адреса…",
+        "Більше дій",
+        "Відповідає ця інсталяція · Support bot",
+        "Claude",
+        "Codex",
+        "Модель · Support bot",
+        "Зусилля · Support bot",
+        "Одночасно · Support bot",
+        "Відповідей на учасника за годину · Support bot",
+        "Повний агент для власника · Support bot",
+        "Відповідає ця інсталяція · Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays",
+        "New botОберіть рушій і модель",
+        "Відповідає ця інсталяція · New bot",
+        "Пошук по базі знань для нових ",
+        "Відповідає ця інсталяція · Пошук по базі знань для нових учасників чату магазину",
+        "Moderation helper for the retu",
+        "Відповідає ця інсталяція · Moderation helper for the returns and warranty chat",
+        "Відповіді про доставкуSonnet ·",
+        "Відповідає ця інсталяція · Відповіді про доставку",
+        "Більше дій",
+        "Support botSonnet · 0 з 1 вико",
+        "Відповідає ця інсталяція · Support bot"
+      ],
+      "unfoldedOverflow": false,
+      "menu": {
+        "rows": [
+          {
+            "text": "Призупинити",
+            "height": 32
+          },
+          {
+            "text": "Від’єднати",
+            "height": 32
+          }
+        ],
+        "inside": true
+      }
+    },
+    {
+      "label": "settings-troubled-1440-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 24,
+      "shortControls": [
+        "Під’єднати Celestia",
+        "Інша адреса…",
+        "Більше дій",
+        "Support botOpus 5.5 · 0 з 1 ви",
+        "Відповідає ця інсталяція · Support bot",
+        "Більше дій",
+        "Support botSonnet · 0 з 1 вико",
+        "Відповідає ця інсталяція · Support bot"
+      ],
+      "cardHeights": [
+        150,
+        167
+      ],
+      "borderedBoxes": [
+        "button[Більше дій]",
+        "span",
+        "button[Більше дій]",
+        "span"
+      ],
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
+          "tone": "danger",
+          "color": "rgb(240, 113, 113)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        },
+        {
+          "state": "unreachable",
+          "text": "Сервіс недоступний. Повторюємо спробу.",
+          "tone": "warning",
+          "color": "rgb(224, 174, 69)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
+      ],
+      "cut": [],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 08:41",
+      "lastProgress": null,
+      "targets": [
+        {
+          "id": "bot-1",
+          "summary": "Opus 5.5 · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "summary": "Sonnet · 0 з 1 виконуються · 10/год",
+          "warned": false,
+          "rowHeight": 37,
+          "open": false,
+          "engine": null,
+          "settings": [],
+          "settingsText": [],
+          "memberLimit": null,
+          "ownerTier": {
+            "on": false,
+            "label": null,
+            "caption": null,
+            "box": null,
+            "hint": null,
+            "hintOverflow": null
+          },
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-1440-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Скасувати"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "pending",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:50.\n\nСкасувати",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-1440-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Так, під’єднати",
+        "Ні, скасувати"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "awaiting_install",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nСервіс каже, що це Person A (@person_a). Це ви?\n\nТак, під’єднати\nНі, скасувати",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": "Сервіс каже, що це Person A (@person_a). Це ви?"
+    },
+    {
+      "label": "settings-ended-1440-uk-dark",
+      "entry": {
+        "text": "Ретранслятор чатів",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "outside": 0,
+      "minControlHeight": 28,
+      "shortControls": [
+        "Почати знову"
+      ],
+      "cardHeights": [],
+      "borderedBoxes": [],
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "cut": [],
+      "pairing": "denied",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nСервіс відхилив це під’єднання.\n\nThe owner declined this install in the relay service.\n\nПочати знову",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "conversationContent": 0,
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "guide-step-1440-uk-dark",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 28,
+        "shortControls": [
+          "<button type=\"button\" role=\"radio\" aria-checked=\"true\" data-onboarding-relay-engine=\"claude\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py",
+          "<button type=\"button\" role=\"radio\" aria-checked=\"false\" data-onboarding-relay-engine=\"codex\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py",
+          "<button type=\"button\" data-external-relay-connect-known=\"celestia\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand ",
+          "<button type=\"button\" data-external-relay-other-toggle=\"\" aria-expanded=\"false\" class=\"inline-flex items-center gap-0.5 font-semibold text-accent underline-offs",
+          "<button type=\"button\" data-onboarding-relay-skip=\"\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:ou"
+        ]
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 28,
+        "shortControls": [
+          "<button type=\"button\" role=\"radio\" aria-checked=\"false\" data-onboarding-relay-engine=\"claude\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 p",
+          "<button type=\"button\" role=\"radio\" aria-checked=\"true\" data-onboarding-relay-engine=\"codex\" class=\"flex w-full items-center gap-3 rounded-[10px] border px-3 py-",
+          "<button type=\"button\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-4 text-ui font-semibold text-primary hove",
+          "<button type=\"button\" data-external-relay-connect-known=\"celestia\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand ",
+          "<button type=\"button\" data-external-relay-other-toggle=\"\" aria-expanded=\"true\" class=\"inline-flex items-center gap-0.5 font-semibold text-accent underline-offse",
+          "<input aria-label=\"Адреса сервісу-ретранслятора\" placeholder=\"https://relay.example\" class=\"h-8 min-w-0 rounded-control border border-border bg-card px-2 text-u",
+          "<button type=\"submit\" disabled=\"\" class=\"inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-ui font-semibold text-o",
+          "<button type=\"button\" data-onboarding-relay-skip=\"\" class=\"inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:ou"
+        ]
+      }
+    }
+  ],
+  "failures": []
+}

@@ -44,7 +44,13 @@ Only then the **disk-dependent** resolvers, as fallbacks:
    thing that saves an **arbitrary-path** `git worktree add ../sibling` checkout
    (e.g. `~/.agents/tools/live-log-viewer-<branch>`), which has NO recognizable
    path layout, once it is deleted. Consulted only when no path recognizer
-   matched and the cwd is gone.
+   matched and the cwd is gone. Automatic recovery of older directory projects
+   supplies the same lookup with atomic recovery rows in `state.sqlite`; those
+   rows commit their mappings, aliases, board migration and lifecycle reason
+   together. Recovery runs at Viewer startup under the release fence and after
+   a complete catalog rescan. A recorded mapping, agreeing native repository
+   hint or branch hint confirmed against refs must prove the match; a sibling
+   name alone never folds, and conflicts or ambiguity keep the project separate.
 
 **The invariant that keeps biting:** a worktree's grouping must survive the
 checkout being **deleted**. Any mapping that finds the parent repo only by
@@ -75,7 +81,7 @@ old remote comes from `state/project-remotes.json`, which each machine fills
 with the remote behind every repository key it resolves, because a key's hash
 cannot be reversed. A re-pointed origin (a fork, an unrelated repository) is
 never aliased, and neither is a remote this machine never recorded, because
-every clone shares a remote id.
+every clone shares a remote id. Shared recorded GitHub remotes also check the forge's current full name once per key per 24 hours, so an unchanged clone origin canonicalizes only after matching numeric repository ids prove the rename.
 <!-- END:worktree-grouping -->
 
 <!-- BEGIN:live-state-and-publication -->

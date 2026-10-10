@@ -1,7 +1,5 @@
-"use client";
-
 import { en } from "@/lib/i18n/en";
-import type { MessageKey, TFunction } from "@/lib/i18n";
+import type { MessageKey, TFunction } from "@/lib/i18n/core";
 import type { RoleParameter } from "@/lib/roles/types";
 
 /**

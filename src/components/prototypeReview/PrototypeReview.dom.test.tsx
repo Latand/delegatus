@@ -1,4 +1,4 @@
-import { afterEach, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
@@ -27,6 +27,14 @@ Object.assign(globalThis, {
   requestAnimationFrame: (run: FrameRequestCallback) => setTimeout(() => run(0), 0),
   cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
+
+/* The phone's layout query answers as a case sets it; every other query is the window's own. */
+const { MOBILE_LAYOUT_QUERY } = await import("@/lib/attention/eligibility");
+let phoneLayout = false;
+const ownMatchMedia = dom.matchMedia.bind(dom);
+(dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => (query === MOBILE_LAYOUT_QUERY
+  ? { matches: phoneLayout, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } }
+  : ownMatchMedia(query));
 
 /* The real dictation hook with its phase held where a case puts it: a
    recording needs a microphone this DOM has none of. With no phase held the
@@ -61,8 +69,52 @@ afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   root = null;
   heldPhase = null;
+  phoneLayout = false;
   globalThis.fetch = realFetch;
   dom.document.body.innerHTML = "";
+});
+
+test.each([false, true])("Hide and history Undo share dismissal identity and keep a real choice available (phone: %s)", async (phone) => {
+  phoneLayout = phone;
+  const calls: unknown[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (String(url) === "/api/attention/dismissals") {
+      const body = JSON.parse(String(init?.body)); calls.push(body);
+      return new Response(JSON.stringify({ ok: true, dismissed: [body.target], alreadyClear: [], changed: [], undo: body.undo,
+        at: "2026-10-09T12:00:00Z", by: { kind: "operator", surface: phone ? "phone" : "desktop" } }));
+    }
+    return new Response(JSON.stringify(reviewRead()));
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-hide]")).not.toBeNull();
+  expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-hide]")!.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-hidden]")).not.toBeNull();
+  expect(document.querySelector("[data-prototype-save]")).toBeNull();
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-undo-hide]")!.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
+  expect(calls).toEqual([false, true].map(undo => ({ target: { kind: "prototype", taskId: "task-1", reviewId: `pr_${"a".repeat(32)}` }, undo, surface: phone ? "phone" : "desktop" })));
+});
+
+test.each(["rec", "busy"] as const)("Hide keeps the voice controls available while dictation is %s", async phase => {
+  heldPhase = phase;
+  const writes: unknown[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") writes.push(url);
+    return new Response(JSON.stringify(reviewRead()));
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout" onClose={() => {}} />); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  const hide = document.querySelector<HTMLButtonElement>("[data-prototype-hide]")!;
+  expect(hide.disabled).toBe(true);
+  await act(async () => { hide.click(); });
+  expect(writes).toEqual([]);
+  expect(document.querySelector("[data-prototype-hidden]")).toBeNull();
 });
 
 test("the comment is saved as it was written: edge spaces and line breaks reach the save request", async () => {
@@ -330,6 +382,37 @@ test("a round published while speech is recorded leaves the speech, and the stag
   expect(commentField().value).toBe("");
 });
 
+test("a round a later decision retired says so where a waiting round asks for a choice, and opens its choice only when the operator asks", async () => {
+  const read = twoRounds();
+  const [older, newer] = read.rounds.map((entry) => entry.id) as [string, string];
+  read.rounds[1] = { ...read.rounds[1]!, decision: { chosen: [2], comment: "", at: "2026-08-30T11:00:00.000Z", delivery: { state: "sent", retryable: false } } };
+  read.rounds[0] = { ...read.rounds[0]!, supersededBy: newer };
+  read.waitingReviewId = null;
+  await mountReview(read);
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${older}"]`)!.click(); });
+  expect(shownRound()).toBe(older);
+  /* The tab's mark is as large as the decided check, and its words show on hover. */
+  const mark = document.querySelector<SVGElement>(`[data-prototype-round="${older}"] [data-prototype-superseded]`)!;
+  expect([mark.tagName.toLowerCase(), mark.getAttribute("aria-label"), mark.getAttribute("class")?.includes("h-3 w-3")]).toEqual(["svg", "superseded by round 2", true]);
+  expect(document.querySelector<HTMLElement>(`[data-prototype-round="${older}"]`)!.title).toEndWith(" · superseded by round 2");
+  const footer = () => document.querySelector<HTMLElement>("footer")!;
+  expect(footer().querySelector("[data-prototype-superseded-line]")?.textContent).toContain("Superseded by round 2, decided on 30 Aug 2026.");
+  expect(footer().textContent).not.toContain("nothing yet");
+  expect(document.querySelector("[data-prototype-save]")).toBeNull();
+  expect(document.querySelector("[data-prototype-comment-field]")).toBeNull();
+  expect(document.querySelector<HTMLButtonElement>('[data-prototype-choose="1"]')!.disabled).toBe(true);
+  /* The link opens the round that decided. */
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-open-round="${newer}"]`)!.click(); });
+  expect(shownRound()).toBe(newer);
+  /* Deciding the retired round is still the operator's to ask for. */
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${older}"]`)!.click(); });
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-decide-anyway]")!.click(); });
+  expect(document.querySelector("[data-prototype-decide-anyway]")).toBeNull();
+  expect(footer().querySelector("[data-prototype-superseded-line]")).not.toBeNull();
+  expect(document.querySelector<HTMLButtonElement>('[data-prototype-choose="1"]')!.disabled).toBe(false);
+  expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
+});
+
 test("a decided round opens on its first chosen variant, and the accent marks the chosen rows only, never the row merely on the stage", async () => {
   const read = reviewRead({ chosen: [2], comment: "" });
   read.rounds[0]!.variants.push(variant(3, "Wide"));
@@ -362,4 +445,250 @@ test("the phone seat card's prototype chip says the word with the count", async 
   } finally {
     publishPrototypeNotices([]);
   }
+});
+
+/* The full-screen viewer over a review: the picture pressed, the frames of its
+   variant to step through, a pair as one picture with its original switched in
+   place, and the hand's swipes. happy-dom lays nothing out, so a pointer is
+   read from the frame's corner; the browser drivers measure the rest. */
+describe("the full-screen viewer", () => {
+  const available = (id: string) => ({ ...media(id), available: true, url: `/media/${id}.png` });
+  const video = (id: string) => ({ media: { ...media(id), mime: "video/webm" as const, available: true, url: `/media/${id}.webm` }, caption: "Walk" });
+  /* Variant 1: a pair, a plain frame and a video; variant 2: one frame. */
+  function pairRead(): PrototypeReviewRead {
+    const read = reviewRead();
+    read.rounds[0]!.variants[0]!.frames = [{ image: available("c"), original: available("o"), caption: "Board" }, { image: available("p"), caption: "Phone" }];
+    read.rounds[0]!.variants[0]!.videos = [video("v")];
+    read.rounds[0]!.variants[1]!.frames = [{ image: available("r"), caption: "Roomy board" }];
+    return read;
+  }
+  const lightbox = () => document.querySelector<HTMLElement>("[role=dialog] [data-lightbox-position]")?.closest<HTMLElement>("[role=dialog]") ?? null;
+  const place = () => lightbox()?.querySelector("[data-lightbox-position]")?.textContent ?? null;
+  const caption = () => lightbox()?.querySelector("[data-lightbox-caption]")?.textContent ?? null;
+  const visible = () => [...lightbox()!.querySelectorAll<HTMLImageElement>("img")].filter((image) => !image.hidden);
+  const scale = () => lightbox()!.querySelector(`button[aria-label="Reset zoom"]`)!.textContent;
+  const press = (selector: string) => act(async () => { document.querySelector<HTMLElement>(selector)!.click(); });
+  const key = (name: string) => act(async () => { dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
+  const stage = () => document.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage;
+  /* One finger at fit, from one point to another, as the phone sends it. */
+  const swipe = async (from: [number, number], to: [number, number]) => {
+    const target = visible()[0]!;
+    const fire = (type: string, [x, y]: [number, number]) => target.dispatchEvent(new dom.PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 7, pointerType: "touch", isPrimary: true, button: 0, buttons: type === "pointerup" ? 0 : 1, clientX: x, clientY: y }) as unknown as Event);
+    await act(async () => { fire("pointerdown", from); });
+    await act(async () => { fire("pointermove", [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2]); });
+    await act(async () => { fire("pointermove", to); });
+    await act(async () => { fire("pointerup", to); });
+  };
+
+  test("a press on a frame opens it with its caption and its place, steps only through its variant's pictures, and closing leaves the stage on the picture stepped to", async () => {
+    await mountReview(pairRead());
+    /* The plain frame is the variant's second slide: the stage walks to it first. */
+    await press('[data-prototype-step="next"]');
+    await press(`[data-prototype-zoom="${"p".repeat(64)}"]`);
+    expect(place()).toBe("2 / 3");
+    expect(caption()).toContain("1 · Compact — Phone");
+    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/p.png"]);
+    /* The video is not a picture and the next variant is not this one: the walk stops here. */
+    await key("ArrowRight");
+    expect(place()).toBe("2 / 3");
+    await key("ArrowLeft");
+    expect(place()).toBe("1 / 3");
+    await key("ArrowLeft");
+    expect(place()).toBe("1 / 3");
+    expect(stage()).toBe("1:f0");
+    /* The close is a button of its own; the review stays open under it. */
+    await act(async () => { lightbox()!.querySelector<HTMLElement>('button[aria-label="Close"]')!.click(); });
+    expect(lightbox()).toBeNull();
+    expect(document.querySelector("[data-prototype-review]")).not.toBeNull();
+    expect(stage()).toBe("1:f0");
+  });
+
+  test("a pair is one picture: the switch puts the original in its place at the same zoom, and a step returns to the changed side unzoomed", async () => {
+    await mountReview(pairRead());
+    /* The desktop draws the pair side by side; a press on the original opens the pair showing it. */
+    await press(`[data-prototype-zoom="${"o".repeat(64)}"]`);
+    expect(place()).toBe("1 / 3");
+    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/o.png"]);
+    expect(caption()).toContain("Board · Original");
+    const side = (name: "before" | "after") => lightbox()!.querySelector<HTMLElement>(`[data-lightbox-compare-side="${name}"]`)!;
+    expect([side("before").getAttribute("aria-pressed"), side("after").getAttribute("aria-pressed")]).toEqual(["true", "false"]);
+    /* Both sides are loaded with the pair, so the switch shows the other at once. */
+    expect(lightbox()!.querySelectorAll("img[data-lightbox-side]")).toHaveLength(2);
+    await act(async () => { side("after").click(); });
+    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/c.png"]);
+    expect(caption()).toContain("Board · Changed");
+    await act(async () => { lightbox()!.querySelector<HTMLElement>(`button[aria-label="Zoom in"]`)!.click(); });
+    expect(scale()).toBe("140%");
+    await act(async () => { side("before").click(); });
+    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/o.png"]);
+    expect(scale()).toBe("140%");
+    expect(lightbox()).not.toBeNull();
+    await key("ArrowRight");
+    expect(place()).toBe("2 / 3");
+    expect(scale()).toBe("100%");
+    expect(lightbox()!.querySelector("[data-lightbox-compare]")).toBeNull();
+    expect(stage()).toBe("1:f1");
+  });
+
+  test("a finger swipes to the neighbouring picture and back, and a drag down closes the viewer and nothing else", async () => {
+    await mountReview(pairRead());
+    await press('[data-prototype-fullsize]');
+    expect(place()).toBe("1 / 3");
+    await swipe([300, 400], [180, 404]);
+    expect(place()).toBe("2 / 3");
+    expect(stage()).toBe("1:f1");
+    /* The last picture of the variant: a further swipe stays. */
+    await swipe([300, 400], [180, 400]);
+    expect(place()).toBe("2 / 3");
+    await swipe([180, 400], [300, 400]);
+    expect(place()).toBe("1 / 3");
+    await swipe([300, 200], [300, 360]);
+    expect(lightbox()).toBeNull();
+    expect(document.querySelector("[data-prototype-review]")).not.toBeNull();
+  });
+
+  test("on the phone the sheet takes the screen, a frame takes the stage's width at its own height, a pair is compared on one frame, and a press on it opens the viewer", async () => {
+    phoneLayout = true;
+    await mountReview(pairRead());
+    const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review]")!;
+    expect(sheet.className).toContain("h-full");
+    expect(document.querySelector("[data-prototype-pair-mode]")).toBeNull();
+    expect(document.querySelector('[data-prototype-pair="slider"]')).not.toBeNull();
+    /* The canvas is as tall as what it draws: no height of its own, no inset. */
+    const canvas = document.querySelector<HTMLElement>("[data-prototype-canvas]")!;
+    expect(canvas.className).not.toMatch(/\bh-\[/);
+    expect(canvas.querySelector('[data-prototype-pair="slider"]')!.className).not.toContain("absolute");
+    await press("[data-prototype-pair-frame]");
+    expect(place()).toBe("1 / 3");
+    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/c.png"]);
+    await key("Escape");
+    expect(lightbox()).toBeNull();
+    await press('[data-prototype-step="next"]');
+    const plain = document.querySelector<HTMLImageElement>("[data-prototype-canvas] img")!;
+    expect(plain.className.split(/\s+/)).toEqual(expect.arrayContaining(["w-full", "h-auto"]));
+    /* The choice and the comment stay in the sheet's footer, outside what scrolls. */
+    expect(sheet.querySelector("[data-mobile2-sheet-body] [data-prototype-save]")).toBeNull();
+    expect(sheet.querySelector("[data-prototype-save]")).not.toBeNull();
+    /* A video plays in the stage at its whole width. */
+    await press('[data-prototype-step="next"]');
+    expect(document.querySelector<HTMLElement>("[data-prototype-video]")!.className).toContain("w-full");
+  });
+});
+
+
+describe("short questionnaire", () => {
+  const questions = [
+    { id: "place", text: "Where?", options: [{ label: "Here", recommended: true }, { label: "There" }] },
+    { id: "scope", text: "Which surfaces?", multiple: true, options: [{ label: "Desktop", recommended: true }, { label: "Phone" }] },
+    { id: "timing", text: "When?", other: true, options: [{ label: "Now", recommended: true }, { label: "Later" }] },
+  ];
+  async function mountQuestions(phone = false, answered = false) {
+    phoneLayout = phone;
+    const data = reviewRead(); data.rounds[0]!.variants = []; data.rounds[0]!.questions = questions;
+    if (answered) data.rounds[0]!.decision = { chosen: [], answers: questions.map(q => ({ questionId: q.id, options: [0] })), skipped: true, comment: "", at: data.rounds[0]!.createdAt, delivery: { state: "sent", retryable: false } };
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body)); posted.push(body);
+        data.rounds[0]!.decision = { chosen: [], answers: body.answers ?? questions.map(q => ({ questionId: q.id, options: [0] })), ...(body.skip ? { skipped: true as const } : {}), comment: body.comment, at: data.rounds[0]!.createdAt, delivery: { state: "sent", retryable: false } };
+      }
+      return new Response(JSON.stringify(data), { status: 200 });
+    }) as typeof fetch;
+    const host = document.createElement("div"); document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); await new Promise(r => setTimeout(r,20)); });
+    return posted;
+  }
+  const click = async (selector: string) => act(async () => { document.querySelector<HTMLElement>(selector)!.click(); });
+  test("questions only preselect recommendations, single and multiple choices and shared other save once", async () => {
+    const posted = await mountQuestions();
+    expect(Boolean(document.querySelector("[data-prototype-variants]"))).toBe(false);
+    expect(Boolean(document.querySelector("[data-prototype-stage]"))).toBe(false);
+    expect(document.querySelectorAll("[data-prototype-recommended]")).toHaveLength(3);
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.getAttribute("aria-checked")).toBe("true");
+    await click('[data-prototype-option="place:1"]');
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.getAttribute("aria-checked")).toBe("false");
+    await click('[data-prototype-option="scope:1"]');
+    await click('[data-prototype-other="timing"]');
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(true);
+    const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+    const props = (field as unknown as Record<string, { onChange: (e: { target: { value: string } }) => void }>)[Object.keys(field).find(k => k.startsWith("__reactProps$"))!]!;
+    await act(async () => props.onChange({ target: { value: "  Start after lunch.\nKeep this.  " } }));
+    await click("[data-prototype-save]");
+    expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [], comment: "  Start after lunch.\nKeep this.  ", answers: [{ questionId: "place", options: [1] }, { questionId: "scope", options: [0,1] }, { questionId: "timing", options: [], other: true }] }]);
+  });
+  test("images accompanying questions keep variant choices optional", async () => {
+    const read = reviewRead();
+    read.rounds[0]!.questions = questions;
+    await mountReview(read);
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(false);
+    expect(document.querySelector("[data-prototype-decide]")?.textContent).not.toContain("Choose one or more");
+  });
+  test("the Questions section label shows over the list only beside images", async () => {
+    await mountQuestions();
+    expect(document.querySelector("[data-prototype-questions-label]")).toBeNull();
+    await mountReview((() => { const read = reviewRead(); read.rounds[0]!.questions = questions; return read; })());
+    expect(document.querySelector("[data-prototype-questions-label]")?.textContent).toBe("Questions");
+  });
+  test("a question's number sits in its own column so wrapped text keeps one left edge", async () => {
+    await mountQuestions();
+    const number = document.querySelector("[data-prototype-question] [data-prototype-question-number]")!;
+    expect(number.nextElementSibling?.tagName).toBe("P");
+    expect(number.parentElement?.className).toContain("flex");
+  });
+  test("phone skip posts only skip and leaves read-only recommended answers", async () => {
+    const posted = await mountQuestions(true);
+    expect(document.querySelector("[data-prototype-actions]")?.contains(document.querySelector("[data-prototype-skip]"))).toBe(true);
+    await click("[data-prototype-skip]");
+    expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [], comment: "", skip: true }]);
+    expect(document.querySelector("[data-prototype-skipped]")).not.toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[data-prototype-option="place:0"]')?.disabled).toBe(true);
+  });
+  test("marks carry no letters and the recommended pill sits beside the words", async () => {
+    await mountQuestions();
+    for (const mark of document.querySelectorAll("[data-prototype-mark]")) expect(mark.textContent).toBe("");
+    for (const pill of document.querySelectorAll("[data-prototype-recommended]")) expect(pill.parentElement?.tagName).toBe("BUTTON");
+  });
+  test("a questions-only review is titled Questions, not Prototype review", async () => {
+    await mountQuestions();
+    expect(document.querySelector("[role=dialog] header p")?.textContent).toBe("Questions · Layout task");
+    expect(document.body.textContent).not.toContain("Prototype review");
+  });
+  test("an answered questionnaire fades unpicked options, drops the hint and shows one status line", async () => {
+    await mountQuestions(false, true);
+    expect(document.querySelector('[data-prototype-option="place:1"]')?.className).toContain("opacity-60");
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.className).not.toContain("opacity-60");
+    expect(document.body.textContent).not.toContain("Choose any");
+    const footer = document.querySelector("[data-prototype-decision]")!;
+    expect(footer.textContent).toContain("Skipped, recommended answers taken");
+    expect(footer.textContent).not.toMatch(/answered|No comment/i);
+  });
+  const escape = async () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  const typeComment = async (value: string) => {
+    const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+    const props = (field as unknown as Record<string, { onChange: (e: { target: { value: string } }) => void }>)[Object.keys(field).find(k => k.startsWith("__reactProps$"))!]!;
+    await act(async () => props.onChange({ target: { value } }));
+  };
+  test("closing after only an answer changed asks about the answers, not a comment", async () => {
+    await mountQuestions();
+    await escape();
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+    await click('[data-prototype-option="place:1"]');
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("");
+    await escape();
+    const guard = document.querySelector("[data-prototype-guard]")!;
+    expect(guard.textContent).toContain("Discard the unsaved answers?");
+    expect(guard.textContent).not.toMatch(/comment/i);
+  });
+  test("closing an images-only review with a comment keeps the comment wording", async () => {
+    await mountReview(reviewRead());
+    await typeComment("Tighter spacing.");
+    await escape();
+    expect(document.querySelector("[data-prototype-guard]")!.textContent).toContain("Discard the unsaved comment?");
+  });
+  test("an open questionnaire keeps the hint and unfaded options", async () => {
+    await mountQuestions();
+    expect(document.body.textContent).toContain("Choose any");
+    expect(document.querySelector('[data-prototype-option="place:1"]')?.className).not.toContain("opacity-60");
+  });
 });

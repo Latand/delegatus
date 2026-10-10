@@ -17,6 +17,14 @@ test("merger resolves a required reviewed-PR list with a read-write, non-nesting
   expect(role.value.definition.capabilities).toEqual([]);
   expect(role.value.prompt).toContain("12@abcdef1,13@1234567");
   expect(role.value.prompt).toContain("Never judge your own resolution");
+  // The rule a seat once had to rule on is the default: main's own red never
+  // stops a batch, foreign detectors are skipped, gates run one at a time.
+  expect(role.value.prompt).toContain("produces on native main are pre-existing and never stop the batch");
+  expect(role.value.prompt).toContain("A detector of a PR outside the candidate is skipped with a note");
+  expect(role.value.prompt).toContain("drops only the PR whose removal clears it");
+  expect(role.value.prompt).toContain("one at a time through scripts/gate-slot.sh");
+  expect(role.value.prompt).toContain("Full browser campaigns are opt-in (gate --browser)");
+  expect(role.value.prompt).not.toContain("/var/tmp/llv-gate");
 });
 
 test("maintainer preserves review and release ownership and treats retired seats as history", () => {

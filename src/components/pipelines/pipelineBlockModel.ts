@@ -251,8 +251,7 @@ export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStag
   if (pipeline.state === "needs_decision") {
     const options = pipelineActionOptions(pipeline);
     if (terminalReviewContinuationAvailable(pipeline)) {
-      const stage = parkedStage(pipeline);
-      return { kind: "decision", stage, choices: [{ action: "continue-review", stageId: null, stageName: null, expectedAttempt: null }], stop: reviewStop(pipeline) };
+      return null;
     }
     const retry = options.find((option) => option.action === "retry-stage");
     if (!retry || retry.refusal || !retry.stageId) return null;
@@ -268,7 +267,7 @@ export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStag
   if (pipeline.state === "needs_review") {
     const stop = reviewStop(pipeline);
     const none = { stageId: null, stageName: null, expectedAttempt: null };
-    return { kind: "review", stage: stop?.stage ?? null, choices: [{ action: "accept-head", ...none }, { action: "continue-review", ...none }], stop };
+    return { kind: "review", stage: stop?.stage ?? null, choices: [{ action: "accept-head", ...none }], stop };
   }
   return null;
 }
@@ -322,6 +321,7 @@ export function screenCurrentStageId(summary: KanbanPipeline): string | null {
  * "Implement failed · 1 finding". The caller adds the age.
  */
 export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): string | null {
+  if (pipeline.state === "provisioning" && pipeline.stateDetail?.startsWith("waiting for disk space:")) return pipeline.stateDetail;
   const stop = reviewStop(pipeline);
   if (stop) return reviewStopReason(t, stop, nameOf);
   if (pipeline.state === "needs_review") {

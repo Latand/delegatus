@@ -16,8 +16,8 @@
         {
           "name": "Open the orchestrator's conversation — w",
           "button": true,
-          "visibleText": 246,
-          "naturalText": 246,
+          "visibleText": 254,
+          "naturalText": 254,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -45,8 +45,8 @@
         {
           "name": "claude-opus-4-5-1m · high",
           "button": false,
-          "visibleText": 155,
-          "naturalText": 120,
+          "visibleText": 159,
+          "naturalText": 123,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -54,8 +54,8 @@
         {
           "name": "· high",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 36,
+          "naturalText": 36,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -63,8 +63,8 @@
         {
           "name": "working 6:40",
           "button": false,
-          "visibleText": 59,
-          "naturalText": 59,
+          "visibleText": 61,
+          "naturalText": 61,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -81,8 +81,8 @@
         {
           "name": "·",
           "button": false,
-          "visibleText": 2,
-          "naturalText": 2,
+          "visibleText": 4,
+          "naturalText": 4,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -90,8 +90,8 @@
         {
           "name": "holding the seat for 9h",
           "button": false,
-          "visibleText": 111,
-          "naturalText": 111,
+          "visibleText": 109,
+          "naturalText": 109,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -99,8 +99,8 @@
         {
           "name": "Context",
           "button": false,
-          "visibleText": 39,
-          "naturalText": 39,
+          "visibleText": 41,
+          "naturalText": 41,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -108,8 +108,8 @@
         {
           "name": "48% left of 1M",
           "button": false,
-          "visibleText": 71,
-          "naturalText": 71,
+          "visibleText": 70,
+          "naturalText": 70,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -117,8 +117,8 @@
         {
           "name": "Rotation recommended — 48% of the window",
           "button": false,
-          "visibleText": 246,
-          "naturalText": 246,
+          "visibleText": 245,
+          "naturalText": 245,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -137,8 +137,8 @@
         {
           "name": "Відкрити розмову оркестратора — працює 6",
           "button": true,
-          "visibleText": 249,
-          "naturalText": 249,
+          "visibleText": 257,
+          "naturalText": 257,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -166,8 +166,8 @@
         {
           "name": "claude-opus-4-5-1m · high",
           "button": false,
-          "visibleText": 155,
-          "naturalText": 120,
+          "visibleText": 159,
+          "naturalText": 123,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -175,17 +175,17 @@
         {
           "name": "· high",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 36,
+          "naturalText": 36,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "працює 6:40",
+          "name": "працює 6:41",
           "button": false,
-          "visibleText": 58,
-          "naturalText": 58,
+          "visibleText": 61,
+          "naturalText": 61,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -202,8 +202,8 @@
         {
           "name": "·",
           "button": false,
-          "visibleText": 2,
-          "naturalText": 2,
+          "visibleText": 4,
+          "naturalText": 4,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -220,8 +220,8 @@
         {
           "name": "Контекст",
           "button": false,
-          "visibleText": 46,
-          "naturalText": 46,
+          "visibleText": 48,
+          "naturalText": 48,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -229,8 +229,8 @@
         {
           "name": "залишилось 48% зі 1M",
           "button": false,
-          "visibleText": 114,
-          "naturalText": 114,
+          "visibleText": 117,
+          "naturalText": 117,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -238,8 +238,8 @@
         {
           "name": "Радимо ротацію — залишилось 48% вікна.",
           "button": false,
-          "visibleText": 216,
-          "naturalText": 216,
+          "visibleText": 219,
+          "naturalText": 219,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -276,17 +276,17 @@
         {
           "name": "Orchestrator",
           "button": false,
-          "visibleText": 77,
-          "naturalText": 77,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": false
         },
         {
-          "name": "live",
+          "name": "working",
           "button": false,
-          "visibleText": 17,
-          "naturalText": 17,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -303,24 +303,6 @@
         {
           "name": "Claude",
           "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
-          "button": false,
           "visibleText": 33,
           "naturalText": 33,
           "clipped": false,
@@ -328,10 +310,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · High",
+          "button": false,
+          "visibleText": 149,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· High",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -346,25 +346,16 @@
           "titled": true
         },
         {
-          "name": "mandate v28, default v29",
+          "name": "mandate v40, default v41",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 118,
+          "naturalText": 118,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Report settings. Reports go to the log o",
-          "button": true,
-          "visibleText": 35,
-          "naturalText": 35,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "Seat tick settings. Tick: could not be r",
+          "name": "Read this answer from the beginning",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -373,10 +364,19 @@
           "titled": true
         },
         {
+          "name": "Report settings. Reports go to the log o",
+          "button": true,
+          "visibleText": 38,
+          "naturalText": 38,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Rotate",
           "button": true,
-          "visibleText": 30,
-          "naturalText": 30,
+          "visibleText": 31,
+          "naturalText": 31,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -384,8 +384,8 @@
         {
           "name": "Stop host",
           "button": true,
-          "visibleText": 48,
-          "naturalText": 48,
+          "visibleText": 51,
+          "naturalText": 51,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -409,10 +409,19 @@
           "titled": true
         },
         {
+          "name": "Open in the agent window",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Collapse the orchestrator chat (O)",
           "button": true,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -425,7 +434,7 @@
     "768-uk-top": {
       "root": {
         "width": 494,
-        "height": 97
+        "height": 152
       },
       "atoms": [
         {
@@ -449,17 +458,17 @@
         {
           "name": "Оркестратор",
           "button": false,
-          "visibleText": 81,
-          "naturalText": 81,
+          "visibleText": 82,
+          "naturalText": 82,
           "clipped": false,
           "truncated": false,
           "titled": false
         },
         {
-          "name": "живий",
+          "name": "працює",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -476,24 +485,6 @@
         {
           "name": "Claude",
           "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
-          "button": false,
           "visibleText": 33,
           "naturalText": 33,
           "clipped": false,
@@ -501,10 +492,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · Високі",
+          "button": false,
+          "visibleText": 159,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· Високі",
+          "button": false,
+          "visibleText": 46,
+          "naturalText": 46,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -519,25 +528,16 @@
           "titled": true
         },
         {
-          "name": "мандат v28, типовий v29",
+          "name": "мандат v40, типовий v41",
           "button": false,
-          "visibleText": 117,
-          "naturalText": 117,
+          "visibleText": 122,
+          "naturalText": 122,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Налаштування звітів. Звіти йдуть лише в ",
-          "button": true,
-          "visibleText": 24,
-          "naturalText": 24,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "name": "Читати цю відповідь від початку",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -546,10 +546,19 @@
           "titled": true
         },
         {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 26,
+          "naturalText": 26,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Замінити",
           "button": true,
-          "visibleText": 43,
-          "naturalText": 43,
+          "visibleText": 45,
+          "naturalText": 45,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -557,8 +566,8 @@
         {
           "name": "Зупинити хост",
           "button": true,
-          "visibleText": 74,
-          "naturalText": 74,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -582,10 +591,19 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
-          "visibleText": 47,
-          "naturalText": 47,
+          "visibleText": 50,
+          "naturalText": 50,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -598,7 +616,7 @@
     "1080-en-top": {
       "root": {
         "width": 798,
-        "height": 73
+        "height": 97
       },
       "atoms": [
         {
@@ -622,8 +640,8 @@
         {
           "name": "Orchestrator",
           "button": false,
-          "visibleText": 77,
-          "naturalText": 77,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -631,17 +649,17 @@
         {
           "name": "atlas",
           "button": false,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "live",
+          "name": "working",
           "button": false,
-          "visibleText": 17,
-          "naturalText": 17,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -649,32 +667,14 @@
         {
           "name": "Previous seats, 20",
           "button": true,
-          "visibleText": 83,
-          "naturalText": 83,
+          "visibleText": 90,
+          "naturalText": 90,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
           "name": "Claude",
-          "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
           "button": false,
           "visibleText": 33,
           "naturalText": 33,
@@ -683,10 +683,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · High",
+          "button": false,
+          "visibleText": 149,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· High",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -701,10 +719,19 @@
           "titled": true
         },
         {
-          "name": "mandate v28, default v29",
+          "name": "mandate v40, default v41",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 118,
+          "naturalText": 118,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Read this answer from the beginning",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -712,15 +739,15 @@
         {
           "name": "Report settings. Reports go to the log o",
           "button": true,
-          "visibleText": 54,
-          "naturalText": 54,
+          "visibleText": 58,
+          "naturalText": 58,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Seat tick settings. Tick: could not be r",
-          "button": true,
+          "name": "—",
+          "button": false,
           "visibleText": 10,
           "naturalText": 10,
           "clipped": false,
@@ -730,8 +757,8 @@
         {
           "name": "Rotate",
           "button": true,
-          "visibleText": 30,
-          "naturalText": 30,
+          "visibleText": 31,
+          "naturalText": 31,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -739,8 +766,8 @@
         {
           "name": "Stop host",
           "button": true,
-          "visibleText": 48,
-          "naturalText": 48,
+          "visibleText": 51,
+          "naturalText": 51,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -764,10 +791,19 @@
           "titled": true
         },
         {
+          "name": "Open in the agent window",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Collapse the orchestrator chat (O)",
           "button": true,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -804,8 +840,8 @@
         {
           "name": "Оркестратор",
           "button": false,
-          "visibleText": 81,
-          "naturalText": 81,
+          "visibleText": 82,
+          "naturalText": 82,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -813,17 +849,17 @@
         {
           "name": "atlas",
           "button": false,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "живий",
+          "name": "працює",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -831,32 +867,14 @@
         {
           "name": "Попередні оркестратори: 20",
           "button": true,
-          "visibleText": 142,
-          "naturalText": 142,
+          "visibleText": 147,
+          "naturalText": 147,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
           "name": "Claude",
-          "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
           "button": false,
           "visibleText": 33,
           "naturalText": 33,
@@ -865,10 +883,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · Високі",
+          "button": false,
+          "visibleText": 159,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· Високі",
+          "button": false,
+          "visibleText": 46,
+          "naturalText": 46,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -883,10 +919,19 @@
           "titled": true
         },
         {
-          "name": "мандат v28, типовий v29",
+          "name": "мандат v40, типовий v41",
           "button": false,
-          "visibleText": 117,
-          "naturalText": 117,
+          "visibleText": 122,
+          "naturalText": 122,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Читати цю відповідь від початку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -894,15 +939,15 @@
         {
           "name": "Налаштування звітів. Звіти йдуть лише в ",
           "button": true,
-          "visibleText": 62,
-          "naturalText": 62,
+          "visibleText": 66,
+          "naturalText": 66,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Налаштування тікера. Тікер: не вдалося п",
-          "button": true,
+          "name": "—",
+          "button": false,
           "visibleText": 10,
           "naturalText": 10,
           "clipped": false,
@@ -912,8 +957,8 @@
         {
           "name": "Замінити",
           "button": true,
-          "visibleText": 43,
-          "naturalText": 43,
+          "visibleText": 45,
+          "naturalText": 45,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -921,8 +966,8 @@
         {
           "name": "Зупинити хост",
           "button": true,
-          "visibleText": 74,
-          "naturalText": 74,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -946,10 +991,19 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
-          "visibleText": 47,
-          "naturalText": 47,
+          "visibleText": 50,
+          "naturalText": 50,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -986,8 +1040,8 @@
         {
           "name": "Оркестратор",
           "button": false,
-          "visibleText": 81,
-          "naturalText": 81,
+          "visibleText": 82,
+          "naturalText": 82,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -995,17 +1049,17 @@
         {
           "name": "atlas",
           "button": false,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "живий",
+          "name": "працює",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1013,32 +1067,14 @@
         {
           "name": "Попередні оркестратори: 20",
           "button": true,
-          "visibleText": 142,
-          "naturalText": 142,
+          "visibleText": 147,
+          "naturalText": 147,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
           "name": "Claude",
-          "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
           "button": false,
           "visibleText": 33,
           "naturalText": 33,
@@ -1047,10 +1083,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · Високі",
+          "button": false,
+          "visibleText": 159,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· Високі",
+          "button": false,
+          "visibleText": 46,
+          "naturalText": 46,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1065,10 +1119,19 @@
           "titled": true
         },
         {
-          "name": "мандат v28, типовий v29",
+          "name": "мандат v40, типовий v41",
           "button": false,
-          "visibleText": 117,
-          "naturalText": 117,
+          "visibleText": 122,
+          "naturalText": 122,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Читати цю відповідь від початку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1076,15 +1139,15 @@
         {
           "name": "Налаштування звітів. Звіти йдуть лише в ",
           "button": true,
-          "visibleText": 62,
-          "naturalText": 62,
+          "visibleText": 66,
+          "naturalText": 66,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Налаштування тікера. Тікер: не вдалося п",
-          "button": true,
+          "name": "—",
+          "button": false,
           "visibleText": 10,
           "naturalText": 10,
           "clipped": false,
@@ -1094,8 +1157,8 @@
         {
           "name": "Замінити",
           "button": true,
-          "visibleText": 43,
-          "naturalText": 43,
+          "visibleText": 45,
+          "naturalText": 45,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1103,8 +1166,8 @@
         {
           "name": "Зупинити хост",
           "button": true,
-          "visibleText": 74,
-          "naturalText": 74,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1128,10 +1191,19 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
-          "visibleText": 47,
-          "naturalText": 47,
+          "visibleText": 50,
+          "naturalText": 50,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1168,8 +1240,8 @@
         {
           "name": "Оркестратор",
           "button": false,
-          "visibleText": 81,
-          "naturalText": 81,
+          "visibleText": 82,
+          "naturalText": 82,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1177,17 +1249,17 @@
         {
           "name": "atlas",
           "button": false,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "живий",
+          "name": "працює",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1195,32 +1267,14 @@
         {
           "name": "Попередні оркестратори: 20",
           "button": true,
-          "visibleText": 142,
-          "naturalText": 142,
+          "visibleText": 147,
+          "naturalText": 147,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
           "name": "Claude",
-          "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
           "button": false,
           "visibleText": 33,
           "naturalText": 33,
@@ -1229,10 +1283,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · Високі",
+          "button": false,
+          "visibleText": 159,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· Високі",
+          "button": false,
+          "visibleText": 46,
+          "naturalText": 46,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1247,10 +1319,19 @@
           "titled": true
         },
         {
-          "name": "мандат v28, типовий v29",
+          "name": "мандат v40, типовий v41",
           "button": false,
-          "visibleText": 117,
-          "naturalText": 117,
+          "visibleText": 122,
+          "naturalText": 122,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Читати цю відповідь від початку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1258,15 +1339,15 @@
         {
           "name": "Налаштування звітів. Звіти йдуть лише в ",
           "button": true,
-          "visibleText": 62,
-          "naturalText": 62,
+          "visibleText": 66,
+          "naturalText": 66,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Налаштування тікера. Тікер: не вдалося п",
-          "button": true,
+          "name": "—",
+          "button": false,
           "visibleText": 10,
           "naturalText": 10,
           "clipped": false,
@@ -1276,8 +1357,8 @@
         {
           "name": "Замінити",
           "button": true,
-          "visibleText": 43,
-          "naturalText": 43,
+          "visibleText": 45,
+          "naturalText": 45,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1285,8 +1366,8 @@
         {
           "name": "Зупинити хост",
           "button": true,
-          "visibleText": 74,
-          "naturalText": 74,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1310,10 +1391,19 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
-          "visibleText": 47,
-          "naturalText": 47,
+          "visibleText": 50,
+          "naturalText": 50,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1350,8 +1440,8 @@
         {
           "name": "Оркестратор",
           "button": false,
-          "visibleText": 81,
-          "naturalText": 81,
+          "visibleText": 82,
+          "naturalText": 82,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1359,17 +1449,17 @@
         {
           "name": "atlas",
           "button": false,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "живий",
+          "name": "працює",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1377,32 +1467,14 @@
         {
           "name": "Попередні оркестратори: 20",
           "button": true,
-          "visibleText": 142,
-          "naturalText": 142,
+          "visibleText": 147,
+          "naturalText": 147,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
           "name": "Claude",
-          "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
           "button": false,
           "visibleText": 33,
           "naturalText": 33,
@@ -1411,10 +1483,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · Високі",
+          "button": false,
+          "visibleText": 159,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· Високі",
+          "button": false,
+          "visibleText": 46,
+          "naturalText": 46,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1429,10 +1519,19 @@
           "titled": true
         },
         {
-          "name": "мандат v28, типовий v29",
+          "name": "мандат v40, типовий v41",
           "button": false,
-          "visibleText": 117,
-          "naturalText": 117,
+          "visibleText": 122,
+          "naturalText": 122,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Читати цю відповідь від початку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1440,15 +1539,15 @@
         {
           "name": "Налаштування звітів. Звіти йдуть лише в ",
           "button": true,
-          "visibleText": 62,
-          "naturalText": 62,
+          "visibleText": 66,
+          "naturalText": 66,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Налаштування тікера. Тікер: не вдалося п",
-          "button": true,
+          "name": "—",
+          "button": false,
           "visibleText": 10,
           "naturalText": 10,
           "clipped": false,
@@ -1458,8 +1557,8 @@
         {
           "name": "Замінити",
           "button": true,
-          "visibleText": 43,
-          "naturalText": 43,
+          "visibleText": 45,
+          "naturalText": 45,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1467,8 +1566,8 @@
         {
           "name": "Зупинити хост",
           "button": true,
-          "visibleText": 74,
-          "naturalText": 74,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1492,10 +1591,19 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
-          "visibleText": 47,
-          "naturalText": 47,
+          "visibleText": 50,
+          "naturalText": 50,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1532,8 +1640,8 @@
         {
           "name": "Orchestrator",
           "button": false,
-          "visibleText": 77,
-          "naturalText": 77,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1541,17 +1649,17 @@
         {
           "name": "atlas",
           "button": false,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "live",
+          "name": "working",
           "button": false,
-          "visibleText": 17,
-          "naturalText": 17,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1559,32 +1667,14 @@
         {
           "name": "Previous seats, 20",
           "button": true,
-          "visibleText": 83,
-          "naturalText": 83,
+          "visibleText": 90,
+          "naturalText": 90,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
           "name": "Claude",
-          "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
           "button": false,
           "visibleText": 33,
           "naturalText": 33,
@@ -1593,10 +1683,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · High",
+          "button": false,
+          "visibleText": 149,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· High",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1611,10 +1719,19 @@
           "titled": true
         },
         {
-          "name": "mandate v28, default v29",
+          "name": "mandate v40, default v41",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 118,
+          "naturalText": 118,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Read this answer from the beginning",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1622,15 +1739,15 @@
         {
           "name": "Report settings. Reports go to the log o",
           "button": true,
-          "visibleText": 54,
-          "naturalText": 54,
+          "visibleText": 58,
+          "naturalText": 58,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Seat tick settings. Tick: could not be r",
-          "button": true,
+          "name": "—",
+          "button": false,
           "visibleText": 10,
           "naturalText": 10,
           "clipped": false,
@@ -1640,8 +1757,8 @@
         {
           "name": "Rotate",
           "button": true,
-          "visibleText": 30,
-          "naturalText": 30,
+          "visibleText": 31,
+          "naturalText": 31,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1649,8 +1766,8 @@
         {
           "name": "Stop host",
           "button": true,
-          "visibleText": 48,
-          "naturalText": 48,
+          "visibleText": 51,
+          "naturalText": 51,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1674,10 +1791,19 @@
           "titled": true
         },
         {
+          "name": "Open in the agent window",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Collapse the orchestrator chat (O)",
           "button": true,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1690,7 +1816,7 @@
     "1440-en-side": {
       "root": {
         "width": 379,
-        "height": 116
+        "height": 152
       },
       "atoms": [
         {
@@ -1714,17 +1840,17 @@
         {
           "name": "Orchestrator",
           "button": false,
-          "visibleText": 77,
-          "naturalText": 77,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": false
         },
         {
-          "name": "live",
+          "name": "working",
           "button": false,
-          "visibleText": 17,
-          "naturalText": 17,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1741,24 +1867,6 @@
         {
           "name": "Claude",
           "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
-          "button": false,
           "visibleText": 33,
           "naturalText": 33,
           "clipped": false,
@@ -1766,10 +1874,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · High",
+          "button": false,
+          "visibleText": 149,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· High",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1784,25 +1910,16 @@
           "titled": true
         },
         {
-          "name": "mandate v28, default v29",
+          "name": "mandate v40, default v41",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 118,
+          "naturalText": 118,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Report settings. Reports go to the log o",
-          "button": true,
-          "visibleText": 35,
-          "naturalText": 35,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "Seat tick settings. Tick: could not be r",
+          "name": "Read this answer from the beginning",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -1811,10 +1928,19 @@
           "titled": true
         },
         {
+          "name": "Report settings. Reports go to the log o",
+          "button": true,
+          "visibleText": 38,
+          "naturalText": 38,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Rotate",
           "button": true,
-          "visibleText": 30,
-          "naturalText": 30,
+          "visibleText": 31,
+          "naturalText": 31,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1822,8 +1948,8 @@
         {
           "name": "Stop host",
           "button": true,
-          "visibleText": 48,
-          "naturalText": 48,
+          "visibleText": 51,
+          "naturalText": 51,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1839,6 +1965,15 @@
         },
         {
           "name": "Dock at the top",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Open in the agent window",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -1887,8 +2022,8 @@
         {
           "name": "Оркестратор",
           "button": false,
-          "visibleText": 81,
-          "naturalText": 81,
+          "visibleText": 82,
+          "naturalText": 82,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1896,17 +2031,17 @@
         {
           "name": "atlas",
           "button": false,
-          "visibleText": 22,
-          "naturalText": 22,
+          "visibleText": 23,
+          "naturalText": 23,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "живий",
+          "name": "працює",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -1914,32 +2049,14 @@
         {
           "name": "Попередні оркестратори: 20",
           "button": true,
-          "visibleText": 142,
-          "naturalText": 142,
+          "visibleText": 147,
+          "naturalText": 147,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
           "name": "Claude",
-          "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
           "button": false,
           "visibleText": 33,
           "naturalText": 33,
@@ -1948,10 +2065,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · Високі",
+          "button": false,
+          "visibleText": 159,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· Високі",
+          "button": false,
+          "visibleText": 46,
+          "naturalText": 46,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1966,10 +2101,19 @@
           "titled": true
         },
         {
-          "name": "мандат v28, типовий v29",
+          "name": "мандат v40, типовий v41",
           "button": false,
-          "visibleText": 117,
-          "naturalText": 117,
+          "visibleText": 122,
+          "naturalText": 122,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Читати цю відповідь від початку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1977,15 +2121,15 @@
         {
           "name": "Налаштування звітів. Звіти йдуть лише в ",
           "button": true,
-          "visibleText": 62,
-          "naturalText": 62,
+          "visibleText": 66,
+          "naturalText": 66,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Налаштування тікера. Тікер: не вдалося п",
-          "button": true,
+          "name": "—",
+          "button": false,
           "visibleText": 10,
           "naturalText": 10,
           "clipped": false,
@@ -1995,8 +2139,8 @@
         {
           "name": "Замінити",
           "button": true,
-          "visibleText": 43,
-          "naturalText": 43,
+          "visibleText": 45,
+          "naturalText": 45,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -2004,8 +2148,8 @@
         {
           "name": "Зупинити хост",
           "button": true,
-          "visibleText": 74,
-          "naturalText": 74,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -2029,10 +2173,19 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
-          "visibleText": 47,
-          "naturalText": 47,
+          "visibleText": 50,
+          "naturalText": 50,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -2069,17 +2222,17 @@
         {
           "name": "Оркестратор",
           "button": false,
-          "visibleText": 81,
-          "naturalText": 81,
+          "visibleText": 82,
+          "naturalText": 82,
           "clipped": false,
           "truncated": false,
           "titled": false
         },
         {
-          "name": "живий",
+          "name": "працює",
           "button": false,
-          "visibleText": 35,
-          "naturalText": 35,
+          "visibleText": 42,
+          "naturalText": 42,
           "clipped": false,
           "truncated": false,
           "titled": false
@@ -2096,24 +2249,6 @@
         {
           "name": "Claude",
           "button": false,
-          "visibleText": 31,
-          "naturalText": 31,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "claude-opus-4-5-1m · high",
-          "button": false,
-          "visibleText": 143,
-          "naturalText": 111,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "· high",
-          "button": false,
           "visibleText": 33,
           "naturalText": 33,
           "clipped": false,
@@ -2121,10 +2256,28 @@
           "titled": true
         },
         {
+          "name": "claude-opus-4-5-1m · Високі",
+          "button": false,
+          "visibleText": 159,
+          "naturalText": 113,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· Високі",
+          "button": false,
+          "visibleText": 46,
+          "naturalText": 46,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "primary",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 37,
+          "naturalText": 37,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -2139,25 +2292,16 @@
           "titled": true
         },
         {
-          "name": "мандат v28, типовий v29",
+          "name": "мандат v40, типовий v41",
           "button": false,
-          "visibleText": 117,
-          "naturalText": 117,
+          "visibleText": 122,
+          "naturalText": 122,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "Налаштування звітів. Звіти йдуть лише в ",
-          "button": true,
-          "visibleText": 24,
-          "naturalText": 24,
-          "clipped": false,
-          "truncated": false,
-          "titled": true
-        },
-        {
-          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "name": "Читати цю відповідь від початку",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -2166,10 +2310,19 @@
           "titled": true
         },
         {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 26,
+          "naturalText": 26,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Замінити",
           "button": true,
-          "visibleText": 43,
-          "naturalText": 43,
+          "visibleText": 45,
+          "naturalText": 45,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -2177,8 +2330,8 @@
         {
           "name": "Зупинити хост",
           "button": true,
-          "visibleText": 74,
-          "naturalText": 74,
+          "visibleText": 79,
+          "naturalText": 79,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -2194,6 +2347,15 @@
         },
         {
           "name": "Закріпити зверху",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Відкрити у вікні агента",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,

@@ -1,0 +1,246 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion&mount=product",
+  "rule": "nothing is mounted until the switch in the settings dialog, reached from the header menu's Settings page, is on; the key is typed masked, sent once, cleared, and never present in the page afterwards; a key from the environment takes precedence and closes the field; the cap is kept with the month's usage beside it; on is the real voice, with no backend to choose and no demo, and the shell mounts it",
+  "note": "the settings routes are answered by the fixture from memory and the key is a made-up string; no provider, microphone or orchestrator is reached",
+  "cases": [
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "choices": {
+        "backendControls": 0,
+        "controls": 4,
+        "demoWords": false
+      },
+      "mountedBeforeEnable": 0,
+      "settingsWrites": [
+        {
+          "enabled": true
+        },
+        {
+          "monthlyCapUsd": 35
+        },
+        {
+          "enabled": false
+        }
+      ],
+      "keyWrites": 1,
+      "keyEchoed": false,
+      "keyFieldAfterSave": "",
+      "keyStatus": "Key saved. It is written to a file only your account can read, never shown again, and sent only to OpenAI when a call starts.",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 470,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "shellMount": {
+        "block": {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 36,
+          "y": 206,
+          "width": 280,
+          "height": 360
+        },
+        "overlapArea": 0,
+        "textUnderCharacter": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "choices": {
+        "backendControls": 0,
+        "controls": 4,
+        "demoWords": false
+      },
+      "mountedBeforeEnable": 0,
+      "settingsWrites": [
+        {
+          "enabled": true
+        },
+        {
+          "monthlyCapUsd": 35
+        },
+        {
+          "enabled": false
+        }
+      ],
+      "keyWrites": 1,
+      "keyEchoed": false,
+      "keyFieldAfterSave": "",
+      "keyStatus": "Ключ збережено. Він записується у файл, який читає лише ваш обліковий запис, більше ніде не показується й надсилається тільки в OpenAI на початку розмови.",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 470,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "shellMount": {
+        "block": {
+          "x": 740,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 450,
+          "y": 372,
+          "width": 280,
+          "height": 180
+        },
+        "overlapArea": 0,
+        "textUnderCharacter": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "choices": {
+        "backendControls": 0,
+        "controls": 4,
+        "demoWords": false
+      },
+      "mountedBeforeEnable": 0,
+      "settingsWrites": [
+        {
+          "enabled": true
+        },
+        {
+          "monthlyCapUsd": 35
+        },
+        {
+          "enabled": false
+        }
+      ],
+      "keyWrites": 1,
+      "keyEchoed": false,
+      "keyFieldAfterSave": "",
+      "keyStatus": "Ключ збережено. Він записується у файл, який читає лише ваш обліковий запис, більше ніде не показується й надсилається тільки в OpenAI на початку розмови.",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 470,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "shellMount": {
+        "block": {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 36,
+          "y": 206,
+          "width": 280,
+          "height": 360
+        },
+        "overlapArea": 0,
+        "textUnderCharacter": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "choices": {
+        "backendControls": 0,
+        "controls": 4,
+        "demoWords": false
+      },
+      "mountedBeforeEnable": 0,
+      "settingsWrites": [
+        {
+          "enabled": true
+        },
+        {
+          "monthlyCapUsd": 35
+        },
+        {
+          "enabled": false
+        }
+      ],
+      "keyWrites": 1,
+      "keyEchoed": false,
+      "keyFieldAfterSave": "",
+      "keyStatus": "Key saved. It is written to a file only your account can read, never shown again, and sent only to OpenAI when a call starts.",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 470,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "shellMount": {
+        "block": {
+          "x": 432,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 574,
+          "y": 292,
+          "width": 280,
+          "height": 260
+        },
+        "overlapArea": 0,
+        "textUnderCharacter": 0
+      }
+    },
+    {
+      "viewport": "390x844",
+      "lang": "en",
+      "scheme": "light",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 316,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "monthSpend": "Used in October: $3.40 of $35.00.",
+      "lastCall": "Last call: $0.40 · 7:51 · Oct 10.",
+      "phoneSettingsMounted": true,
+      "openedThrough": "header menu Settings → Voice Delegatus"
+    },
+    {
+      "viewport": "390x844",
+      "lang": "uk",
+      "scheme": "dark",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 316,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "monthSpend": "Витрачено за жовтень: $3.40 із $35.00.",
+      "lastCall": "Остання розмова: $0.40 · 7:51 · 10 жовтня.",
+      "phoneSettingsMounted": true,
+      "openedThrough": "header menu Settings → Voice Delegatus"
+    },
+    {
+      "lang": "en",
+      "realBackendWithoutKey": "refused in the lane with the way to the settings; no start attempted"
+    },
+    {
+      "lang": "en",
+      "environmentKey": "said to take precedence; the field and Save are disabled"
+    },
+    {
+      "lang": "uk",
+      "realBackendWithoutKey": "refused in the lane with the way to the settings; no start attempted"
+    },
+    {
+      "lang": "uk",
+      "environmentKey": "said to take precedence; the field and Save are disabled"
+    }
+  ]
+}

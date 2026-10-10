@@ -19,6 +19,8 @@ export type RelayTargetSettings = {
   hardCapMinutes: number;
   /** Answers per member per hour in each chat (§B.8); absent is the default, null or 0 no limit. */
   memberLimitPerHour?: number | null;
+  /** Absent is off; only the operator can enable full owner agent runs. */
+  ownerTier?: boolean;
 };
 export type PairedRelay = {
   id: string;
@@ -27,6 +29,7 @@ export type PairedRelay = {
   name: string;
   description: string;
   credential: string;
+  features?: string[];
   owner: ExternalRelayOwner;
   pairedAt: string;
   paused: boolean;
@@ -43,6 +46,7 @@ export type PendingRelay = {
   api_base: string;
   name: string;
   description: string;
+  features?: string[];
   limits: PairedRelay["limits"];
   pairing_id: string;
   poll_secret: string;
@@ -61,6 +65,10 @@ export type RelayStore = {
   pending: PendingRelay[];
 };
 export type RunRecord = {
+  /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
+  conversationId?: string;
+  /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
+  ownerTurn?: { clientAttemptId: string; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
   requestId: string;
   leaseId: string;
   relayId: string;
@@ -83,7 +91,7 @@ function read<T>(file: string, fallback: () => T): T {
     throw error;
   }
 }
-function write(file: string, data: unknown): void {
+export function writeRelayFile(file: string, data: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
@@ -129,7 +137,7 @@ function readStoredRelays(): RelayStore {
     !Array.isArray(store.pending)
   )
     throw new Error("invalid relay store");
-  if (!existed) write(file, store);
+  if (!existed) writeRelayFile(file, store);
   return store;
 }
 export function updateRelayStore(
@@ -138,7 +146,7 @@ export function updateRelayStore(
   const file = externalRelayFile("relays");
   return withFileLock(file, () => {
     const next = withoutExpired(change(withoutExpired(readStoredRelays())));
-    write(file, next);
+    writeRelayFile(file, next);
     return next;
   });
 }
@@ -157,11 +165,11 @@ export function updateRunLedger(
   const file = externalRelayFile("runs");
   return withFileLock(file, () => {
     const next = change(readRunLedger());
-    write(file, next);
+    writeRelayFile(file, next);
     return next;
   });
 }
-function withFileLock<T>(file: string, action: () => T): T {
+export function withFileLock<T>(file: string, action: () => T): T {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let fd: number | null = null;

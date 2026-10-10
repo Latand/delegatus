@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { currentPrototypeSummary, prototypeReviewSummary } from "@/lib/prototypeReview/model";
+import { redactMonitorText } from "@/lib/monitor/redact";
 
 import { statePath } from "@/lib/configDir";
 import type { PipelinePatchResult } from "@/lib/pipelines/engine";
@@ -34,6 +37,7 @@ import {
  *  - an orchestrator's decision request is resolved in the bridge report log
  *    itself (`resolvedAsks`), which is the record the report log's tick
  *    writes too, so the two surfaces are one action on one record;
+ *  - a prototype round has an exact-round record in this collection;
  *  - a task has none: dismissing a task dismisses what is on it.
  *
  * A dismissal hides only what its maker saw, so nothing here ever has to be
@@ -51,8 +55,11 @@ export const DISMISSAL_RETENTION_MS = 30 * 24 * 3_600_000;
 export const DISMISSAL_CAPACITY = 2_000;
 
 export interface AttentionDismissalV1 {
-  /** The durable conversation id, or the transcript path of a conversation
-      the registry does not know. */
+  /** The durable conversation id, a legacy transcript path, or a prototype
+      round key prefixed with `prototype:`. */
+  kind?: "conversation" | "prototype";
+  taskId?: string;
+  note?: string;
   subject: string;
   conversationId: string | null;
   path: string | null;
@@ -93,6 +100,8 @@ function parseRecord(value: unknown): AttentionDismissalV1 | null {
   if (typeof record.at !== "string" || !Number.isFinite(Date.parse(record.at))) return null;
   if (!isDismissedBy(record.by)) return null;
   return {
+    ...(record.kind === "prototype" ? { kind: "prototype" as const, taskId: typeof record.taskId === "string" ? record.taskId : undefined } : {}),
+    ...(typeof record.note === "string" ? { note: record.note } : {}),
     subject: record.subject,
     conversationId: nullableString(record.conversationId) ? record.conversationId : null,
     path: nullableString(record.path) ? record.path : null,
@@ -213,20 +222,23 @@ export function overlayAttentionDismissals(files: readonly FileEntry[], read: ()
     const record = file.supersededBy || file.migratedTo
       ? undefined
       : (file.conversationId ? index.get(file.conversationId) : undefined) ?? index.get(file.path);
-    if (record) file.attentionDismissal = { at: record.at, by: record.by, reasonId: record.reasonId };
+    if (record && record.kind !== "prototype") file.attentionDismissal = { at: record.at, by: record.by, reasonId: record.reasonId };
     else if (file.attentionDismissal) delete file.attentionDismissal;
   }
 }
 
 /** One serialized read-modify-write. A mutation that returns no records
-    changed nothing and writes nothing. Old records and the overflow go on
-    every write. */
+    changed nothing and writes nothing. Prototype hides remain undoable;
+    conversation records alone expire and count towards the capacity. */
 function mutate<R>(mutation: (records: AttentionDismissalV1[]) => { records?: AttentionDismissalV1[]; result: R }, now: Date): R {
   return dismissalsStore.mutate(attentionDismissalsFile(), (current) => {
     const outcome = mutation(current.records);
     if (!outcome.records) return { next: undefined, result: outcome.result };
     const floor = now.getTime() - DISMISSAL_RETENTION_MS;
-    const kept = outcome.records.filter((record) => Date.parse(record.at) >= floor).slice(-DISMISSAL_CAPACITY);
+    const conversations = new Set(outcome.records
+      .filter(record => record.kind !== "prototype" && Date.parse(record.at) >= floor)
+      .slice(-DISMISSAL_CAPACITY));
+    const kept = outcome.records.filter(record => record.kind === "prototype" || conversations.has(record));
     return {
       next: {
         schemaVersion: ATTENTION_DISMISSALS_SCHEMA_VERSION,
@@ -264,13 +276,15 @@ export interface DismissalPorts {
   pipeline(pipelineId: string): Pipeline | null;
   /** Stamp or clear a lane. `drawnMovedAt`, when stated, is the movement the
       card drew; a lane that moved since answers `moved` and is not stamped. */
-  setPipelineDismissal(pipelineId: string, dismiss: boolean, by: DismissedBy, drawnMovedAt?: number | null): Promise<PipelinePatchResult>;
+  setPipelineDismissal(pipelineId: string, dismiss: boolean, by: DismissedBy, drawnMovedAt?: number | null, note?: string): Promise<PipelinePatchResult>;
   /** Resolve decision requests in the report log, or take the mark back. */
-  resolveReports(seqs: readonly number[], resolve: boolean, by: DismissedBy, at: string): { resolved: number[]; alreadyClear: number[]; unknown: number[] };
+  resolveReports(seqs: readonly number[], resolve: boolean, by: DismissedBy, at: string, project?: string, note?: string): { resolved: number[]; alreadyClear: number[]; unknown: number[] };
 }
 
 export interface DismissOptions {
   undo?: boolean;
+  reason?: string;
+  project?: string;
   /** The MCP operation, when an agent called: a replay of it answers the
       record the first run wrote. */
   operationKey?: string;
@@ -336,8 +350,8 @@ function parseSubjects(value: unknown): DismissalSubjectRequest[] {
 
 /**
  * A target as a caller sent it, checked. `subjects` (a task's drawn subjects,
- * or a card no task owns) is the operator's own form: the MCP tool names a
- * conversation, a pipeline or a task and nothing narrower.
+ * or a card no task owns) is the operator's own batch form; the MCP tool
+ * names individual targets or all attention on one task.
  */
 export function parseDismissalTarget(value: unknown, options: { allowSubjects: boolean }): DismissalTarget {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new DismissalError("INVALID_TARGET", "target must be an object with a kind");
@@ -347,6 +361,12 @@ export function parseDismissalTarget(value: unknown, options: { allowSubjects: b
       return parseSubject({ ...target, kind: "conversation" }) as Extract<DismissalTarget, { kind: "conversation" }>;
     case "pipeline":
       return parsePipeline(target);
+    case "prototype":
+      return { kind: "prototype", taskId: requiredId(target.taskId, "taskId"), reviewId: requiredId(target.reviewId, "reviewId") };
+    case "report":
+      return parseSubject(target) as DismissalTarget;
+    case "update":
+      throw new DismissalError("UPDATE_NEEDS_ANSWER", "The operator chooses deploy now or keep waiting");
     case "task":
       return {
         kind: "task",
@@ -357,7 +377,7 @@ export function parseDismissalTarget(value: unknown, options: { allowSubjects: b
       if (!options.allowSubjects) break;
       return { kind: "subjects", subjects: parseSubjects(target.subjects) };
   }
-  throw new DismissalError("INVALID_TARGET", `target.kind must be ${options.allowSubjects ? "conversation, pipeline, task or subjects" : "conversation, pipeline or task"}`);
+  throw new DismissalError("INVALID_TARGET", `target.kind must be ${options.allowSubjects ? "conversation, pipeline, task, report, prototype or subjects" : "conversation, pipeline, task, report or prototype"}`);
 }
 
 /** A completed lane whose automatic merge stopped (#2187 §4.6). */
@@ -383,11 +403,13 @@ function laneCleared(pipeline: Pipeline): boolean {
 /** The subjects a target names. A task names the subjects its card drew when
     the caller says which, and otherwise everything on it: its assignments and
     the lanes filed under it. */
-function subjectsOf(target: DismissalTarget, ports: DismissalPorts): DismissalSubjectRequest[] {
+function subjectsOf(target: DismissalTarget, ports: DismissalPorts): Array<DismissalSubjectRequest | Extract<DismissalTarget, { kind: "prototype" }>> {
   switch (target.kind) {
     case "conversation":
       return [{ kind: "conversation", conversationId: target.conversationId, path: target.path, reasonId: target.reasonId ?? null }];
     case "pipeline":
+    case "report":
+    case "prototype":
       return [target];
     case "subjects":
       return target.subjects;
@@ -395,7 +417,9 @@ function subjectsOf(target: DismissalTarget, ports: DismissalPorts): DismissalSu
       const task = ports.task(target.taskId);
       if (!task) throw new DismissalError("TASK_NOT_FOUND", `no task ${target.taskId}`, 404);
       if (target.subjects) return target.subjects;
+      const reviewId = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary)?.waitingReviewId;
       return [
+        ...(reviewId ? [{ kind: "prototype" as const, taskId: task.id, reviewId }] : []),
         ...task.assignments
           .filter((assignment) => assignment.conversationId || assignment.path)
           .map((assignment): DismissalSubjectRequest => ({ kind: "conversation", conversationId: assignment.conversationId ?? undefined, path: assignment.path ?? undefined })),
@@ -419,6 +443,7 @@ function subjectsOf(target: DismissalTarget, ports: DismissalPorts): DismissalSu
  * starts later. A target that names nothing the service can find is refused.
  */
 export async function dismissAttention(target: DismissalTarget, by: DismissedBy, options: DismissOptions = {}): Promise<DismissalOutcome> {
+  const note = dismissalNote(options.reason);
   const ports = options.ports ?? await productionDismissalPorts();
   const undo = options.undo === true;
   const now = ports.now();
@@ -467,6 +492,7 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
           path: entry.resolved.path,
           at,
           by,
+          ...(note ? { note } : {}),
           reason: entry.reason,
           reasonId: entry.reasonId,
           ...(options.operationKey ? { operationKey: options.operationKey } : {}),
@@ -480,6 +506,24 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
     }, now);
     dismissed.push(...outcome.done);
     alreadyClear.push(...outcome.clear);
+  }
+
+  for (const request of requested) {
+    if (request.kind !== "prototype" || seen.has(`prototype:${request.reviewId}`)) continue;
+    seen.add(`prototype:${request.reviewId}`);
+    const task = ports.task(request.taskId);
+    if (!task) throw new DismissalError("TASK_NOT_FOUND", "prototype task not found", 404);
+    const summary = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary);
+    const answer: DismissalSubject = { ...request };
+    const subject = `prototype:${request.reviewId}`;
+    const result = mutate((records) => {
+      const held = records.find(record => record.subject === subject && record.taskId === task.id);
+      if (undo) return held ? { records: records.filter(record => record !== held), result: true } : { result: false };
+      if (summary?.waitingReviewId !== request.reviewId || held) return { result: false };
+      return { records: [...records, { kind: "prototype", taskId: task.id, subject, conversationId: null, path: null, at, by, reason: null, reasonId: null,
+        ...(note ? { note } : {}), ...(options.operationKey ? { operationKey: options.operationKey } : {}) }], result: true };
+    }, now);
+    (result ? dismissed : alreadyClear).push(answer);
   }
 
   for (const request of requested) {
@@ -504,14 +548,14 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
       changed.push(answer);
       continue;
     }
-    const result = await ports.setPipelineDismissal(pipeline.id, !undo, by, drawn);
+    const result = await ports.setPipelineDismissal(pipeline.id, !undo, by, drawn, note);
     if (!result.pipeline) throw new DismissalError("PIPELINE_REFUSED", result.error ?? "the pipeline refused the dismissal", result.status ?? 409);
     (result.moved ? changed : dismissed).push(answer);
   }
 
   const reports = [...new Set(requested.flatMap((request) => (request.kind === "report" ? [request.seq] : [])))];
   if (reports.length) {
-    const outcome = ports.resolveReports(reports, !undo, by, at);
+    const outcome = ports.resolveReports(reports, !undo, by, at, options.project, note);
     dismissed.push(...outcome.resolved.map((seq): DismissalSubject => ({ kind: "report", seq })));
     alreadyClear.push(...outcome.alreadyClear.map((seq): DismissalSubject => ({ kind: "report", seq })));
   }
@@ -519,7 +563,7 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
   if (!dismissed.length && !alreadyClear.length && !changed.length) {
     throw new DismissalError("NOTHING_TO_DISMISS", "the target names nothing that can need the operator");
   }
-  return { dismissed, alreadyClear, changed, at, by, undo };
+  return { dismissed, alreadyClear, changed, at, by, undo, ...(options.reason !== undefined ? { reason: note ?? "" } : {}) };
 }
 
 /** Production ports, loaded on first use so this module stays free of the
@@ -546,7 +590,14 @@ async function productionDismissalPorts(): Promise<DismissalPorts> {
     task: (taskId) => loadTasks().find((task) => task.id === taskId) ?? null,
     pipelines: () => loadPipelinesForList(),
     pipeline: (pipelineId) => getPipeline(pipelineId) ?? null,
-    setPipelineDismissal: (pipelineId, dismiss, by, drawnMovedAt) => setPipelineDismissal(pipelineId, dismiss, by, undefined, drawnMovedAt),
-    resolveReports: (seqs, resolve, by, at) => resolveBridgeAsks(seqs, { by, at, undo: !resolve }),
+    setPipelineDismissal: (pipelineId, dismiss, by, drawnMovedAt, note) => setPipelineDismissal(pipelineId, dismiss, by, undefined, drawnMovedAt, note),
+    resolveReports: (seqs, resolve, by, at, project, note) => resolveBridgeAsks(seqs, { by, at, undo: !resolve, inProject: project ? (held) => canonicalOrchestratorProject(held) === project : undefined, note }),
   };
+}
+
+/** A dismissal reason is retained as one redacted line. */
+export function dismissalNote(reason: unknown): string | undefined {
+  if (reason === undefined) return undefined;
+  if (typeof reason !== "string" || /[\r\n]/.test(reason) || reason.length > 200) throw new DismissalError("INVALID_REASON", "reason must be one line of at most 200 characters");
+  return redactMonitorText(reason.trim()) || undefined;
 }

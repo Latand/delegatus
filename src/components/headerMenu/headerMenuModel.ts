@@ -10,7 +10,7 @@ import type { MemorySettingView } from "@/lib/memory/viewTypes";
     phone's two device rows. */
 export const HEADER_ITEMS = [
   "activity", "team", "update", "qr", "language", "push", "memory", "key",
-  "mapping", "dictation", "linked", "relay", "ping", "guide", "walk", "signOut", "sound", "awake",
+  "mapping", "dictation", "voice", "linked", "relay", "ping", "guide", "walk", "signOut", "sound", "awake",
 ] as const;
 export type HeaderItem = (typeof HEADER_ITEMS)[number];
 export type HeaderSurface = "desktop" | "phone";
@@ -33,13 +33,14 @@ const HELP_ITEMS = ["guide", "walk"] as const;
 /* The desktop has no board-menu home for the language, the QR and the bell, so
    they stand here; the phone keeps them as the three buttons in its drawer
    header, keeps sound and keep-awake in this menu, and signs out on the Team
-   page. */
+   page. The voice companion is a desktop surface; its settings on both surfaces
+   also show the last call and monthly spend. */
 export const HEADER_LAYOUTS: Record<HeaderSurface, HeaderLayout> = {
   desktop: {
     cells: CELLS,
     rows: [
       { kind: "item", item: "qr" },
-      { kind: "page", id: "settings", items: ["language", "push", "memory", "key", "mapping", "dictation", "linked", "relay", "ping"] },
+      { kind: "page", id: "settings", items: ["language", "push", "memory", "key", "mapping", "dictation", "voice", "linked", "relay", "ping"] },
       { kind: "fold", id: "help", items: HELP_ITEMS },
       { kind: "item", item: "signOut" },
     ],
@@ -47,7 +48,7 @@ export const HEADER_LAYOUTS: Record<HeaderSurface, HeaderLayout> = {
   phone: {
     cells: CELLS,
     rows: [
-      { kind: "page", id: "settings", items: ["sound", "awake", "memory", "key", "mapping", "dictation", "linked", "relay", "ping"] },
+      { kind: "page", id: "settings", items: ["sound", "awake", "memory", "key", "mapping", "dictation", "voice", "linked", "relay", "ping"] },
       /* A page on the phone: the sheet at rest already stands near today's 743 px, and in place it would scroll. */
       { kind: "page", id: "help", items: HELP_ITEMS },
     ],

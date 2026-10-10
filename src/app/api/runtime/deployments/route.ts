@@ -9,6 +9,7 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { readRetirementStatus } from "@/lib/runtime/structuredHostRetirementStatus";
 
 import { isCanonicalBranchRef } from "@/lib/runtime/canonicalRevision";
+import { parseViewerDeploymentListCursor, viewerDeploymentPage } from "@/lib/runtime/contracts";
 import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealth } from "@/lib/runtime/client";
 import { DeploymentRuntimeUnavailableError, requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
 import { runtimeEventsRolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
@@ -41,9 +42,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const decision = await selfUpdateService().decide();
   if (decision.mode === "checkout" || decision.mode === "package") {
     await selfUpdateService().snapshot();
+    // The same page the host answers: newest first, a keyset cursor, and
+    // hasMore beside nextCursor, which deployment_status requires of both.
+    let cursor: ReturnType<typeof parseViewerDeploymentListCursor>;
+    try { cursor = parseViewerDeploymentListCursor(request.nextUrl.searchParams.get("cursor") ?? undefined); }
+    catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 400 }); }
     try {
-      const rows = checkoutDeployments(statePath("self-update")).slice().reverse().slice(0, deploymentListLimit(request));
-      return NextResponse.json({ count: rows.length, deployments: rows, nextCursor: null });
+      const page = viewerDeploymentPage(checkoutDeployments(statePath("self-update")), deploymentListLimit(request), cursor,
+        request.nextUrl.searchParams.get("compact") === "true");
+      return NextResponse.json({ count: page.deployments.length, ...page });
     } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Deployment ledger unavailable" }, { status: 503 }); }
   }
   const client = runtimeHostClient();

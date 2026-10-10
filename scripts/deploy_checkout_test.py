@@ -1,5 +1,6 @@
 """Synthetic switch regressions; no installation, service or live state is used."""
 import importlib.util
+import contextlib
 import pathlib
 import json
 import os
@@ -41,6 +42,9 @@ class Switch:
         self.process_error = None
         self.mcp_errors = 0
         self.outcome = "recovered"
+        self.cut = []
+        self.cut_unreadable = []
+        self.cut_error = None
 
     def preflight(self):
         return self.old, self.hosts
@@ -70,6 +74,11 @@ class Switch:
 
     def emit(self, event):
         self.events.append(event)
+
+    def interrupted(self, since, hosts):
+        if self.cut_error:
+            raise self.cut_error
+        return self.cut, self.cut_unreadable
 
 
 class LoggedFailures(unittest.TestCase):
@@ -106,6 +115,33 @@ class LoggedFailures(unittest.TestCase):
                 result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
                 self.assertEqual(result["verdict"], expected)
                 self.assertEqual(len(switch.samples), 3)
+
+    def test_verdict_lists_the_conversations_the_restart_cut(self):
+        switch = Switch()
+        switch.cut = [{"conversationId": "conversation_synthetic", "stage": None}]
+        result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["interrupted"], switch.cut)
+        self.assertEqual(result["interruptedUnreadable"], [])
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_an_unreadable_cut_inventory_is_unknown_and_never_passes(self):
+        switch = Switch()
+        switch.cut_error = PermissionError("records unreadable")
+        result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertIsNone(result["interrupted"])
+        self.assertEqual(result["interruptedUnreadable"], ["interrupted:PermissionError"])
+        self.assertEqual(result["diagnostics"], ["interrupted:PermissionError"])
+
+    def test_a_cut_inventory_with_gaps_keeps_what_it_read_and_never_passes(self):
+        switch = Switch()
+        switch.cut = [{"conversationId": "conversation_synthetic", "stage": None}]
+        switch.cut_unreadable = ["interruption-continuation-broken.json:JSONDecodeError"]
+        result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["interrupted"], switch.cut)
+        self.assertEqual(result["interruptedUnreadable"], switch.cut_unreadable)
 
     def test_old_or_mixed_serving_releases_retry_and_are_named_in_verdict(self):
         switch = Switch()
@@ -210,6 +246,199 @@ class AdapterContracts(unittest.TestCase):
                                 capture_output=True, timeout=5, env={**os.environ, "LLV_STATE_DIR": ""})
         self.assertEqual(result.returncode, 0)
         self.assertIn(b"--preflight", result.stdout)
+
+
+def obligation(identifier, conversation, recorded, **extra):
+    return {"version": 1, "id": "interruption-continuation-" + identifier, "conversationId": conversation,
+            "engine": "claude", "hostKey": "claude:synthetic", "path": "/synthetic.jsonl", "reason": "viewer-restart",
+            "recordedAt": recorded, "checkpoint": {"lastEventKind": "tool-result", "lastEventAt": 0},
+            "seat": None, "state": "owed", "resolution": None, **extra}
+
+
+class InterruptedConversations(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="delegatus-interrupted-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.state = pathlib.Path(self.temp.name)
+        self.directory = self.state / "interruption-obligations"
+        self.directory.mkdir()
+
+    def write(self, record):
+        deploy.write_json(self.directory / (record["id"] + ".json"), record)
+
+    def test_lists_cuts_recorded_since_the_switch_with_their_stage(self):
+        self.write(obligation("old", "conversation_before", "2026-10-06T14:00:00.000Z"))
+        self.write(obligation("agent", "conversation_agent", "2026-10-06T14:25:30.000Z",
+                              checkpoint={"lastEventKind": "assistant-message", "lastEventAt": 0,
+                                          "backgroundTasks": ["background task b1"]}))
+        self.write(obligation("stage", "conversation_stage", "2026-10-06T14:25:31.000Z", state="discharged",
+                              resolution="a pipeline stage: its controller retries the attempt",
+                              stage={"pipelineId": "lane", "stageId": "build", "attempt": 1}))
+        self.write(obligation("protected", "conversation_protected", "2026-10-06T14:25:32.000Z"))
+        hosts = [{"conversationId": "conversation_protected", "pipelineId": "other", "stageId": "fix", "attempt": 4}]
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15.000000+00:00", hosts)
+        self.assertEqual(unreadable, [])
+        self.assertEqual([entry["conversationId"] for entry in listed],
+                         ["conversation_agent", "conversation_stage", "conversation_protected"])
+        self.assertIsNone(listed[0]["stage"])
+        self.assertEqual(listed[0]["backgroundTasks"], ["background task b1"])
+        self.assertEqual(listed[1]["stage"], {"pipelineId": "lane", "stageId": "build", "attempt": 1})
+        self.assertEqual(listed[1]["state"], "discharged")
+        self.assertEqual(listed[2]["stage"], {"pipelineId": "other", "stageId": "fix", "attempt": 4})
+
+    def test_reads_the_pending_journal_and_names_every_record_it_could_not_read(self):
+        (self.directory / "interruption-continuation-broken.json").write_text("{")
+        self.write(obligation("undated", "conversation_undated", None))
+        pending = self.state / "interruption-obligations.pending.jsonl"
+        pending.write_text(json.dumps(obligation("journal", "conversation_journal", "2026-10-06T14:26:00.000Z")) + "\n{\n")
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
+        self.assertEqual([entry["conversationId"] for entry in listed], ["conversation_journal"])
+        self.assertEqual(unreadable, ["interruption-obligations.pending.jsonl:2",
+                                      "interruption-continuation-broken.json:JSONDecodeError",
+                                      "interruption-continuation-undated:recordedAt"])
+
+    def claim(self, suffix, body):
+        claimed = self.state / ("interruption-obligations.pending.jsonl.claim-" + suffix)
+        claimed.write_text(body)
+        return claimed
+
+    def test_records_an_import_holds_in_its_claim_are_listed_and_a_corrupt_claim_is_unreadable(self):
+        # An import in flight, one that died holding its claim, and a claim
+        # whose record also reached the directory, which keeps the directory's.
+        self.claim("123-abcdef123456", json.dumps(obligation("active", "conversation_active", "2026-10-06T14:26:00.000Z",
+                                                             stage={"pipelineId": "lane", "stageId": "build", "attempt": 1})) + "\n")
+        self.claim("77-0123456789ab", json.dumps(obligation("abandoned", "conversation_abandoned", "2026-10-06T14:26:01.000Z")) + "\n{\n")
+        self.claim("88-ba9876543210", json.dumps(obligation("imported", "conversation_imported", "2026-10-06T14:26:02.000Z")) + "\n")
+        self.write(obligation("imported", "conversation_imported", "2026-10-06T14:26:02.000Z", state="delivered"))
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
+        self.assertEqual([(entry["conversationId"], entry["state"], entry["stage"]) for entry in listed], [
+            ("conversation_active", "owed", {"pipelineId": "lane", "stageId": "build", "attempt": 1}),
+            ("conversation_abandoned", "owed", None),
+            ("conversation_imported", "delivered", None),
+        ])
+        self.assertEqual(unreadable, ["interruption-obligations.pending.jsonl.claim-77-0123456789ab:2"])
+
+    def test_a_claim_the_inventory_cannot_read_is_unreadable(self):
+        claimed = self.claim("123-abcdef123456", "")
+        claimed.chmod(0)
+        if os.access(claimed, os.R_OK):
+            self.skipTest("this user reads files whatever their mode")
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
+        self.assertEqual(listed, [])
+        self.assertEqual(unreadable, ["interruption-obligations.pending.jsonl.claim-123-abcdef123456:PermissionError"])
+
+    def test_a_switch_whose_only_cut_waits_in_an_import_claim_lists_it(self):
+        state = self.state
+
+        class ClaimedSwitch(Switch):
+            def restart(self):
+                pending = state / "interruption-obligations.pending.jsonl"
+                pending.write_text(json.dumps(obligation("claimed", "conversation_claimed", deploy.utc(),
+                                                         stage={"pipelineId": "lane", "stageId": "build", "attempt": 1})) + "\n")
+                pending.rename(state / "interruption-obligations.pending.jsonl.claim-123-abcdef123456")
+
+            def interrupted(self, since, hosts):
+                return deploy.interrupted_conversations(state, since, hosts)
+
+        result = deploy.run_switch(ClaimedSwitch(), TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["interruptedUnreadable"], [])
+        self.assertEqual([(entry["conversationId"], entry["stage"]) for entry in result["interrupted"]],
+                         [("conversation_claimed", {"pipelineId": "lane", "stageId": "build", "attempt": 1})])
+
+    def test_a_corrupt_import_claim_keeps_a_healthy_switch_from_passing(self):
+        state = self.state
+
+        class CorruptClaimSwitch(Switch):
+            def restart(self):
+                (state / "interruption-obligations.pending.jsonl.claim-77-0123456789ab").write_text("{\n")
+
+            def interrupted(self, since, hosts):
+                return deploy.interrupted_conversations(state, since, hosts)
+
+        result = deploy.run_switch(CorruptClaimSwitch(), TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["interruptedUnreadable"], ["interruption-obligations.pending.jsonl.claim-77-0123456789ab:1"])
+
+    def test_a_claim_taken_over_while_it_is_read_is_still_listed_by_a_switch(self):
+        # A later import renames an abandoned claim to its own just before the
+        # inventory reads it, and has not published the record yet.
+        state = self.state
+        abandoned = "interruption-obligations.pending.jsonl.claim-77-0123456789ab"
+        original = pathlib.Path.read_text
+
+        def taken_over(path, *args, **kwargs):
+            if path.name == abandoned:
+                path.rename(path.with_name("interruption-obligations.pending.jsonl.claim-99-fedcba987654"))
+            return original(path, *args, **kwargs)
+
+        class TakeoverSwitch(Switch):
+            def restart(self):
+                (state / abandoned).write_text(json.dumps(obligation("taken", "conversation_taken", deploy.utc())) + "\n")
+
+            def interrupted(self, since, hosts):
+                with patch.object(pathlib.Path, "read_text", taken_over):
+                    return deploy.interrupted_conversations(state, since, hosts)
+
+        result = deploy.run_switch(TakeoverSwitch(), TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["interruptedUnreadable"], [])
+        self.assertEqual([entry["conversationId"] for entry in result["interrupted"]], ["conversation_taken"])
+
+    def test_records_that_keep_moving_leave_the_inventory_unknown(self):
+        state = self.state
+        pending = state / "interruption-obligations.pending.jsonl"
+        original = deploy.read_journal
+
+        def appended_during_every_read(path, records, unreadable):
+            original(path, records, unreadable)
+            with pending.open("a") as journal:
+                journal.write("\n")
+
+        class MovingSwitch(Switch):
+            def restart(self):
+                record = obligation("moving", "conversation_moving", deploy.utc())
+                deploy.write_json(state / "interruption-obligations" / (record["id"] + ".json"), record)
+
+            def interrupted(self, since, hosts):
+                with patch.object(deploy, "read_journal", appended_during_every_read), patch.object(deploy.time, "sleep"):
+                    return deploy.interrupted_conversations(state, since, hosts)
+
+        result = deploy.run_switch(MovingSwitch(), TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["interruptedUnreadable"], ["interruption-obligations:moving"])
+        self.assertEqual([entry["conversationId"] for entry in result["interrupted"]], ["conversation_moving"])
+
+    def test_a_record_too_incomplete_to_name_its_conversation_is_unreadable(self):
+        self.write({"id": "interruption-continuation-bare", "recordedAt": "2026-10-06T23:00:00Z"})
+        for name, change in [("anonymous", {"conversationId": None}), ("stageless", {"stage": {"stageId": "build"}}),
+                             ("attempt", {"stage": {"pipelineId": "lane", "stageId": "build", "attempt": "1"}}),
+                             ("tasks", {"checkpoint": {"backgroundTasks": "background task b1"}}),
+                             ("checkpoint", {"checkpoint": None}), ("state", {"state": "pending"}),
+                             ("reason", {"reason": None})]:
+            self.write(obligation(name, "conversation_" + name, "2026-10-06T23:00:01.000Z", **change))
+        self.write(obligation("stale", "conversation_stale", "2026-10-06T21:00:00.000Z", conversationId=None))
+        self.write(obligation("whole", "conversation_whole", "2026-10-06T23:00:02.000Z",
+                              stage={"pipelineId": "lane", "stageId": None, "attempt": None}))
+        pending = self.state / "interruption-obligations.pending.jsonl"
+        pending.write_text(json.dumps({"id": "interruption-continuation-journal", "recordedAt": "2026-10-06T23:00:03Z"}) + "\n")
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T22:00:00+00:00")
+        self.assertEqual([(entry["conversationId"], entry["stage"]) for entry in listed],
+                         [("conversation_whole", {"pipelineId": "lane", "stageId": None, "attempt": None})])
+        self.assertEqual(sorted(unreadable), sorted(
+            "interruption-continuation-" + flaw for flaw in [
+                "bare:version", "anonymous:conversationId", "stageless:stage", "attempt:stage", "tasks:checkpoint",
+                "checkpoint:checkpoint", "state:state", "reason:reason", "journal:version"]))
+
+    def test_an_unreadable_record_directory_raises_rather_than_listing_nothing(self):
+        self.directory.rmdir()
+        self.directory.write_text("not a directory")
+        with self.assertRaises(OSError):
+            deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
+
+    def test_a_state_without_records_lists_nothing(self):
+        self.directory.rmdir()
+        self.assertEqual(deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00"), ([], []))
 
 
 class CheckoutIntegration(unittest.TestCase):
@@ -334,7 +563,7 @@ class CheckoutIntegration(unittest.TestCase):
             return b'<script src="/_next/static/synthetic.js"></script>'
         if route.endswith(".js"):
             return b"synthetic"
-        if route == "/api/tasks":
+        if route == "/api/tasks?project=":
             return b'{"tasks":[]}'
         if route == "/api/self-update":
             return json.dumps({"auto": {"enabled": False}, "serving": {r: {"sha": self.current} for r in ["web", "runtimeHost"]},
@@ -342,14 +571,30 @@ class CheckoutIntegration(unittest.TestCase):
         raise AssertionError("unplanned HTTP read")
 
     def test_real_adapter_replays_both_restart_failures_with_private_registry(self):
+        directory = self.state / "interruption-obligations"
+        directory.mkdir()
+        cut = obligation("cut", "synthetic-stage", "2999-01-01T00:00:00.000Z")
+        deploy.write_json(directory / (cut["id"] + ".json"), cut)
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
+        self.assertEqual([(entry["conversationId"], entry["stage"]) for entry in result["interrupted"]],
+                         [("synthetic-stage", {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1})])
         self.assertEqual(result["protected"][0]["outcome"], "recovered")
         self.assertEqual(json.loads(self.pointer.read_text())["sha"], TARGET)
         self.assertTrue(all(result["serving"][r]["sha"] == TARGET for r in ["launcher", "viewer", "runtimeHost"]))
         self.assertTrue(all(result["serving"][r]["since"] for r in ["launcher", "viewer", "runtimeHost"]))
         self.assertEqual(sum("restart" in c for c in self.commands), 1)
         self.assertTrue(all("stop" not in c and "kill" not in c for c in self.commands))
+
+    def test_an_incomplete_interruption_record_keeps_a_healthy_switch_from_passing(self):
+        directory = self.state / "interruption-obligations"
+        directory.mkdir()
+        deploy.write_json(directory / "interruption-continuation-broken.json",
+                          {"id": "interruption-continuation-broken", "recordedAt": "2999-01-01T00:00:00Z"})
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["interrupted"], [])
+        self.assertEqual(result["interruptedUnreadable"], ["interruption-continuation-broken:version"])
 
     def assert_stage_verdict(self, attempts, verdict, outcome, attempt):
         self.attempts = attempts
@@ -466,6 +711,74 @@ class CheckoutIntegration(unittest.TestCase):
             deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
         self.assertFalse(any("restart" in c for c in self.commands))
+
+    @contextlib.contextmanager
+    def board_http(self, status=200, body=b'{"tasks":[]}'):
+        import http.server
+        import threading
+        fixture = self
+        paths = []
+        # Many valid-sized rows make the unfiltered board exceed the read cap.
+        full_board = json.dumps({"tasks": [{"text": "x" * 3000}] * 1500}).encode()
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                paths.append(self.path)
+                code = 200
+                if self.path == "/api/tasks":
+                    answer = full_board
+                elif self.path == "/api/tasks?project=":
+                    code, answer = status, body
+                elif self.path == "/oversized":
+                    answer = full_board
+                else:
+                    answer = fixture.http(0, self.path, "synthetic-secret")
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(answer)))
+                self.end_headers()
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    self.wfile.write(answer)
+        with http.server.HTTPServer(("127.0.0.1", 0), Handler) as server:
+            thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+            thread.start()
+            try:
+                record = json.loads(self.record_file.read_text())
+                record["port"] = server.server_address[1]
+                deploy.write_json(self.record_file, record)
+                self.adapter.http = deploy.http_read
+                yield record["port"], paths, full_board
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
+
+    def test_large_board_passes_serving_and_preflight_without_reading_full_board(self):
+        with self.board_http() as (port, paths, full_board):
+            self.assertGreater(len(full_board), 4 * 1024 * 1024)
+            for route in ["/api/tasks", "/oversized"]:
+                with self.assertRaisesRegex(RuntimeError, "HTTP health oversized"):
+                    deploy.http_read(port, route, "synthetic-secret")
+            paths.clear()
+            self.assertTrue(self.adapter.serving()["checks"]["http"])
+            self.adapter.preflight()
+            self.assertEqual(paths.count("/api/tasks?project="), 2)
+            self.assertNotIn("/api/tasks", paths)
+            self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+            self.assertFalse(any("restart" in c for c in self.commands))
+
+    def test_broken_board_refuses_serving_and_preflight_without_publication_or_restart(self):
+        for status, body in [(503, b'{"tasks":[]}'), (200, b'{broken'), (200, b'{}'),
+                             (200, b'{"tasks":{}}'), (200, b'{"tasks":null}'), (200, b'[]'),
+                             (200, b"x" * (4 * 1024 * 1024 + 1))]:
+            with self.subTest(status=status, bodyBytes=len(body)), self.board_http(status, body) as (_, paths, _):
+                self.adapter.clock = FakeClock()
+                self.assertFalse(self.adapter.serving()["checks"]["http"])
+                with self.assertRaisesRegex(RuntimeError, "baseline serving health unavailable"):
+                    self.adapter.preflight()
+                self.assertIn("/api/tasks?project=", paths)
+                self.assertNotIn("/api/tasks", paths)
+                self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+                self.assertFalse(any("restart" in c for c in self.commands))
 
     def test_plan_requires_explicit_matching_state(self):
         with patch.dict(os.environ, {"LLV_STATE_DIR": ""}):

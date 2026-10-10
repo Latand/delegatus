@@ -151,14 +151,6 @@
  * set before each one, and the document's language and the dictation
  * button's name are checked.
  *
- * With BOARD_CAPTURE_CASE=relay-answers it renders the relay card's Recent
- * answers (docs/design/relay.md §B.9) on a home with one paired relay, a
- * fake relay service on loopback that never hands a request out, and five
- * invented answer records: the member limit field, the list, a hand-off
- * opened read-only, and a long answer with its received input unfolded, at
- * 1440 × 900 and 390 × 844 in en and uk. It requires each label in its language, no editable field, no
- * sideways overflow and 44 px controls on the phone.
- *
  * With BOARD_CAPTURE_CASE=seat-creation it renders what the orchestrator pane
  * says when a creation did not land, on a signed-in home with no seat: the
  * designation still waiting on its launch, a failure recorded with the account
@@ -170,6 +162,15 @@
  * timeout, no pid and no engine name in either, the recorded text for a cause
  * with no sentence of its own, one retry control inside the viewport, and no
  * text cut or scrolled inside the failure block.
+ *
+ * With BOARD_CAPTURE_CASE=twice-switched-link it opens a link to a
+ * conversation switched between accounts twice whose payload carries both
+ * archived generations and not yet the current one (2026-10-07). The real
+ * `/api/files` answer is reshaped in the browser so three seeded transcripts
+ * are those generations: canonical `#c=` and legacy `#f=` links, with the
+ * archived rows in either order, must each open a reader with no not-found
+ * notice; then the third generation arrives and the reader must follow it
+ * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -200,7 +201,6 @@ import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
-import { procBackend } from "../src/lib/proc";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "../src/lib/selfUpdate/types";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -6891,6 +6891,117 @@ async function installPingMain(): Promise<void> {
  * BOARD_CAPTURE_CASE=hydration uses only the synthetic home above. Set
  * HYDRATION_MUTATE_SHELL=1 to prove that a server/client text mismatch fails the gate.
  */
+/** A link to a conversation whose two archived generations are listed and its current one is not yet. */
+async function twiceSwitchedLinkMain(): Promise<void> {
+  seedHome();
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const conversationId = "conversation_twice-switched-link";
+  const failures: string[] = [];
+  const frames: Record<string, unknown> = {};
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    /* Three transcripts of one project; the first scan can still hold them under a project it has not resolved. */
+    let seeded: string[] = [];
+    let seededProject = "";
+    for (const deadline = Date.now() + 60_000; seeded.length < 3 && Date.now() < deadline; await Bun.sleep(1_000)) {
+      const byProject = new Map<string, string[]>();
+      for (const file of ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? []) {
+        if (file.project && file.path?.endsWith(".jsonl")) byProject.set(file.project, [...byProject.get(file.project) ?? [], file.path]);
+      }
+      seededProject = byProject.has(PROJECT_NAME) ? PROJECT_NAME : [...byProject.entries()].sort((a, b) => b[1].length - a[1].length)[0]?.[0] ?? "";
+      seeded = [...byProject.get(seededProject) ?? []].sort();
+    }
+    if (seeded.length < 3) throw new Error(`the scan listed ${seeded.length} seeded transcripts of one project, three are needed`);
+    const [older, newer, successor] = seeded as [string, string, string];
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const lang of ["en", "uk"] as const) for (const order of ["older-first", "newer-first"] as const) for (const link of ["canonical", "legacy"] as const) {
+      const tag = `${lang}-${order}-${link}`;
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+      let arrived = false;
+      /* The catalog answers served once the successor arrived, by request scope. */
+      const servedAfter: string[] = [];
+      await context.route(/\/api\/files(\?|$)/, async (route) => {
+        if (arrived) servedAfter.push(new URL(route.request().url()).searchParams.get("path") === null ? "plain" : "pinned");
+        try {
+          /* A 304 would keep the page on the shape it was served before the successor arrived. */
+          const headers = { ...route.request().headers() };
+          delete headers["if-none-match"];
+          delete headers["if-modified-since"];
+          const response = await route.fetch({ headers });
+          if (response.status() !== 200) return route.fulfill({ response });
+          const body = await response.json() as { files?: Array<Record<string, unknown> & { path?: string }> };
+          /* All three generations stay in the project the link opened: the fixture's first scans can
+             place a transcript under a project they have not resolved yet. */
+          const generation = (file: Record<string, unknown>, value: number, migratedTo: string | null) =>
+            ({ ...file, project: seededProject, conversationId, generation: value, ...(migratedTo ? { migratedTo } : {}) });
+          const rows = body.files ?? [];
+          const at = rows.findIndex((file) => file.path === older || file.path === newer);
+          const olderRow = rows.find((file) => file.path === older);
+          const newerRow = rows.find((file) => file.path === newer);
+          const successorRow = rows.find((file) => file.path === successor);
+          const rest = rows.filter((file) => file.path !== older && file.path !== newer && file.path !== successor);
+          const archived = olderRow && newerRow
+            ? (order === "older-first" ? [generation(olderRow, 1, newer), generation(newerRow, 2, successor)] : [generation(newerRow, 2, successor), generation(olderRow, 1, newer)])
+            : [];
+          const current = arrived && successorRow ? [{ ...generation(successorRow, 3, null), predecessorPath: newer }] : [];
+          body.files = [...rest.slice(0, Math.max(0, at)), ...archived, ...current, ...rest.slice(Math.max(0, at))];
+          await route.fulfill({ response, json: body });
+        } catch {
+          /* the context is gone */
+        }
+      });
+      const page = await context.newPage();
+      const hash = link === "canonical" ? `#c=${encodeURIComponent(conversationId)}` : `#f=${encodeURIComponent(older)}`;
+      await page.goto(`${baseUrl}/${hash}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      const readersOf = (paths: string[]) => page.evaluate((wanted: string[]) => [...document.querySelectorAll("[data-kanban-board] [data-kanban-reader]")]
+        .filter((reader) => wanted.some((file) => reader.matches(`[data-link-path="${CSS.escape(file)}"]`) || reader.querySelector(`[data-link-path="${CSS.escape(file)}"]`) !== null)).length, paths);
+      const drawn = (file: string) => page.evaluate((wanted: string) => document.querySelector(`[data-kanban-board] [data-member="${CSS.escape(wanted)}"]`) !== null, file);
+      const notice = () => page.evaluate(() => document.querySelector("[data-stale-focus-notice]") !== null);
+      const opened = await page.waitForFunction(() => document.querySelector("[data-kanban-board] [data-kanban-reader]") !== null, null, { timeout: 30_000 }).then(() => true, () => false);
+      await page.waitForTimeout(600);
+      const before = { readers: await readersOf([older, newer]), notice: await notice() };
+      await page.screenshot({ path: path.join(OUT_DIR, `twice-switched-${tag}-opened.png`) });
+      if (!opened || before.readers < 1) failures.push(`${tag}: the link opened ${before.readers} readers of the conversation`);
+      if (before.notice) failures.push(`${tag}: a not-found notice for a link that resolves`);
+      arrived = true;
+      await page.evaluate((event: string) => window.dispatchEvent(new Event(event)), "llv:files-changed");
+      const followed = await page.waitForFunction((wanted: string) => [...document.querySelectorAll("[data-kanban-board] [data-kanban-reader]")]
+        .some((reader) => reader.matches(`[data-link-path="${CSS.escape(wanted)}"]`) || reader.querySelector(`[data-link-path="${CSS.escape(wanted)}"]`) !== null), successor, { timeout: 30_000 }).then(() => true, () => false);
+      await page.waitForTimeout(600);
+      const after = {
+        successorReaders: await readersOf([successor]),
+        archivedReaders: await readersOf([older, newer]),
+        archivedDrawn: (await drawn(older)) || (await drawn(newer)),
+        notice: await notice(),
+      };
+      await page.screenshot({ path: path.join(OUT_DIR, `twice-switched-${tag}-followed.png`) });
+      if (!followed || after.successorReaders !== 1) failures.push(`${tag}: ${after.successorReaders} readers followed the arriving generation`);
+      if (after.archivedReaders || after.archivedDrawn) failures.push(`${tag}: an archived generation is still drawn beside its successor`);
+      if (after.notice) failures.push(`${tag}: a not-found notice after the successor arrived`);
+      const language = await page.evaluate(() => document.documentElement.lang);
+      if (language !== lang) failures.push(`${tag}: the page speaks ${language}`);
+      frames[tag] = { language, before, after, servedAfter };
+      await context.close();
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+  }
+  const report = JSON.stringify({ commit: captureCommit(), frames, failures }, null, 2) + "\n";
+  fs.writeFileSync(path.join(OUT_DIR, "twice-switched-link.json"), report);
+  if (failures.length) throw new Error(failures.join("; "));
+  console.log(`twice-switched link: ${path.join(OUT_DIR, "twice-switched-link.json")}`);
+}
+
 async function hydrationMain(): Promise<void> {
   const { reviewers } = seedHome();
   /* Scanner-only transcripts have no canonical conversation id. Register a
@@ -7000,218 +7111,8 @@ async function hydrationMain(): Promise<void> {
   console.log(`hydration acceptance: ${Object.keys(report.frames).length} loads, no hydration warnings or page errors`);
 }
 
-/* ------------------------------------------------------------------------- */
-/* BOARD_CAPTURE_CASE=relay-answers                                           */
-/* ------------------------------------------------------------------------- */
-
-const RELAY_ANSWERS_ROOT = path.join(STATE_DIR, "external-relay", "answers", "relay-1", "bot-1");
-
-/** One answer record as `src/lib/externalRelay/answers.ts` writes it (relay.md §B.2). */
-function writeRelayAnswer(minutesAgo: number, requestId: string, over: Record<string, unknown>): void {
-  const started = Date.now() - minutesAgo * 60_000;
-  const durationMs = typeof over.durationMs === "number" ? over.durationMs : 5_400;
-  const record = {
-    v: 1, requestId, relayId: "relay-1", targetId: "bot-1", targetName: "Club helper", engine: "claude", model: "opus",
-    claimedAt: new Date(started - 400).toISOString(), startedAt: new Date(started).toISOString(),
-    finishedAt: new Date(started + durationMs).toISOString(), durationMs, state: "finished", outcome: "answered",
-    answer: null, delivery: "accepted", input: null, ...over,
-  };
-  fs.mkdirSync(RELAY_ANSWERS_ROOT, { recursive: true });
-  fs.writeFileSync(path.join(RELAY_ANSWERS_ROOT, `${started}_${requestId}.json`), JSON.stringify(record) + "\n");
-}
-
-/** Invented exchanges of one club chat: a hand-off, a long answer, a time-out, a busy decline and one still running. */
-function seedRelayAnswers(): void {
-  const message = (id: string, key: string, name: string, text: string, minutesAgo: number, replyTo: string | null = null) => ({
-    id, author: { key, name, self: key === "self" }, sent_at: new Date(Date.now() - minutesAgo * 60_000).toISOString(), text, reply_to: replyTo,
-  });
-  const frame = { instructions: "You answer as the club's helper. Plain text, at most three sentences.", owner_instructions: "Friendly and brief.", documents: [] };
-  const tools = [
-    { name: "lookup_notes", summary: "Search the club's documents.", mode: "handoff" },
-    { name: "restrict_member", summary: "Mute a participant for a while.", mode: "handoff" },
-    { name: "poll_attendees", summary: "Post a poll in the chat.", mode: "handoff" },
-    { name: "draw_picture", summary: "Draw a picture and post it.", mode: "handoff" },
-  ];
-  writeRelayAnswer(2, "rq_running", { state: "running", outcome: null, finishedAt: null, durationMs: null, delivery: null,
-    input: { ...frame, conversation: [message("m90", "u_c", "Member C", "@helper what should I bring on Thursday?", 2)], respond_to: "m90", request_text: null } });
-  // Keep the invented running answer under this capture process's custody.
-  // Without its ledger entry, startup correctly settles it as interrupted.
-  const ownerIdentity = procBackend.processIdentity(process.pid);
-  if (!ownerIdentity) throw new Error("relay capture process identity unavailable");
-  fs.writeFileSync(path.join(STATE_DIR, "external-relay", "runs.json"), JSON.stringify({ v: 1, runs: [{
-    requestId: "rq_running", leaseId: "ls_bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", relayId: "relay-1", targetId: "bot-1",
-    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity,
-    runDir: path.join(BASE, "running-relay"), startedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
-  }] }) + "\n");
-  writeRelayAnswer(9, "rq_handoff", { outcome: "declined:handoff", answer: { action: "handoff", text: "", reply_to: null }, durationMs: 4_200,
-    input: { ...frame,
-      conversation: [
-        message("m71", "u_x", "Visitor X", "Cheap followers here: example.invalid/promo", 11),
-        message("m72", "u_a", "Admin A", "@helper mute the person posting promo links, for an hour", 9, "m71"),
-      ],
-      respond_to: "m72", request_text: null,
-      requester: { key: "u_a", is_admin: true, can_restrict_members: true, can_delete_messages: true, is_owner: false, is_anonymous_admin: false },
-      short_term_memory: "The Thursday meetup moved to the north pier this week.", tools } });
-  const longAnswer = "The meetup is on Thursday at 18:30 at the north pier, because the hall is being painted this week. "
-    + "Bring a warm layer: it gets windy by the water after sunset. If you are new, look for the blue flag by the cafe; someone will meet you there. "
-    + "We usually walk to the lighthouse and back, about five kilometres at an easy pace, and finish with tea at the cafe around 20:00.";
-  writeRelayAnswer(34, "rq_answered", { answer: { action: "reply", text: longAnswer, reply_to: "m55" }, durationMs: 7_800,
-    input: { ...frame,
-      conversation: [
-        message("m54", "self", "Club helper", "Welcome to the club chat!", 60),
-        message("m55", "u_b", "Member B", "@helper when and where is the next meetup? [Voice message, 0:12. Transcript: and is it the usual route or something new?]", 34),
-      ],
-      respond_to: "m55", request_text: null,
-      requester: { key: "u_b", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false }, short_term_memory: null, tools: tools.filter((tool) => tool.name !== "restrict_member") } });
-  writeRelayAnswer(80, "rq_hard_cap", { outcome: "failed:hard_cap", durationMs: 1_800_000, delivery: "unconfirmed",
-    input: { ...frame, conversation: [message("m30", "u_d", "Member D", "@helper summarise everything from last month", 80)], respond_to: "m30", request_text: null } });
-  writeRelayAnswer(140, "rq_busy", { outcome: "declined:busy", engine: null, model: null, durationMs: 300,
-    input: { ...frame, conversation: [message("m12", "u_e", "Member E", "@helper hi", 140)], respond_to: "m12", request_text: null } });
-}
-
-function seedRelayStore(apiOrigin: string): void {
-  const dir = path.join(STATE_DIR, "external-relay");
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "relays.json"), JSON.stringify({
-    v: 1, installId: crypto.randomUUID(), label: "Delegatus", pending: [],
-    relays: [{
-      id: "relay-1", origin: apiOrigin, api_base: `${apiOrigin}/v1`, name: "Example Connect", description: "Answers club chats with the owner's own agent.",
-      credential: "c".repeat(43), owner: { namespace: "example", id: "owner-1", display_name: "Person A", handle: null },
-      pairedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(), paused: false,
-      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
-      targets: [{ id: "bot-1", name: "Club helper", answered_by: "install", fallback: "service", enabled: true, engine: "claude", model: "opus", effort: null, project: null, concurrency: 1, hardCapMinutes: 30 }],
-    }],
-  }) + "\n");
-}
-
-/**
- * The relay card's Recent answers (relay.md §B.9 [rc]) in the real settings
- * dialog of the production build: a fake relay service on a loopback port 0
- * answers the target list and holds every claim, so nothing is ever claimed.
- * At 1440 × 900 and 390 × 844 in en and uk it renders the list, a hand-off
- * opened read-only and a long answer with its received input unfolded, and
- * requires the language of each label, no field to type into, no sideways
- * overflow and 44 px controls. Frames go to RELAY_ANSWERS_RENDER_DIR (or the
- * run's out directory), readings to relay-answers.json beside them.
- */
-async function relayAnswersMain(): Promise<void> {
-  seedHome();
-  const service = Bun.serve({
-    port: 0, hostname: "127.0.0.1",
-    async fetch(request) {
-      const { pathname } = new URL(request.url);
-      if (pathname === "/v1/targets") return Response.json({ targets: [{ target_id: "bot-1", name: "Club helper", answered_by: "install", fallback: "service" }] });
-      if (pathname === "/v1/requests/claim") { await Bun.sleep(20_000); return new Response(null, { status: 204 }); }
-      return Response.json({ error: { code: "not_found", message: "not found" } }, { status: 404 });
-    },
-  });
-  seedRelayStore(`http://127.0.0.1:${service.port}`);
-  seedRelayAnswers();
-  const renderDir = process.env.RELAY_ANSWERS_RENDER_DIR?.trim() || OUT_DIR;
-  fs.mkdirSync(renderDir, { recursive: true });
-  const port = await freePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
-  const must = (ok: boolean, message: string) => { if (!ok) report.failures.push(message); };
-  let server: ChildProcess | null = null;
-  let browser: Browser | null = null;
-  try {
-    server = startServer(port);
-    await waitForServer(baseUrl, server);
-    await waitForBoard(baseUrl, false);
-    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
-    /* The telemetry notice sits above every dialog; this case is about the relay card. */
-    await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
-    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) {
-      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
-      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
-      const tag = `${lang}-${width}`;
-      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
-      await context.addInitScript(seedInit);
-      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
-      const page = await context.newPage();
-      await page.goto(`${baseUrl}/`);
-      await page.waitForFunction(() => {
-        if (document.querySelector("[data-external-relay-settings]")) return true;
-        window.dispatchEvent(new Event("delegatus:open-external-relay-settings"));
-        return false;
-      }, undefined, { timeout: 60_000 });
-      const toggle = page.locator("[data-external-relay-target=bot-1] [data-external-relay-answers-toggle]");
-      await toggle.waitFor({ timeout: 30_000 });
-      const measure = (scope: string) => page.evaluate((selector) => {
-        const dialog = document.querySelector<HTMLElement>("[data-external-relay-settings]")!;
-        const scroller = [...dialog.querySelectorAll<HTMLElement>("div")].find((node) => getComputedStyle(node).overflowY === "auto") ?? dialog;
-        const area = document.querySelector<HTMLElement>(selector)!;
-        const outer = dialog.getBoundingClientRect();
-        const visible = (node: Element) => (node as HTMLElement).offsetParent !== null;
-        const controls = [...area.querySelectorAll("button, summary")].filter(visible);
-        return {
-          overflow: Math.max(dialog.scrollWidth - dialog.clientWidth, scroller.scrollWidth - scroller.clientWidth),
-          outside: [...area.querySelectorAll("*")].filter(visible).filter((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && (rect.left < outer.left - 0.5 || rect.right > outer.right + 0.5); }).length,
-          shortControls: controls.filter((node) => node.getBoundingClientRect().height < 43.5).map((node) => node.textContent?.slice(0, 40)),
-          editable: area.querySelectorAll("input, textarea, [contenteditable=true]").length,
-          lang: document.documentElement.lang,
-          text: area.innerText,
-        };
-      }, scope);
-      const t = (key: Parameters<typeof translate>[1]) => translate(lang, key);
-      must((await toggle.textContent()) === t("externalRelay.answers.open"), `${tag}: the toggle reads ${await toggle.textContent()}`);
-      /* The member limit field sits in the same row, showing the default. */
-      const limit = page.locator("[data-external-relay-target=bot-1] [data-external-relay-member-limit]");
-      await limit.evaluate((node) => node.scrollIntoView({ block: "center" }));
-      const limitBox = await limit.boundingBox();
-      must((await limit.inputValue()) === "10", `${tag}: the member limit shows ${await limit.inputValue()}`);
-      must((limitBox?.height ?? 0) >= 43.5, `${tag}: the member limit field is ${limitBox?.height} px tall`);
-      await page.screenshot({ path: path.join(renderDir, `${tag}-member-limit.png`) });
-      await toggle.click();
-      await page.waitForSelector("[data-external-relay-answer-list]", { timeout: 15_000 });
-      await page.evaluate(() => document.querySelector("[data-external-relay-answers=bot-1]")?.scrollIntoView({ block: "start" }));
-      const rows = await page.locator("[data-external-relay-answer]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-external-relay-answer")));
-      must(JSON.stringify(rows) === JSON.stringify(["rq_running", "rq_handoff", "rq_answered", "rq_hard_cap", "rq_busy"]), `${tag}: the list is ${rows.join(", ")}`);
-      const list = await measure("[data-external-relay-answers=bot-1]");
-      must(list.text.includes(t("externalRelay.outcome.handoff")) && list.text.includes(t("externalRelay.answers.running")), `${tag}: the list misses the hand-off or running label`);
-      await page.screenshot({ path: path.join(renderDir, `${tag}-list.png`) });
-      await page.locator("[data-external-relay-answer=rq_handoff]").click();
-      const exchange = page.locator("[data-external-relay-exchange=rq_handoff]");
-      await exchange.waitFor({ timeout: 15_000 });
-      await exchange.scrollIntoViewIfNeeded();
-      await page.evaluate(() => document.querySelector("[data-external-relay-exchange]")?.scrollIntoView({ block: "start" }));
-      const handoff = await measure("[data-external-relay-answers=bot-1]");
-      must((await page.locator("[data-external-relay-exchange-outcome]").textContent()) === t("externalRelay.outcome.handoff"), `${tag}: the exchange outcome is not the hand-off label`);
-      must((await page.locator("[data-external-relay-exchange-answer]").textContent()) === t("externalRelay.answers.handedOff"), `${tag}: the hand-off answer line`);
-      must(handoff.text.includes(`Admin A · ${t("externalRelay.answers.role.admin")}`), `${tag}: who asked is missing`);
-      await page.screenshot({ path: path.join(renderDir, `${tag}-handoff.png`) });
-      await page.getByRole("button", { name: t("externalRelay.answers.back"), exact: true }).click();
-      await page.locator("[data-external-relay-answer=rq_answered]").click();
-      await page.locator("[data-external-relay-exchange=rq_answered]").waitFor({ timeout: 15_000 });
-      await page.locator("[data-external-relay-exchange=rq_answered] summary").click();
-      await page.evaluate(() => document.querySelector("[data-external-relay-exchange-answer]")?.scrollIntoView({ block: "start" }));
-      const answered = await measure("[data-external-relay-answers=bot-1]");
-      must(answered.text.includes("north pier, because the hall"), `${tag}: the long answer is missing`);
-      await page.screenshot({ path: path.join(renderDir, `${tag}-answer-input.png`) });
-      for (const [name, reading] of Object.entries({ list, handoff, answered })) {
-        must(reading.overflow <= 1, `${tag} ${name}: ${reading.overflow} px sideways overflow`);
-        must(reading.outside === 0, `${tag} ${name}: ${reading.outside} elements outside the dialog`);
-        must(reading.editable === 0, `${tag} ${name}: ${reading.editable} editable fields in a read-only view`);
-        must(reading.lang === lang, `${tag} ${name}: document language ${reading.lang}`);
-        if (width === 390) must(reading.shortControls.length === 0, `${tag} ${name}: controls under 44 px: ${reading.shortControls.join(" | ")}`);
-        report.frames[`${tag}-${name}`] = { ...reading, text: undefined };
-      }
-      await context.close();
-    }
-  } finally {
-    await browser?.close();
-    await stop(server);
-    service.stop(true);
-  }
-  fs.writeFileSync(path.join(renderDir, "relay-answers.json"), JSON.stringify(report, null, 2) + "\n");
-  if (report.failures.length) throw new Error(report.failures.join("; "));
-  console.log(`relay answers: ${Object.keys(report.frames).length} readings passed in ${renderDir}`);
-}
-
 if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
-else if (process.env.BOARD_CAPTURE_CASE === "relay-answers") await relayAnswersMain();
+else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();

@@ -128,8 +128,10 @@
 .pblock .pb-chain.has-finish { flex-wrap: wrap; row-gap: 4px; }
 .pblock .pb-chain > .pb-pills { flex: 1 1 auto; }
 /* The chips end the chain line; they wrap under each other rather than
-   squeeze the pills, and never take more than half the row. */
-.pblock .pb-links { flex: 0 1 auto; justify-content: flex-end; margin-top: 2px; max-width: 50%; }
+   squeeze the pills, and never take more than half the row. They keep at
+   least their widest chip's width: squeezed under it, a chip ran into the
+   tail's graph toggle. */
+.pblock .pb-links { flex: 0 1 auto; justify-content: flex-end; margin-top: 2px; max-width: 50%; min-width: min-content; }
 .pblock .pb-links.end { max-width: none; }
 /* The head's tail on the chain row: the graph toggle, then the age and the
    way into the stages, whose chevron ends the row at the card's edge. */
@@ -144,6 +146,12 @@
 .pblock .stage-findings li[data-severity="P0"] .sev, .pblock .stage-findings li[data-severity="P1"] .sev { background: var(--color-danger-soft); color: var(--color-danger); }
 .pblock .stage-findings .text { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .pblock .stage-findings .more { color: var(--color-muted); }
+/* Role memory (docs/design/role-memory.md §3.1): what a stage left, one coloured block under its report that opens the rules window. */
+.pblock .stage-lesson { display: flex; flex-direction: column; gap: 1px; width: 100%; min-width: 0; margin: 2px 0 0; padding: 4px 8px; border: 0; border-left: 3px solid var(--color-accent); border-radius: 6px; background: var(--color-accent-soft); color: var(--color-accent); font: inherit; font-size: var(--text-label); line-height: 1.35; text-align: left; cursor: pointer; }
+.pblock .stage-lesson:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-accent) 40%, transparent); outline-offset: 1px; }
+.pblock .stage-lesson .head { display: flex; align-items: center; gap: 5px; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pblock .stage-lesson .rule { min-width: 0; color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pblock p.stage-lesson[data-stage-lesson="none"] { padding: 0 8px; border-left-color: var(--color-border); background: none; color: var(--color-muted); cursor: default; }
 .pblock .graph-edit { margin: 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pblock .review-heads { margin: 2px 0 0; font-size: var(--text-label); font-weight: 600; color: var(--color-warning); overflow-wrap: anywhere; }
 

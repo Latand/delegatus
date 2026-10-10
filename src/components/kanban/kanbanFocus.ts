@@ -139,8 +139,8 @@ function visibleBox(element: Element, clips: readonly Element[]): { width: numbe
 }
 
 function onScreen(element: Element, root: Element): boolean {
-  /* The full-window reader has the window for its box. */
-  const clips: Element[] = element.closest(".reader-full") ? [] : [root];
+  /* The agent window's reader has the window for its box. */
+  const clips: Element[] = element.closest("[data-agent-window]") ? [] : [root];
   if (clips.length) {
     const body = element.closest(".col-body");
     if (!body) return false;
@@ -160,17 +160,21 @@ export function cardOnScreen(root: HTMLElement, cardId: string, escape: (value: 
   return card ? onScreen(card, root) : false;
 }
 
+/** The conversation's reader is in the agent window (never the park) and
+    shows at least 48 px of itself, whatever its feed holds yet. */
+export function readerShown(root: HTMLElement, slot: HTMLElement | null): boolean {
+  if (!slot?.isConnected || !root.contains(slot) || slot.hasAttribute("data-incoming") || !slot.closest("[data-agent-window]")) return false;
+  const reader = slot.querySelector<HTMLElement>("[data-kanban-reader]");
+  return reader ? onScreen(reader, root) : false;
+}
+
 /**
- * The structural reader arrival: the conversation's reader is in a slot (never
- * the park), expanded, shows at least 48 px inside its column body, and its
- * feed has settled — rows, or the empty state an empty transcript settles on.
- * No amount of text is required.
+ * The structural reader arrival: the conversation's reader is shown in the
+ * agent window and its feed has settled — rows, or the empty state an empty
+ * transcript settles on. No amount of text is required.
  */
 export function readerArrived(root: HTMLElement, slot: HTMLElement | null): boolean {
-  if (!slot?.isConnected || !root.contains(slot)) return false;
-  const reader = slot.querySelector<HTMLElement>("[data-kanban-reader]");
-  if (!reader || reader.dataset.folded === "1") return false;
-  const feed = reader.querySelector<HTMLElement>("[data-feed-state]");
-  const settled = feed?.dataset.feedState === "items" || feed?.dataset.feedState === "empty";
-  return settled && onScreen(reader, root);
+  if (!readerShown(root, slot)) return false;
+  const feed = slot!.querySelector<HTMLElement>("[data-kanban-reader] [data-feed-state]");
+  return feed?.dataset.feedState === "items" || feed?.dataset.feedState === "empty";
 }

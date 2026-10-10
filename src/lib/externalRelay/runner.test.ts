@@ -1,4 +1,13 @@
-import { afterAll, expect, test } from "bun:test";
+import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
+import { createHash, randomBytes } from "node:crypto";
+import http from "node:http";
+import dns from "node:dns/promises";
+import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
+import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
+import { ownerRequest, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
+import { relayClaimCapabilities } from "./poller";
+import { setRelaySwitch } from "./switches";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +16,7 @@ import { procBackend } from "@/lib/proc";
 import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
-import { advertisedSlots, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
+import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
@@ -85,7 +94,7 @@ function stub(script: string) {
   return file;
 }
 test("an unsafe provider home declines as a profile error before launch", async () => {
-  const completions: any[] = [];
+  const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/complete")) completions.push(body);
     return { body: { status: "accepted", duplicate: false } };
@@ -126,11 +135,11 @@ test("an unsafe provider home declines as a profile error before launch", async 
   }
 });
 test("heartbeats continue through silence, newest progress is sent, completion frees slot", async () => {
-  const beats: any[] = [];
-  const completed: any[] = [];
+  const beats: { seq: number; progress: { label: string } | null }[] = [];
+  const completed: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/heartbeat")) {
-      beats.push(body);
+      beats.push(body as typeof beats[number]);
       return { body: { status: "ok" } };
     }
     if (req.url?.endsWith("/complete")) {
@@ -162,7 +171,7 @@ test("heartbeats continue through silence, newest progress is sent, completion f
     expect(outcome?.outcome).toBe("answered");
     expect(beats.length).toBeGreaterThanOrEqual(2);
     expect(beats[0].seq).toBe(1);
-    expect(beats[1].progress.label).toBe("Checking notes");
+    expect(beats[1]!.progress!.label).toBe("Checking notes");
     /* The settings page reads the same label, kept in memory for the relay. */
     expect(relayActivity(paired.id).lastProgress).toMatchObject({ targetId: "target_1", label: "Checking notes" });
     expect(completed).toHaveLength(1);
@@ -173,7 +182,7 @@ test("heartbeats continue through silence, newest progress is sent, completion f
   }
 });
 test("a full target is declined and a nonzero CLI exit cannot use a written answer", async () => {
-  const completions: any[] = [];
+  const completions: unknown[] = [];
   const server = await startTestRelay((req, body) =>
     req.url?.endsWith("/complete")
       ? (completions.push(body),
@@ -389,7 +398,7 @@ test("an acknowledged heartbeat still keeps the run alive after a delayed respon
   }
 }, 20_000);
 test("Claude startup failure without init completes agent_error", async () => {
-  const completions: any[] = [];
+  const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
     completions.push(body);
@@ -435,7 +444,7 @@ test("completion retry reuses the identical body after a lost response", async (
   }
 });
 test("unknown request kind is declined as unsupported", async () => {
-  const completions: any[] = [];
+  const completions: unknown[] = [];
   const server = await startTestRelay((_req, body) => {
     completions.push(body);
     return { body: { status: "accepted", duplicate: false } };
@@ -473,7 +482,7 @@ test("404 heartbeat drops the lease and cancels the child", async () => {
   }
 });
 test("a duplicate claim leaves the held lease alone", async () => {
-  const completions: any[] = [];
+  const completions: unknown[] = [];
   const server = await startTestRelay((req, body) =>
     req.url?.endsWith("/heartbeat")
       ? { body: { status: "ok" } }
@@ -528,7 +537,7 @@ test("newly confirmed targets default to a 30 minute hard cap", async () => {
   }
 });
 test("exhausted account sends a retry hint in seconds", async () => {
-  const completions: any[] = [];
+  const completions: unknown[] = [];
   const server = await startTestRelay((_req, body) => {
     completions.push(body);
     return { body: { status: "accepted", duplicate: false } };
@@ -550,10 +559,10 @@ test("exhausted account sends a retry hint in seconds", async () => {
   }
 });
 test("a note arriving during a heartbeat is sent on the next beat", async () => {
-  const beats: any[] = [];
+  const beats: { seq: number; progress: { label: string } | null }[] = [];
   const server = await startTestRelay(async (req, body) => {
     if (req.url?.endsWith("/heartbeat")) {
-      beats.push(body);
+      beats.push(body as typeof beats[number]);
       if (beats.length === 1) await Bun.sleep(450);
     }
     return { body: { status: "ok" } };
@@ -617,7 +626,7 @@ test("local answers and early declines survive recovery while completion is pend
 }, 15_000);
 
 test("413 on an answer completes failed invalid_answer immediately", async () => {
-  const completions: any[] = [];
+  const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
     completions.push(body);
@@ -630,7 +639,7 @@ test("413 on an answer completes failed invalid_answer immediately", async () =>
     const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
       ...sampleRequest, request_id: "rq_too_large",
     }, undefined, { command: script });
-    expect(completions.map((body) => [body.outcome, body.reason])).toEqual([
+    expect(completions.map((body) => { const completion = body as { outcome: string; reason?: string }; return [completion.outcome, completion.reason]; })).toEqual([
       ["answered", undefined], ["failed", "invalid_answer"],
     ]);
     expect(outcome).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
@@ -644,7 +653,7 @@ test("413 on an answer completes failed invalid_answer immediately", async () =>
 });
 for (const engine of ["codex", "claude"] as const)
   test(`${engine} forbidden tool cancels the child and completes profile_violation`, async () => {
-    const completions: any[] = [];
+    const completions: unknown[] = [];
     const server = await startTestRelay((req, body) => {
       if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
       completions.push(body);
@@ -670,7 +679,7 @@ for (const engine of ["codex", "claude"] as const)
     }
   });
 test("hard cap kills the child and completes failed hard_cap", async () => {
-  const completions: any[] = [];
+  const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
     completions.push(body);
@@ -1011,7 +1020,7 @@ test("service-built roles answer and the real runner and poller emit cross-check
     ensureExternalRelayPollers();
     const deadline = Date.now() + 5000;
     while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
-    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context"], slots: [{ target_id: "t_target", free: 1 }] });
+    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions"], slots: [{ target_id: "t_target", free: 1 }] });
     const expected = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_completions.json"), "utf8"));
     expect(handoff).toEqual(expected.handoff);
     expect(claimBody).toEqual(expected.claim_body);
@@ -1032,3 +1041,1408 @@ test("service-built roles answer and the real runner and poller emit cross-check
     await server.close();
   }
 }, 60_000);
+
+// Slice 2a uses the real launchDetached command and relayCall HTTP seams.
+function loopStub(plan: string, seen: string) {
+  return stub(`import fs from 'node:fs';const a=process.argv.slice(2);const p=await Bun.stdin.text();
+const schema=JSON.parse(fs.readFileSync(a[a.indexOf('--output-schema')+1],'utf8'));
+const round=Number(p.match(/This is round (\\d+) of 8/)?.[1]??1);
+const results=JSON.parse(p.match(/<tool_results>\\n([^]*?)\\n<\\/tool_results>/)?.[1]??'[]');
+const final=!schema.properties.calls;
+fs.appendFileSync(${JSON.stringify(seen)},JSON.stringify({round,prompt:p,schema,cwd:process.cwd()})+'\\n');
+const call=(tool='search_docs',args={query:'meetup'},cursor=null)=>({tool,arguments:JSON.stringify(args),cursor});
+const reply={action:'reply',text:'The meetup is Friday.',reply_to:'m_b40b71a0a9d43622ee0e2e6a',...(final?{}:{calls:[]})};
+const answer=(()=>{${plan}})();
+if(answer!==undefined)await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));`);
+}
+const oneCallPlan = `return round===1?{action:'call',text:'',reply_to:null,calls:[call()]}:reply;`;
+type WireCall = ReturnType<typeof callBody>;
+async function runLoopCase(options: {
+  live?: { engine: "codex" | "claude"; home: string };
+  role?: string; request?: ReturnType<typeof x1Request>; plan?: string;
+  response?: (body: WireCall, attempt: number) => { status?: number; body?: unknown; drop?: boolean } | Promise<{ status?: number; body?: unknown; drop?: boolean }>;
+  completeResponse?: (body: unknown, attempt: number) => { status?: number; body?: unknown };
+  runtime?: ToolLoopRuntime & { ownerPorts?: import("./ownerRun").OwnerRunPorts };
+  relayId?: string; ownerTier?: boolean;
+  reverseReadArrival?: boolean;
+  heartbeatResponse?: (seq: number) => { status?: number; body?: unknown };
+  features?: string[];
+}) {
+  const request = options.request ?? { ...x1Request(options.role ?? "member"), request_id: `loop_${crypto.randomUUID()}` };
+  const calls: WireCall[] = [];
+  const events: string[] = [];
+  const heartbeats: unknown[] = [];
+  const completions: unknown[] = [];
+  const seen = path.join(root, `loop-seen-${crypto.randomUUID()}`);
+  const originalHttpRequest = http.request;
+  let releaseFirstSend: (() => void) | undefined;
+  let toolPosts = 0;
+  if (options.reverseReadArrival) http.request = ((...args: Parameters<typeof http.request>) => {
+    const outgoing = originalHttpRequest(...args);
+    const requestOptions = args[0] as http.RequestOptions;
+    if (requestOptions.path?.endsWith("/tool-calls") && toolPosts++ === 0) {
+      const end = outgoing.end;
+      outgoing.end = ((...endArgs: Parameters<typeof outgoing.end>) => {
+        releaseFirstSend = () => { end.apply(outgoing, endArgs); };
+        return outgoing;
+      }) as typeof outgoing.end;
+    }
+    return outgoing;
+  }) as typeof http.request;
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      const seq = (body as { seq: number }).seq;
+      events.push(`beat:${seq}`);
+      heartbeats.push(body);
+      if (options.heartbeatResponse) return options.heartbeatResponse(seq);
+    }
+    if (req.url?.endsWith("/complete")) { completions.push(body); if (options.completeResponse) return options.completeResponse(body, completions.length); }
+    if (req.url?.endsWith("/tool-calls")) {
+      events.push("call");
+      calls.push(body as WireCall);
+      if (calls.length === 1) releaseFirstSend?.();
+      return options.response ? await options.response(body as WireCall, calls.length) : {
+        body: { ...x1Results.ok, call_id: (body as WireCall).call_id, calls_remaining: 16 - new Set(calls.map((call) => call.call_id)).size },
+      };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  if (options.features) paired.features = options.features;
+  paired.id = options.relayId ?? `loop_${crypto.randomUUID()}`;
+  paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null, ...(options.ownerTier !== undefined ? { ownerTier: options.ownerTier } : {}) };
+  const previousSelection = accountManager.resolveHeadlessSpawn;
+  const restoreFeatures = options.live ? setCodexFeatureReaderForTest(undefined) : undefined;
+  if (options.live) {
+    paired.targets[0] = { ...paired.targets[0]!, engine: options.live.engine,
+      model: options.live.engine === "codex" ? "gpt-6-sol" : "haiku", effort: "low", hardCapMinutes: 2 };
+    const liveAccount: AccountContext = { engine: options.live.engine, accountId: `synthetic_probe_${options.live.engine}`, kind: "managed",
+      home: options.live.home, transcriptRoot: root, env: { ...process.env } };
+    accountManager.resolveHeadlessSpawn = (() => ({ kind: "available", account: liveAccount })) as typeof previousSelection;
+  }
+  try {
+    const completion = await runClaimedRequest(paired, request, undefined, { ...(options.live ? {} : { command: loopStub(options.plan ?? oneCallPlan, seen) }),
+      sleep: async () => {}, ...options.runtime });
+    const rounds = fs.existsSync(seen) ? fs.readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+    expect(events.indexOf("beat:1")).toBeLessThan(events.indexOf("call") === -1 ? Infinity : events.indexOf("call"));
+    expect(readRunLedger().runs).toEqual([]);
+    return { completion, calls, events, heartbeats, rounds, completions, paired, request,
+      record: readAnswerRecord(paired.id, request.target_id, request.request_id) };
+  } finally { http.request = originalHttpRequest; restoreFeatures?.(); accountManager.resolveHeadlessSpawn = previousSelection; await server.close(); }
+}
+
+for (const role of ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin"])
+  test(`X1 ${role} claim completes through the read loop`, async () => {
+    const run = await runLoopCase({ role });
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+    expect(run.calls).toHaveLength(1);
+    expect(run.rounds).toHaveLength(2);
+    expect(run.record).toMatchObject({ rounds: 2, toolCalls: [{ round: 1, tool: "search_docs", status: "ok", local: false }] });
+    const stored = JSON.stringify(run.record);
+    for (const secret of [run.calls[0]!.call_id, run.request.lease_id, run.paired.credential, x1Results.ok!.output]) expect(stored).not.toContain(secret);
+    expect(run.record!.toolCalls![0]).not.toHaveProperty("arguments");
+  });
+
+for (const [name, sample] of Object.entries(x1Results))
+  test(`X1 result ${name} crosses the runner projection`, async () => {
+    // Even an unexpected action result must end calling safely; no action is sent.
+    const run = await runLoopCase({
+      response: (body, attempt) => ({ body: { ...(sample.status === "pending" && attempt > 1 ? x1Results.ok : sample), tool: "search_docs", call_id: body.call_id } }),
+    });
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+    const prompt = run.rounds[1].prompt as string;
+    const projected = JSON.parse(prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)![1]!)[0];
+    if (sample.audience) {
+      expect(projected).toMatchObject({ status: "denied", code: "not_permitted", output: "" });
+      expect(run.record!.toolCalls![0]!.withheld).toBe(true);
+      expect(run.calls).toHaveLength(1);
+    } else if (sample.status === "pending") {
+      expect(run.calls).toHaveLength(2);
+      expect(run.calls[1]).toEqual(run.calls[0]);
+      expect(projected.output).toBe(x1Results.ok!.output);
+    } else {
+      expect(projected.status).toBe(sample.status);
+      expect(projected.output).toBe(sample.output);
+      if (sample.code) expect(projected.code).toBe(sample.code);
+      expect(run.calls).toHaveLength(name === "unavailable" ? 3 : 1);
+    }
+    if (sample.delivered || sample.status === "outcome_unknown" || sample.code === "too_many_calls")
+      expect(run.rounds[1].schema).toEqual(handoffAnswerSchema);
+  });
+
+for (const [name, envelope] of Object.entries(x1Errors).filter(([name]) => name !== "handoff_after_action"))
+  test(`X1 transport ${name} uses the production HTTP path`, async () => {
+    const waits: number[] = [];
+    const run = await runLoopCase({ response: () => envelope, runtime: { sleep: async (ms) => { waits.push(ms); } } });
+    if (["lease_lost", "not_found"].includes(name)) {
+      expect(run.completion).toBeNull();
+      expect(run.completions).toEqual([]);
+      expect(run.record?.outcome).toBe("lease_lost");
+    } else {
+      expect(run.completion).toMatchObject({ outcome: "answered" });
+      expect(run.rounds[1].prompt).toContain(`"code":"${name}"`);
+      if (["unauthorized", "unsupported_version"].includes(name)) expect(run.rounds[1].schema).toEqual(handoffAnswerSchema);
+      if (name === "rate_limited") expect(waits).toEqual([60000, 60000, 60000]);
+    }
+  });
+
+for (const rejection of ["unauthorized", "unsupported_version"])
+  test(`${rejection} cancels a sibling poll wait and completes one normal final round`, async () => {
+    let waiting!: () => void;
+    const siblingWaiting = new Promise<void>((resolve) => { waiting = resolve; });
+    const run = await runLoopCase({
+      plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('search_docs',{query:'reject'}),call('search_docs',{query:'sibling'})]}:reply;`,
+      response: async (body) => {
+        if ("arguments" in body && body.arguments?.query === "reject") {
+          await siblingWaiting;
+          return x1Errors[rejection]!;
+        }
+        return { body: { ...x1Results.pending, tool: "search_docs", call_id: body.call_id, retry_after_s: 60 } };
+      },
+      runtime: { sleep: async (ms, signal) => { waiting(); await toolSleep(ms, signal); } },
+    });
+    expect(run.calls).toHaveLength(2);
+    expect(run.completions).toHaveLength(1);
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+    expect(run.rounds).toHaveLength(2);
+    expect(run.rounds[1].schema).toEqual(handoffAnswerSchema);
+    expect(run.record?.outcome).toBe("answered");
+    expect(run.record?.toolCalls?.map((call) => call.code)).toEqual([rejection, rejection]);
+  });
+
+test("exhausting the call budget still polls an already admitted read", async () => {
+  const run = await runLoopCase({ response: (body, attempt) => ({ body: {
+    ...(attempt === 1 ? x1Results.pending : x1Results.ok), tool: "search_docs", call_id: body.call_id, calls_remaining: 0,
+  } }) });
+  expect(run.calls).toHaveLength(2);
+  expect(run.calls[0]).toEqual(run.calls[1]);
+  expect(run.completions).toHaveLength(1);
+  expect(run.completion).toMatchObject({ outcome: "answered" });
+  expect(run.rounds[1].schema).toEqual(handoffAnswerSchema);
+  expect(run.rounds[1].prompt).toContain(x1Results.ok!.output.replaceAll('"', '\\"'));
+});
+
+test("six requested calls send four, invalid arguments and forbidden tools stay local", async () => {
+  const run = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:Array.from({length:6},(_,i)=>call('search_docs',{query:String(i)}))}:reply;` });
+  expect(run.calls).toHaveLength(4);
+  expect(run.record!.toolCalls!.slice(4).map((item) => item.code)).toEqual(["too_many_calls", "too_many_calls"]);
+  const local = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('missing'),{tool:'search_docs',arguments:'[]',cursor:null},call('search_docs',{},'invented'),call('search_docs',{query:'x'.repeat(65536)})]}:reply;` });
+  expect(local.calls).toHaveLength(0);
+  expect(local.record!.toolCalls!.map((item) => item.code)).toEqual(["not_permitted", "invalid_arguments", "invalid_arguments", "invalid_arguments"]);
+});
+test("sixteen calls force a final schema, and sparse calls force round eight", async () => {
+  for (const n of [1, 4]) {
+    const run = await runLoopCase({ plan: `return final?reply:{action:'call',text:'',reply_to:null,calls:Array.from({length:${n}},(_,i)=>call('search_docs',{query:round+'-'+i}))};` });
+    expect(run.calls).toHaveLength(n === 4 ? 16 : 7);
+    expect(run.rounds).toHaveLength(n === 4 ? 5 : 8);
+    expect(run.rounds.at(-1).schema).toEqual(handoffAnswerSchema);
+  }
+});
+test("repeat calls use the local result, empty calls force the next round final", async () => {
+  const run = await runLoopCase({ plan: `return round<=2?{action:'call',text:'',reply_to:null,calls:[call()]}:reply;` });
+  expect(run.calls).toHaveLength(1);
+  const empty = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[]}:reply;` });
+  expect(empty.calls).toHaveLength(0);
+  expect(empty.rounds[1].schema).toEqual(handoffAnswerSchema);
+});
+test("a pending read stops at 330 seconds through the wait seam", async () => {
+  let clock = 0;
+  const run = await runLoopCase({ response: (body) => ({ body: { ...x1Results.pending, tool: "search_docs", call_id: body.call_id } }),
+    runtime: { now: () => clock, sleep: async (ms) => { clock += ms; } } });
+  expect(clock).toBe(330000);
+  expect(run.rounds[1].prompt).toContain("The read did not finish.");
+});
+test("only 64 KiB of distinct outputs reaches subsequent prompts", async () => {
+  const run = await runLoopCase({
+    plan: `return final?reply:{action:'call',text:'',reply_to:null,calls:Array.from({length:4},(_,i)=>call('search_docs',{query:round+'-'+i}))};`,
+    response: (body) => ({ body: { ...x1Results.ok, call_id: body.call_id, output: "😀".repeat(16000), calls_remaining: 16 } }),
+  });
+  const prompt = run.rounds.at(-1).prompt as string;
+  const results = JSON.parse(prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)![1]!);
+  expect(results.reduce((bytes: number, result: { output: string }) => bytes + Buffer.byteLength(result.output), 0)).toBeLessThanOrEqual(65536);
+  expect(results.some((result: { code?: string }) => result.code === "quota_exhausted")).toBe(true);
+});
+test("a later Codex round cannot reuse a previous answer file", async () => {
+  const run = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call()]}:undefined;` });
+  expect(run.completion).toMatchObject({ outcome: "failed", reason: "agent_error" });
+  expect(run.rounds[0].cwd).not.toBe(run.rounds[1].cwd);
+});
+
+test("C4 X2 marks only the stored outcome of an admitted call as replayed", () => {
+  const evidence = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8"));
+  const [media, docs, page] = evidence.calls;
+  expect(media.attempts[0].request).toEqual(media.attempts[1].request);
+  expect(media.attempts[0].response).toMatchObject({ status: "pending", replayed: false });
+  expect(media.attempts[1].response).toMatchObject({ status: "ok", replayed: true });
+  expect(docs.attempts[0].response.replayed).toBe(false);
+  expect(page.attempts[0].response.replayed).toBe(false);
+});
+
+for (const reverseArrival of [false, true])
+test(`X2 is generated by the real poller and runner with X1 pending and pages (${reverseArrival ? "reversed" : "normal"} arrivals)`, async () => {
+  const { ensureExternalRelayPollers, stopExternalRelayPollers } = await import("./poller");
+  const request = x1Request("member");
+  const plannedCalls = [
+    { round: 1, body: callBody(request, { tool: "get_media", arguments: { message_id: "m_b40b71a0a9d43622ee0e2e6a" } }) },
+    { round: 1, body: callBody(request, { tool: "search_docs", arguments: { query: "meetup" } }) },
+    { round: 2, body: callBody(request, { cursor: x1Results.cursor_page!.cursor! }) },
+  ];
+  // Allocate fixture slots and admission snapshots in round/model-item order.
+  const calls: { round: number; attempts: { request: WireCall; x1_sample: string; response: ToolCallResult }[] }[] =
+    plannedCalls.map(({ round }) => ({ round, attempts: [] }));
+  const seenIds = new Set<string>();
+  let admitRoundOne!: () => void;
+  const roundOneAdmitted = new Promise<void>((resolve) => { admitRoundOne = resolve; });
+  let claimBody: unknown;
+  let heartbeat = false;
+  const arrivals: string[] = [];
+  const originalHttpRequest = http.request;
+  let releaseFirstSend: (() => void) | undefined;
+  let toolPosts = 0;
+  if (reverseArrival) http.request = ((...args: Parameters<typeof http.request>) => {
+    const outgoing = originalHttpRequest(...args);
+    const options = args[0] as http.RequestOptions;
+    if (options.path?.endsWith("/tool-calls") && toolPosts++ === 0) {
+      const end = outgoing.end;
+      outgoing.end = ((...endArgs: Parameters<typeof outgoing.end>) => {
+        releaseFirstSend = () => { end.apply(outgoing, endArgs); };
+        return outgoing;
+      }) as typeof outgoing.end;
+    }
+    return outgoing;
+  }) as typeof http.request;
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [{ target_id: request.target_id, name: "Target", answered_by: "install", fallback: "service" }] } };
+    if (req.url?.endsWith("/claim")) { claimBody = body; stopExternalRelayPollers(); return { status: 204 }; }
+    if (req.url?.endsWith("/heartbeat")) heartbeat = true;
+    if (req.url?.endsWith("/tool-calls")) {
+      expect(heartbeat).toBe(true);
+      const call = body as WireCall;
+      arrivals.push("cursor" in call ? "page" : call.tool);
+      if ("tool" in call && call.tool === "search_docs") releaseFirstSend?.();
+      const first = !seenIds.has(call.call_id);
+      seenIds.add(call.call_id);
+      const index = plannedCalls.findIndex((planned) => planned.body.call_id === call.call_id);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(call).toEqual(plannedCalls[index]!.body);
+      // Both concurrent reads are admitted before either can start polling.
+      if (seenIds.size >= 2) admitRoundOne();
+      await roundOneAdmitted;
+      const sample = "cursor" in call ? "last_page" : call.tool === "search_docs" ? "ok" : first ? "pending" : "cursor_page";
+      const response = { ...x1Results[sample]!, call_id: call.call_id, calls_remaining: first ? 15 - index : 14,
+        replayed: !first };
+      const entry = calls[index]!;
+      entry.attempts.push({ request: call, x1_sample: sample, response });
+      return { body: response };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = "relay_x2";
+  paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null };
+  try {
+    updateRelayStore((store) => ({ ...store, relays: [paired] }));
+    ensureExternalRelayPollers();
+    const deadline = Date.now() + 5000;
+    while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
+    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions"], slots: [{ target_id: request.target_id, free: 1 }] });
+    const completion = await runClaimedRequest(paired, request, undefined, { sleep: async () => {}, command: loopStub(
+      `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('get_media',{message_id:'m_b40b71a0a9d43622ee0e2e6a'}),call()]};
+       if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('get_media',{},results.find(r=>r.next_cursor).next_cursor)]};return reply;`,
+      path.join(root, "x2-seen")) });
+    expect(completion?.outcome).toBe("answered");
+    if (reverseArrival) expect(arrivals.slice(0, 2)).toEqual(["search_docs", "get_media"]);
+    if (completion?.outcome !== "answered") throw new Error("X2 did not answer");
+    expect(completion.duration_ms).toBeGreaterThanOrEqual(0);
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+    const x2Rounds = fs.readFileSync(path.join(root, "x2-seen"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const hashes = { prompts: x2Rounds.slice(-3).map((r) => hash(r.prompt)), schemas: x2Rounds.slice(-3).map((r) => hash(JSON.stringify(r.schema))),
+      calls: calls.flatMap((entry) => entry.attempts.map((attempt) => hash(JSON.stringify(attempt.request)))) };
+    const hashFile = path.join(x1Dir, "actions-off-x2-2a-hashes.json");
+
+    const output = JSON.stringify({ x1: { revision: "a0d9245bcac2c2246f29f180f8bd21aa825d478c", claim: "claimed_tools_member.json",
+      claim_sha256: createHash("sha256").update(fs.readFileSync(path.join(x1Dir, "claimed_tools_member.json"))).digest("hex") },
+      claim_body: claimBody, calls, completion: { ...completion, duration_ms: 0 },
+      ...(JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8")).actions ? { actions: JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8")).actions } : {}) }, null, 2) + "\n";
+    const readWire = JSON.parse(output);
+    delete readWire.actions;
+    readWire.claim_body.features = readWire.claim_body.features.filter((feature: string) => feature !== "relay_tool_actions");
+    expect({ ...hashes, wire: hash(JSON.stringify(readWire, null, 2) + "\n") })
+      .toEqual(JSON.parse(fs.readFileSync(hashFile, "utf8")));
+    if (process.env.LLV_RELAY_WIRE_OUTPUT_TOOL_LOOP) fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT_TOOL_LOOP, output);
+    expect(output).toBe(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8"));
+    expect(calls[0]!.attempts[0]!.request).toEqual(calls[0]!.attempts[1]!.request);
+    expect(calls[2]!.attempts[0]!.request).toEqual({ lease_id: request.lease_id, call_id: calls[2]!.attempts[0]!.request.call_id, cursor: x1Results.cursor_page!.cursor! });
+  } finally { http.request = originalHttpRequest; stopExternalRelayPollers(); await server.close(); }
+}, 30_000);
+
+test("C6 re-claim sends the stored call identity under a new lease and counts the member once", async () => {
+  const request = { ...x1Request("member"), request_id: "rq_reclaim_read" };
+  const relayId = "relay_reclaim_read";
+  let first: WireCall | undefined;
+  let executions = 0;
+  const lost = await runLoopCase({ request, relayId, response: (body) => {
+    first = body; executions++; return x1Errors.lease_lost!;
+  } });
+  expect(lost.completion).toBeNull();
+  const reclaimed = await runLoopCase({ request: { ...request, lease_id: "b".repeat(64) }, relayId,
+    response: (body) => {
+      expect(body.call_id).toBe(first!.call_id);
+      if (body.call_id !== first!.call_id) executions++;
+      return { body: { ...x1Results.ok, call_id: body.call_id, replayed: true } };
+    } });
+  expect(reclaimed.completion).toMatchObject({ outcome: "answered" });
+  expect(executions).toBe(1);
+  expect(countMemberAnswers({ relayId, targetId: request.target_id, chatKey: request.chat!.key,
+    requesterKey: request.input.requester!.key, sinceMs: Date.now() - 3600000 }).count).toBe(1);
+});
+
+test("heartbeats span the pending phase between child rounds", async () => {
+  const request = { ...x1Request("member"), request_id: "rq_pending_beats",
+    liveness: { ...x1Request("member").liveness, heartbeat_interval_s: 2 } };
+  const run = await runLoopCase({ request, response: (body, attempt) => ({ body: {
+    ...(attempt === 1 ? x1Results.pending : x1Results.ok), tool: "search_docs", call_id: body.call_id,
+  } }), runtime: { sleep: async (ms) => { await Bun.sleep(ms); } } });
+  expect(run.events.indexOf("beat:2")).toBeGreaterThan(run.events.indexOf("call"));
+  expect(run.events).toContain("beat:3");
+  expect(run.calls[0]).toEqual(run.calls[1]);
+}, 20_000);
+
+test("a stalled lease aborts a call phase and sends no completion", async () => {
+  const request = { ...x1Request("member"), request_id: "rq_stalled_call",
+    liveness: { ...x1Request("member").liveness, heartbeat_interval_s: 2, stall_window_s: 10 } };
+  const run = await runLoopCase({ request, response: async (body) => {
+    await Bun.sleep(12000); return { body: { ...x1Results.ok, call_id: body.call_id } };
+  }, heartbeatResponse: (seq) => seq === 1 ? { body: { status: "ok" } } : { status: 503 } });
+  expect(run.completion).toBeNull();
+  expect(run.completions).toEqual([]);
+  expect(run.record!.outcome).toBe("lease_lost");
+}, 25_000);
+
+for (const role of ["admin", "owner", "anonymous_admin"])
+  test(`audience projection for ${role} permits only its own flags`, async () => {
+    for (const audience of ["admin", "owner"] as const) {
+      const sample = x1Results[audience]!;
+      const run = await runLoopCase({ role, response: (body) => ({ body: { ...sample, tool: "search_docs", call_id: body.call_id } }) });
+      const allowed = audience === "admin" || role === "owner";
+      expect(run.record!.toolCalls![0]!.withheld).toBe(!allowed);
+      const result = JSON.parse(run.rounds[1].prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)[1])[0];
+      expect(result.output).toBe(allowed ? sample.output : "");
+    }
+  });
+
+test("slice 1 requests launch with unchanged prompt/schema, no calls and no loop record fields", async () => {
+  const { answerPrompt } = await import("./prompt");
+  const { answerSchema } = await import("./protocol");
+  for (const fixture of serviceClaims) {
+    const request = requestSchema.parse(fixture.body.request);
+    const run = await runLoopCase({ request, plan: "return reply;" });
+    expect(run.rounds[0].prompt).toBe(answerPrompt(request));
+    expect(run.rounds[0].schema).toEqual(request.input.tools?.length ? handoffAnswerSchema : answerSchema);
+    expect(run.calls).toEqual([]);
+    expect(run.record).not.toHaveProperty("rounds");
+    expect(run.record).not.toHaveProperty("toolCalls");
+  }
+  const readRequest = x1Request("member");
+  const request = { ...readRequest, request_id: "rq_handoff_only", input: { ...readRequest.input, tool_guidance: null,
+    tools: readRequest.input.tools!.map((tool) => ({ name: tool.name, summary: tool.summary, mode: "handoff" as const })) } };
+  const run = await runLoopCase({ request, plan: "return reply;" });
+  expect(run.calls).toEqual([]);
+  expect(run.rounds[0].prompt).toBe(answerPrompt(request));
+  expect(run.record).not.toHaveProperty("rounds");
+});
+
+test("concurrent reads settle in model order with at most four in flight", async () => {
+  let active = 0;
+  let maximum = 0;
+  const run = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:Array.from({length:4},(_,i)=>call('search_docs',{query:String(i)}))}:reply;`,
+    response: async (body) => {
+      active++; maximum = Math.max(maximum, active);
+      const query = "arguments" in body ? body.arguments!.query as string : "";
+      await Bun.sleep((4 - Number(query)) * 20); active--;
+      return { body: { ...x1Results.ok, call_id: body.call_id, output: query, calls_remaining: 12 } };
+    } });
+  expect(maximum).toBe(4);
+  const results = JSON.parse(run.rounds[1].prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)[1]);
+  expect(results.map((item: { output: string }) => item.output)).toEqual(["0", "1", "2", "3"]);
+});
+
+test("transport and invalid-result retries keep identical bodies", async () => {
+  for (const kind of ["5xx", "bad_result", "oversize_response"]) {
+    const waits: number[] = [];
+    const run = await runLoopCase({ response: (body, attempt) => {
+      if (attempt < 4) {
+        if (kind === "5xx") return { status: 503 };
+        if (kind === "oversize_response") return { body: { ...x1Results.ok, output: "x".repeat(65537), call_id: body.call_id } };
+        return { body: { ...x1Results.ok, status: "unexpected", call_id: body.call_id } };
+      }
+      return { body: { ...x1Results.ok, call_id: body.call_id } };
+    }, runtime: { sleep: async (ms) => { waits.push(ms); } } });
+    expect(run.calls).toHaveLength(4);
+    expect(run.calls.every((body) => JSON.stringify(body) === JSON.stringify(run.calls[0]))).toBe(true);
+    expect(waits).toEqual([1000, 2000, 4000]);
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+  }
+});
+
+test("a historical replay cannot restore the fresh remaining-call budget", async () => {
+  const run = await runLoopCase({ plan: `if(final)return reply;return round<=2?{action:'call',text:'',reply_to:null,calls:[call('search_docs',{query:String(round)})]}:reply;`,
+    response: (body, attempt) => ({ body: { ...x1Results.ok, call_id: body.call_id, calls_remaining: attempt === 1 ? 2 : 15, replayed: attempt === 2 } }) });
+  expect(run.rounds[2].prompt).toContain("2 calls are left.");
+});
+
+// Captured on the slice 2a head before changing the loop; only deterministic wire surfaces.
+test("actions OFF preserves every 2a round, schema and call byte", async () => {
+  const hashes: Record<string, unknown> = {};
+  for (const role of ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_off"]) {
+    const request = x1Request(role === "actions_off" ? "actions_admin" : role);
+    if (role === "actions_off") request.input.tools = request.input.tools!.map((tool) => tool.effect === "action"
+      ? { name: tool.name, summary: tool.summary, mode: "handoff" as const } : tool);
+    const run = await runLoopCase({ request });
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+    hashes[role] = { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))),
+      calls: run.calls.map((call) => hash(JSON.stringify(call))) };
+    expect(run.record!.toolCalls!.every((row) => !("effect" in row))).toBe(true);
+  }
+  const file = path.join(x1Dir, "actions-off-2a-hashes.json");
+  if (process.env.LLV_RELAY_CAPTURE_2A) fs.writeFileSync(file, JSON.stringify(hashes, null, 2) + "\n");
+  expect(hashes).toEqual(JSON.parse(fs.readFileSync(file, "utf8")));
+});
+
+const actionPlan = (tool: string, final = "reply") =>
+  `return round===1?{action:'call',text:'',reply_to:null,calls:[call('${tool}',{})]}:${final};`;
+const projectionsOf = (run: Awaited<ReturnType<typeof runLoopCase>>, round = 1) =>
+  JSON.parse(run.rounds[round].prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)[1]);
+
+test("N1 owner switch OFF preserves pre-amendment v3 runner and claim bytes", async () => {
+  const hashes: Record<string, unknown> = {};
+  setRelaySwitch("relay:owner_tools:enabled", false);
+  for (const role of ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin"]) {
+    const run = await runLoopCase({ request: x1Request(role) });
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+    hashes[role] = { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))),
+      calls: run.calls.map((call) => hash(JSON.stringify(call))) };
+  }
+  hashes.claim = JSON.stringify(relayClaimCapabilities({ features: ["relay_owner_tools"] }));
+  const output = JSON.stringify(hashes, null, 2) + "\n";
+  if (process.env.LLV_RELAY_CAPTURE_OWNER_N1) fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_OWNER_N1, output);
+  else expect(output).toBe(fs.readFileSync(path.join(x1Dir, "owner-tools-off-runner-hashes.json"), "utf8"));
+});
+
+const ownerFeatures = ["requester_context", "relay_tool_calls", "relay_tool_actions", "relay_owner_tools"];
+const ownerRateLimit = (seconds = 7) => ({ status: 429,
+  body: { error: { code: "rate_limited", message: "rate limited", retry_after_s: seconds } } });
+const ownerResponse = (body: WireCall, overrides: Partial<ToolCallResult> = {}) => ({ body: {
+  call_id: body.call_id, tool: "tool" in body ? body.tool : "owner_list_grid_chats", status: "ok", output: "[]",
+  truncated: false, effect: "tool" in body && ["owner_list_grids", "owner_list_grid_chats"].includes(body.tool!) ? "read" : "action",
+  delivered: false, replayed: false, calls_remaining: 15, audience: "owner", ...overrides,
+} });
+
+test("both owner switches preserve non-owner relay runs and reject offered owner tools", async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  let launches = 0;
+  const runtime = { ownerPorts: {
+    launch: async () => { launches++; throw Error("non-owner must not launch"); },
+    observe: async () => ({ state: "running" as const }), stop: async () => {},
+  } };
+  try {
+    for (const role of ["member", "admin", "anonymous_admin"]) {
+      const request = ownerRequest(`both_switches_${role}`);
+      const input = x1Request(role).input;
+      request.input.requester = input.requester;
+      request.input.conversation = input.conversation;
+      const options = { request, features: ownerFeatures, runtime,
+        plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};return {action:'reply',text:'Done',reply_to:null,calls:[]};` };
+      const off = await runLoopCase({ ...options, ownerTier: false });
+      const on = await runLoopCase({ ...options, ownerTier: true });
+      expect(on.completion).toMatchObject({ outcome: "answered" });
+      expect({ ...on.completion, duration_ms: 0 }).toEqual({ ...off.completion, duration_ms: 0 });
+      const surfaces = (run: typeof on) => run.rounds.map(({ prompt, schema }) => ({ prompt, schema }));
+      expect(surfaces(on)).toEqual(surfaces(off));
+      expect(on.calls).toEqual([]);
+      expect(on.record!.profile).not.toHaveProperty("owner");
+      expect(on.rounds[0].schema.properties.calls.items.properties.tool.enum).not.toContain("owner_create_grid");
+      expect(projectionsOf(on)[0]).toMatchObject({ status: "denied", code: "not_permitted" });
+    }
+    expect(launches).toBe(0);
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+test("E3 owner pure 429 ceiling refunds its debit and permits completion with handoff", async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    const run = await runLoopCase({ request: ownerRequest("owner_refund_regression"), features: ownerFeatures,
+      plan: `if(round<=2)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+      response: () => ownerRateLimit(), runtime: { sleep: async () => {} } });
+    expect(run.completion).toMatchObject({ outcome: "declined", reason: "handoff" });
+    expect(run.calls).toHaveLength(4); expect(run.rounds[1].prompt.includes("16 calls are left.")).toBe(true);
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+for (const refusal of ["malformed", "too_large"]) test(`E3 owner ${refusal} refusal followed by a pure 429 ceiling permits handoff`, async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    const run = await runLoopCase({ request: ownerRequest(`owner_refusal_${refusal}`), features: ownerFeatures,
+      plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};
+        if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'00000000-0000-0000-0000-000000000000',body:{}})]};
+        return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+      response: (_body, attempt) => attempt === 1 ? x1Errors[refusal]! : ownerRateLimit(), runtime: { sleep: async () => {} } });
+    expect(run.completion).toMatchObject({ outcome: "declined", reason: "handoff" });
+    expect(run.calls).toHaveLength(5); expect(run.rounds).toHaveLength(3);
+    expect(new Set(run.calls.slice(1).map((call) => JSON.stringify(call))).size).toBe(1);
+    expect(run.rounds[2].prompt).toContain("15 calls are left.");
+    expect(run.rounds[2].schema.properties.action.enum).toContain("handoff");
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+for (const status of ["ok", "error"] as const) test(`E3 owner admitted ${status} followed by a pure 429 ceiling keeps handoff blocked`, async () => {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    const run = await runLoopCase({ request: ownerRequest(`owner_admitted_${status}`), features: ownerFeatures,
+      plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};
+        if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'00000000-0000-0000-0000-000000000000',body:{}})]};
+        return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+      response: (body, attempt) => attempt === 1 ? ownerResponse(body, { status }) : ownerRateLimit(), runtime: { sleep: async () => {} } });
+    expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(run.calls).toHaveLength(5); expect(run.rounds[2].prompt).toContain("15 calls are left.");
+    expect(run.rounds[2].schema.properties.action.enum).not.toContain("handoff");
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+test("X4 six owner runs extend the existing X2 capture format", async () => {
+  const capture: { name: string; x1: unknown; calls: unknown[]; completion: unknown }[] = [];
+  const grid = "00000000-0000-0000-0000-000000000000";
+  const page = "p".repeat(43);
+  const plans: Record<string, string> = {
+    reads: `if(round===1||round===3)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{grid_id:'${grid}',cursor:'public-query-cursor',limit:2})]};
+      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{},'${page}')]};return reply;`,
+    writes: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}}),call('owner_list_grids',{})]};
+      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid B'}})]};
+      if(round===3)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'${grid}',body:{owned:[101]}})]};
+      if(round===4)return {action:'call',text:'',reply_to:null,calls:[call('owner_activate_clone',{bot_id:42})]};return reply;`,
+    retry_ceiling: `if(round<=2)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}})]};return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+    inner_404: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_get_grid',{grid_id:'${grid}'})]};
+      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grids',{})]};return reply;`,
+    lease_lost: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('owner_list_grids',{})]}:reply;`,
+    confirmation: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('owner_deactivate_clone',{bot_id:42})]}:reply;`,
+  };
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    for (const [name, plan] of Object.entries(plans)) {
+      const calls: { body: WireCall; attempts: { request: WireCall; x1_sample: string; response?: unknown; status?: number; body?: unknown }[] }[] = [];
+      const admitted = new Set<string>();
+      const waits: number[] = [];
+      const run = await runLoopCase({ request: ownerRequest(`owner_x4_${name}`), plan, features: ownerFeatures,
+        runtime: { now: () => Date.parse("2026-10-10T00:00:00Z"), sleep: async (ms) => { waits.push(ms); } },
+        response: (body) => {
+          let entry = calls.find((call) => call.body.call_id === body.call_id);
+          if (!entry) { entry = { body, attempts: [] }; calls.push(entry); }
+          const attempt = entry.attempts.length + 1;
+          const tool = "tool" in body ? body.tool : "owner_list_grid_chats";
+          const refused = name === "retry_ceiling" || name === "writes" && tool === "owner_activate_clone" && attempt === 1;
+          if (refused || name === "lease_lost") {
+            const response = name === "lease_lost" ? x1Errors.lease_lost! : ownerRateLimit();
+            entry.attempts.push({ request: body, x1_sample: refused ? "owner_rate_limited" : "lease_lost", ...response });
+            return response;
+          }
+          const replayed = admitted.has(body.call_id);
+          admitted.add(body.call_id);
+          let result: Partial<ToolCallResult> = { tool, calls_remaining: 16 - admitted.size, replayed };
+          let sample = "owner_ok";
+          if (name === "reads") {
+            result = { ...result, effect: "read", output: "[101,102]" };
+            if ("tool" in body && attempt === 1) { sample = "owner_pending"; result = { ...result, status: "pending", output: "", retry_after_s: 1 }; }
+            else if ("tool" in body) { sample = "owner_cursor_replayed"; result = { ...result, truncated: true, cursor: page }; }
+            else sample = "owner_last_page";
+          } else if (name === "inner_404") {
+            result = { ...result, effect: "read", ...(tool === "owner_get_grid" ? { status: "error", output: '{"http_status":404,"message":"Grid not found"}' } : {}) };
+            sample = tool === "owner_get_grid" ? "owner_inner_404" : "owner_ok";
+          } else if (name === "confirmation") {
+            sample = "owner_confirmation_pending";
+            result = { ...result, status: "confirmation_pending", output: "", delivered: true, calls_remaining: 0,
+              confirmation_id: "confirmation_owner_x4", summary: "Deactivate the named clone?", expires_at: "2026-10-10T00:10:00Z" };
+          } else if (tool === "owner_attach_grid_chats") { sample = "owner_204"; result.output = ""; }
+          else if (tool === "owner_create_grid") {
+            const name = (body.arguments!.body as { name: string }).name;
+            result.output = JSON.stringify({ grid_id: name === "Grid A" ? grid : "00000000-0000-0000-0000-000000000001", kind: "settings", name });
+          }
+          const response = ownerResponse(body, result);
+          entry.attempts.push({ request: body, x1_sample: sample, response: response.body });
+          return response;
+        } });
+      if (name === "lease_lost") {
+        expect(run.completion).toBeNull(); expect(run.completions).toEqual([]); expect(run.record?.outcome).toBe("lease_lost");
+      } else expect(run.completion?.outcome).toBe(name === "retry_ceiling" ? "declined" : "answered");
+      if (name === "reads") {
+        expect(run.calls).toHaveLength(3); expect(run.calls[1]).toEqual(run.calls[0]);
+        expect(run.calls[2]).toEqual(callBody(run.request, { cursor: page }));
+        expect(projectionsOf(run, 3)).toHaveLength(2); // cached repetition grows no prompt
+      }
+      if (name === "writes") {
+        expect(run.calls.map((call) => "tool" in call && call.tool)).toEqual([
+          "owner_list_grids", "owner_create_grid", "owner_create_grid", "owner_attach_grid_chats", "owner_activate_clone", "owner_activate_clone"]);
+        expect(run.calls[4]).toEqual(run.calls[5]); expect(waits).toEqual([7000]);
+        expect(run.rounds[1].prompt).toContain("further distinct owner writes requested");
+        expect(projectionsOf(run, 3).at(-1).output).toBe("");
+        expect(run.rounds[4].prompt).toContain("11 calls are left.");
+      }
+      if (name === "retry_ceiling") {
+        expect(run.calls).toHaveLength(4); expect(new Set(run.calls.map((call) => JSON.stringify(call))).size).toBe(1);
+        expect(waits).toEqual([7000, 7000, 7000]); expect(run.rounds[1].prompt).toContain("16 calls are left.");
+        expect(run.rounds[2].schema.properties.action.enum).toContain("handoff");
+        expect(run.completion).toMatchObject({ outcome: "declined", reason: "handoff" });
+      }
+      if (name === "inner_404") {
+        expect(run.calls).toHaveLength(2); expect(projectionsOf(run)[0]).toMatchObject({ status: "error", output: '{"http_status":404,"message":"Grid not found"}' });
+      }
+      if (name === "confirmation") {
+        const projection = projectionsOf(run)[0];
+        expect(projection).toMatchObject({ status: "confirmation_pending", summary: "Deactivate the named clone?", expires_in_s: 600, delivered: true });
+        expect(projection).not.toHaveProperty("confirmation_id"); expect(projection).not.toHaveProperty("expires_at");
+        expect(run.rounds[1].prompt).not.toContain("confirmation_owner_x4");
+        expect(run.rounds[1].prompt).not.toContain("2026-10-10T00:10:00Z");
+        expect(run.rounds[1].prompt).toContain("nothing you can call confirms it");
+        expect(run.rounds[1].schema).toEqual(answerSchema);
+      }
+      capture.push({ name, x1: { amendment_revision: "03de6455", amendment_sha256: "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
+        claim: "claimed_tools_owner_tools.json", claim_source: "local I10 owner index over unchanged X1 2b claim", index: "owner-tools-index.json" }, calls,
+        completion: run.completion ? { ...run.completion, duration_ms: 0 } : null });
+    }
+    const [reads, ...actions] = capture;
+    const output = JSON.stringify({ x1: reads!.x1, claim_body: { wait_s: 25, ...relayClaimCapabilities({ features: ownerFeatures }),
+      slots: [{ target_id: ownerRequest().target_id, free: 1 }] }, calls: reads!.calls, completion: reads!.completion, actions }, null, 2) + "\n";
+    const file = path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop_owner.json");
+    if (process.env.LLV_RELAY_WIRE_OUTPUT_OWNER) fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT_OWNER, output);
+    else expect(output).toBe(fs.readFileSync(file, "utf8"));
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+const actionResponse = (sample: string, body: WireCall) => ({ body: {
+  ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
+} });
+
+test("a post-execution switch-off denial prevents a changed-reason ban after switch-on", async () => {
+  let actionsEnabled = true;
+  const executed = new Set<string>();
+  const run = await runLoopCase({ role: "actions_admin",
+    plan: `return round<=2?{action:'call',text:'',reply_to:null,calls:[call('ban_participant',{
+      target_message_id:'m_b40b71a0a9d43622ee0e2e6a',reason:round===1?'Spam':'Repeated spam'})]}:reply;`,
+    response: (body) => {
+      expect(actionsEnabled).toBe(true);
+      executed.add(body.call_id);
+      actionsEnabled = false;
+      // Exact output of Celestia's withhold_action_result at dcc35137,
+      // apps/backend/application/usecase/clones/relay_tool_call.py:115.
+      const withheld = { call_id: body.call_id, tool: "ban_participant", status: "denied", output: "",
+        truncated: false, effect: "action", delivered: false, replayed: false, calls_remaining: 15, code: "not_permitted" };
+      actionsEnabled = true;
+      return { body: withheld };
+    } });
+  expect(executed.size).toBe(1);
+  expect(run.calls).toHaveLength(1);
+  expect(projectionsOf(run)[0]).toMatchObject({ status: "denied", code: "not_permitted", effect: "action" });
+  expect(run.rounds[1].schema).toEqual(answerSchema);
+  // Even a model that ignores the final schema cannot issue another ban or hand off.
+  expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+  expect(run.completions).toHaveLength(1);
+});
+
+for (const choice of ["reply", "call", "handoff", "ignore"])
+  test(`an exhausted unavailable replay preserves the completed ban's uncertainty with ${choice}`, async () => {
+    const executed = new Set<string>();
+    const run = await runLoopCase({ role: "actions_admin",
+      plan: `if(round===1||'${choice}'==='call'&&!final)return {action:'call',text:'',reply_to:null,calls:[call('ban_participant',{
+        target_message_id:'m_b40b71a0a9d43622ee0e2e6a',reason:round===1?'Spam':'Repeated spam'})]};
+        if('${choice}'==='call')return {action:'call',text:'',reply_to:null,calls:[call('ban_participant',{reason:'Repeated spam'})]};
+        return '${choice}'==='reply'?{...reply,text:'The ban may have happened; I will not repeat it.'}:{action:'${choice}',text:'',reply_to:null};`,
+      response: (body) => {
+        if (!executed.has(body.call_id)) {
+          executed.add(body.call_id);
+          return { drop: true }; // Ban finished, but its first HTTP result was lost.
+        }
+        // Celestia reauthorizes a saved ok result before replaying it. The
+        // pinned dispatcher returns this denial when that check is unavailable.
+        return { body: { call_id: body.call_id, tool: "ban_participant", status: "denied", output: "",
+          truncated: false, effect: "action", delivered: false, replayed: true, calls_remaining: 15,
+          code: "unavailable", retry_after_s: 1 } };
+      } });
+    expect(executed.size).toBe(1);
+    expect(run.calls).toHaveLength(4);
+    expect(new Set(run.calls.map((body) => JSON.stringify(body))).size).toBe(1);
+    expect(projectionsOf(run)[0]).toMatchObject({ status: "denied", code: "unavailable", effect: "action", execution_unknown: true });
+    expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+    expect(run.rounds[1].prompt).toContain("execution_unknown means the action may have happened");
+    expect(run.rounds).toHaveLength(2);
+    expect(run.record!.toolCalls![0]).toMatchObject({ status: "denied", code: "unavailable", replayed: true, local: false });
+    expect(run.completion).toMatchObject(choice === "reply" ? { outcome: "answered" } : { outcome: "failed", reason: "invalid_answer" });
+    expect(run.completions).toHaveLength(1);
+  });
+
+for (const sample of ["action_ok", "action_error", "action_denied", "confirmation_pending", "outcome_unknown", "action_replayed", "action_delivered"])
+  test(`X1 ${sample} crosses the real action loop`, async () => {
+    const wire = x1Results[sample]!;
+    const run = await runLoopCase({ role: "actions_admin", plan: actionPlan(wire.tool),
+      runtime: { now: () => Date.parse("2026-01-01T00:00:00Z") }, response: (body) => actionResponse(sample, body) });
+    expect(run.calls).toHaveLength(1);
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+    expect(projectionsOf(run)[0]).toMatchObject({ status: wire.status, effect: "action", output: wire.output });
+    const schema = run.rounds[1].schema;
+    expect(schema.properties.action.enum).not.toContain("handoff");
+    if (sample === "outcome_unknown") expect(schema).toEqual(replyAnswerSchema);
+    else if (wire.delivered || wire.status === "confirmation_pending" || wire.status === "denied") expect(schema).toEqual(answerSchema);
+    else expect(schema.properties.action.enum).toContain("call");
+    if (wire.delivered) expect(projectionsOf(run)[0].delivered).toBe(true);
+    if (sample === "confirmation_pending") {
+      expect(projectionsOf(run)[0].summary).toBe(wire.summary);
+      expect(projectionsOf(run)[0].expires_in_s).toBe(Math.max(0, Math.ceil((Date.parse(wire.expires_at!) - Date.parse("2026-01-01T00:00:00Z")) / 1000)));
+      expect(projectionsOf(run)[0]).not.toHaveProperty("confirmation_id");
+    }
+    expect(run.record!.toolCalls![0]).toMatchObject({ effect: "action", local: false });
+    for (const field of ["output", "summary", "confirmation_id", "arguments", "call_id", "lease_id", "credential"])
+      expect(run.record!.toolCalls![0]).not.toHaveProperty(field);
+  });
+
+for (const choice of ["ignore", "handoff"])
+  test(`an unknown action rejects ${choice} even if the model ignores its schema`, async () => {
+    const run = await runLoopCase({ role: "actions_admin", plan: actionPlan("generate_video", `{action:'${choice}',text:'',reply_to:null}`),
+      response: (body) => actionResponse("outcome_unknown", body) });
+    expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(run.completions).toHaveLength(1);
+    expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+  });
+
+test("handoff_after_action completion is resent as failed/invalid_answer", async () => {
+  const run = await runLoopCase({ plan: `return {action:'handoff',text:'',reply_to:null,calls:[]};`,
+    completeResponse: (_body, attempt) => attempt === 1 ? x1Errors.handoff_after_action! : { body: { status: "ok" } } });
+  expect(run.completions).toHaveLength(2);
+  expect(run.completions[0]).toMatchObject({ outcome: "declined", reason: "handoff" });
+  expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+  expect(run.record?.delivery).toBe("accepted");
+});
+
+test("action repeats in one round and later rounds join one execution", async () => {
+  const run = await runLoopCase({ role: "actions_admin",
+    plan: `return round<=2?{action:'call',text:'',reply_to:null,calls:[call('react_to_message',{}),call('react_to_message',{})]}:reply;`,
+    response: (body) => actionResponse("action_ok", body) });
+  expect(run.calls).toHaveLength(1);
+  expect(projectionsOf(run, 2)).toHaveLength(1);
+  expect(run.record!.toolCalls).toHaveLength(4);
+});
+
+test("a second action is local and can be requested after the first result", async () => {
+  const run = await runLoopCase({ role: "actions_admin", plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('react_to_message',{}),call('ban_participant',{})]};
+    if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('ban_participant',{})]};return reply;`,
+    response: (body) => actionResponse("action_ok", body) });
+  expect(run.calls.map((body) => "tool" in body && body.tool)).toEqual(["react_to_message", "ban_participant"]);
+  expect(run.record!.toolCalls![1]).toMatchObject({ local: true, code: "too_many_calls", effect: "action" });
+});
+
+test("reads settle before an action even when the model lists the action first", async () => {
+  let settledReads = 0;
+  const run = await runLoopCase({ role: "actions_admin", plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('react_to_message',{}),call('search_docs',{query:'a'}),call('search_docs',{query:'b'})]}:reply;`,
+    response: async (body) => {
+      if ("tool" in body && body.tool === "search_docs") {
+        await Bun.sleep(20); settledReads++; return { body: { ...x1Results.ok, call_id: body.call_id } };
+      }
+      expect(settledReads).toBe(2); return actionResponse("action_ok", body);
+    } });
+  expect(run.calls.map((body) => "tool" in body && body.tool)).toEqual(["search_docs", "search_docs", "react_to_message"]);
+  expect(projectionsOf(run).map((p: { tool: string }) => p.tool)).toEqual(["react_to_message", "search_docs", "search_docs"]);
+});
+
+for (const failure of ["transport", "malformed", "503_then_400", "call_conflict", "pending_deadline", "ambiguous_429", "ambiguous_413", "pending_then_400", "malformed_then_400", "five_xx", "oversized_response", "wrong_tool"])
+  test(`${failure} cannot prove an action fate and ends calling`, async () => {
+    let clock = 0;
+    const run = await runLoopCase({ role: "actions_admin", plan: actionPlan("react_to_message"),
+      runtime: { now: () => clock, sleep: async (ms) => { clock += ms; } },
+      response: (body, attempt) => {
+        if (failure === "pending_deadline") return actionResponse("action_pending", body);
+        if (failure === "call_conflict") return x1Errors.call_conflict!;
+        if (failure === "malformed") return { body: { ...x1Results.action_ok, call_id: "wrong" } };
+        if (failure === "transport") return { drop: true };
+        if (failure === "five_xx") return { status: 503 };
+        if (failure === "oversized_response") return { body: { ...x1Results.action_ok, call_id: body.call_id, output: "x".repeat(65537) } };
+        if (failure === "wrong_tool") return { body: { ...x1Results.action_ok, call_id: body.call_id, tool: "generate_image" } };
+        if (failure === "pending_then_400") return attempt === 1 ? actionResponse("action_pending", body) : { status: 400 };
+        if (failure === "malformed_then_400") return attempt === 1 ? { body: "malformed" } : { status: 400 };
+        return attempt === 1 ? { status: 503 } : { status: failure === "503_then_400" ? 400 : failure === "ambiguous_413" ? 413 : 429, body: { error: { code: "refused" } } };
+      } });
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+    expect(projectionsOf(run)[0]).toMatchObject({ status: "outcome_unknown", effect: "action" });
+    expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+    expect(new Set(run.calls.map((call) => JSON.stringify(call))).size).toBe(1);
+    expect(run.record!.toolCalls![0]).toMatchObject({ status: "outcome_unknown", local: true, effect: "action" });
+    if (["transport", "malformed"].includes(failure)) expect(run.calls).toHaveLength(4);
+    if (failure === "pending_deadline") expect(clock).toBe(330000);
+  });
+
+for (const unresolved of [302, 408, 418, 409])
+  for (const refusal of [400, 401, 413, 426, 429])
+    test(`an unresolved ${unresolved} then ${refusal} prevents a changed-reason ban`, async () => {
+      const executed = new Set<string>();
+      const run = await runLoopCase({ role: "actions_admin",
+        plan: `if(final)return reply;return round<=2?{action:'call',text:'',reply_to:null,calls:[call('ban_participant',{
+          target_message_id:'m_b40b71a0a9d43622ee0e2e6a',reason:round===1?'Spam':'Repeated spam'})]}:reply;`,
+        response: (body, attempt) => {
+          if (attempt === 1) {
+            executed.add(body.call_id);
+            return { status: unresolved, body: { error: { code: "unexpected_response" } } };
+          }
+          if (body.call_id === [...executed][0]) return { status: refusal, body: { error: { code: "refused" } } };
+          executed.add(body.call_id);
+          return actionResponse("action_ok", body);
+        } });
+      expect(executed.size).toBe(1);
+      expect(run.calls).toHaveLength(refusal === 429 ? 4 : 2);
+      expect(new Set(run.calls.map((body) => JSON.stringify(body))).size).toBe(1);
+      expect(projectionsOf(run)[0]).toMatchObject({ status: "outcome_unknown", effect: "action" });
+      expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+      expect(run.rounds).toHaveLength(2);
+      expect(run.record!.toolCalls![0]).toMatchObject({ status: "outcome_unknown", local: true });
+      expect(run.completion).toMatchObject({ outcome: "answered" });
+    });
+
+for (const status of [400, 413, 429, 401, 426])
+  test(`pre-admission ${status} alone remains an action error`, async () => {
+    const run = await runLoopCase({ role: "actions_admin", plan: actionPlan("react_to_message"),
+      response: () => ({ status, body: { error: { code: "refused" } } }) });
+    expect(projectionsOf(run)[0]).toMatchObject({ status: "error", effect: "action" });
+    expect(run.rounds[1].schema.properties.action.enum).not.toContain("handoff");
+    if ([401, 426].includes(status)) expect(run.rounds[1].schema).toEqual(answerSchema);
+  });
+
+for (const rejection of ["unauthorized", "unsupported_version"])
+  for (const first of ["pending", "transport", "503"])
+    test(`an action's ${first} then ${rejection} preserves uncertainty and rejects ignore`, async () => {
+      const run = await runLoopCase({ role: "actions_admin",
+        plan: actionPlan("react_to_message", `{action:'ignore',text:'',reply_to:null}`),
+        response: (body, attempt) => attempt > 1 ? x1Errors[rejection]!
+          : first === "pending" ? actionResponse("action_pending", body)
+          : first === "transport" ? { drop: true } : { status: 503 } });
+      expect(run.calls).toHaveLength(2);
+      expect(run.calls[0]).toEqual(run.calls[1]);
+      expect(projectionsOf(run)[0]).toMatchObject({ status: "outcome_unknown", effect: "action" });
+      expect(run.record!.toolCalls![0]).toMatchObject({ status: "outcome_unknown", local: true });
+      expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+      expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+      expect(run.completions).toHaveLength(1);
+    });
+
+for (const status of ["ok", "error"])
+  for (const pendingRemaining of [15, 0])
+    test(`a replayed action ${status} with zero ends calls after polling pending with ${pendingRemaining} left`, async () => {
+      const run = await runLoopCase({ role: "actions_admin",
+        plan: `if(final)return reply;return round<=2?{action:'call',text:'',reply_to:null,calls:[call(round===1?'generate_voice':'react_to_message',{})]}:reply;`,
+        response: (body, attempt) => ({ body: {
+          ...actionResponse(attempt === 1 ? "action_pending" : "action_error", body).body,
+          status: attempt === 1 ? "pending" : status, delivered: false,
+          calls_remaining: attempt === 1 ? pendingRemaining : 0, replayed: attempt > 1,
+        } }) });
+      expect(run.calls).toHaveLength(2);
+      expect(run.calls[0]).toEqual(run.calls[1]);
+      expect(projectionsOf(run)[0]).toMatchObject({ status, effect: "action" });
+      expect(run.rounds).toHaveLength(2);
+      expect(run.rounds[1].schema).toEqual(answerSchema);
+      expect(run.completion).toMatchObject({ outcome: "answered" });
+    });
+
+test("a positive historical action replay keeps the fresh remaining-call budget", async () => {
+  const run = await runLoopCase({ role: "actions_admin",
+    plan: `return round<=2?{action:'call',text:'',reply_to:null,calls:[call('react_to_message',{message_id:String(round)})]}:reply;`,
+    response: (body, attempt) => ({ body: { ...actionResponse("action_ok", body).body,
+      calls_remaining: attempt === 1 ? 2 : 15, replayed: attempt === 2 } }) });
+  expect(run.calls).toHaveLength(2);
+  expect(run.rounds[2].prompt).toContain("2 calls are left.");
+  expect(run.rounds[2].schema.properties.action.enum).toContain("call");
+  expect(run.completion).toMatchObject({ outcome: "answered" });
+});
+
+test("C6 action identity survives a new lease with one execution", async () => {
+  const request = { ...x1Request("actions_admin"), request_id: "rq_reclaim_action" };
+  let first: WireCall | undefined;
+  let executions = 0;
+  const lost = await runLoopCase({ request, plan: actionPlan("generate_image"), response: (body) => {
+    first = body; executions++; return x1Errors.lease_lost!;
+  } });
+  expect(lost.completion).toBeNull(); expect(lost.completions).toEqual([]); expect(lost.calls).toHaveLength(1);
+  const reclaimed = await runLoopCase({ request: { ...request, lease_id: "b".repeat(64) }, plan: actionPlan("generate_image"), response: (body) => {
+    expect(body.call_id).toBe(first!.call_id);
+    if (body.call_id !== first!.call_id) executions++;
+    return actionResponse("action_replayed", body);
+  } });
+  expect(reclaimed.completion).toMatchObject({ outcome: "answered" }); expect(executions).toBe(1);
+});
+
+test("an action cannot hand off after a denial or after a terminal result", async () => {
+  for (const sample of ["action_denied", "action_delivered"]) {
+    const run = await runLoopCase({ role: "actions_admin", plan: actionPlan(x1Results[sample]!.tool, `{action:'handoff',text:'',reply_to:null,calls:[]}`),
+      response: (body) => actionResponse(sample, body) });
+    expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(run.completions).toHaveLength(1);
+  }
+});
+
+test("confirmation expiry is projected at zero and is never polled", async () => {
+  const wire = x1Results.confirmation_pending!;
+  const run = await runLoopCase({ role: "actions_admin", plan: actionPlan(wire.tool),
+    runtime: { now: () => Date.parse(wire.expires_at!) + 1000 }, response: (body) => actionResponse("confirmation_pending", body) });
+  expect(projectionsOf(run)[0]).toMatchObject({ expires_in_s: 0, summary: wire.summary });
+  expect(run.calls).toHaveLength(1);
+});
+
+test("member flags remove admin actions from the prompt, schema and wire", async () => {
+  const request = x1Request("actions_admin"); request.input.requester = x1Request("member").input.requester;
+  const run = await runLoopCase({ request, plan: actionPlan("ban_participant") });
+  expect(run.rounds[0].schema.properties.calls.items.properties.tool.enum).not.toContain("ban_participant");
+  const tools = JSON.parse(run.rounds[0].prompt.match(/<tools>\n([^]*?)\n<\/tools>/)[1]);
+  expect(tools.some((tool: { name: string }) => tool.name === "ban_participant")).toBe(false);
+  expect(run.calls).toEqual([]);
+  expect(run.record!.toolCalls![0]).toMatchObject({ code: "not_permitted", local: true });
+});
+
+test("action progress hides restricted tool names and shows unrestricted actions", async () => {
+  for (const tool of ["ban_participant", "react_to_message"]) {
+    const request = x1Request("actions_admin"); request.answer.progress = "notes"; request.liveness.heartbeat_interval_s = 2;
+    const run = await runLoopCase({ request, plan: actionPlan(tool),
+      runtime: { sleep: async (ms) => { await Bun.sleep(ms); } }, response: (body, attempt) => actionResponse(attempt === 1 ? "action_pending" : "action_ok", body) });
+    // Real heartbeats carry only the loop's permitted progress labels.
+    const activity = JSON.stringify(run.heartbeats);
+    expect(activity).not.toContain("ban_participant");
+    if (tool === "react_to_message") expect(activity).toContain("react_to_message");
+  }
+}, 20_000);
+
+
+test("heartbeat lease loss between reads and an action prevents the action and completion", async () => {
+  const request = x1Request("actions_admin"); request.liveness.heartbeat_interval_s = 2;
+  const run = await runLoopCase({ request,
+    plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('react_to_message',{}),call('search_docs',{query:'meetup'})]}:reply;`,
+    response: async (body) => { await Bun.sleep(2400); return { body: { ...x1Results.ok, call_id: body.call_id } }; },
+    heartbeatResponse: (seq) => seq === 1 ? { body: { status: "ok" } } : x1Errors.lease_lost! });
+  expect(run.calls).toHaveLength(1); expect(run.calls[0]).toHaveProperty("tool", "search_docs");
+  expect(run.events).toContain("beat:2"); expect(run.completion).toBeNull(); expect(run.completions).toEqual([]);
+}, 10_000);
+
+for (const reverseReadArrival of [false, true])
+test(`X2 actions are generated by the real runner using the service fixtures (${reverseReadArrival ? "reversed" : "normal"} arrivals)`, async () => {
+  const runs: unknown[] = [];
+  const plans = [
+    { name: "action_and_confirmation", plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('search_chat_messages',{query:'spam'}),call('search_docs',{query:'meetup'}),call('react_to_message',{emoji:'👍',message_id:'m_b40b71a0a9d43622ee0e2e6a'})]};
+      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('request_kick_participant',{reason:'Repeated spam',target_message_id:'m_b40b71a0a9d43622ee0e2e6a'})]};
+      return {...reply,text:'Removal is waiting for confirmation in the chat.',reply_to:null};` },
+    { name: "delivered_generation", plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('generate_image',{prompt:'A quiet forest'})]}:{action:'ignore',text:'',reply_to:null};` },
+    { name: "outcome_unknown", plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('generate_video',{prompt:'A quiet forest at dawn'})]}:{...reply,text:'The video may have been sent; I will not try again.',reply_to:null};` },
+  ];
+  for (const { name, plan } of plans) {
+    const request = x1Request("actions_admin");
+    const tools = name === "action_and_confirmation"
+      ? ["search_chat_messages", "search_docs", "react_to_message", "request_kick_participant"]
+      : [name === "delivered_generation" ? "generate_image" : "generate_video"];
+    // Admission slots and budgets follow model order, independently of HTTP arrival.
+    const calls: { round: number; attempts: { request: WireCall; x1_sample: string; response: ToolCallResult }[] }[] =
+      tools.map((tool) => ({ round: tool === "request_kick_participant" ? 2 : 1, attempts: [] }));
+    const stored = new Map<string, ToolCallResult>();
+    const executions = new Map<string, number>();
+    let admitReads!: () => void;
+    const readsAdmitted = new Promise<void>((resolve) => { admitReads = resolve; });
+    const run = await runLoopCase({ request, plan, reverseReadArrival: reverseReadArrival && name === "action_and_confirmation",
+      runtime: { now: () => Date.parse("2026-10-07T12:00:00Z") },
+      response: async (body) => {
+        if (!("tool" in body) || !body.tool) throw new Error("X2 action has no tool");
+        const index = tools.indexOf(body.tool);
+        expect(index).toBeGreaterThanOrEqual(0);
+        const first = !stored.has(body.call_id);
+        const sample = body.tool === "search_chat_messages" ? "admin" : body.tool === "search_docs" ? "ok"
+          : body.tool === "react_to_message" ? "action_ok"
+          : body.tool === "request_kick_participant" ? "confirmation_pending" : body.tool === "generate_video" ? "outcome_unknown"
+          : first ? "action_pending" : "action_delivered";
+        if (first) {
+          executions.set(body.call_id, (executions.get(body.call_id) ?? 0) + 1);
+          const terminal = body.tool === "generate_image" ? x1Results.action_delivered! : x1Results[sample]!;
+          stored.set(body.call_id, { ...terminal, call_id: body.call_id,
+            calls_remaining: terminal.calls_remaining === 0 ? 0 : 15 - index });
+        }
+        if (name === "action_and_confirmation" && index < 2) {
+          if (stored.size >= 2) admitReads();
+          await readsAdmitted;
+        }
+        const response = first
+          ? { ...x1Results[sample]!, call_id: body.call_id, calls_remaining: x1Results[sample]!.calls_remaining === 0 ? 0 : 15 - index, replayed: false }
+          : { ...stored.get(body.call_id)!, replayed: true };
+        expect(response.tool).toBe(body.tool!);
+        calls[index]!.attempts.push({ request: body, x1_sample: sample, response });
+        return { body: response };
+      } });
+    expect([...executions.values()].every((count) => count === 1)).toBe(true);
+    expect(run.completion?.outcome).toBe("answered");
+    if (run.completion?.outcome !== "answered") throw new Error("X2 action did not answer");
+    expect(run.completion.duration_ms).toBeGreaterThanOrEqual(0);
+    if (name === "action_and_confirmation") {
+      expect(run.calls.map((call) => "tool" in call && call.tool)).toEqual(reverseReadArrival
+        ? ["search_docs", "search_chat_messages", "react_to_message", "request_kick_participant"]
+        : ["search_chat_messages", "search_docs", "react_to_message", "request_kick_participant"]);
+      expect(run.rounds).toHaveLength(3);
+    } else expect(run.rounds).toHaveLength(2);
+    if (name === "delivered_generation") {
+      expect(run.calls[0]).toEqual(run.calls[1]);
+      expect(calls[0]!.attempts[0]!.response).toMatchObject({ status: "pending", replayed: false });
+      expect(calls[0]!.attempts[1]!.response).toMatchObject({ status: "ok", delivered: true, replayed: true });
+      expect(executions.get(run.calls[0]!.call_id)).toBe(1);
+    }
+    runs.push({ name, x1: { claim: "claimed_tools_actions_admin.json", claim_sha256: createHash("sha256").update(fs.readFileSync(path.join(x1Dir, "claimed_tools_actions_admin.json"))).digest("hex") },
+      calls, completion: { ...run.completion, duration_ms: 0 } });
+  }
+  const file = path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json");
+  const expected = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (process.env.LLV_RELAY_WIRE_OUTPUT_ACTIONS) fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT_ACTIONS, JSON.stringify({ ...expected, actions: runs }, null, 2) + "\n");
+  expect(runs).toEqual(expected.actions);
+});
+
+// Opt-in live-model checks use only the local fake; credentials remain in the profile's auth source.
+for (const engine of ["codex", "claude"] as const)
+  for (const task of ["react", "meetup"])
+    (process.env.LLV_RELAY_LIVE_ACTION_PROBE === "1" ? test : test.skip)(`${engine} live model ${task} uses only the requested action`, async () => {
+      const accountHome = process.env[engine === "codex" ? "LLV_RELAY_LIVE_CODEX_HOME" : "LLV_RELAY_LIVE_CLAUDE_HOME"];
+      if (!accountHome) throw new Error("live action probe account home is required");
+      const request = x1Request("actions_admin");
+      request.request_id = `rq_live_synthetic_${engine}_${task}`;
+      request.input.tools = request.input.tools!.filter((tool) => ["react_to_message", "search_docs"].includes(tool.name));
+      request.input.tool_guidance = null;
+      request.input.instructions = "Answer the requester briefly using the supplied tools when needed.";
+      request.input.request_text = task === "react" ? "React with 👍 to message m_b40b71a0a9d43622ee0e2e6a." : "When is the meetup?";
+      request.input.short_term_memory = null;
+      request.input.documents = [];
+      request.input.conversation = [];
+      const run = await runLoopCase({ request, live: { engine, home: accountHome }, response: (body) => {
+        if ("tool" in body && body.tool === "react_to_message") return actionResponse("action_ok", body);
+        return { body: { ...x1Results.ok, call_id: body.call_id, output: "The meetup is Friday." } };
+      } });
+      expect(run.completion).toMatchObject({ outcome: "answered" });
+      const actions = run.calls.filter((call) => "tool" in call && call.tool === "react_to_message");
+      expect(actions).toHaveLength(task === "react" ? 1 : 0);
+    }, 180_000);
+
+
+test("a read effect returned for an indexed action never restores handoff", async () => {
+  const run = await runLoopCase({ role: "actions_admin", plan: actionPlan("generate_image", `{action:'handoff',text:'',reply_to:null,calls:[]}`),
+    response: (body) => ({ body: { ...x1Results.not_permitted, call_id: body.call_id, tool: "generate_image" } }) });
+  expect(projectionsOf(run)[0]).toMatchObject({ effect: "action", status: "denied", code: "not_permitted" });
+  expect(run.rounds[1].schema.properties.action.enum).not.toContain("handoff");
+  expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+});
+
+// Captured by replaying the accepted slice 2b runner before enabling any slice 3 path.
+test("slice 3 dark and ineligible paths preserve the slice 2b wire and records", async () => {
+  const fixtureFile = path.join(x1Dir, "switches-off-2b-hashes.json");
+  const snapshot = JSON.parse(fs.readFileSync(fixtureFile, "utf8"));
+  const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
+  const surfaces: Record<string, unknown> = {};
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  async function replay(role: string, ownerTier?: boolean) {
+    const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
+    const run = await runLoopCase({ request, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
+    const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
+    const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
+    if (ownerTier !== undefined) delete view.targets[0]!.ownerTier;
+    return { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))), calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
+  }
+  for (const role of cases) surfaces[role] = await replay(role);
+  if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }
+  expect(surfaces).toEqual(snapshot.surfaces);
+  for (const role of cases.filter(r => r !== "owner")) expect(await replay(role, true)).toEqual(snapshot.surfaces[role]);
+  const { setRelaySwitch } = await import("./switches");
+  const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
+  try {
+    for (const raw of [JSON.stringify({ v: 1, chat_conversations: false, compact: false }), "{", JSON.stringify({ v: 2, chat_conversations: true })]) {
+      fs.writeFileSync(switchFile, raw);
+      for (const role of cases) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
+    }
+    setRelaySwitch("chat_conversations", true);
+    for (const role of ["admin", "anonymous_admin", "actions_admin"]) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
+  } finally { fs.rmSync(switchFile, { force: true }); }
+}, 30000);
+
+
+for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "invalid_request"] as const)
+  test(`owner tier runner: ${scenario}`, async () => {
+    const { contextRequest } = await import("./request.fixture");
+    const { setRelaySwitch } = await import("./switches");
+    const { readConversations } = await import("./conversations");
+    const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
+    const bodies: Record<string, unknown>[] = [], stops: string[] = [], beats: Record<string, unknown>[] = [];
+    const id = `owner_${crypto.randomUUID()}`;
+    const server = await startTestRelay((req, body) => {
+      if (req.url?.endsWith("/heartbeat")) {
+        beats.push(body as Record<string, unknown>);
+        return scenario === "lease_lost" ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } };
+      }
+      return { body: { status: "ok" } };
+    });
+    const paired = relay(`${server.origin}/v1`);
+    paired.targets[0]!.ownerTier = true;
+    if (scenario === "owner_tools") paired.features = ownerFeatures;
+    updateRelayStore(s => ({ ...s, relays: [paired] }));
+    const request = { ...contextRequest, request_id: id, chat: { key: "owner-group" },
+      input: { ...contextRequest.input, ...(scenario === "owner_tools" ? { tools: ownerRequest().input.tools } : {}), requester: { ...contextRequest.input.requester, is_owner: scenario === "invalid_request" ? "true" : true } } };
+    const conversationsBefore = readConversations();
+    try {
+      setRelaySwitch("chat_conversations", true);
+      if (scenario === "owner_tools") setRelaySwitch("relay:owner_tools:enabled", true);
+      const completion = await runClaimedRequest(paired, request, undefined, {
+        command: "/missing-owner-must-never-run-cli", timeoutMs: scenario === "hard_cap" ? 50 : 2000,
+        ownerPorts: {
+          launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_owner_runner" } }; },
+          observe: async () => {
+            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null });
+            if (!beats.length || scenario === "lease_lost" || scenario === "hard_cap") return { state: "running" };
+            return { state: "ended", finalText: "Owner reply" };
+          },
+          stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
+        },
+      });
+      expect(readConversations()).toEqual(conversationsBefore);
+      expect(readRunLedger().runs).toEqual([]);
+      if (scenario === "invalid_request") { expect(completion).toMatchObject({ outcome: "declined", reason: "invalid_request" }); expect(bodies).toEqual([]); }
+      else {
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0]).toMatchObject({ cwd: os.homedir(), engine: "codex", model: "gpt-6-sol", effort: "low", accountId: "answer", clientAttemptId: `relay-owner-${id}`, mcpServers: ["viewer"], plugins: [] });
+        expect(beats.length).toBeGreaterThan(0);
+        expect(beats.every(b => !b.progress)).toBe(true);
+        const record = readAnswerRecord(paired.id, "target_1", id);
+        expect(record).toMatchObject({ profile: { webSearch: true, owner: true }, conversationId: "conversation_owner_runner" });
+        if (scenario === "answer" || scenario === "owner_tools") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply", reply_to: "m1" } }); expect(stops).toEqual([]); }
+        if (scenario === "lease_lost") { expect(completion).toBeNull(); expect(stops).toEqual(["interrupt"]); }
+        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "failed", reason: "hard_cap" }); expect(stops).toEqual(["interrupt"]); }
+      }
+    } finally { fs.rmSync(switchFile, { force: true }); await server.close(); }
+  });
+
+
+for (const phase of ["running", "pending"] as const) test(`owner cutoff through PATCH stops ${phase} host work and withholds late reply`, async () => {
+  const { NextRequest } = await import("next/server");
+  const { PATCH } = await import("@/app/api/external-relay/relays/[id]/route");
+  const completions: unknown[] = [], stops: string[] = [];
+  let notify!: () => void, release!: () => void;
+  const reached = new Promise<void>(r => { notify = r; });
+  const held = new Promise<void>(r => { release = r; });
+  let working = false;
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = `cutoff_${phase}`;
+  try {
+    const done = runClaimedRequest(paired, { ...contextRequest, request_id: requestId,
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      timeoutMs: 2000, ownerPorts: {
+        launch: async () => {
+          if (phase === "pending") { notify(); await held; }
+          working = true;
+          return { status: 202, body: { conversationId: `conversation_cutoff_${phase}` } };
+        },
+        observe: async () => { if (phase === "running") { notify(); await held; } return { state: "ended", finalText: "Late owner reply" }; },
+        stop: async (_id, action) => { stops.push(action); working = false; }, pollMs: 1, stopRetryMs: 1,
+      },
+    });
+    await reached;
+    const origin = "http://127.0.0.1:8899";
+    const response = await PATCH(new NextRequest(`${origin}/api/external-relay/relays/${paired.id}`, {
+      method: "PATCH", headers: { origin, host: "127.0.0.1:8899", "content-type": "application/json" },
+      body: JSON.stringify({ target: { id: "target_1", ownerTier: false } }),
+    }), { params: Promise.resolve({ id: paired.id }) });
+    expect(response.status).toBe(200);
+    if (phase === "pending") expect(readRunLedger().runs[0]?.ownerTurn).toMatchObject({ cancel: "kill" });
+    release();
+    expect(await done).toMatchObject({ outcome: "failed", reason: "cancelled" });
+    await Bun.sleep(20);
+    expect(working).toBe(false);
+    expect(stops).toEqual([phase === "pending" ? "kill" : "interrupt"]);
+    expect(JSON.stringify(completions)).not.toContain("Late owner reply");
+    const record = readAnswerRecord(paired.id, "target_1", requestId);
+    expect(record?.answer).toBeNull();
+    expect(record?.conversationId).toBe(`conversation_cutoff_${phase}`);
+    const { sweepExternalRelayOrphans } = await import("./poller");
+    await sweepExternalRelayOrphans();
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { release(); await service.close(); }
+});
+
+test("owner admission rechecks current store even when the claimed target object is stale", async () => {
+  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
+  let launches = 0;
+  try {
+    const completion = await runClaimedRequest(paired, { ...contextRequest, request_id: "stale_owner_admission",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => { launches++; return { status: 202, body: {} }; }, observe: async () => ({ state: "failed" }), stop: async () => {} },
+    });
+    expect(launches).toBe(0); expect(completion?.outcome).toBe("failed");
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { await service.close(); }
+});
+
+for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains failed-stop custody and recovers through sweep`, async () => {
+  const { sweepExternalRelayOrphans } = await import("./poller");
+  const service = await startTestRelay(req => req.url?.endsWith("/heartbeat") && trigger === "lease_lost"
+    ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let stops = 0, working = true, recover = false;
+  const ports = { launch: async () => ({ status: 202, body: { conversationId: `conversation_stop_${trigger}` } }),
+    observe: async () => ({ state: "running" as const }), stopRetryMs: 1, pollMs: 1,
+    stop: async () => { stops++; if (!recover) throw Error("control unavailable"); working = false; } };
+  try {
+    const done = await runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`,
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { timeoutMs: 20, ownerPorts: ports });
+    if (trigger === "lease_lost") expect(done).toBeNull(); else expect(done).toMatchObject({ reason: "hard_cap" });
+    expect(stops).toBe(3); expect(working).toBe(true);
+    expect(readRunLedger().runs[0]).toMatchObject({ conversationId: `conversation_stop_${trigger}`, ownerTurn: { cancel: "interrupt" } });
+    expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    expect(relayActivity(paired.id).lastOutcome).toBe("owner_stop_pending");
+    const { relayPollerStatus } = await import("./poller");
+    const { noteRelayOutcome } = await import("./activity");
+    noteRelayOutcome(paired.id, "failed:hard_cap");
+    expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_pending");
+    // A restarted Viewer still has the receipt-bound conversation to stop.
+    const { changeRun } = await import("./store");
+    changeRun(`stop_${trigger}`, r => ({ ...r, ownerPid: 999999999, ownerIdentity: "gone" }));
+    recover = true;
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(4); expect(working).toBe(false); expect(readRunLedger().runs).toEqual([]);
+  } finally { await service.close(); }
+});
+
+for (const admission of ["failed_receipt", "lost_response"] as const) test(`owner ${admission} keeps custody until host control confirms`, async () => {
+  const { sweepExternalRelayOrphans } = await import("./poller");
+  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let stops = 0, recover = false;
+  const conversationId = `conversation_${admission}`;
+  const ports = {
+    launch: async () => admission === "lost_response" ? { status: 202, body: {} }
+      : { status: 503, body: { conversationId } },
+    observe: async () => ({ state: "failed" as const, conversationId,
+      failure: { kind: "launch-failed" as const, detail: "receipt failed before cleanup was confirmed" } }),
+    stop: async () => { stops++; if (!recover) throw Error("control receipt pending"); }, stopRetryMs: 1,
+  };
+  try {
+    const completion = await runClaimedRequest(paired, { ...contextRequest, request_id: admission,
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { ownerPorts: ports });
+    expect(completion).toMatchObject({ outcome: "failed" });
+    expect(stops).toBe(3);
+    expect(readRunLedger().runs[0]).toMatchObject({ conversationId, ownerTurn: { cancel: "kill", admissionComplete: true } });
+    expect(readAnswerRecord(paired.id, "target_1", admission)?.conversationId).toBe(conversationId);
+    expect(readRunLedger().runs[0]!.ownerTurn!.confirmed).not.toBe(true);
+    expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    // Retry while the same Viewer is alive, without relying on a restart.
+    recover = true;
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(4); expect(readRunLedger().runs).toEqual([]);
+  } finally { await service.close(); }
+});
+
+test("owner credentials, host paths and key material never reach completion, answer records or diagnostics", async () => {
+  const { rotateOperatorSpawnCapability } = await import("@/lib/agent/operatorCapability");
+  const control = rotateOperatorSpawnCapability();
+  const spawn = randomBytes(32).toString("base64url");
+  const completions: unknown[] = [], diagnostics: unknown[][] = [];
+  const service = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) completions.push(body); return { body: { status: "ok" } }; });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.credential = randomBytes(32).toString("base64url");
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
+  const material = "fixture-private-material";
+  const pgpMaterial = "fixture-pgp-private-material";
+  const value = ["fixture", "host", "credential", "value"].join("-");
+  const json = JSON.stringify({ password: value, api_key: value });
+  const finalText = ["Done", json, JSON.stringify({ detail: json }), paired.credential, control, spawn, ...paths, "-----BEGIN PRIVATE KEY-----", material, "-----END PRIVATE KEY-----",
+    "-----BEGIN PGP PRIVATE KEY BLOCK-----", pgpMaterial, "-----END PGP PRIVATE KEY BLOCK-----"].join("\n");
+  const oldError = console.error;
+  console.error = (...args) => { diagnostics.push(args); };
+  try {
+    const outcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_scrubbed",
+      answer: { ...contextRequest.answer, max_chars: 32000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_scrubbed" } }), observe: async () => ({ state: "ended", finalText }), stop: async () => {} },
+    });
+    expect(outcome).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("Done") } });
+    const record = readAnswerRecord(paired.id, "target_1", "owner_scrubbed");
+    expect(completions).toHaveLength(1);
+    expect(record?.answer?.text).toContain("Done");
+    for (const surface of [completions, record, diagnostics]) for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(surface)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    const encoded = Array.from(paired.credential, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+    const encodedOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_encoded",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_encoded" } }),
+        observe: async () => ({ state: "ended", finalText: `{"detail":"${encoded}"}` }), stop: async () => {} },
+    });
+    expect(encodedOutcome).toMatchObject({ outcome: "answered", answer: { text: "[redacted]" } });
+    expect(completions[1]).toMatchObject({ answer: { text: "[redacted]" } });
+    expect(readAnswerRecord(paired.id, "target_1", "owner_encoded")?.answer?.text).toBe("[redacted]");
+    let partial = control.slice(0, 42) + `\\u${control.charCodeAt(42).toString(16).padStart(4, "0")}`;
+    for (let depth = 0; depth < 3; depth++) {
+      partial = JSON.stringify({ detail: partial });
+      const id = `owner_partial_${depth}`;
+      const result = await runClaimedRequest(paired, { ...contextRequest, request_id: id,
+        input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+        ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_partial" } }),
+          observe: async () => ({ state: "ended", finalText: partial }), stop: async () => {} },
+      });
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: "[redacted]" } });
+      expect(completions.at(-1)).toMatchObject({ answer: { text: "[redacted]" } });
+      expect(readAnswerRecord(paired.id, "target_1", id)?.answer?.text).toBe("[redacted]");
+      expect(JSON.stringify([completions, readAnswerRecord(paired.id, "target_1", id), diagnostics])).not.toContain(control.slice(0, 42));
+    }
+    for (const [kind, opaque] of [["home", "q".repeat(36) + ["", "home", "a"].join("-")],
+      ["vendor", "q".repeat(27) + ["", "sk", "r".repeat(12)].join("-")],
+      ["encoded", "%71" + "q".repeat(26) + ["", "sk", "r".repeat(12)].join("-")]] as const) {
+      const id = `owner_opaque_${kind}`;
+      const opaqueOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: id,
+        answer: { ...contextRequest.answer, max_chars: 32000 },
+        input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+        ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_opaque" } }),
+          observe: async () => ({ state: "ended", finalText: JSON.stringify({ detail: opaque }) }), stop: async () => {} },
+      });
+      const opaqueRecord = readAnswerRecord(paired.id, "target_1", id);
+      expect(opaqueOutcome).toMatchObject({ outcome: "answered" });
+      expect(opaqueRecord?.answer?.text).toContain("[redacted]");
+      expect(JSON.stringify([opaqueOutcome, opaqueRecord, completions])).not.toContain(opaque.slice(0, 27));
+    }
+    await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_safe_diagnostic",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      timeoutMs: 10, ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_diag" } }),
+        observe: async () => ({ state: "running" }), stop: async () => { throw Error(finalText); }, stopRetryMs: 1, pollMs: 1 },
+    });
+    for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(diagnostics)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    const { dropRun } = await import("./store"); dropRun("owner_safe_diagnostic");
+  } finally { console.error = oldError; await service.close(); }
+});
+
+for (const retry of [false, true]) test(`owner completion rechecks cutoff after DNS resolution${retry ? " on retry" : ""}`, async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((_req, body) => {
+    completions.push(body);
+    return retry && completions.length === 1 ? { drop: true } : { body: { status: "ok" } };
+  });
+  let reached!: () => void, release!: () => void;
+  const resolving = new Promise<void>(r => { reached = r; });
+  const held = new Promise<void>(r => { release = r; });
+  let attempts = 0, allowed = true;
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => {
+    if (++attempts === (retry ? 2 : 1)) { reached(); await held; }
+    return [{ address: "127.0.0.1", family: 4 }];
+  }) as unknown as typeof dns.lookup);
+  try {
+    const paired = relay(`${server.origin.replace("127.0.0.1", "relay-fixture.test")}/v1`);
+    const done = completeRelayRequest(paired, "owner_dns_fixture", {
+      lease_id: "lease_fixture", outcome: "answered", duration_ms: 0, answer: { action: "reply", text: "Late owner reply", reply_to: null },
+    }, Date.now, 45000, () => allowed);
+    await resolving; allowed = false; release();
+    expect(await done).toMatchObject({ body: { outcome: "failed", reason: "cancelled" }, delivery: "accepted" });
+    expect(completions.at(-1)).toMatchObject({ outcome: "failed", reason: "cancelled" });
+    expect(completions).toHaveLength(retry ? 2 : 1);
+  } finally { release(); lookup.mockRestore(); await server.close(); }
+});

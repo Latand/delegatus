@@ -19,7 +19,9 @@
       "answer"
     ],
     "features": [
-      "requester_context"
+      "requester_context",
+      "relay_tool_calls",
+      "relay_tool_actions"
     ],
     "slots": [
       {

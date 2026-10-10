@@ -1809,6 +1809,10 @@ test("runtime retry accepts an explicit fresh idempotency key", async () => {
         );
       },
     }) as unknown as RuntimeHostClient,
+    /* The attempt's row is written before the command now, and a retry
+       nothing durable names is refused before it; this fixture is about the
+       journal's idempotency conflict. */
+    recordRetryAttempt: () => true,
     recover: async () => ({
       target: null,
       path: "/retry.jsonl",
@@ -2175,6 +2179,23 @@ test("runtime retry leaves an in-flight operation and its ownership unchanged", 
   expect(retries).toBe(0);
 });
 
+test.each([true, false].flatMap(browser => ["interrupt", "kill"].map(control => ({ browser, control }))))
+("control authorship comes from the authenticated surface ($control, browser=$browser)", async ({ browser, control }) => {
+  const commands: unknown[] = [];
+  const client = { command: async (command: unknown) => {
+    commands.push(command);
+    return { operationId: "interrupt-authorship", receipt: { operationId: "interrupt-authorship", status: "pending" } };
+  } } as unknown as RuntimeHostClient;
+  const response = await handleRuntimeCommand(request({ conversationId: "conversation_interrupt_authorship", operationId: "interrupt-authorship",
+    origin: browser ? { kind: "agent", role: "pipeline" } : { kind: "operator" },
+    ...(control === "kill" ? { sessionKey: { engine: "codex", sessionId: "stage-control" } } : {}) },
+    browser ? { host: "127.0.0.1", "sec-fetch-site": "same-origin" } : { host: "127.0.0.1" }), control as "interrupt" | "kill", {
+    enabled: () => true, structuredEnabled: () => true, client: () => client,
+  });
+  expect(response.status).toBe(202);
+  expect((commands[0] as { origin?: MessageOrigin })?.origin?.kind).toBe(browser ? "operator" : "agent");
+});
+
 test("a send no structured delivery owns is refused rather than admitted without a reservation", async () => {
   /* #1131: this was the last road by which `queued` could be a final answer.
      The structured path declines the conversation, and the direct command below
@@ -2212,4 +2233,149 @@ test("a send no structured delivery owns is refused rather than admitted without
   );
   expect(interrupt.status).toBe(202);
   expect(commands).toHaveLength(1);
+});
+
+/* docs/design/delivery-progress-and-drain.md, A2 and C2: the retry and
+   discard routes. */
+test("an unknown-fate retry reopens the operation's ended record, counts the attempt, and reaches the host once", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-unknown-fate-rearm-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const conversation = registry.ensureConversation("codex", path.join(directory, "recipient.jsonl"), "default");
+  const operationId = "operation-rearm-record";
+  const held = registry.holdDelivery(conversation.id, "re-arm this unknown outcome", "message-rearm-record", "text", [], null,
+    { operationId, kind: "send", policy: "queue" });
+  registry.beginDeliveryAttempt(held.id, held.generationId!);
+  registry.recordDeliveryOutcome(held.id, "failed", "delivery outcome is unverified", "unverified");
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+    conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: "rearm-thread" }, hostKind: "codex-app-server",
+    host: "hosted", turn: "idle", provenance: "structured", capabilities: { steer: true, structuredAttention: true } } });
+  journal.executeOperation({ kind: "send", operationId, idempotencyKey: "message-rearm-record", conversationId: conversation.id,
+    text: "re-arm this unknown outcome", policy: "queue" });
+  journal.transitionOperation(operationId, "delivering");
+  journal.transitionOperation(operationId, "failed", { reason: "delivery outcome is unverified" });
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  progress.note(operationId, conversation.id, { waitReason: "dispatching", originalKey: "message-rearm-record", attempted: true });
+  progress.settle(operationId, "uncertain", "delivery outcome is unverified");
+  const client = {
+    operationStatus: async (id: string, options?: { currentRetryLeaf?: boolean }) => options?.currentRetryLeaf
+      ? journal.currentRetryResult(id) : journal.operationResult(id),
+    claimDeliveryAction: async (...args: Parameters<RuntimeHostClient["claimDeliveryAction"]>) => journal.claimDeliveryAction(...args),
+    retryOperation: async (...args: Parameters<RuntimeHostClient["retryOperation"]>) => journal.retryOperation(...args),
+  } as RuntimeHostClient;
+  try {
+    const response = await handleRuntimeRetry(new NextRequest(`http://127.0.0.1/api/runtime/operations/${operationId}`, {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "retry-uncertain" }),
+    }), operationId, { enabled: () => true, client: () => client, registry: () => registry, kick: () => {}, progress });
+    expect(response.status).toBe(202);
+    expect(progress.get(operationId)).toMatchObject({ terminal: null, attempt: 2, waitReason: "queued", originalKey: "message-rearm-record" });
+    expect(progress.get(operationId)!.deadlineAt).not.toBeNull();
+    const ledger = createFakeDeliveryLedger();
+    await new StructuredDeliveryQueue({
+      effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
+      transition: async (id, status, details) => { journal.transitionOperation(id, status, details); },
+      status: async (id) => journal.operationResult(id)?.receipt ?? null,
+    }, () => new FakeEngineHost(ledger)).drain();
+    expect(ledger.writes.map((write) => write.id)).toEqual([operationId]);
+  } finally {
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a terminal retry has its row and record before the retry command, so a lost reply with a failing listing still leaves both", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-terminal-retry-row-first-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const conversation = registry.ensureConversation("codex", "", "default");
+  const held = registry.holdDelivery(conversation.id, "retry me after the host died", "send-row-first");
+  const originalOperationId = held.command.operationId;
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+    conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: "session-row-first" }, hostKind: "codex-app-server",
+    host: "hosted", turn: "idle", provenance: "structured", capabilities: { steer: true, structuredAttention: true } } });
+  journal.executeOperation({ kind: "send", operationId: originalOperationId, idempotencyKey: "send-row-first", conversationId: conversation.id,
+    text: "retry me after the host died", policy: "queue" });
+  journal.transitionOperation(originalOperationId, "delivering");
+  journal.transitionOperation(originalOperationId, "failed", { reason: "dead-host" });
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const { terminalRetryOperationId } = await import("./contracts");
+  const progress = new DeliveryProgressStore(null);
+  const retryOperationId = terminalRetryOperationId(originalOperationId);
+  const seen: { row: boolean; record: boolean }[] = [];
+  const client = {
+    operationStatus: async (id: string, options?: { currentRetryLeaf?: boolean }) => options?.currentRetryLeaf
+      ? journal.currentRetryResult(id) : journal.operationResult(id),
+    retryOperation: async (...args: Parameters<RuntimeHostClient["retryOperation"]>) => {
+      seen.push({ row: Boolean(registry.snapshot().deliveryOperationOwners[retryOperationId]), record: Boolean(progress.get(retryOperationId)) });
+      journal.retryOperation(...args);
+      throw new RuntimeHostUnavailableError("runtime host is unavailable");
+    },
+  } as unknown as RuntimeHostClient;
+  let kicks = 0;
+  try {
+    const response = await handleRuntimeRetry(new NextRequest(`http://127.0.0.1/api/runtime/operations/${originalOperationId}`,
+      { method: "POST", headers: { host: "127.0.0.1" } }), originalOperationId, {
+      enabled: () => true, client: () => client, registry: () => registry, kick: () => { kicks += 1; }, progress,
+      recover: async () => ({ target: null, path: "/retry-row-first.jsonl", conversationId: conversation.id, spawned: false }),
+    });
+    expect(response.status).toBe(503);
+    expect(seen).toEqual([{ row: true, record: true }]);
+    expect(journal.operationResult(retryOperationId)?.receipt.status).toBe("queued");
+    expect(registry.snapshot().deliveryOperationOwners[retryOperationId]).toMatchObject({ retryOfOperationId: originalOperationId, terminalState: null });
+    expect(progress.get(retryOperationId)).toMatchObject({ originalKey: "send-row-first", waitReason: "evidence-unreadable", attempt: 1, terminal: null });
+    expect(progress.get(retryOperationId)!.deadlineAt).not.toBeNull();
+    expect(kicks).toBe(1);
+  } finally {
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a discard whose registry write is refused answers retryable, keeps the loop responsive, and a repeated discard ends the send discarded once the lock clears", async () => {
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const made = sqliteRegistryFixture("llv-discard-refused", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  const journal = new RuntimeJournal(path.join(made.root, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const conversation = registry.ensureConversation("codex", path.join(made.root, "recipient.jsonl"), "default");
+    registry.requestConversationReseat(conversation.id, "successor-account");
+    const operationId = "operation-discard-refused";
+    const held = registry.holdDelivery(conversation.id, "discard under a held lock", "message-discard-refused", "text", [], null,
+      { operationId, kind: "send", policy: "queue" });
+    journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+      conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: "discard-refused-thread" }, hostKind: "codex-app-server",
+      host: "hosted", turn: "idle", provenance: "structured", capabilities: { steer: true, structuredAttention: true } } });
+    journal.executeOperation({ kind: "send", operationId, idempotencyKey: "message-discard-refused", conversationId: conversation.id,
+      text: "discard under a held lock", policy: "queue" });
+    let holdOnce = true;
+    const client = {
+      operationStatus: async (id: string, options?: { currentRetryLeaf?: boolean }) => options?.currentRetryLeaf
+        ? journal.currentRetryResult(id) : journal.operationResult(id),
+      claimDeliveryAction: async (...args: Parameters<RuntimeHostClient["claimDeliveryAction"]>) => journal.claimDeliveryAction(...args),
+      transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => {
+        const moved = journal.transitionOperation(...args);
+        if (holdOnce) { holdOnce = false; await holder.hold(600); }
+        return moved;
+      },
+    } as RuntimeHostClient;
+    const discard = () => handleRuntimeDiscard(new NextRequest(`http://127.0.0.1/api/runtime/operations/${operationId}`,
+      { method: "DELETE", headers: { host: "127.0.0.1" } }), operationId,
+    { enabled: () => true, client: () => client, registry: () => registry, kick: () => {} });
+    const { value: refused, gapMs } = await longestLoopGap(discard);
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({ retryable: true });
+    expect(gapMs).toBeLessThan(50);
+    expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "held" });
+    await Bun.sleep(650);
+    const repeated = await discard();
+    expect(repeated.status).toBe(200);
+    expect(registry.snapshot().deliveryOperationOwners[operationId]).toMatchObject({ terminalState: "failed", terminalReason: "delivery-discarded" });
+  } finally {
+    journal.close();
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
 });

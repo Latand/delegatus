@@ -7,6 +7,7 @@ import type { Database as BunDatabase } from "bun:sqlite";
 
 import { deepFreeze } from "@/lib/deepFreeze";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
+import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -503,6 +504,8 @@ export class SqliteAgentRegistryStore {
   private readonly onWriterWait: ((durationMs: number) => void) | undefined;
   private readonly maxMutationAttempts: number;
   private readonly writerClock: () => number;
+  /** Set while {@link withWriter} holds an open write transaction for the next {@link mutate}. */
+  private writerHeld = false;
   private onSnapshotLoad: (() => void) | undefined;
   private onRowPayloadRead: ((collection: RowCollection, count: number) => void) | undefined;
   private onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
@@ -1112,18 +1115,22 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { updateSnapshotCache?: boolean; operationName?: string } = {}): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string } = {}): SqliteRegistryMutation<T> {
     let operationName = options.operationName ?? operation.name;
+    /* {@link withWriter} already opened the write transaction for this call. */
+    const writerHeld = this.writerHeld;
+    this.writerHeld = false;
     for (let attempt = 1; attempt <= this.maxMutationAttempts; attempt += 1) {
-      const pessimistic = attempt > 1;
+      const pessimistic = attempt > 1 || writerHeld;
       const waitStartedAt = performance.now();
-      if (pessimistic) this.beginMutationWrite();
+      if (writerHeld) { /* the lock is held and the transaction is open */ }
+      else if (pessimistic) this.beginMutationWrite();
       else this.db.exec("BEGIN");
       let current: LazyRegistrySnapshot;
       let changes: RegistryChanges;
       let result: T;
       try {
-        if (pessimistic) this.onWriterWait?.(performance.now() - waitStartedAt);
+        if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName);
         current = this.loadLazyInTransaction();
         result = operation(current.file);
         changes = current.changes();
@@ -1138,10 +1145,18 @@ export class SqliteAgentRegistryStore {
       let stamps = { before: "", after: "" };
       const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
       try {
-        if (!pessimistic) this.onWriterWait?.(performance.now() - optimisticWaitStartedAt);
+        if (!pessimistic) this.noteWriterWait(performance.now() - optimisticWaitStartedAt, operationName);
         if (!pessimistic && Number(this.meta("revision") ?? 0) !== current.revision) {
           this.db.exec("ROLLBACK");
           operationName ||= new Error().stack?.split("\n")[2]?.trim() ?? "anonymous";
+          /* The whole lost attempt, read and wait included: the time a lost
+             revision cost the caller before its retry. */
+          recordBlockingWait({
+            site: "registry-revision-retry",
+            durationMs: performance.now() - waitStartedAt,
+            synchronous: true,
+            subject: operationName,
+          });
           if (attempt >= this.maxMutationAttempts) {
             console.warn(`[registry] mutation ${operationName} reached its retry ceiling after ${attempt} lost revision`);
             throw new RegistryMutationRetryLimitError(operationName, attempt);
@@ -1166,8 +1181,13 @@ export class SqliteAgentRegistryStore {
       }
       if (changed) {
         this.secureFiles();
-        // A narrow delivery commit must not clone populated snapshot maps.
-        if (options.updateSnapshotCache === false) this.readOnlyCache = null;
+        /* A delivery commit patches the cached reader view like any other
+           narrow commit. Dropping it cost the next whole-registry
+           reader a full reload, 0.28 to 0.40 s on a copy of the production
+           registry (3,052 conversations, 3,254 deliveries) where the patch
+           costs nothing measurable, and an account switch interleaves dozens
+           of such commits with such readers on the Viewer's main thread
+           (2026-10-07: every request stalled 3 to 6 s as a switch started). */
         this.updateCachesAfterCommit(current.file, changes, revision, stamps);
         this.rememberRevision(revision);
       }
@@ -1178,6 +1198,111 @@ export class SqliteAgentRegistryStore {
       return { result, file: null, revision };
     }
     throw new RegistryMutationRetryLimitError(operationName || "anonymous", this.maxMutationAttempts);
+  }
+
+  private noteWriterWait(durationMs: number, operationName: string): void {
+    this.onWriterWait?.(durationMs);
+    recordBlockingWait({ site: "registry-lock", durationMs, synchronous: true, subject: operationName || "anonymous" });
+  }
+
+  /**
+   * Runs `operation` once this connection holds the registry write lock, having
+   * waited for the lock without holding the event loop. Answers
+   * `{ acquired: false }` and runs nothing when the deadline passes first.
+   *
+   * The synchronous acquisition in {@link mutate} spins for up to five seconds
+   * on the caller's thread, and on 2026-10-06 the Viewer's delivery path spent
+   * up to 4.1 s there with every request behind it. Here each attempt asks for
+   * the lock once with no busy wait and sleeps between attempts, so a lock
+   * another process holds is waited out while the loop serves others. The
+   * attempt that gets the lock keeps it: `operation` runs in the same
+   * synchronous step, and the one {@link mutate} it makes reads, writes and
+   * commits inside that transaction, so no writer can pass between the wait
+   * and the write and the mutation cannot lose its revision.
+   *
+   * `operation` must go straight to its mutation: a snapshot read inside it
+   * would open a second transaction.
+   */
+  async withWriter<T>(
+    operation: () => T,
+    options: {
+      deadlineMs?: number;
+      probeMs?: number;
+      /** The correlation of a wait whose operation is only known once the
+          write has made it (an admission mints its operation id inside). */
+      correlate?: (value: T) => BlockingWaitCorrelation | null;
+    } = {},
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    const startedAt = performance.now();
+    const deadline = this.writerClock() + (options.deadlineMs ?? 5_000);
+    const probeMs = options.probeMs ?? 5;
+    let attempts = 1;
+    while (!this.tryBeginWrite()) {
+      if (this.writerClock() >= deadline) {
+        recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry" });
+        return { acquired: false };
+      }
+      attempts += 1;
+      await new Promise<void>((resolve) => setTimeout(resolve, probeMs));
+    }
+    const waitedMs = performance.now() - startedAt;
+    const noteWait = (correlation?: BlockingWaitCorrelation | null) => {
+      if (attempts > 1) recordBlockingWait({ site: "registry-lock-async", durationMs: waitedMs, synchronous: false, subject: "agent-registry", correlation });
+    };
+    this.writerHeld = true;
+    let value: T;
+    try {
+      value = operation();
+    } catch (error) {
+      noteWait();
+      throw error;
+    } finally {
+      /* An operation that made no mutation leaves the transaction open. */
+      if (this.writerHeld) {
+        this.writerHeld = false;
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      }
+    }
+    noteWait(options.correlate?.(value));
+    return { acquired: true, value };
+  }
+
+  /**
+   * {@link withWriter} for a caller that may not wait at all: the lock is asked
+   * for once, without a busy wait, and `operation` runs in the same synchronous
+   * step when it was granted. A refusal runs nothing and is recorded with the
+   * caller's correlation. For writes made inside another synchronous lock,
+   * where neither a spin nor an `await` is safe.
+   */
+  tryWriter<T>(operation: () => T): { acquired: true; value: T } | { acquired: false } {
+    const startedAt = performance.now();
+    if (!this.tryBeginWrite()) {
+      recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry", refused: true });
+      return { acquired: false };
+    }
+    this.writerHeld = true;
+    try {
+      return { acquired: true, value: operation() };
+    } finally {
+      if (this.writerHeld) {
+        this.writerHeld = false;
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      }
+    }
+  }
+
+  /** One request for the write lock that never waits. */
+  private tryBeginWrite(): boolean {
+    this.db.exec("PRAGMA busy_timeout = 0");
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      return true;
+    } catch (error) {
+      if (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY") return false;
+      throw error;
+    } finally {
+      this.db.exec("PRAGMA busy_timeout = 5000");
+    }
   }
 
   private beginMutationWrite(): void {

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { withoutStoredLessons } from "@/lib/memory/roleStore";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
@@ -11,7 +12,10 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 /** Compose the launch message before spawn admission. The shared UI renderer
     remains pure; this server path materializes oversized parts, falling back
-    to the complete rendered prompt when substitutions or framing do not fit. */
+    to the complete rendered prompt when substitutions or framing do not fit.
+    `reserveBytes` stays free for what dispatch adds (role memory's pointer to
+    its learned rules). A stored lesson the inputs quote (a report relayed as
+    the previous output) is withheld from the message and from every file. */
 export async function composeStageInput(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -19,9 +23,11 @@ export async function composeStageInput(
   previousOutput: string,
   worktreeDir: string = pipeline.worktreeDir,
   exec: ExecPort = realExec,
+  reserveBytes = 0,
 ): Promise<string> {
-  const inline = renderStagePrompt(pipeline, stage, role, previousOutput);
-  if (Buffer.byteLength(inline, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) {
+  const limit = MAX_STRUCTURED_TEXT_BYTES - reserveBytes;
+  const inline = withoutStoredLessons(renderStagePrompt(pipeline, stage, role, previousOutput));
+  if (Buffer.byteLength(inline, "utf8") <= limit) {
     await protectExistingControllerArtifacts(worktreeDir, exec);
     return inline;
   }
@@ -32,30 +38,30 @@ export async function composeStageInput(
   const artifact = (label: string, text: string) => {
     const digest = crypto.createHash("sha256").update(text).digest("hex");
     const file = path.join(directory, `${label.replaceAll(" ", "-")}-${digest}.md`);
-    const part = { label, file, text };
+    const part = { label, file, text: withoutStoredLessons(text) };
     artifacts.push(part);
     return part;
   };
   const previousFile = previousOutput ? artifact("previous output", previousOutput) : null;
-  const render = (headBytes: number, specFile: ReturnType<typeof artifact> | null) => renderStagePrompt(
+  const render = (headBytes: number, specFile: ReturnType<typeof artifact> | null) => withoutStoredLessons(renderStagePrompt(
     specFile ? { ...pipeline, spec: artifactReference(specFile, headBytes) } : pipeline, stage, role,
     previousFile ? artifactReference(previousFile, headBytes) : previousOutput,
-  );
+  ));
   const fit = (specFile: ReturnType<typeof artifact> | null) => {
     let prompt = "";
     /* Count every substituted reference, labels and UTF-8 bytes too. Tight
        prompts retain a smaller head, while both full inputs stay on disk. */
     for (const headBytes of [512, 128, 32, 4]) {
       prompt = render(headBytes, specFile);
-      if (Buffer.byteLength(prompt) <= MAX_STRUCTURED_TEXT_BYTES) break;
+      if (Buffer.byteLength(prompt) <= limit) break;
     }
     return prompt;
   };
   let prompt = fit(null);
-  const specFile = Buffer.byteLength(prompt) > MAX_STRUCTURED_TEXT_BYTES && pipeline.spec?.trim()
+  const specFile = Buffer.byteLength(prompt) > limit && pipeline.spec?.trim()
     ? artifact("specification", pipeline.spec) : null;
   if (specFile) prompt = fit(specFile);
-  if (Buffer.byteLength(prompt, "utf8") > MAX_STRUCTURED_TEXT_BYTES) {
+  if (Buffer.byteLength(prompt, "utf8") > limit) {
     // Preserve the original renderer's bytes, including every substitution,
     // role instruction, access fence and completion contract. The reference
     // replaces the whole message; unused part references need no files.

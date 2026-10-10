@@ -180,11 +180,12 @@ test("pipeline_action close answers counts in 600 B with 8 pending hosts, and ge
   const closed: Pipeline = { ...structuredClone(open), state: "closed", cursor: null, closedAt: "2026-09-22T11:00:00Z", closeReport: close,
     closeTeardown: { id: "close-budget", phase: "pending", waitingForActivation: false, acknowledgeHosts: false, flow: null } };
   savePipelines([closed]);
+  let current = open;
   const mcp = await session({
     ...tickDomain,
-    readPipelineRecord: () => open,
+    readPipelineRecord: () => current,
     getPipelines: () => ({ pipelines: [closed] }),
-    patchPipeline: async () => ({ pipeline: closed, close }),
+    patchPipeline: async () => { current = closed; return { pipeline: closed, close }; },
   });
   try {
     const answer = await mcp.call("pipeline_action", { pipelineId: open.id, action: "close", reason: "superseded by the fix lane" });

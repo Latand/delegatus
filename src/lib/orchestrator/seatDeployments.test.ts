@@ -44,3 +44,21 @@ test("the record is bounded, oldest first out, and an unreadable file reads as n
   recordSeatDeployment(row("after-tear"));
   expect(seatDeploymentsFor(SEAT).map((record) => record.deploymentId)).toEqual(["after-tear"]);
 });
+
+
+test("a pending key stays bound to its authorized seat and revision until acceptance (#2346)", async () => {
+  const { beginSeatDeployment, recoverSeatDeploymentRequests } = await import("./seatDeployments");
+  const request = { conversationId: SEAT, project: "viewer", revision: "d".repeat(40),
+    requestedAt: "2026-10-09T00:00:00Z", idempotencyKey: "pending-key" };
+  beginSeatDeployment(request);
+  beginSeatDeployment(request);
+  expect(() => beginSeatDeployment({ ...request, conversationId: OTHER })).toThrow("already attributed");
+  expect(() => beginSeatDeployment({ ...request, revision: "e".repeat(40) })).toThrow("already attributed");
+  await recoverSeatDeploymentRequests(SEAT, async key => ({ idempotencyKey: key, requestedRevision: request.revision,
+    revision: request.revision, deploymentId: "accepted-pending" }) as never);
+  expect(seatDeploymentsFor(SEAT).filter(row => row.deploymentId === "accepted-pending")).toHaveLength(1);
+  expect(() => recordSeatDeployment({ ...row("accepted-pending", OTHER) })).toThrow("another seat");
+  expect(seatDeploymentsFor(OTHER)).toEqual([]);
+  await recoverSeatDeploymentRequests(SEAT, async () => { throw new Error("resolved requests need no lookup"); });
+  expect(seatDeploymentsFor(SEAT).filter(row => row.deploymentId === "accepted-pending")).toHaveLength(1);
+});

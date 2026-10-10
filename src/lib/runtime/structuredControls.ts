@@ -50,6 +50,7 @@ export type StructuredControlResult =
       can tell "this process cannot ask any host generation" from a host that
       answered and refused (#1501). */
   | { status: 503; body: { error: string; code: typeof RUNTIME_HOST_UNAVAILABLE_CODE } }
+  | { status: 503; body: { error: string; retryable: true } }
   | { status: 400 | 409 | 503; body: { error: string } };
 
 export const RUNTIME_HOST_UNAVAILABLE_CODE = "runtime-host-unavailable";
@@ -62,6 +63,7 @@ export interface StructuredControlRequest {
   action: string;
   operationId?: string;
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
+  providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef;
   reconfiguration?: Partial<AgentReconfiguration>;
   /** `permission` only (#2215): allow once or deny. */
   decision?: string;
@@ -71,6 +73,8 @@ export interface StructuredControlRequest {
       Absent means the operator: an agent is the only caller that can name
       itself here, exactly as `requireOperatorAuthority` reads a request. */
   actor?: AccountChoiceActor;
+  /** Verified control authorship, separately from account-choice attribution. */
+  controlOrigin?: import("./messageOrigin").MessageOrigin;
 }
 
 /** An account pick for this conversation that has not settled (#1846). */
@@ -207,6 +211,9 @@ export async function dispatchStructuredControl(
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
   } = {},
 ): Promise<StructuredControlResult | null> {
+  if (request.providerRecovery && (request.action !== "kill" || !request.onlyIfIdle)) {
+    return { status: 400, body: { error: "provider recovery requires an idle-only kill" } };
+  }
   if (!request.action) return null;
   if (!(dependencies.enabled ?? (() => structuredHostsEnabled()))()) return null;
   const registry = dependencies.registry ?? agentRegistry();
@@ -316,12 +323,13 @@ export async function dispatchStructuredControl(
      are refused before a durable reconfigure can be claimed. */
   const reconfigurableEngine = conversation.engine;
 
-  if (structuredKill
+  const pipelineStage = snapshot.memberships[conversation.id]?.some(membership => membership.kind === "pipeline");
+  if (structuredKill && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
     && !entry.structuredHost?.process
     && (entry.status === "dead" || entry.status === "unhosted")) {
     /* The durable projection already records this session as torn down, so a
-       repeated kill replays the terminal outcome instead of re-entering the
-       command channel or the legacy pane-close ladder. */
+       retirement replays the terminal outcome. Pipeline operator stops still
+       need durable admission to fence recovery of the dead stage. */
     return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "delivered" } };
   }
 
@@ -378,7 +386,17 @@ export async function dispatchStructuredControl(
            pick still waiting, and it is how a message held by a failed switch goes out on this account. */
         const { accountId: _restated, ...profileOnly } = reconfiguration.value;
         reconfiguration.value = profileOnly;
-        if (conversation.switchHold) registry.releaseSwitchHold(conversation.id);
+        if (conversation.switchHold) {
+          const released = await registry.deliveryWrite({ label: "delivery.release-switch-hold",
+            operationId: request.operationId ?? conversation.switchHold.operationId },
+            () => registry.releaseSwitchHold(conversation.id));
+          if (!released.acquired) return { status: 503, body: {
+            error: "the delivery record's write lock is busy; the switch hold and its messages remain held", retryable: true,
+          } };
+          /* The hold committed: wake its accepted sends even if a later
+             profile update fails. The next queue pass remains the fallback. */
+          try { await (dependencies.kick ?? kickStructuredDeliveryQueue)(); } catch { /* committed hold stands */ }
+        }
         if (waiting) {
           const withdrawal = registry.withdrawConversationReconfigure(conversation.id, waiting.operationId);
           /* The claim won the race with this withdrawal: the move is under way, and a profile-only reconfigure
@@ -440,7 +458,10 @@ export async function dispatchStructuredControl(
     }
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
     const command: RuntimeOperationCommand = request.action === "kill"
-      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey, ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}) }
+      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey,
+          origin: request.controlOrigin ?? (request.actor?.kind === "agent" ? { kind: "agent", conversationId: request.actor.conversationId } : { kind: "operator" }),
+          ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
+          ...(request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}) }
       /* #862: a compact command carries a generation fence and nothing else.
          There is no text field to fill, so no caller's text can ride this
          control into the conversation — the Claude host's `/compact` is the
@@ -464,6 +485,8 @@ export async function dispatchStructuredControl(
             }
           : {
               kind: "interrupt",
+              origin: request.controlOrigin ?? (request.actor?.kind === "agent" ? { kind: "agent", conversationId: request.actor.conversationId }
+                : { kind: "operator" }),
               operationId,
               idempotencyKey: operationId,
               conversationId: conversation.id,

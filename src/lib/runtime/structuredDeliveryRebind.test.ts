@@ -531,6 +531,65 @@ test("a carried-over host released mid-registration is released once and stays g
   await close();
 });
 
+test("releasing one conversation's host reads and republishes no other conversation's host", async () => {
+  /* 2026-10-07 on production: every release republished all 13 to 17
+     registered hosts one after another, which added 10.7 to 19.1 s to each
+     account switch and made a kill take 16 to 32 s. */
+  const { registry, journal, directory, client, close } = fixture("release-scope");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const released = seedConversation(registry, directory, "release-scope-released");
+  const releasedHost = structuredHost();
+  await publishStructuredDeliveryHost({ key: released.key, host: releasedHost });
+  const reads = { count: 0 };
+  for (const name of ["release-scope-other-one", "release-scope-other-two"]) {
+    const { key } = seedConversation(registry, directory, name);
+    const host = structuredHost();
+    const health = host.health.bind(host);
+    await publishStructuredDeliveryHost({ key, host: Object.assign(host, {
+      health: async () => { reads.count += 1; return health(); },
+    }) });
+  }
+  const before = reads.count;
+  const sessionRevision = () => journal.snapshot().sessions
+    .find((session) => session.conversationId === released.conversationId)?.revision ?? 0;
+  const revisionBefore = sessionRevision();
+
+  expect(await releaseStructuredDeliveryHost(released.key)).toBe(true);
+
+  expect(reads.count).toBe(before);
+  /* The released conversation's own projection is still rewritten. */
+  expect(sessionRevision()).toBeGreaterThan(revisionBefore);
+
+  await close();
+});
+
+test("a settled operator message moves the files revision, so the board drops its stale delivery state", async () => {
+  /* 2026-10-07 on production: the card kept "message not delivered" for 7 to
+     15 s after the agent had answered, until the next poll. */
+  const { registry, journal, directory, client, close } = fixture("settled-delivery-revision");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const { conversationId, key } = seedConversation(registry, directory, "settled-delivery-revision-session");
+  await publishStructuredDeliveryHost({ key, host: structuredHost() });
+  const reservation = registry.holdDelivery(conversationId as `conversation_${string}`, "Reply with the single word OK",
+    "settled-delivery", "text", [], null, { operationId: "operation-settled-delivery" });
+  expect(registry.beginDeliveryAttempt(reservation.id, key.sessionId)).toMatchObject({ state: "delivery-uncertain" });
+  const revisionBefore = journal.snapshot().filesRevision;
+
+  journal.executeOperation({
+    kind: "send",
+    operationId: "operation-settled-delivery",
+    idempotencyKey: "settled-delivery",
+    conversationId,
+    text: "Reply with the single word OK",
+    policy: "queue",
+  });
+  await kickStructuredDeliveryQueue();
+  await settles(() => registry.readOnlySnapshot().heldDeliveries[reservation.id]?.state !== "delivery-uncertain", "delivery record");
+  await settles(() => journal.snapshot().filesRevision > revisionBefore, "files revision");
+
+  await close();
+});
+
 test("an inactive carried-over host retired mid-registration is detached and stays gone (#1191)", async () => {
   const { registry, journal, directory, client, close } = fixture("handover-terminate");
   let gate: ReturnType<typeof producerCursorGate> | undefined;
@@ -791,3 +850,82 @@ test.each(["health-failure", "deadline", "durable-read-loss", "claim-read-failur
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 10_000);
+
+test("the watchdog runs while startup is still seating hosts: a registered conversation's unreadable send stalls and recovers once, and an unregistered host's send waits for startup", async () => {
+  /* docs/design/delivery-progress-and-drain.md, A7. */
+  const { registry, journal, directory, client, close } = fixture("startup-watchdog");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  const first = seedConversation(registry, directory, "watchdog-registered");
+  const second = seedConversation(registry, directory, "watchdog-unregistered");
+  const firstHost = structuredHost();
+  const secondHost = structuredHost();
+  let unreadable = true;
+  const reading = {
+    ...client,
+    operationStatus: async (operationId: string) => {
+      if (unreadable && operationId === "watchdog-original-0") throw new RuntimeHostUnavailableError("runtime host is unavailable");
+      return journal.operationResult(operationId);
+    },
+  } as RuntimeHostClient;
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client: reading, deferStartupWork: true, progress,
+      watchdogIntervalMs: 5, settlementSweepMs: 0, queueTiming: { stallMs: 20, safetyPassMs: 40 } });
+    await publishStructuredDeliveryHost({ key: first.key, host: firstHost });
+    for (const [index, target] of [first, second].entries()) {
+      journal.append({ scope: { type: "session", id: target.conversationId }, kind: "session-status",
+        payload: { conversationId: target.conversationId, sessionKey: target.key, hostKind: "codex-app-server", host: "hosted", turn: "idle" } });
+      journal.executeOperation({ kind: "send", operationId: `watchdog-original-${index}`, idempotencyKey: `watchdog-key-${index}`,
+        conversationId: target.conversationId, text: `watchdog payload ${index}`, policy: "queue" });
+    }
+    /* No manual kick: only the watchdog moves anything. */
+    await settles(() => progress.get("watchdog-original-0")?.stalledSince != null, "stall during startup");
+    expect(progress.get("watchdog-original-1")?.waitReason).toBe("startup");
+    unreadable = false;
+    await settles(() => firstHost.ledger.writes.length === 1, "registered host delivery during startup");
+    expect(secondHost.ledger.writes).toEqual([]);
+    await publishStructuredDeliveryHost({ key: second.key, host: secondHost });
+    await completeStructuredDeliveryQueueStartup([]);
+    await kickStructuredDeliveryQueue();
+    await settles(() => secondHost.ledger.writes.length === 1, "unregistered host delivery after startup");
+    expect(firstHost.ledger.writes).toHaveLength(1);
+  } finally {
+    await close();
+  }
+});
+
+test("startup projection waits for the lock off the loop and leaves refused outcomes owed to the journal", async () => {
+  /* docs/design/delivery-progress-and-drain.md, C3. */
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const made = sqliteRegistryFixture("llv-startup-projection", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  const journal = new RuntimeJournal(path.join(made.root, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  try {
+    const target = seedConversation(registry, made.root, "projection-owed");
+    const held = registry.holdDelivery(target.conversationId as `conversation_${string}`, "projected at startup", "projection-key", "text", [], null,
+      { operationId: "projection-operation", kind: "send", policy: "queue" });
+    registry.beginDeliveryAttempt(held.id, held.generationId!);
+    journal.append({ scope: { type: "session", id: target.conversationId }, kind: "session-status",
+      payload: { conversationId: target.conversationId, sessionKey: target.key, hostKind: "codex-app-server", host: "hosted", turn: "idle" } });
+    journal.executeOperation({ kind: "send", operationId: "projection-operation", idempotencyKey: "projection-key",
+      conversationId: target.conversationId, text: "projected at startup", policy: "queue" });
+    journal.transitionOperation("projection-operation", "delivering");
+    journal.transitionOperation("projection-operation", "delivered");
+
+    await holder.hold(600);
+    const { gapMs } = await longestLoopGap(() => bindStructuredDeliveryQueue([], { registry, client, watchdogIntervalMs: 0, settlementSweepMs: 0 }));
+    expect(gapMs).toBeLessThan(50);
+    expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "delivery-uncertain" });
+    await Bun.sleep(650);
+    await bindStructuredDeliveryQueue([], { registry, client, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+    expect(registry.snapshot().deliveryOperationOwners["projection-operation"]).toMatchObject({ terminalState: "delivered" });
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});

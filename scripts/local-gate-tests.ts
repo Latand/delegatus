@@ -10,7 +10,11 @@ export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: 
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
-const key = (site: TestSite) => JSON.stringify([site.file, site.suite, diagnosticName(site), site.kind]);
+// Keep the concrete identities in displayed evidence. A head/base comparison
+// of the same survivor failure must not depend on the different PIDs allocated
+// to those two isolated runs.
+const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
+  site.kind === "error" ? diagnosticName(site).replace(/(owned runner: surviving owned processes: ).*$/, "$1<run-owned identities>") : diagnosticName(site), site.kind]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -121,7 +125,18 @@ export function parseReport(xml: string, output: string, file: string, root: str
     const occurrence = testcaseOccurrences.get(identity) ?? 0;
     testcaseOccurrences.set(identity, occurrence + 1);
     const site: TestSite = { file, suite: attrs.classname ?? "", name: attrs.name, kind: "test", occurrence };
-    if (/<(?:failure|error)\b/.test(match[2] ?? "")) { failures.push(site); namedFailures++; }
+    if (/<(?:failure|error)\b/.test(match[2] ?? "")) {
+      // Bun gives failing lifecycle hooks a line-less "(unnamed)" testcase.
+      // It cannot be selected by a test-name filter. Keep the real diagnostic
+      // blocking, including the survivor names from the ownership afterAll.
+      if (attrs.name === "(unnamed)" && attrs.line === undefined) {
+        const tag = match[2]!.match(/<(?:failure|error)\b[^>]*>/)?.[0];
+        const message = tag ? attributes(tag).message : undefined;
+        if (!message) throw new Error("unidentified JUnit hook failure");
+        failures.push({ file, suite: site.suite, name: `<hook error> ${message.split(root).join("<checkout>")}`, kind: "error" });
+      } else failures.push(site);
+      namedFailures++;
+    }
     else if (!/<skipped\b/.test(match[2] ?? "")) passed.push(site);
   }
   if (tests !== Number(totals.tests) || namedFailures !== Number(totals.failures) || (!tests && !filtered)) throw new Error("JUnit totals incomplete or no tests executed");
@@ -145,33 +160,52 @@ function command(command: string[], cwd: string, env: NodeJS.ProcessEnv, timeout
   return result.stdout;
 }
 
+/** The preload and service can report the same surviving tree. Keep one
+ * ownership failure for that exact identity set; other hook errors still block.
+ */
+export function appendOwnershipFailure(failures: TestSite[], file: string, diagnostic: string): void {
+  const runnerPrefix = "owned runner: surviving owned processes: ";
+  const hookPrefix = "<hook error> owned test scope children survived teardown: ";
+  const identities = (value: string) => value.split(", ").sort().join(", ");
+  const members = identities(diagnostic.slice(runnerPrefix.length));
+  const duplicate = failures.findIndex(site => site.file === file && site.kind === "error"
+    && site.name.startsWith(hookPrefix) && identities(site.name.slice(hookPrefix.length)) === members);
+  if (duplicate >= 0) failures.splice(duplicate, 1);
+  failures.push({ file, suite: "", name: `<ownership error> ${diagnostic}`, kind: "error" });
+}
+
+/** Bun arguments that run only the named cases of one file. */
+export function testNameFilter(sites: readonly TestSite[]): string[] {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Bun filters the outer-to-inner describe names joined by spaces. Its JUnit
+  // classname records the same ancestry in reverse, separated by " > ".
+  const names = sites.flatMap(site => {
+    const parts = site.suite ? site.suite.split(" > ") : [];
+    // JUnit uses the same delimiter for reverse ancestry and literal suite
+    // text. Enumerate possible boundaries, reversing groups while preserving
+    // the text and order inside each group.
+    const forms: string[] = [];
+    for (let mask = 0; mask < 2 ** Math.max(0, parts.length - 1); mask++) {
+      const groups: string[] = [];
+      let group = parts[0] ?? "";
+      for (let index = 1; index < parts.length; index++) {
+        if (mask & (1 << (index - 1))) { groups.push(group); group = parts[index]!; }
+        else group += ` > ${parts[index]}`;
+      }
+      if (group) groups.push(group);
+      forms.push([...groups.reverse(), site.name].join(" "));
+    }
+    return [...new Set(forms.map(escape))];
+  });
+  return [`--test-name-pattern=^(?:${names.join("|")})$`, "--pass-with-no-tests"];
+}
+
 function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void } = {}): TestRun {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   for (const file of files) {
     const remaining = Math.floor(Math.min(RUN_BUDGET_MS - (performance.now() - started), (options.deadline ?? Infinity) - performance.now()));
     if (remaining <= 0) throw new Error(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget`);
-    const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Bun filters the outer-to-inner describe names joined by spaces. Its JUnit
-    // classname records the same ancestry in reverse, separated by " > ".
-    const names = options.sites?.filter(site => site.file === file).flatMap(site => {
-      const parts = site.suite ? site.suite.split(" > ") : [];
-      // JUnit uses the same delimiter for reverse ancestry and literal suite
-      // text. Enumerate possible boundaries, reversing groups while preserving
-      // the text and order inside each group.
-      const forms: string[] = [];
-      for (let mask = 0; mask < 2 ** Math.max(0, parts.length - 1); mask++) {
-        const groups: string[] = [];
-        let group = parts[0] ?? "";
-        for (let index = 1; index < parts.length; index++) {
-          if (mask & (1 << (index - 1))) { groups.push(group); group = parts[index]!; }
-          else group += ` > ${parts[index]}`;
-        }
-        if (group) groups.push(group);
-        forms.push([...groups.reverse(), site.name].join(" "));
-      }
-      return [...new Set(forms.map(escape))];
-    });
-    const filter = names ? [`--test-name-pattern=^(?:${names.join("|")})$`, "--pass-with-no-tests"] : [];
+    const filter = options.sites ? testNameFilter(options.sites.filter(site => site.file === file)) : [];
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
     const env = isolatedEnvironment(privateRoot, inherited);
     env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
@@ -180,21 +214,25 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
     const fd = openSync(log, "w");
     let result: Bun.SyncSubprocess;
     try {
-      result = Bun.spawnSync({ cmd: [process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
-        cwd: root, env, stdio: ["ignore", fd, fd], timeout: Math.min(FILE_BUDGET_MS, remaining), killSignal: "SIGKILL",
-        detached: process.platform !== "win32",
+      result = Bun.spawnSync({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(FILE_BUDGET_MS, remaining)) }, stdio: ["ignore", fd, fd], timeout: Math.min(FILE_BUDGET_MS, remaining) + 5_000, killSignal: "SIGKILL",
       });
     } finally { closeSync(fd); }
-    // Reap only the process group created for this file, including helpers that
-    // inherited the gate slot descriptor. No port/name based process cleanup.
-    if (process.platform !== "win32" && result.pid) {
-      try { process.kill(-result.pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-    }
+    // The owned runner ends the service cgroup. A group number after the root
+    // exits is neither a bound handle nor proof against PID reuse.
     try {
       if (result.signalCode || result.exitedDueToTimeout || ![0, 1].includes(result.exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? result.exitCode}${result.exitedDueToTimeout ? "; timed out" : ""})`);
       const output = readFileSync(log, "utf8");
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, !!options.sites);
-      if ((result.exitCode === 0) !== (parsed.failures.length === 0)) throw new Error("runner exit disagrees with its report");
+      const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
+      // A complete report still needs the service's ownership verdict.
+      // Retain it so cleanup fixed on head can recover a broken baseline.
+      if (survivors && result.exitCode !== 0) {
+        appendOwnershipFailure(parsed.failures, file, survivors);
+      }
+      if ((result.exitCode === 0) !== (parsed.failures.length === 0)) {
+        throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
+      }
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
@@ -268,8 +306,8 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     const remote = oldFiles.length ? git("config", "--get", "remote.origin.url").trim() : "";
     // Scope ids and journal descriptors change on each gate-slot invocation;
     // they do not change the test inputs. Keep semantic environment in the key.
-    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
-    const identity = digest(JSON.stringify(["per-file-junit-v5-occurrence-aware-green-only", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
+    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM", "LLV_OWNED_TEST_RUNNER_PID", "LLV_OWNED_TEST_RUN_CGROUP", "LLV_OWNED_RUN_PARENT_IDENTITY", "LLV_FIXTURE_PARENT_IDENTITY"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
+    const identity = digest(JSON.stringify(["per-file-junit-v6-kernel-owned-runners", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
     const cache = options.cache ?? path.join(gateTemporaryRoot(), `delegatus-test-baselines-${process.getuid?.() ?? "user"}`);
     prepareCache(cache);
     const entry = path.join(cache, `${identity}.json`);

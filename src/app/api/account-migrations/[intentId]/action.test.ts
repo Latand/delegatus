@@ -99,3 +99,41 @@ test("operator retry authorizes an unknown Codex fork before restarting the migr
   });
   expect(ticks).toBe(1);
 });
+
+test("a Stop refused for the lock changes nothing and a repeated Stop cancels the held sends once", async () => {
+  /* docs/design/delivery-progress-and-drain.md, C2: the write waits off the
+     loop and its refusal is retryable. */
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const made = sqliteRegistryFixture("llv-migration-stop-refused", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const conversation = registry.ensureConversation("codex", "/migration-stop-refused.jsonl", "source");
+    const intent = registry.commitMigrationIntent({
+      engine: "codex", targetId: "target", origin: "manual", requestId: "stop-refused",
+      expectedRevision: registry.engineRouting("codex").revision,
+    });
+    const held = registry.holdDelivery(conversation.id, "fixture", "stop-refused-held");
+    const stop = () => updateMigrationAction(new NextRequest(`http://127.0.0.1/api/account-migrations/${intent.id}`, {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ action: "stop", expectedRevision: intent.revision }),
+    }), { params: Promise.resolve({ intentId: intent.id }) }, registry);
+
+    await holder.hold(600);
+    const { value: refused, gapMs } = await longestLoopGap(stop);
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({ retryable: true });
+    expect(gapMs).toBeLessThan(50);
+    expect(registry.snapshot().migrationIntents[intent.id]).toMatchObject({ state: "draining" });
+    expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "held" });
+
+    await Bun.sleep(650);
+    const stopped = await stop();
+    expect(stopped.status).toBe(200);
+    expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", attempts: 0, error: expect.stringContaining("migration was stopped") });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});

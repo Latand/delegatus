@@ -194,6 +194,8 @@ export interface CodexAppServerHostOptions {
   model?: string;
   effort?: string;
   allowSubagents?: boolean;
+  /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
+  cleanMemory?: boolean;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   /** Codex plugins granted to this session (issue #687). Empty or absent
@@ -1433,7 +1435,7 @@ export class CodexAppServerHost implements EngineHost {
 
   private static async open(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
     let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
-    try { if (options.codexHome) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
+    try { if (options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
@@ -1444,6 +1446,8 @@ export class CodexAppServerHost implements EngineHost {
     const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
     const granted = grantedPlugins(options.plugins);
     if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
+    /* A clean launch reads none of Codex's own memories. */
+    if (options.cleanMemory) subagentFeatures.memories = false;
     const args = [
       "-c", `agents.enabled=${options.allowSubagents === true}`,
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
@@ -1524,6 +1528,7 @@ export class CodexAppServerHost implements EngineHost {
            over HTTP. */
         viewerMcpTransportForLaunch(childEnv),
         features,
+        options.cleanMemory === true,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
       if (memoryHook) {
@@ -1862,7 +1867,7 @@ export class CodexAppServerHost implements EngineHost {
     return entry;
   }
 
-  async steer(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence) {
+  async steer(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void) {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredSendRefusedError("dead-host");
     }
@@ -1884,6 +1889,7 @@ export class CodexAppServerHost implements EngineHost {
         normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
         normalized.selectedContext, normalized.origin, codexDeliveryDedup(normalized.id)) },
     ];
+    authorizeDispatch?.();
     const result = await this.rpc("turn/steer", {
       threadId: this.identity.threadId, expectedTurnId: currentTurn, input, clientUserMessageId: entry.id,
     });
@@ -1922,7 +1928,7 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
-  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
+  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -1941,7 +1947,7 @@ export class CodexAppServerHost implements EngineHost {
     let reject!: (error: unknown) => void;
     const promise = new Promise<DeliveryReceipt>((fulfill, fail) => { resolve = fulfill; reject = fail; });
     this.sendingDeliveries.set(normalized.id, { contentDigest: normalized.contentDigest, promise });
-    void this.sendOnce(normalized, firstDispatch).then(resolve, reject);
+    void this.sendOnce(normalized, firstDispatch, authorizeDispatch).then(resolve, reject);
     try {
       return await promise;
     } finally {
@@ -1951,7 +1957,7 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
-  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
+  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -1981,6 +1987,7 @@ export class CodexAppServerHost implements EngineHost {
         ),
       },
     ];
+    authorizeDispatch?.();
     if (currentTurn) {
       if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
       try {

@@ -1,3 +1,4 @@
+import { checkFixtureParent } from "@/lib/testing/fixtureLifetime";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -27,6 +28,7 @@ const upload: RuntimeImageUpload = { base64: imageBase64, mime: "image/png" };
 function waitForRelease(filename: string): void {
   const deadline = Date.now() + 10_000;
   while (!fs.existsSync(filename)) {
+    checkFixtureParent();
     if (Date.now() >= deadline) throw new Error("structured image admission release timed out");
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
   }

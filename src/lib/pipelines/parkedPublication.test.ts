@@ -8,15 +8,17 @@ import type { Flow } from "@/lib/flows/types";
 
 // Store modules bind some paths at import time. Run these real controller
 // regressions in a child so their state and module caches cannot affect the
-// pre-push hook's other selected suites in the parent Bun process.
+// pre-push hook's other selected suites in the parent Bun process. The child
+// takes 45 s at load 18 on 24 cores; the bound stays inside the hook's
+// five-minute budget per file.
 if (process.env.LLV_PARKED_PUBLICATION_CHILD !== "1") {
   test("isolated parked publication regressions", () => {
     const result = spawnSync(process.execPath, ["test", import.meta.path], {
-      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 30_000,
+      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 120_000,
     });
     if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
     expect(result.status).toBe(0);
-  }, 35_000);
+  }, 125_000);
 } else {
 const previousState = process.env.LLV_STATE_DIR;
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-parked-publication-"));
@@ -106,19 +108,20 @@ function terminalReview(h: ReturnType<typeof fixture>) {
   savePipelines([h.lane]);
 }
 
-// Budget exhaustion controls stage recovery even when an earlier fix still
-// needs publication. Publishing that fix never supplies a review verdict.
+// An explicit budget stop controls recovery even when an earlier fix still
+// needs publication. Publishing that fix never supplies a review verdict,
+// and the fixed budget cannot be extended to leave the stop.
 function terminalBudgetPark(h: ReturnType<typeof fixture>) {
   terminalReview(h);
   const stage = h.lane.stages[1]!;
-  stage.kind = "run"; stage.onFail = { to: "build", maxRounds: 1 };
+  stage.kind = "run"; stage.onFail = { to: "build", maxRounds: 1, onExhausted: "park" };
   const attempt = h.lane.runs[1]!.attempts[0]!;
   attempt.flowId = null; attempt.state = "failed";
   attempt.verdict = { status: "fail", findings: ["P1 retained defect"] };
   attempt.completedAt = new Date().toISOString();
   attempt.activatedBy = { stageId: "build", attempt: 1, edge: "pass", budgetRecheck: true };
   h.lane.lastPassedCommit = h.head;
-  h.lane.stateDetail = "budget spent: retained terminal findings; continue-review required";
+  h.lane.stateDetail = "budget spent: retained terminal findings; explicit operator stop";
   h.lane.reviewPending = { terminalRecheck: true, stageId: "review", attempt: 1,
     fixStageId: "build", fixAttempt: 1, reviewedHead: h.head, currentHead: h.head,
     verdict: "fail", findings: 1, at: attempt.completedAt };
@@ -207,14 +210,18 @@ for (const timing of ["before execution", "during Git verification", "after fina
         expect(h.pushes()).toBe(0);
         if (timing === "before execution") expect(gitCalls).toBe(0);
         for (const action of ["skip-stage", "retry-stage"] as const) {
-          expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+          expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("Review budget is fixed") });
         }
         expect((await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "stale-race-grant",
           addRounds: 1, expectedRevision: admittedRevision }, ports, { kind: "operator" })).status).toBe(409);
-        expect((await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "fresh-race-grant",
-          addRounds: 1, expectedRevision: pipelineRevision(h.current()) }, ports, { kind: "operator" })).error).toBeUndefined();
-        expect(h.current()).toMatchObject({ state: "running", cursor: { stageId: "build", state: "pending",
-          input: expect.stringContaining("late review defect") }, reviewGrants: [{ rounds: 1, terminalAttempt: 1 }] });
+        const fixedRevision = pipelineRevision(h.current());
+        expect(await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "fresh-race-grant",
+          addRounds: 1, expectedRevision: fixedRevision }, ports, { kind: "operator" }))
+          .toMatchObject({ status: 409, error: expect.stringContaining("Review budget is fixed") });
+        expect(pipelineRevision(h.current())).toBe(fixedRevision);
+        expect(h.current()).toMatchObject({ state: "needs_decision", reviewPending: retainedPending });
+        expect(h.current().reviewGrants).toBeUndefined();
+        expect(h.current().stages[1]!.onFail!.maxRounds).toBe(1);
         expect(h.pushes()).toBe(0);
       } finally { release(); await work; h.cleanup(); }
     });
@@ -263,16 +270,18 @@ for (const hookFails of [false, true]) test(`publishing an unpublished fix prese
     if (!result.ok) expect(result.error).toContain("retained-hook-phase");
     else expect(h.current().publishedCommit).toBe(h.head);
     for (const action of ["retry-stage", "skip-stage"] as const) {
-      expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+      expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("Review budget is fixed") });
     }
     const current = h.current();
-    expect((await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "budget-before-recovery",
-      addRounds: 1, expectedRevision: pipelineRevision(current) }, ports, { kind: "operator" })).error).toBeUndefined();
-    expect(h.current()).toMatchObject({ state: "running", cursor: { stageId: "build", state: "pending", input: expect.stringContaining("retained defect") },
-      reviewGrants: [{ rounds: 1, terminalAttempt: 1 }] });
-    expect(h.current().runs[1]!.attempts).toHaveLength(1);
-    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ state: "failed", verdict: review!.verdict,
-      activatedBy: review!.activatedBy, reviewHeadSha: review!.reviewHeadSha, budgetSpent: true });
+    const fixedRevision = pipelineRevision(current);
+    expect(await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "budget-before-recovery",
+      addRounds: 1, expectedRevision: fixedRevision }, ports, { kind: "operator" }))
+      .toMatchObject({ status: 409, error: expect.stringContaining("Review budget is fixed") });
+    expect(pipelineRevision(h.current())).toBe(fixedRevision);
+    expect(h.current()).toMatchObject({ state: "needs_decision", reviewPending: pending });
+    expect(h.current().reviewGrants).toBeUndefined();
+    expect(h.current().stages[1]!.onFail!.maxRounds).toBe(1);
+    expect(h.current().runs[1]!.attempts).toEqual([review!]);
     expect(h.pushes()).toBe(1);
   } finally { h.cleanup(); }
 });
@@ -657,6 +666,64 @@ test("a refused publication of a head that changed code parks at once and is nev
   } finally { h.cleanup(); }
 });
 
+test("a hook that stopped at the deadline it was handed is retried as an interrupted push, even when the stage changed code", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const { NoVerdict } = await import("../../../scripts/local-gate");
+    // The hook's own line, as scripts/local-gate.ts writes it.
+    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0 }, { ranMs: 830_000 }).message}`;
+    const handed = path.join(h.root, "deadline");
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho "$LLV_GATE_PUSH_DEADLINE" > '${handed}'\necho 'pre-push: privacy' >&2\necho 'pre-push: touched tests' >&2\necho '${line}' >&2\nexit 75\n`, { mode: 0o700 });
+    let clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    const before = Date.now();
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    // Fourteen minutes: the fifteen-minute push limit less one for the pack.
+    const deadline = Number(fs.readFileSync(handed, "utf8"));
+    expect(deadline).toBeGreaterThanOrEqual(before + 14 * 60_000);
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 14 * 60_000);
+    const cause = "the pre-push hook's 14-minute budget ran out before its \"touched tests\" check reached a verdict, and the push did not reach the remote";
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toBe(`passed but unpublished: ${cause}; automatic retry 1 of 3 at 2026-10-04T10:01:00.000Z`);
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
+    for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; for (let n = 0; n < 8; n++) await tickPipelines([], ports); }
+    expect(h.pushes()).toBe(4);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail!.split("\n")[0]).toBe(`publishing the passed stage: ${cause}; retried 3 times. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.`);
+  } finally { h.cleanup(); }
+});
+
+test("a hook stopped at its deadline stays an interrupted push when the Viewer stopped before settling it", async () => {
+  const h = fixture();
+  const { reconcilePipelinePublication } = await import("./git");
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const { NoVerdict } = await import("../../../scripts/local-gate");
+    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0 }, { ranMs: 830_000 }).message}`;
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho 'pre-push: touched tests' >&2\necho '${line}' >&2\nexit 75\n`, { mode: 0o700 });
+    const clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    // The executor retained its result; settlement never ran.
+    const interrupted = h.current();
+    const operation = interrupted.delivery!.operation!;
+    expect(operation.executor!.result).toMatchObject({ ok: false, outcome: "not-landed" });
+    operation.state = "running"; delete operation.result;
+    interrupted.stateDetail = "publication accepted; remote verification pending";
+    savePipelines([interrupted]);
+    expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toContain("automatic retry 1 of 3");
+  } finally { h.cleanup(); }
+});
+
 test("a privacy refusal of an unchanged head is never retried or bypassed: the pushed commits stay unpublished", async () => {
   const h = fixture();
   try {
@@ -715,6 +782,7 @@ test("an interrupted push is named by what ended it and the phase the hook had r
   expect(publicationInterruptionCause({ ...failure, outputTail: "" })).toBe("the push was ended by SIGKILL and did not reach the remote");
   // The Viewer died with its push: nothing was retained.
   expect(publicationInterruptionCause()).toBe("the push was interrupted and did not reach the remote");
+  expect(publicationInterruptionCause({ ...failure, code: 1, signal: null, hookBudgetMs: 840_000 })).toBe("the pre-push hook's 14-minute budget ran out while its \"Linux tests\" phase was still running; it stopped without a verdict and the push did not reach the remote");
 });
 
 function missingDependencyFixture(h: ReturnType<typeof fixture>): string {

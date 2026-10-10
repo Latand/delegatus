@@ -5,7 +5,7 @@
       "form": "desktop",
       "cards": 101,
       "links": 34,
-      "linksMs": 0.03,
+      "linksMs": 0.02399999976158142,
       "wired": 12,
       "drawnWires": 2,
       "counts": [
@@ -13,20 +13,20 @@
       ],
       "scrollFrames": 30,
       "updates": 31,
-      "totalMs": 113.50000005960464,
-      "maxMs": 6.399999976158142,
-      "rectReads": 1178,
+      "totalMs": 255.5,
+      "maxMs": 57.5,
+      "rectReads": 1364,
       "wires": 3,
       "stubs": 1,
-      "elements": 15,
-      "msPerUpdate": 3.6612903245033754,
-      "rectReadsPerUpdate": 38
+      "elements": 42,
+      "msPerUpdate": 8.241935483870968,
+      "rectReadsPerUpdate": 44
     },
     {
       "form": "phone",
       "cards": 101,
       "links": 34,
-      "linksMs": 0.021500000059604646,
+      "linksMs": 0.01550000011920929,
       "wired": 12,
       "drawnWires": 5,
       "counts": [
@@ -34,14 +34,14 @@
       ],
       "scrollFrames": 30,
       "updates": 31,
-      "totalMs": 42.69999998807907,
-      "maxMs": 2.800000011920929,
-      "rectReads": 806,
+      "totalMs": 63.299999833106995,
+      "maxMs": 5.5,
+      "rectReads": 1023,
       "wires": 6,
       "stubs": 1,
-      "elements": 26,
-      "msPerUpdate": 1.3774193544541635,
-      "rectReadsPerUpdate": 26
+      "elements": 68,
+      "msPerUpdate": 2.0419354784873223,
+      "rectReadsPerUpdate": 33
     }
   ]
 }

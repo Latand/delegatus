@@ -18,7 +18,7 @@ process.env.LLV_STRUCTURED_HOSTS = "0";
 fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-type KillRequest = { conversationId: string; transcriptPath: string; action: string };
+type KillRequest = { conversationId: string; transcriptPath: string; action: string; actor?: { kind: "agent"; conversationId: string } };
 const killed: KillRequest[] = [];
 let killResult: { status: number; body: Record<string, unknown> } = { status: 200, body: { ok: true, structured: true } };
 
@@ -114,6 +114,16 @@ test("a resident stage host is terminated through the conversation kill control 
   expect(result).toEqual({ outcome: "stopped" });
   expect(killed).toEqual([{ conversationId: fixture.conversationId, transcriptPath: fixture.path, action: "kill" }]);
   setAgentRegistryForTests(null);
+});
+
+test("an automatic stage retirement stamps its control actor", async () => {
+  const fixture = hostedConversation();
+  killResult = { status: 200, body: { ok: true, structured: true, operationId: "automatic-stop", receipt: { status: "delivered" } } };
+  try {
+    expect(await defaultPipelinePorts().stopStageAgent(target(fixture.conversationId), { automatic: true })).toEqual({ outcome: "stopped" });
+    expect(killed).toEqual([{ conversationId: fixture.conversationId, transcriptPath: fixture.path, action: "kill",
+      actor: { kind: "agent", conversationId: fixture.conversationId } }]);
+  } finally { setAgentRegistryForTests(null); }
 });
 
 test("an attempt whose conversation id no longer resolves is found by its transcript (#670)", async () => {
@@ -386,5 +396,32 @@ test("a recycled pane id is reported unknown and never signalled (#670)", async 
   expect(quiet).toEqual({ outcome: "not-running" });
   expect(signalled).toBe(1);
   expect(killed).toEqual([]);
+  setAgentRegistryForTests(null);
+});
+
+test("provider recovery authority survives the engine idle retirement helper", async () => {
+  const fixture = hostedConversation();
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  const onlyIfIdle = { revision: 1, writerClaim: "fixture:1" };
+  const client = { readSession: async () => ({ conversationId: fixture.conversationId, host: "hosted", turn: "idle", activeTurnId: null,
+    attentionIds: [], retirementBlocked: false, revision: 1, writerClaim: onlyIfIdle.writerClaim, artifactPath: fixture.path }) } as unknown as RuntimeHostClient;
+  const { retirePipelineStageAgent } = await import("./engine");
+  expect(await retirePipelineStageAgent(target(fixture.conversationId, fixture.path), { client, providerRecovery })).toEqual({ outcome: "stopped" });
+  expect(killed).toEqual([expect.objectContaining({ onlyIfIdle, providerRecovery })]);
+});
+
+
+test("provider recovery authority cannot select an unconditional engine stop", async () => {
+  const fixture = hostedConversation();
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  expect(await stopPipelineStageAgent(target(fixture.conversationId, fixture.path), { providerRecovery })).toEqual({ outcome: "deferred" });
+  expect(killed).toEqual([]);
+});
+
+test("runtime-switch handoff forwards its stable owned stop identity to the kill control", async () => {
+  const fixture = hostedConversation();
+  killResult = { status: 200, body: { ok: true, operationId: "switch-owned-stop", receipt: { status: "delivered" } } };
+  expect(await defaultPipelinePorts().stopStageAgent(target(fixture.conversationId), { operationId: "switch-owned-stop" })).toEqual({ outcome: "stopped" });
+  expect(killed[0]).toMatchObject({ operationId: "switch-owned-stop", conversationId: fixture.conversationId });
   setAgentRegistryForTests(null);
 });

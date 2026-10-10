@@ -358,7 +358,7 @@ test("spawn_agent derives required role params from the prompt and preserves sup
         initialMessage: "pending",
       };
     },
-  }).spawn_agent;
+  }, { callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_operator", role: null }) } as never).spawn_agent;
   const sha = "a".repeat(40);
 
   await spawn({
@@ -415,6 +415,7 @@ test("spawn_agent derives required role params from the prompt and preserves sup
     cwd: "/repo",
     ["prompt"]: `Prepare deployment for ${sha}.`,
     role: "deployer",
+    confirm: "deploy",
   });
 
   expect(bodies.map((body) => body.roleParams)).toEqual([
@@ -637,7 +638,7 @@ test("spawn_agent reports every underivable required role param with its shape i
       posts += 1;
       return {};
     },
-  }).spawn_agent;
+  }, { callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_operator", role: null }) } as never).spawn_agent;
   const cases = [
     { role: "reviewer", prompt: "Review the current work.", param: "diffSource" },
     { role: "verifier", prompt: "", param: "claims" },
@@ -2529,7 +2530,7 @@ test("pipeline close acknowledges pending teardown and get_pipeline reads final 
   const target = { stageId: "build", attempt: 1, conversationId: "conversation_build", agentPath: null, paneId: null };
   const close = { status: "pending", pending: [target], stopped: [], alreadyStopped: [], unconfirmed: [],
     acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
-  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  const { buildPipeline, savePipelines, findPipelineRecord } = await import("@/lib/pipelines/store");
   const pipeline = buildPipeline({ id: "pipeline_close_pending", task: "Close pending", project: "viewer", repoDir: "/repo", stages: [{
     id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null },
   }],
@@ -2538,6 +2539,7 @@ test("pipeline close acknowledges pending teardown and get_pipeline reads final 
   pipeline.cursor = null;
   pipeline.closedAt = "2026-09-20T00:00:00Z";
   const bindings = viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: findPipelineRecord,
     patchPipeline: async () => ({ pipeline, close }),
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
   } as never);
@@ -3165,6 +3167,8 @@ function tickSettingsBindings(options: {
 } = {}) {
   const store = options.store ?? new Map<string, unknown>();
   const bindings = viewerMcpBindings(undefined, undefined, {
+    registrySnapshot: () => ({ conversations: {} }),
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "another-project", displayName: "Another project", smt: 1, conversations: 1 }], complete: true } }),
     callerAttribution: () => ({ kind: options.kind ?? "manager", conversationId: TICK_SEAT, role: "orchestrator" }),
     authorizedSeats: () => (options.callerProject === null
       ? []
@@ -4560,6 +4564,19 @@ test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries
   expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
 });
 
+test("MCP apply-now forwards the actor and returns the runtime switch acknowledgement", async () => {
+  let captured: unknown;
+  const runtimeSwitch = { id: "runtime-switch-1", phase: "requested", mode: "fork" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    patchPipeline: async (_id: string, body: unknown, _ports: unknown, actor: unknown) => { captured = { body, actor }; return { pipeline: { id: "pipeline_1", state: "running", taskIds: [] }, runtimeSwitch }; },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, { claim: async () => ({ kind: "fresh" }), complete: async () => {} } as never);
+  const answer = await service.callTool("pipeline_action", { clientRequestId: "runtime-apply", pipelineId: "pipeline_1", action: "override-stage", stageId: "build", model: "gpt-6.1-sol", applyNow: true });
+  expect(captured).toMatchObject({ body: { applyNow: true, model: "gpt-6.1-sol" }, actor: { kind: "agent", conversationId: "conversation_orchestrator" } });
+  expect(answer).toMatchObject({ ok: true, runtimeSwitch });
+});
+
 test.each([
   { id: "restart-service", button: true, unit: "delegatus.service" },
   { id: "start-service", button: true, unit: "delegatus.service" },
@@ -4582,4 +4599,21 @@ test.each([
     expect(error).toBeInstanceOf(McpToolRefusal);
     expect(error.details).toMatchObject({ status: 409, code: "self-update-action-required", action });
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("seat_tick_settings acknowledges auto-rotation and records the server-derived manager and why", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-auto-rotation-"));
+  sandboxes.push(sandbox); process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  beginOrchestratorSeatIntent({ project: "viewer", mandate: "Own the board", clientRequestId: "tick_auto_seed", mode: "spawn" });
+  completeOrchestratorSeatIntent({ project: "viewer", clientRequestId: "tick_auto_seed", conversationId: TICK_SEAT, path: null });
+  const { bindings, store } = tickSettingsBindings();
+  await expect(bindings.seat_tick_settings({ clientRequestId: "tick-auto-refused", autoRotate: { enabled: true } })).rejects.toThrow("autoRotate.why is required");
+  expect(store.size).toBe(0);
+  const changed = await bindings.seat_tick_settings({ clientRequestId: "tick-auto-armed", autoRotate: { enabled: true, thresholdPercent: 60, why: "operator requested in chat" } });
+  expect(changed.changedFields).toEqual(["autoRotate"]);
+  expect((store.get("viewer") as import("@/lib/monitor/seatTickSettings").SeatTickSettings)?.autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, setBy: { kind: "manager", conversationId: TICK_SEAT, seatEpoch: 1 }, why: "operator requested in chat" });
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-auto-read" });
+  expect(read.autoRotate).toEqual({ enabled: true, thresholdPercent: 60 });
+  const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-auto-verbose", verbose: true });
+  expect(verbose.autoRotate).toMatchObject({ setBy: { kind: "manager", conversationId: TICK_SEAT }, why: "operator requested in chat" });
 });

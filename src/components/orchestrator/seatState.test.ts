@@ -24,6 +24,8 @@ import {
   seatFailureCopy,
   seatRefsOf,
   seatRequestSettled,
+  seatVacated,
+  vacatedSeatReplacement,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
   type RotationHint,
@@ -90,6 +92,21 @@ describe("the panel names every state in the map (#977)", () => {
     expect(deriveOrchestratorPanelState({ ...base, status: status() })).toEqual({ kind: "draft", vacated: false });
     expect(deriveOrchestratorPanelState({ ...base, status: status({ seat: seat(), exists: false }) }))
       .toEqual({ kind: "draft", vacated: true });
+  });
+
+  test("a seat is vacated only when its record stands and its conversation is gone — one predicate for both create forms", () => {
+    expect(seatVacated(null)).toBe(false);
+    expect(seatVacated(status())).toBe(false);
+    expect(seatVacated(status({ seat: seat(), exists: true }))).toBe(false);
+    expect(seatVacated(status({ seat: seat(), exists: false }))).toBe(true);
+    expect(seatVacated(status({ seat: null, exists: false }))).toBe(false);
+    expect(vacatedSeatReplacement(status({ seat: seat(), exists: false }))).toEqual({
+      replaceIncumbent: true,
+      expectedIncumbentSeatEpoch: 4,
+    });
+    expect(vacatedSeatReplacement(status({ seat: seat(), exists: true }))).toEqual({});
+    expect(vacatedSeatReplacement(status())).toEqual({});
+    expect(vacatedSeatReplacement(null)).toEqual({});
   });
 
   test("a POST on the wire and a durable pending intent are both creating", () => {
@@ -218,14 +235,14 @@ describe("the panel names every state in the map (#977)", () => {
     const under = deriveOrchestratorPanelState({
       ...base,
       status: status({ seat: seat() }),
-      file: file({ ctx: { usedTokens: 10, windowTokens: 100, pct: ROTATION_CONTEXT_PERCENT - 1, source: "transcript", confidence: "high", observedAt: "" } as unknown as FileEntry["ctx"] }),
+      file: file({ ctx: { usedTokens: 49, windowTokens: 100, pct: ROTATION_CONTEXT_PERCENT - 1, source: "transcript", confidence: "high", observedAt: "" } as unknown as FileEntry["ctx"] }),
     });
     expect(under).toMatchObject({ kind: "live", rotation: null });
 
     const at = deriveOrchestratorPanelState({
       ...base,
       status: status({ seat: seat() }),
-      file: file({ ctx: { usedTokens: 60, windowTokens: 100, pct: ROTATION_CONTEXT_PERCENT, source: "transcript", confidence: "high", observedAt: "" } as unknown as FileEntry["ctx"] }),
+      file: file({ ctx: { usedTokens: 50, windowTokens: 100, pct: ROTATION_CONTEXT_PERCENT, source: "transcript", confidence: "high", observedAt: "" } as unknown as FileEntry["ctx"] }),
     });
     expect(at).toMatchObject({ kind: "live", rotation: { level: "strongly_recommend", contextPercent: ROTATION_CONTEXT_PERCENT, reasons: ["context"] } });
 
@@ -830,4 +847,23 @@ describe("a designation failure in the operator's words", () => {
     });
     expect(state).toMatchObject({ kind: "intent-error", retry: "fresh" });
   });
+});
+
+test("panel fallback uses raw usage at 49/50/51 percent and never gives Codex a threshold", () => {
+  for (const engine of ["claude", "codex"] as const) for (const capacity of [200_000, 1_000_000]) for (const percent of [49, 50, 51]) {
+    const state = deriveOrchestratorPanelState({
+      ...base, status: status({ seat: seat() }), file: file({ engine, model: "opus[1m]",
+        ctx: { usedTokens: capacity * percent / 100, windowTokens: capacity, pct: percent, source: "runtime", confidence: "exact", observedAt: "" } }),
+      surface: "live-root",
+    });
+    expect(state.kind).toBe("live");
+    if (state.kind === "live") expect(state.rotation?.level ?? "none").toBe(engine === "claude" && percent >= 50 ? "strongly_recommend" : "none");
+  }
+});
+
+test("panel fallback keeps unknown capacity unknown even for a registered model", () => {
+  const state = deriveOrchestratorPanelState({ ...base, status: status({ seat: seat() }), surface: "live-root",
+    file: file({ ctx: { usedTokens: 900_000, windowTokens: null, pct: null, source: "unknown", confidence: "unknown", observedAt: "" } }),
+  });
+  expect(state).toMatchObject({ kind: "live", rotation: null });
 });

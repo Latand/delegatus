@@ -15,6 +15,7 @@ export class ExternalRelayError extends Error {
     readonly code: string,
     readonly status = 0,
     readonly retryAfterSeconds: number | null = null,
+    readonly payload?: unknown,
   ) {
     super(code);
   }
@@ -62,15 +63,19 @@ export async function relayOrigin(value: string): Promise<string> {
 export async function relayCall<T = unknown>(
   apiBase: string,
   route: string,
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   body?: unknown,
   credential?: string,
-  options: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {},
+  options: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal;
+    /** Trusted caller rechecks its body after DNS, immediately before emission. */
+    prepareBody?: () => unknown;
+  } = {},
 ): Promise<{ status: number; body: T | null }> {
   const { url, address } = await target(apiBase);
   if (!url.pathname.endsWith("/v1") || !route.startsWith("/"))
     throw new ExternalRelayError("invalid_address");
-  const encoded = body === undefined ? null : Buffer.from(JSON.stringify(body));
+  const outgoing = options.prepareBody ? options.prepareBody() : body;
+  const encoded = outgoing === undefined ? null : Buffer.from(JSON.stringify(outgoing));
   const transport = url.protocol === "https:" ? https : http;
   return await new Promise((resolve, reject) => {
     const request = transport.request(
@@ -128,14 +133,15 @@ export async function relayCall<T = unknown>(
           }
           if (status >= 400) {
             const error = parsed as {
-              error?: { code?: string; retry_after_s?: number };
+              error?: { code?: string; retry_after_s?: number } | { code?: string; retry_after?: number }[];
             } | null;
+            const wireError = Array.isArray(error?.error) ? error.error[0] : error?.error;
             const retry =
-              error?.error?.retry_after_s ??
+              (Array.isArray(error?.error) ? error.error[0]?.retry_after : error?.error?.retry_after_s) ??
               Number(response.headers["retry-after"]);
             reject(
               new ExternalRelayError(
-                error?.error?.code ??
+                wireError?.code ??
                   (status === 401
                     ? "unauthorized"
                     : status === 426
@@ -143,6 +149,7 @@ export async function relayCall<T = unknown>(
                       : "unreachable"),
                 status,
                 Number.isFinite(retry) ? retry : null,
+                parsed,
               ),
             );
             return;
@@ -158,12 +165,9 @@ export async function relayCall<T = unknown>(
     request.end(encoded ?? undefined);
   });
 }
-/** The service's descriptor as published, checked against the schema and nothing else. */
-export async function readRelayDescriptor(
-  originInput: string,
-): Promise<{ origin: string; descriptor: ExternalRelayDescriptor }> {
-  const origin = await relayOrigin(originInput);
-  const { url, address } = await target(origin);
+/** Bounded JSON transport with DNS pinning and redirect refusal, without credentials. */
+export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
+  const { url, address } = await target(urlInput);
   const transport = url.protocol === "https:" ? https : http;
   const descriptor = await new Promise<unknown>((resolve, reject) => {
     const request = transport.request(
@@ -173,7 +177,7 @@ export async function readRelayDescriptor(
         servername: net.isIP(bare(url.hostname))
           ? undefined
           : bare(url.hostname),
-        path: "/.well-known/delegatus-relay.json",
+        path: url.pathname,
         method: "GET",
         agent: false,
         headers: { host: url.host, "Delegatus-Relay-Version": "1" },
@@ -208,6 +212,11 @@ export async function readRelayDescriptor(
     );
     request.end();
   });
+  return descriptor;
+}
+export async function readRelayDescriptor(originInput: string): Promise<{ origin: string; descriptor: ExternalRelayDescriptor }> {
+  const origin = await relayOrigin(originInput);
+  const descriptor = await readRelayJsonUrl(`${origin}/.well-known/delegatus-relay.json`);
   const parsed = descriptorSchema.safeParse(descriptor);
   if (!parsed.success) throw new ExternalRelayError("malformed");
   return { origin, descriptor: parsed.data };

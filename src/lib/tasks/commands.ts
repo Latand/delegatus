@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { readFindingKey } from "./finding";
+import { canonicalProject } from "@/lib/projects/aliases";
 
 import { readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
@@ -51,13 +53,16 @@ export type TaskCommandResult =
 export interface RecentCreate {
   clientRequestId: string;
   taskId: string;
+  matched?: boolean;
 }
 
 export type CreateTaskResult =
-  | { ok: true; tasks: BoardTask[]; task: BoardTask; recentCreates: RecentCreate[]; replay: boolean; notes?: string[] }
+  | { ok: true; tasks: BoardTask[]; task: BoardTask; recentCreates: RecentCreate[]; replay: boolean; matched?: boolean; notes?: string[] }
   | TaskRefusal;
 
 export interface CreateTaskInput {
+  findingKey?: unknown;
+  note?: unknown;
   hold?: unknown;
   project?: unknown;
   text?: unknown;
@@ -88,6 +93,7 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  findingKey?: unknown;
   /** Dashboard undo only, accepted with operator authority and both fences. */
   restoreHold?: unknown;
   hold?: unknown;
@@ -180,6 +186,7 @@ export interface PatchTaskOptions {
 /** Injected so the pure command can ask the store whether an attachment ref's
     bytes actually exist; defaults to "trust the ref" for unit tests. */
 export interface TaskCommandDeps {
+  noteAuthor?: TaskNoteAuthor;
   actor?: "operator" | "agent";
   conversationId?: string;
   now?: () => string;
@@ -344,7 +351,7 @@ export function createTask(
   recentCreates: RecentCreate[] = [],
   deps: TaskCommandDeps = {},
 ): CreateTaskResult {
-  const project = normalizeProject(input.project);
+  let project = normalizeProject(input.project);
   if (!project) return { ok: false, error: "project is required", status: 400 };
   const text = normalizeText(input.text);
   if (!text) return { ok: false, error: "task text is required", status: 400 };
@@ -361,7 +368,27 @@ export function createTask(
       const task = existing.find((item) => item.id === prior.taskId);
       /* The task may have been deleted since; a replay then behaves as a fresh
          create rather than resurrecting a phantom. */
-      if (task) return { ok: true, tasks: existing, task, recentCreates, replay: true };
+      if (task) return { ok: true, tasks: existing, task, recentCreates, replay: true, ...(prior.matched !== undefined ? { matched: prior.matched } : {}) };
+    }
+  }
+
+  const findingKey = readFindingKey(input.findingKey);
+  if (!findingKey.ok) return findingKey;
+  const key = findingKey.key;
+  // Keyed admission uses the same project identity the store persists.
+  if (key !== undefined) project = canonicalProject(project);
+  const now = deps.now?.() ?? isoNow();
+  const receipt = (taskId: string, matched = false): RecentCreate[] => clientRequestId
+    ? [...recentCreates.filter(entry => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId, ...(key !== undefined ? { matched } : {}) }].slice(-RECENT_CREATES_CAP)
+    : recentCreates;
+  if (key !== undefined) {
+    const prior = existing.find(task => task.project === project && task.findingKey === key && task.status !== "done");
+    if (prior) {
+      // Only the current note and occurrence metadata change on a match.
+      const updated = patchTask(existing, prior.id, { note: input.note ?? null }, now, deps);
+      if (!updated.ok) return updated;
+      const task: BoardTask = { ...updated.task, finding: { ...prior.finding, count: (prior.finding?.count ?? 1) + 1, lastSeenAt: now } };
+      return { ok: true, tasks: updated.tasks.map(row => row.id === task.id ? task : row), task, recentCreates: receipt(task.id, true), replay: false, matched: true };
     }
   }
 
@@ -390,7 +417,6 @@ export function createTask(
 
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
-  const now = deps.now?.() ?? isoNow();
   const steps = readTaskSteps(input.steps, now, deps.actor ?? "operator", deps.conversationId);
   if (!steps.ok) return steps;
   /* The bound is on bands, so only a task that will occupy one is counted
@@ -403,9 +429,16 @@ export function createTask(
 
   const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId);
   const id = deps.id?.() ?? crypto.randomUUID();
-  const task: BoardTask = {
+  const previous = key === undefined ? undefined : existing
+    .filter(row => row.project === project && row.findingKey === key && row.status === "done")
+    .sort((a, b) => (b.finding?.lastSeenAt ?? b.updatedAt).localeCompare(a.finding?.lastSeenAt ?? a.updatedAt))[0];
+  let task: BoardTask = {
     id,
     project,
+    ...(key !== undefined ? { findingKey: key, finding: {
+      count: 1, lastSeenAt: now,
+      ...(previous ? { previousTaskId: previous.id } : {}),
+    } } : {}),
     status: hold ? "blocked" : "inbox",
     ...(deps.statusActor ? { statusBy: { actor: structuredClone(deps.statusActor), from: null, at: now } } : {}),
     ...(hold ? { hold } : {}),
@@ -426,11 +459,14 @@ export function createTask(
     createdAt: now,
     updatedAt: now,
   };
-  const nextRecent = clientRequestId
-    ? [...recentCreates.filter((entry) => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId: id }].slice(-RECENT_CREATES_CAP)
-    : recentCreates;
+  if (key !== undefined && Object.hasOwn(input, "note")) {
+    const noted = patchTask([task], id, { note: input.note }, now, deps);
+    if (!noted.ok) return noted;
+    task = noted.task;
+  }
+  const nextRecent = receipt(id);
   const notes = [icon, color, priority].flatMap((field) => field.kind === "clamped" ? [field.note] : []);
-  return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(notes.length ? { notes } : {}) };
+  return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(key !== undefined ? { matched: false } : {}), ...(notes.length ? { notes } : {}) };
 }
 
 /** Presentation of a task, never work on it: `updatedAt` stays (see below). */
@@ -490,6 +526,12 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
   const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "findingKey")) {
+    const key = readFindingKey(input.findingKey);
+    if (!key.ok) return key;
+    patch.findingKey = key.key;
+    if (key.key !== task.findingKey) patch.finding = key.key === undefined ? undefined : { count: 1, lastSeenAt: now };
+  }
   if (Object.hasOwn(input, "note")) {
     if (input.note !== null && typeof input.note !== "string") {
       return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "note", error: "note must be a string or null" };
@@ -655,6 +697,12 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
 
+  const candidateKey = Object.hasOwn(patch, "findingKey") ? patch.findingKey : task.findingKey;
+  if (candidateKey !== undefined && (patch.status ?? task.status) !== "done"
+    && existing.some(row => row.id !== id && row.project === task.project && row.status !== "done" && row.findingKey === candidateKey)) {
+    return { ok: false, status: 409, code: "TASK_FINDING_KEY_CONFLICT", field: "findingKey", error: "an open task in this project already holds findingKey" };
+  }
+
   /* A colour label, an icon, a priority or a group hide is presentation of the task, never
      work on it: `updatedAt` stays, so the board's ranking and age and the seat tick's
      reading of card movement (its quiet guard, its "assigned, nothing started
@@ -679,6 +727,8 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueTz;
   }
   if (Object.hasOwn(patch, "note") && patch.note === undefined) delete updated.note;
+  if (Object.hasOwn(patch, "findingKey") && patch.findingKey === undefined) delete updated.findingKey;
+  if (Object.hasOwn(patch, "finding") && patch.finding === undefined) delete updated.finding;
   if (updated.placement === "unplaced") delete updated.pos;
   if (Object.hasOwn(patch, "hold") && patch.hold === undefined) delete updated.hold;
   if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;

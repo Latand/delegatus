@@ -89,6 +89,15 @@ export const RUNTIME_DELIVERY_DISCARDED_REASON = "delivery-discarded";
  * of its own has to be bounded by this number, and the only way to keep them
  * bounded by the SAME number is for there to be one.
  */
+/** The operation id the runtime journal gives the new attempt of a terminal
+    operation: deterministic, so the Viewer writes the attempt's owner row and
+    record under it before the retry command leaves the process
+    (docs/design/delivery-progress-and-drain.md, A2). The journal computes the
+    same id itself; a test pins the two together. */
+export function terminalRetryOperationId(operationId: string): string {
+  return `retry_${createHash("sha256").update(operationId).digest("hex")}`;
+}
+
 export const RUNTIME_IDEMPOTENCY_KEY_LIMIT = 200;
 
 /** Whether the runtime journal would admit an operation under this key. The
@@ -250,8 +259,10 @@ export interface RuntimeOperationReceipt {
   idempotencyKey: string;
   conversationId: string;
   kind: RuntimeOperationKind;
-  /** Kill authorship, derived from the admitted onlyIfIdle fence. */
+  /** Stop authorship, derived from the admitted idle fence or authenticated control actor. */
   origin?: "system" | "operator";
+  /** Distinguishes an authenticated actor/fence from legacy inferred custody. */
+  originAuthenticated?: true;
   status: RuntimeReceiptStatus;
   turnId?: string | null;
   queuePosition?: number | null;
@@ -374,6 +385,8 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   contentDigest?: string;
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
+  /** Automatic continuation requires this same idle revision and writer at admission and execution. */
+  onlyIfIdle?: RuntimeIdleKillFence;
   runtime?: RuntimeSendSettings;
   /** The Viewer card selected when this turn was submitted (#844). Admitted
       atomically with the text and never re-read afterwards, so board movement
@@ -407,12 +420,23 @@ export function runtimeSettingsCapability(engine: RuntimeEngine, nativeTurnProfi
 export interface RuntimeInterruptCommand extends RuntimeCommandBase {
   kind: "interrupt";
   turnId?: string | null;
+  /** Authenticated caller, stamped by the admission surface. */
+  origin?: MessageOrigin;
 }
 
 /** Automatic retirement is bound to one observed idle session revision and writer. */
 export interface RuntimeIdleKillFence {
   revision: number;
   writerClaim: string;
+}
+
+/** Engine recovery authority for one provider-cut attempt. Requires an idle fence. */
+export interface RuntimeProviderRecoveryRef {
+  pipelineId: string;
+  stageId: string;
+  attempt: number;
+  turnTs: number;
+  controlGeneration: string | null;
 }
 
 export function runtimeIdleKillMatches(
@@ -429,7 +453,10 @@ export function runtimeIdleKillMatches(
 
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  /** Authenticated control authorship; an automatic recovery is system custody. */
+  origin?: MessageOrigin;
   onlyIfIdle?: RuntimeIdleKillFence;
+  providerRecovery?: RuntimeProviderRecoveryRef;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
 }
 
@@ -960,6 +987,22 @@ export function parseViewerDeploymentListCursor(cursor?: string): [number, strin
   } catch { throw new Error("deployment list cursor is invalid"); }
 }
 
+/** One keyset page of an in-memory ledger, newest first: the snapshot of an
+    older host and the ledger of a checkout install page the way the host's
+    journal does. */
+export function viewerDeploymentPage(rows: ViewerDeploymentStatus[], limit: number, cursor: [number, string, boolean] | null,
+  compact = false, legacySnapshot = false): Pick<ViewerDeploymentList, "deployments" | "nextCursor" | "hasMore"> {
+  const after = rows.slice()
+    .sort((a, b) => viewerDeploymentStartedAt(b) - viewerDeploymentStartedAt(a) || b.deploymentId.localeCompare(a.deploymentId))
+    .filter(row => !cursor || viewerDeploymentStartedAt(row) < cursor[0]
+      || (viewerDeploymentStartedAt(row) === cursor[0] && row.deploymentId < cursor[1]));
+  const page = after.slice(0, limit);
+  const last = page.at(-1);
+  return { deployments: compact ? page.map(viewerDeploymentSummary) : page,
+    hasMore: after.length > limit,
+    nextCursor: after.length > limit && last ? viewerDeploymentListCursor(viewerDeploymentStartedAt(last), last.deploymentId, legacySnapshot) : null };
+}
+
 export function viewerDeploymentStartedAt(row: ViewerDeploymentStatus): number {
   const created = Date.parse(row.createdAt);
   const updated = Date.parse(row.updatedAt);
@@ -988,7 +1031,7 @@ export interface RuntimeReplay {
 
 export interface RuntimeSocketRequest {
   id: string;
-  method: "runtime-host-health" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 

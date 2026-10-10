@@ -1,0 +1,567 @@
+{
+  "design": "docs/design/role-memory.md",
+  "base": "5a197eeb555b01bf84ea48c2131eb64e4ac5974a",
+  "driver": "src/components/kanban/issue1695BrowserHarness.ts (serveEvidenceFixture, openFixture) over the kanban evidence fixture, from a scratch export of the base with prototype components that were never added to the repository",
+  "framesDir": "$HOME/Pictures/delegatus-review/role-memory",
+  "viewports": {
+    "desktop": [
+      1440,
+      900
+    ],
+    "phone": [
+      390,
+      844,
+      "touch"
+    ]
+  },
+  "scheme": "light",
+  "variants": {
+    "1": "Pages in the menu: the Memory page gains the Learned rules switch, whose line states the data flow, and scope rows; a scope opens as a deeper menu page with rewritten, merged and archived rules",
+    "2": "Rules window: one row on the Memory page opens a wide window (desktop) or a full-screen sheet (phone), with rewritten rules shown before and after",
+    "3": "Rule line under the stage report",
+    "4": "Rule count inside the stage report line, opening into the rules",
+    "5": "The stage conversation: the learned rules block with rule ids at start, the lesson request in the stage_report answer, the leave_lesson call"
+  },
+  "geometryNotes": [
+    "variant 1 and 2 memory page, uk, 232 px menu: one clipped span is the existing shared-memory tile label (59/54 px); the one button under 16 px is the existing inline Details link; neither belongs to these variants",
+    "variant 2 window: the Restore buttons are 24 px tall in round 2 (three were under 16 px in round 1); no frame of the window flags a tiny button",
+    "variant 1 memory page, uk, desktop: the menu reaches 754 px tall with the data-flow line under the switch",
+    "variant 5 stage-end and answer frames use a taller viewport (1440x1250, 390x2300) with tool-card max-height lifted so the whole request reads in one frame"
+  ],
+  "frames": [
+    {
+      "file": "variant-1-desktop-1440-en-memory-page.png",
+      "variant": 1,
+      "lang": "en",
+      "width": 1440,
+      "state": "memory page with scopes",
+      "geometry": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 696,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 1
+      }
+    },
+    {
+      "file": "variant-1-desktop-1440-en-builder-scope.png",
+      "variant": 1,
+      "lang": "en",
+      "width": 1440,
+      "state": "builder scope page",
+      "geometry": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 838,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-2-desktop-1440-en-memory-page.png",
+      "variant": 2,
+      "lang": "en",
+      "width": 1440,
+      "state": "memory page with one row",
+      "geometry": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 458,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 1
+      }
+    },
+    {
+      "file": "variant-2-desktop-1440-en-window.png",
+      "variant": 2,
+      "lang": "en",
+      "width": 1440,
+      "state": "learned rules window",
+      "geometry": {
+        "left": 160,
+        "top": 90,
+        "width": 1120,
+        "height": 720,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-3-desktop-1440-en-card.png",
+      "variant": 3,
+      "lang": "en",
+      "width": 1440,
+      "state": "card with the fix stage's lesson",
+      "geometry": {
+        "left": 582,
+        "top": -344,
+        "width": 428,
+        "height": 16,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-4-desktop-1440-en-card.png",
+      "variant": 4,
+      "lang": "en",
+      "width": 1440,
+      "state": "card with the fix stage's lesson",
+      "geometry": {
+        "left": 705,
+        "top": 708,
+        "width": 45,
+        "height": 16,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-4-desktop-1440-en-card-open.png",
+      "variant": 4,
+      "lang": "en",
+      "width": 1440,
+      "state": "count opened"
+    },
+    {
+      "file": "variant-5-desktop-1440-en-start.png",
+      "variant": 5,
+      "lang": "en",
+      "width": 1440,
+      "state": "learned rules block in a fresh builder's first message"
+    },
+    {
+      "file": "variant-5-desktop-1440-en-stage-conversation.png",
+      "variant": 5,
+      "lang": "en",
+      "width": 1440,
+      "state": "the fix stage's conversation, tool rows closed"
+    },
+    {
+      "file": "variant-5-desktop-1440-en-stage-end.png",
+      "variant": 5,
+      "lang": "en",
+      "width": 1440,
+      "height": 1250,
+      "state": "the lesson request in the stage_report answer"
+    },
+    {
+      "file": "variant-5-desktop-1440-en-answer.png",
+      "variant": 5,
+      "lang": "en",
+      "width": 1440,
+      "height": 1250,
+      "state": "the leave_lesson call with the example answer"
+    },
+    {
+      "file": "variant-1-phone-390-en-memory-page.png",
+      "variant": 1,
+      "lang": "en",
+      "width": 390,
+      "state": "memory page with scopes",
+      "geometry": {
+        "left": 0,
+        "top": 101,
+        "width": 390,
+        "height": 743,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-1-phone-390-en-builder-scope.png",
+      "variant": 1,
+      "lang": "en",
+      "width": 390,
+      "state": "builder scope page",
+      "geometry": {
+        "left": 0,
+        "top": 101,
+        "width": 390,
+        "height": 743,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-2-phone-390-en-memory-page.png",
+      "variant": 2,
+      "lang": "en",
+      "width": 390,
+      "state": "memory page with one row",
+      "geometry": {
+        "left": 0,
+        "top": 260,
+        "width": 390,
+        "height": 584,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-2-phone-390-en-window.png",
+      "variant": 2,
+      "lang": "en",
+      "width": 390,
+      "state": "learned rules window",
+      "geometry": {
+        "left": 0,
+        "top": 0,
+        "width": 390,
+        "height": 844,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-3-phone-390-en-card.png",
+      "variant": 3,
+      "lang": "en",
+      "width": 390,
+      "state": "card with the fix stage's lesson",
+      "geometry": {
+        "left": 56,
+        "top": 412,
+        "width": 312,
+        "height": 60,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-4-phone-390-en-card.png",
+      "variant": 4,
+      "lang": "en",
+      "width": 390,
+      "state": "card with the fix stage's lesson",
+      "geometry": {
+        "left": 179,
+        "top": 433,
+        "width": 60,
+        "height": 17,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-4-phone-390-en-card-open.png",
+      "variant": 4,
+      "lang": "en",
+      "width": 390,
+      "state": "count opened"
+    },
+    {
+      "file": "variant-5-phone-390-en-start.png",
+      "variant": 5,
+      "lang": "en",
+      "width": 390,
+      "state": "learned rules block in a fresh builder's first message"
+    },
+    {
+      "file": "variant-5-phone-390-en-stage-conversation.png",
+      "variant": 5,
+      "lang": "en",
+      "width": 390,
+      "state": "the fix stage's conversation, tool rows closed"
+    },
+    {
+      "file": "variant-5-phone-390-en-stage-end.png",
+      "variant": 5,
+      "lang": "en",
+      "width": 390,
+      "height": 2300,
+      "state": "the lesson request in the stage_report answer"
+    },
+    {
+      "file": "variant-5-phone-390-en-answer.png",
+      "variant": 5,
+      "lang": "en",
+      "width": 390,
+      "height": 2300,
+      "state": "the leave_lesson call with the example answer"
+    },
+    {
+      "file": "variant-1-desktop-1440-uk-memory-page.png",
+      "variant": 1,
+      "lang": "uk",
+      "width": 1440,
+      "state": "memory page with scopes",
+      "geometry": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 754,
+        "overflowX": 0,
+        "clipped": 1,
+        "tinyButtons": 1
+      }
+    },
+    {
+      "file": "variant-1-desktop-1440-uk-builder-scope.png",
+      "variant": 1,
+      "lang": "uk",
+      "width": 1440,
+      "state": "builder scope page",
+      "geometry": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 940,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-2-desktop-1440-uk-memory-page.png",
+      "variant": 2,
+      "lang": "uk",
+      "width": 1440,
+      "state": "memory page with one row",
+      "geometry": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 515,
+        "overflowX": 0,
+        "clipped": 1,
+        "tinyButtons": 1
+      }
+    },
+    {
+      "file": "variant-2-desktop-1440-uk-window.png",
+      "variant": 2,
+      "lang": "uk",
+      "width": 1440,
+      "state": "learned rules window",
+      "geometry": {
+        "left": 160,
+        "top": 90,
+        "width": 1120,
+        "height": 720,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-3-desktop-1440-uk-card.png",
+      "variant": 3,
+      "lang": "uk",
+      "width": 1440,
+      "state": "card with the fix stage's lesson",
+      "geometry": {
+        "left": 582,
+        "top": -368,
+        "width": 428,
+        "height": 16,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-4-desktop-1440-uk-card.png",
+      "variant": 4,
+      "lang": "uk",
+      "width": 1440,
+      "state": "card with the fix stage's lesson",
+      "geometry": {
+        "left": 722,
+        "top": 708,
+        "width": 64,
+        "height": 16,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-4-desktop-1440-uk-card-open.png",
+      "variant": 4,
+      "lang": "uk",
+      "width": 1440,
+      "state": "count opened"
+    },
+    {
+      "file": "variant-5-desktop-1440-uk-start.png",
+      "variant": 5,
+      "lang": "uk",
+      "width": 1440,
+      "state": "learned rules block in a fresh builder's first message"
+    },
+    {
+      "file": "variant-5-desktop-1440-uk-stage-conversation.png",
+      "variant": 5,
+      "lang": "uk",
+      "width": 1440,
+      "state": "the fix stage's conversation, tool rows closed"
+    },
+    {
+      "file": "variant-5-desktop-1440-uk-stage-end.png",
+      "variant": 5,
+      "lang": "uk",
+      "width": 1440,
+      "height": 1250,
+      "state": "the lesson request in the stage_report answer"
+    },
+    {
+      "file": "variant-5-desktop-1440-uk-answer.png",
+      "variant": 5,
+      "lang": "uk",
+      "width": 1440,
+      "height": 1250,
+      "state": "the leave_lesson call with the example answer"
+    },
+    {
+      "file": "variant-1-phone-390-uk-memory-page.png",
+      "variant": 1,
+      "lang": "uk",
+      "width": 390,
+      "state": "memory page with scopes",
+      "geometry": {
+        "left": 0,
+        "top": 101,
+        "width": 390,
+        "height": 743,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-1-phone-390-uk-builder-scope.png",
+      "variant": 1,
+      "lang": "uk",
+      "width": 390,
+      "state": "builder scope page",
+      "geometry": {
+        "left": 0,
+        "top": 101,
+        "width": 390,
+        "height": 743,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-2-phone-390-uk-memory-page.png",
+      "variant": 2,
+      "lang": "uk",
+      "width": 390,
+      "state": "memory page with one row",
+      "geometry": {
+        "left": 0,
+        "top": 247,
+        "width": 390,
+        "height": 598,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-2-phone-390-uk-window.png",
+      "variant": 2,
+      "lang": "uk",
+      "width": 390,
+      "state": "learned rules window",
+      "geometry": {
+        "left": 0,
+        "top": 0,
+        "width": 390,
+        "height": 844,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-3-phone-390-uk-card.png",
+      "variant": 3,
+      "lang": "uk",
+      "width": 390,
+      "state": "card with the fix stage's lesson",
+      "geometry": {
+        "left": 56,
+        "top": 412,
+        "width": 312,
+        "height": 60,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-4-phone-390-uk-card.png",
+      "variant": 4,
+      "lang": "uk",
+      "width": 390,
+      "state": "card with the fix stage's lesson",
+      "geometry": {
+        "left": 196,
+        "top": 433,
+        "width": 79,
+        "height": 17,
+        "overflowX": 0,
+        "clipped": 0,
+        "tinyButtons": 0
+      }
+    },
+    {
+      "file": "variant-4-phone-390-uk-card-open.png",
+      "variant": 4,
+      "lang": "uk",
+      "width": 390,
+      "state": "count opened"
+    },
+    {
+      "file": "variant-5-phone-390-uk-start.png",
+      "variant": 5,
+      "lang": "uk",
+      "width": 390,
+      "state": "learned rules block in a fresh builder's first message"
+    },
+    {
+      "file": "variant-5-phone-390-uk-stage-conversation.png",
+      "variant": 5,
+      "lang": "uk",
+      "width": 390,
+      "state": "the fix stage's conversation, tool rows closed"
+    },
+    {
+      "file": "variant-5-phone-390-uk-stage-end.png",
+      "variant": 5,
+      "lang": "uk",
+      "width": 390,
+      "height": 2300,
+      "state": "the lesson request in the stage_report answer"
+    },
+    {
+      "file": "variant-5-phone-390-uk-answer.png",
+      "variant": 5,
+      "lang": "uk",
+      "width": 390,
+      "height": 2300,
+      "state": "the leave_lesson call with the example answer"
+    }
+  ],
+  "round": 2,
+  "roundNote": "Re-rendered after the design review: the switch line states the data flow; scope pages and the window show rewritten rules with before and after; the learned rules block carries rule ids and the private-memory sentence; the lesson request names the egress paths. Round 1 frames are kept beside them under round-1/."
+}

@@ -40,12 +40,11 @@
   /* Between the items of a header row. */
   --gap-head: var(--space-2);
   /* The page's edges (point 9 of the open-agents review): the edge the
-     project's name, the Orchestrator row on top, the open-agents rail and the
-     columns start on, and the gap above and below the Orchestrator row (and
-     under the scroll mode's jump strip). The edge follows the board's layout
-     mode, set on this element: the board's own 20 px wide, then the scale's
-     16 and 12. The open-agents rail's rows hold their content on a card's
-     inset. */
+     project's name, the Orchestrator row on top and the columns start on, and
+     the gap above and below the Orchestrator row (and under the scroll mode's
+     jump strip). The edge follows the board's layout mode, set on this
+     element: the board's own 20 px wide, then the scale's 16 and 12. The
+     agent window's list rows hold their content on a card's inset. */
   --kb-edge: 20px;
   --kb-stack: var(--space-3);
   --kb-grid-dot: color-mix(in srgb, var(--color-primary) 9%, transparent);
@@ -241,6 +240,9 @@
    what the operator is reading. Only a width change takes it away, because
    there the layout helper holds the first card in the window itself. */
 .kb[data-column-layout-active] .board:not(.tabs) .col-body { overflow-anchor: none; }
+/* Under the agent window the columns keep their scroll: a card that grows or
+   leaves there (a launch's draft) moves nothing the operator comes back to. */
+.kb:has(> .agent-window-layer) .col-body { overflow-anchor: none; }
 /* Promotion exists only while these real surfaces are moving. */
 .kb[data-column-layout-active] .column { transition: none; }
 .kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
@@ -333,7 +335,9 @@
 
 /* Its line sits halfway between the cards above and below: the column's gap
    on both sides and no padding of its own on either. */
-.kb .divider { display: flex; align-items: center; gap: 10px; color: var(--color-muted); font-size: var(--text-label); font-weight: 600; padding: 0 2px; }
+/* The pixel above centres the label's ink between the cards, which its line
+   box alone leaves a pixel low in the system fonts of Linux. */
+.kb .divider { display: flex; align-items: center; gap: 10px; color: var(--color-muted); font-size: var(--text-label); font-weight: 600; padding: 0 2px; margin-top: 1px; }
 .kb .divider::before, .kb .divider::after { content: ""; flex: 1; height: 1px; background: var(--border-default); }
 
 .kb .tabs-nav { display: flex; gap: 4px; padding: 10px 12px; }
@@ -506,8 +510,11 @@
 .kb .card .undo { display: inline-flex; align-items: center; height: var(--target, 32px); padding: 0 6px; margin-left: -6px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-accent); }
 .kb .card .undo:hover { background: var(--surface-well); }
 /* A card no task holds: the chip is a line of its own between the conversation
-   above it and the counts that wrap below it, with the same 12 px on both sides. */
-.kb .card .foot:has(> .origin-chip) { margin-top: 0; row-gap: var(--space-3); }
+   above it and the counts that wrap below it, with the same 12 px on both sides.
+   The extra pixel below, and the one the foot gives back to the card's bottom
+   inset, hold that balance in the system fonts of Linux as well as the
+   designer's: the counts' smaller label sits lower in its line box. */
+.kb .card .foot:has(> .origin-chip) { margin-top: 0; margin-bottom: -1px; row-gap: calc(var(--space-3) + 1px); }
 .kb .card .origin-chip { height: 20px; padding: 0 8px; display: inline-flex; align-items: center; border-radius: 999px; border: 1px dashed var(--border-strong); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 
 /* The project a card belongs to (#1820). Only the cross-project Overview
@@ -535,6 +542,8 @@
 }
 .kb .tile:hover { background: var(--surface-well); }
 .kb .tile:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* A conversation open in the agent window: an accent edge, nothing that moves the row. */
+.kb .tile.open { box-shadow: inset 3px 0 0 var(--color-accent); }
 .kb .tile .row { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; font-size: var(--text-label); min-width: 0; }
 .kb .tile .role { font-weight: 600; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .tile .engine { flex-shrink: 0; }
@@ -903,26 +912,64 @@
    catalog update landing mid-scroll stopped it outright. Promoting them does
    not change their layout, stacking or clipping. */
 .kb .kb-page, .kb .col-body, .kb .board.scroll, .kb .board.reading { will-change: scroll-position; }
-/* ── The open agents, in a strip at the board's side (OpenAgentsRail.tsx) ── */
-/* A strip of its own beside the columns, below a seat on top, so it covers
-   nothing on them and leaves the seat its width. Its width is
-   `OPEN_RAIL_WIDTH` in kanbanLayout.ts, set on the element. Each segment
-   carries `data-role`, so it reads the role palette the reader's ribbon reads
-   (src/styles/roleFrames.css). */
-.kb .board-frame.with-rail { flex-direction: row; }
-.kb .board-frame.with-rail > :not(.open-rail) { flex: 1 1 0; min-width: 0; }
-/* Its top is the columns' top: the board's own top padding, and in the
-   scroll mode the jump strip above the columns too (its 28 px buttons and
-   the same gap over them); the tabbed mode's strip is its 36 px tabs with
-   a gap on each side. */
-.kb .open-rail { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; padding: var(--kb-stack) 0 20px var(--kb-edge); }
-.kb[data-mode="scroll"] .open-rail { padding-top: calc(2 * var(--kb-stack) + 28px); }
-.kb[data-mode="tabs"] .open-rail { padding-top: calc(2 * var(--kb-stack) + 36px); }
-.kb .open-rail .or-chip {
-  display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden;
-  border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
+/* ── The agent window (AgentWindow.tsx, docs/design/agent-window.md) ────── */
+/* Its box is measured onto the board (agentWindowGeometry.ts): from 1100 px
+   wide it covers the board below the header row with even 8 px margins, and
+   narrower it covers the viewport. The board under that region is a flat
+   field, so no card's text shows in the margins; the scrim over everything
+   dims the header and the sidebar whole. */
+.kb .aw-field { position: fixed; z-index: 64; top: var(--aw-region-top); left: var(--aw-region-left); width: var(--aw-region-width); height: var(--aw-region-height); background: var(--surface-canvas); }
+.kb .aw-scrim { position: fixed; inset: 0; z-index: 64; background: rgb(10 10 16 / 0.5); }
+.kb .agent-window {
+  position: fixed; z-index: 64; top: var(--aw-top); left: var(--aw-left); width: var(--aw-width); height: var(--aw-height);
+  display: grid; grid-template-columns: var(--aw-list-w) minmax(0, 1fr); overflow: hidden;
+  border-radius: var(--radius-surface); background: var(--surface-card); box-shadow: var(--shadow-2);
 }
-.kb .open-rail .or-head { flex-shrink: 0; padding: 8px 10px 7px var(--inset-card); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); border-bottom: 1px solid var(--border-default); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The list, at full contrast: its rows are the switcher. Each row carries
+   `data-role`, so it reads the role palette the reader's ribbon reads
+   (src/styles/roleFrames.css). */
+.kb .aw-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border-default); background: var(--surface-card); }
+.kb .aw-head { flex-shrink: 0; display: flex; align-items: center; gap: 4px; min-height: 41px; padding: 6px 6px 6px var(--inset-card); border-bottom: 1px solid var(--border-default); font-size: var(--text-label); font-weight: 600; color: var(--color-primary); }
+.kb .aw-head > .num { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb .aw-steps { flex-shrink: 0; display: inline-flex; gap: 2px; }
+.kb .aw-steps .icon-btn { width: 28px; height: 28px; }
+.kb .aw-steps .icon-btn svg { width: 15px; height: 15px; }
+.kb .aw-steps .chev.flip { transform: scaleX(-1); }
+.kb .aw-list .or-list { flex: 1 1 auto; }
+.kb .aw-reader { position: relative; min-width: 0; min-height: 0; }
+.kb .aw-reader > .reader-slot { position: absolute; inset: 0; display: flex; }
+/* The agent coming in reads on screen, under the one shown, and is not drawn
+   until it is ready; a first open keeps the whole window so. */
+.kb .aw-reader > .reader-slot[data-incoming], .kb .agent-window-layer[data-agent-window-pending] { visibility: hidden; }
+.kb .aw-reader .reader-host, .kb .reader-park .reader-host { max-width: none; height: 100%; }
+.kb .agent-window .reader.conv, .kb .reader-park .reader.conv, .kb .reader-screen .reader.conv { max-height: none; height: 100%; border: 0; border-radius: 0; }
+/* On the phone a relay chat's conversation (RelayChats.tsx) opens full screen,
+   the agent window's reader with no list beside it. */
+.kb .reader-screen { position: fixed; inset: 0; z-index: 64; display: flex; background: var(--surface-card); }
+.kb .reader-screen > .reader-host { max-width: none; height: 100%; }
+/* A reader not on screen waits laid out at the window reader's size, off
+   screen and not drawn, so it comes back with the layout it left with. */
+.kb .reader-park {
+  position: fixed; top: 0; left: calc(-1 * var(--aw-width, 100vw) - 64px); width: calc(var(--aw-width, 100vw) - var(--aw-list-w, 248px)); height: var(--aw-height, 100vh);
+  display: grid; visibility: hidden; pointer-events: none; contain: strict;
+}
+.kb .reader-park > .reader-host { grid-area: 1 / 1; min-height: 0; }
+/* The header's pill: the open agents with the window closed. It stands in a
+   slot of one width and height whether or not anything is open, so nothing in
+   the header moves when the first agent opens or the last one closes, on one
+   row or wrapped. It keeps one form at every width: it names the agents it
+   counts and stands as tall as the header's other buttons. */
+.kb .bar .open-agents-slot { flex: 0 0 auto; width: 104px; height: 32px; display: flex; align-items: center; }
+/* A wrapped bar breaks its rows on the search's basis, so the search gives up
+   the slot and its gap there: the first row asks for what it did before the
+   slot, keeps the search beside the project's name, and the rows stay where
+   they were. The search still grows into whatever the row leaves it. */
+.kb .bar[data-bar="project"][data-bar-wrap] .bar-find { flex-basis: calc(240px - 104px - 16px); }
+.kb .bar .open-agents-pill { max-width: 100%; padding: 0 8px 0 10px; }
+.kb .bar .open-agents-pill .num { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb .bar .open-agents-pill svg { flex-shrink: 0; width: 13px; height: 13px; color: var(--color-secondary); }
+/* Where even the crowded row runs into the attention chip, the slot is not drawn. */
+.kb .bar[data-bar="project"][data-bar-tight] .open-agents-slot { display: none; }
 .kb .or-list { list-style: none; margin: 0; padding: 0; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .kb .or-seg { position: relative; display: flex; align-items: center; }
 .kb .or-seg + .or-seg { border-top: 1px solid var(--border-default); }
@@ -943,28 +990,18 @@
 .kb .or-names { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; line-height: 1.3; }
 .kb .or-name { font-size: var(--text-label); font-weight: 600; color: var(--color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kb .or-card { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* × on hover or focus, over the end of the names, which are cut there anyway. */
+/* × in a column of its own, always there: a name ends in its ellipsis before it. */
 .kb .or-seg .or-x {
-  position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px;
+  flex-shrink: 0; width: 28px; height: 28px; margin-right: 6px;
   display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-control);
-  color: var(--color-muted); background: var(--surface-well); opacity: 0; transition: opacity var(--motion-fast);
+  color: var(--color-secondary);
 }
-.kb .or-seg:is(:hover, :focus-within) .or-x { opacity: 1; }
 .kb .or-seg .or-x:hover { color: var(--color-primary); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--border-default); }
 .kb .or-seg .or-x svg { width: 13px; height: 13px; }
-.kb .or-close-all { flex-shrink: 0; width: 100%; padding: 7px 10px 7px var(--inset-card); text-align: left; border-top: 1px solid var(--border-default); font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
+.kb .or-close-all { flex-shrink: 0; width: 100%; padding: 9px 10px 9px var(--inset-card); text-align: left; border-top: 1px solid var(--border-default); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 .kb .or-close-all:hover { color: var(--color-primary); background: var(--surface-well); }
-/* Short of room: the count alone, which opens the same list. */
-.kb .open-rail .or-count {
-  width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
-  border-radius: var(--radius-control); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
-  font-size: var(--text-ui); font-weight: 700; color: var(--color-primary);
-}
-.kb .open-rail .or-count:is(:hover, [aria-expanded="true"]) { border-color: var(--border-strong); }
-.kb .popover.open-agents { width: 280px; padding: 4px 0 0; overflow: hidden; display: flex; flex-direction: column; }
-.kb .popover.open-agents .head { padding: 6px 10px 7px var(--inset-card); font-size: var(--text-label); color: var(--color-secondary); border-bottom: 1px solid var(--border-default); }
 @media (pointer: coarse) {
-  .kb .or-seg .or-x { opacity: 1; width: 36px; height: 36px; }
+  .kb .or-seg .or-x { width: 36px; height: 36px; }
   .kb .or-seg .or-jump, .kb .or-close-all { min-height: 44px; }
 }
 .kb .skip-board {
@@ -1167,15 +1204,38 @@
   .kb .seat-title .proj, .kb .seat-head .seat-prev .word, .kb .seat .seat-unread span { display: none; }
 }
 
-/* ── Readers: conversations open inside cards (K3) ───────────────────────── */
+/* ── Readers (K3): conversations in the agent window and the Stages panes,
+   and the forms a card holds: a waiting stage's first message, an agent draft ── */
 .kb .card.has-reader { content-visibility: visible; }
-/* An agent draft on a card (K9a): the draft pane at reading width, as tall as a reader. */
+/* An agent draft on a card (K9a) is the conversation composer and nothing else: as tall as the composer
+   until Send. From the press it is the conversation opening, laid out as the launched card will be: the
+   window is a reader's box at a reader's height, and a card that holds nothing but the draft also keeps the
+   room of the title, status and description rows its task gains, so the launch reply moves nothing. */
 .kb .agent-drafts { display: flex; flex-direction: column; gap: 8px; }
 .kb .agent-draft { display: flex; width: 100%; max-width: 780px; height: var(--conv-in-card-h); min-width: 0; }
+.kb .agent-draft:has([data-draft-pane]) { height: auto; }
+.kb [data-draft-pane] { gap: 6px; }
+.kb [data-draft-pane="opening"] .draft-window {
+  flex: none; height: var(--conv-in-card-h); gap: 8px; padding: 8px var(--inset-conversation) 10px; overflow: hidden;
+  border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
+}
+.kb .draft-opening-head { height: 50px; }
+.kb .draft-opening { padding-top: 12px; }
+/* A card that exists only to hold the draft is the draft: no title and no foot of its own. On a task's card
+   the draft is one more row of that card. */
+.kb .card[data-id^="draft:"]:has([data-draft-pane]) > :is(.head, .foot) { display: none; }
+/* The rows stand at the card's own rhythm: 8 px under the head, 12 px over the description, 8 px over the window. */
+.kb .card[data-id^="draft:"] .draft-card-rows { display: flex; flex-direction: column; gap: 8px; padding-bottom: 2px; }
+.kb .card[data-id^="draft:"] [data-draft-pane="opening"] { padding-bottom: 22px; }
+.kb .card:not([data-id^="draft:"]) [data-draft-pane="composer"] { border-top: 1px solid var(--border-default); padding-top: 8px; }
+/* A task with no agent at work has no status line; the launch gives it one («Working · 1»), above the
+   conversations. The opening keeps that line's room. */
+.kb .card:not([data-id^="draft:"]):not(:has(> .motion-line)) [data-draft-pane="opening"] { padding-top: 28px; }
+/* The card's first conversation brings the conversations block, which stands 2 px lower than a draft does. */
+.kb .card:not([data-id^="draft:"]):not(:has(> .members)) .agent-drafts:has([data-draft-pane="opening"]) { margin-top: 2px; }
 /* `+ Task`'s inline card at the top of Inbox. */
 .kb .card.new-task { content-visibility: visible; gap: 6px; }
 .kb .readers { display: flex; flex-direction: column; gap: 8px; }
-.kb .member-reader { flex: 1 1 100%; min-width: 0; }
 .kb .reader-slot { width: 100%; min-width: 0; }
 .kb .reader-host { display: flex; width: 100%; max-width: 780px; min-width: 0; }
 .kb .reader.conv {
@@ -1183,10 +1243,11 @@
   border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
   container-type: inline-size; text-align: left;
 }
-/* A launched reader keeps the height of the draft it came from (launchedConversations.ts). */
-.kb .reader.conv.launched:not(.folded):not(.in-sheet):not(.full) { height: var(--conv-in-card-h); }
-.kb .reader.conv:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 26%, transparent); }
+/* The reader takes focus when it comes into the window; the ring is for the keyboard. */
+.kb .reader.conv:focus { outline: none; }
+.kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 60%, transparent); }
 .kb .reader.conv.needs { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--border-default)); }
+/* A stage's panel folded on its card is its head and one line of its first message. */
 .kb .reader.conv.folded { gap: 2px; padding-bottom: 6px; border-color: var(--border-default); max-height: none; }
 .kb .reader.conv.folded > :not(.conv-head):not(.rlatest) { display: none; }
 .kb .reader [data-feed-state] > .text-center { margin-top: 12px; margin-bottom: 8px; }
@@ -1238,6 +1299,14 @@
    board then scrolls sideways inside itself, never the page. */
 .kb .board.reading { overflow-x: auto; }
 .kb .board.scroll .column.reading { --kb-column-width: 460px; }
+/* The other cards of a shelf widened for a reader or a draft keep the foot
+   they have at the shelf's own width: when the column narrows back (a launch
+   from that draft, docs/design/launch-render-polish.md §5) their counts and
+   buttons do not rewrap and push every card below them down. The shelf's
+   280 px beside the scroller, 220 px in the narrow grid, less the column's
+   and the card's insets. */
+.kb .board.scroll .column.reading .card.shelf:not(.has-reader) > .foot { max-width: calc(280px - 26px - 2 * (var(--inset-card) + 1px)); }
+.kb .board.narrow .column.reading .card.shelf:not(.has-reader) > .foot { max-width: calc(220px - 26px - 2 * (var(--inset-card) + 1px)); }
 
 /* Written as specific as the Assigned shelf's 280 px basis above, and after
    it, so an Assigned column that gave the wide share away keeps the agent's
@@ -1262,12 +1331,6 @@
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head > .n { order: -1; }
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head > h2 { writing-mode: vertical-rl; max-height: 240px; }
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-body { display: none; }
-
-/* One reader may take the window; it is the same reader, moved. */
-.kb .reader-full { position: fixed; inset: 0; z-index: 64; display: flex; justify-content: center; padding: 24px; background: color-mix(in srgb, var(--color-primary) 28%, transparent); }
-.kb .reader-full .reader-slot { width: min(1100px, 100%); height: 100%; display: flex; }
-.kb .reader-full .reader-host { max-width: none; height: 100%; }
-.kb .reader-full .reader.conv { max-height: none; height: 100%; box-shadow: var(--shadow-2); }
 
 /* ── Link to a task ──────────────────────────────────────────────────────── */
 .kb .popover.link-picker .search { display: block; padding: 0 8px 6px; }
@@ -1816,10 +1879,17 @@
    (`orchestratorWires.ts`). A wire is the board's pipeline edge: solid is a
    link, and a link to a running lane flows the way `.pedge.live` does. The
    layer is the board root's child on the desktop and on the phone, so these
-   rules name no board. */
+   rules name no board. A card's end of a wire rides its scrollers inside a box
+   the size of the column's visible part (docs/research/orchestrator-wires-hover-scroll.md). */
 [data-orchestrator-wires] { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
-[data-orchestrator-wires] > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-[data-orchestrator-wires] > div { position: absolute; inset: 0; }
+[data-orchestrator-wires] :is([data-oa-ride], [data-oa-shift], [data-oa-marks]) { position: absolute; inset: 0; }
+[data-orchestrator-wires] [data-oa-clip] { position: absolute; overflow: hidden; }
+[data-orchestrator-wires] [data-oa-origin] { position: absolute; }
+[data-orchestrator-wires] svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+/* The pointer takes a wire by a stroke wider than it, and nothing else of the layer. */
+[data-orchestrator-wires] .oa-hit { fill: none; stroke: transparent; stroke-width: 12; stroke-linecap: butt; stroke-linejoin: round; pointer-events: stroke; cursor: pointer; }
+[data-orchestrator-wires] .oa-hit:focus { outline: none; }
+[data-orchestrator-wires] .oa-anchor { position: absolute; width: 0; height: 0; }
 [data-orchestrator-wires] .oa-wire { fill: none; stroke: var(--color-accent); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 [data-orchestrator-wires] [data-tone="needs"] .oa-wire { stroke: var(--color-warning); }
 [data-orchestrator-wires] .oa-wire[data-stub] { stroke: color-mix(in srgb, var(--color-muted) 55%, transparent); stroke-dasharray: 5 4; }
@@ -1830,6 +1900,12 @@
 [data-orchestrator-wires] [data-tone="needs"] .oa-port { stroke: var(--color-warning); fill: var(--color-warning-soft); }
 [data-orchestrator-wires] .oa-port[data-seat] { fill: var(--color-accent); }
 [data-orchestrator-wires] .oa-ring { fill: none; stroke: color-mix(in srgb, var(--color-accent) 60%, transparent); stroke-width: 2; }
+/* The pointer or the keyboard on a wire: that wire and both its ends stand out, the others step back. */
+[data-orchestrator-wires] [data-hover] > .oa-wire, [data-orchestrator-wires] .oa-wire[data-hover] { stroke-width: 2.5; }
+[data-orchestrator-wires] [data-hover] > .oa-port { r: 5; }
+[data-orchestrator-wires] .oa-port[data-seat][data-hover] { r: 6; }
+[data-orchestrator-wires][data-hovering] :is(g[data-wire], g[data-wire-end]):not([data-hover]) > :not(.oa-hit),
+[data-orchestrator-wires][data-hovering] :is(.oa-port[data-seat], .oa-wire[data-stub], .oa-stub):not([data-hover]) { opacity: 0.35; }
 [data-orchestrator-wires] .oa-stub { position: absolute; padding: 0 6px; border-radius: var(--radius-control); background: var(--surface-card); border: 1px solid var(--border-default); font: 700 var(--text-caption)/18px var(--font-sans); font-variant-numeric: tabular-nums; color: var(--color-secondary); white-space: nowrap; }
 [data-orchestrator-wires] .oa-dot { position: absolute; left: 0; top: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent); }
 @media (prefers-reduced-motion: reduce) {

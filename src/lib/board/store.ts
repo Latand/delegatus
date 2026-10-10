@@ -431,9 +431,10 @@ export function setBoardWriteHookForTests(hook: ((phase: BoardWritePhase) => voi
 /** One serialized read-modify-write over the board. The prepare step reads the
     committed projects under the collection lease and names the projects it
     changed and the ones it folded away; only those rows are written. */
-function writeBoardState<R>(
+function writeBoardState<R, C = never>(
   filePath: string,
   prepare: (file: BoardFileV1) => { changed?: Record<string, BoardProjectStateV1>; deleted?: readonly string[]; result: R },
+  companion?: { collection: SqliteStateCollection<C>; records: readonly C[]; validate?: () => void },
 ): R {
   return asBoardStoreError(() => {
     const collection = boardCollection(filePath, "write")!;
@@ -441,13 +442,15 @@ function writeBoardState<R>(
     let result: R;
     collection.patchSync(() => {
       writeHookForTests?.("in-lease");
+      companion?.validate?.();
       const outcome = prepare(fileFromRows(collection.snapshot()));
       result = outcome.result;
       return {
         records: boardRows(outcome.changed ?? {}),
         deleteKeys: (outcome.deleted ?? []).map(projectRowKey),
+        ...(companion ? { companion: { records: companion.records } } : {}),
       };
-    });
+    }, { companion: companion?.collection });
     return result!;
   });
 }
@@ -730,11 +733,12 @@ function resolvedMigrations(migrations: ReadonlyMap<string, string>): {
 
 /** Move durable board preferences along with catalog project-key repairs.
     Sources remain intact whenever a merge cannot preserve board invariants. */
-export function migrateBoardProjects(
+export function migrateBoardProjects<C = never>(
   migrations: ReadonlyMap<string, string>,
   /* Resolved per call, not from {@link BOARD_FILE}: the scanner runs in
      processes that settle their state directory after this module loads. */
   filePath = boardFileForTests ?? statePath("board.json"),
+  companion?: { collection: SqliteStateCollection<C>; records: readonly C[]; validate?: () => void },
 ): boolean {
   if (migrations.size === 0) return true;
   const plan = resolvedMigrations(migrations);
@@ -775,6 +779,7 @@ export function migrateBoardProjects(
         continue;
       }
     }
+    if (companion && !complete) throw new BoardStoreError("worktree recovery could not preserve the board");
     return { changed, deleted, result: complete };
-  });
+  }, companion);
 }

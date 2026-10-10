@@ -11,6 +11,7 @@ import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLab
 /* The stage-name rule lives beside `stageChipLabel` so the phone reads it
    without pulling a kanban component (#1865). */
 export { stageDisplayName, stageNames } from "@/components/pipelines/pipelineModel";
+import { StageLessonLine } from "@/components/roleMemory/LearnedRules";
 import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline, KanbanRecordedConversation } from "./kanbanModel";
@@ -114,6 +115,7 @@ export function StageReportLine({ pipeline, entry, names, shown = SHOWN_STAGE_FI
           ) : null}
         </ul>
       ) : null}
+      <StageLessonLine pipeline={pipeline} entry={entry} />
     </>
   );
 }
@@ -124,7 +126,7 @@ export function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
   const who = actorName(t, edit.actor);
   const change = [
     t(`kanban.graph.edit.${edit.action}`, { stage: edit.stageId ?? "" }),
-    edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
+    edit.runtimeSwitch ? t("kanban.graph.edit.appliedNow", { n: edit.runtimeSwitch.attempt }) : edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
   ].filter(Boolean).join(" · ");
   const at = Date.parse(edit.at);
   return (

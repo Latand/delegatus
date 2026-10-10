@@ -195,6 +195,7 @@ test("issue 1270: a killed rollback executor is recovered by the retained runtim
       path.join(releaseRoot, "scripts", "rollback-runtime-host.ts"),
     );
     fs.copyFileSync(path.join(repositoryRoot, "tsconfig.json"), path.join(releaseRoot, "tsconfig.json"));
+    fs.copyFileSync(path.join(repositoryRoot, "package.json"), path.join(releaseRoot, "package.json"));
     fs.symlinkSync(path.join(repositoryRoot, "node_modules"), path.join(releaseRoot, "node_modules"), "dir");
     fs.writeFileSync(path.join(binDir, "docker"), `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"

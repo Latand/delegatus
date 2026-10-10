@@ -33,6 +33,7 @@ import { replaceConversationCatalog, type ConversationCatalogEntry } from "./con
 import {
   describeFile,
   fileDescriptionIdentity,
+  observeWorktreeResolution,
   reprojectFileDescription,
   type FileDescription,
 } from "./describe";
@@ -506,6 +507,8 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   excludedSummaryPaths?: ReadonlySet<string>;
   scanToken?: ProjectCatalogScanToken;
   complete?: boolean;
+  /** Internal second projection after an atomic recovery, using the same raw inventory. */
+  recoverWorktrees?: boolean;
 } = {}): Promise<{
   projectCatalog: ProjectCatalogEntry[];
   projectByPath: Map<string, string>;
@@ -516,6 +519,15 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   const persistIndex = options.persist !== false || options.persistIndex === true;
   const scanToken = options.scanToken ?? beginProjectCatalogScan(persistIndex);
   const state = readState();
+  /* A warm summary still sees the cwd alive. Learn before deciding whether
+     cached project overlays are reusable, including catalog-only scans. */
+  const observed = new Set<string>();
+  await forEachCooperatively(raw, (entry) => {
+    const cwd = state.files[entry.path]?.cwd;
+    if (!cwd || observed.has(cwd)) return;
+    observed.add(cwd);
+    observeWorktreeResolution(cwd);
+  });
   const stateKey = projectResolutionStateKey();
   const nextFiles: Record<string, CachedProjectFile> = {};
   const groups = new Map<string, ProjectCatalogEntry>();
@@ -754,6 +766,17 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
     scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
       writeState({ version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: nextFiles });
+      if (options.recoverWorktrees !== false) {
+        try {
+          const { recoverWorktreeProjects } = await import("@/lib/projects/worktreeBackfill");
+          const recovery = isProjectCatalogScanCurrent(scanToken)
+            && projectCatalogRuntime.__llvProjectCatalogPersistenceGeneration === scanToken.persistence
+            ? recoverWorktreeProjects("rescan", nextFiles) : null;
+          if (recovery?.folded.length) return projectCatalogSnapshotFromRaw(raw, { ...options, scanToken, recoverWorktrees: false });
+        } catch {
+          console.error("[worktree recovery] catalog recovery deferred; the next startup or full catalog scan retries");
+        }
+      }
     } else {
       console.error("[project catalog] board project migration deferred; a later scan will retry");
     }

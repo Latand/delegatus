@@ -1,4 +1,11 @@
+import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
+import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
+import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
+import type { SeatContextUsage } from "./seatAutoRotation";
+import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
+import { ruleReports } from "./ruleReports";
+import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -24,7 +31,7 @@ import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 import { resolvedQuestionAnswers } from "@/lib/bridge/asks";
-import { readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
+import { appendBridgeReports, readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
 import type { BridgeReportV1, BridgeResolvedAskV1 } from "@/lib/bridge/types";
 import { operatorLocale } from "@/lib/operator/settings";
@@ -44,7 +51,7 @@ import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
-import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { findSeatDeploymentByKey, recoverSeatDeploymentRequests, seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
   lookupOriginalSend,
@@ -460,6 +467,10 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  recordRuleReports?: (project: string, at: string) => void;
+  seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
+  seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
+  diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
   /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
@@ -489,6 +500,8 @@ export interface SeatTickSources {
       `deploy_exact_sha` recorded them. Absent reads as none, which is how a
       harness that does not model deploys stays exactly as it was. */
   seatDeployments?: (conversationId: string) => readonly SeatDeploymentRecord[];
+  /** Serialized, read-only recovery of an original deployment admission. */
+  deploymentByKey?: typeof findSeatDeploymentByKey;
   /** One deployment off the ledger by id (#2063). Absent reads as none. */
   deployment?: typeof ledgerDeployment;
   retirementReport: () => StructuredHostRetirementReport | null;
@@ -609,11 +622,20 @@ export async function settleRecordFromJournal(
   /* Only what {@link journalWakeState} would act on: the settlement's own
      unverified `failed` classifies as lost here and is not one. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
+  /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); refused,
+     it answers null like an undecidable verdict, and the next tick reads it
+     again. */
   try {
+    const correlation = { label: "delivery.settle", operationId: target.operationId };
     if (verdict.state === "delivered") {
-      registry.recordDeliveryOutcomeForOperation(target.conversationId as ViewerConversationId, target.operationId, "delivered", null, "delivered");
+      const written = await registry.deliveryWrite(correlation, () => registry.recordDeliveryOutcomeForOperation(
+        target.conversationId as ViewerConversationId, target.operationId, "delivered", null, "delivered"));
+      if (!written.acquired) return null;
     } else if (target.deliveryId) {
-      registry.recordDeliveryOutcome(target.deliveryId, "failed", receipt.reason ?? verdict.reason, "lost");
+      const deliveryId = target.deliveryId;
+      const written = await registry.deliveryWrite(correlation,
+        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost"));
+      if (!written.acquired) return null;
     } else {
       return null;
     }
@@ -625,6 +647,36 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    recordRuleReports(project, at) {
+      const seat = orchestratorSeatForCurrentProject(project).active;
+      if (!seat?.conversationId) return;
+      const registry = agentRegistry().readOnlySnapshot();
+      const log = readBridgeReportLog();
+      appendBridgeReports(ruleReports({ project, at, seatConversationId: seat.conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
+        tasks: loadTasks(), pipelines: loadPipelinesForList().map(lane => ({ ...lane, project: canonicalOrchestratorProject(lane.project) })), deliveries: Object.values(registry.heldDeliveries),
+        maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: { ...log, reports: log.reports.map(row => row.project ? { ...row, project: canonicalOrchestratorProject(row.project) } : row) },
+        deliveryLost: delivery => registry.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "lost",
+        deliveryProject: delivery => {
+          const held = delivery.command.origin?.project ?? registry.conversations[delivery.conversationId]?.projectOwnership?.project;
+          return held ? canonicalOrchestratorProject(held) : null;
+        } }));
+    },
+    seatContextUsage: (conversationId) => {
+      const conversation = agentRegistry().conversation(conversationId as never);
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
+      const model = generation.launchProfile?.model ?? null;
+      const facts = readOrchestratorTranscriptFacts(generation.path, null);
+      const policy = contextWindowPolicyFor(conversation.engine, model, facts);
+      const reading = contextReading({ policy, facts });
+      return { engine: conversation.engine, model, tokens: reading.tokens, windowTokens: reading.limit, estimated: reading.estimated };
+    },
+    seatTurnOutcome: async (conversationId) => {
+      const conversation = agentRegistry().conversation(conversationId as never);
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
+      return readSeatTurnOutcome(conversation.engine, generation.path);
+    },
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
@@ -647,7 +699,9 @@ export function defaultSeatTickSources(): SeatTickSources {
     lifecycleJournal: readLifecycleJournal,
     latestDeployment: latestLedgerDeployment,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
+    deploymentByKey: findSeatDeploymentByKey,
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
+    diskPressure: () => readDiskPressure(),
     retirementReport: () => {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
@@ -671,8 +725,14 @@ export function defaultSeatTickSources(): SeatTickSources {
       if (!delivery) return "unknown";
       if (delivery.state === "delivered") return "too-late";
       if (delivery.state !== "held") return "unknown";
-      agentRegistry().terminalizeHeldDelivery(delivery.id, reason);
-      return "withdrawn";
+      /* Off the loop; refused, the withdrawal is undecided. The row is asked
+         again inside the write: an attempt may have claimed it while the
+         writer was held, and then it is not withdrawn. */
+      const registry = agentRegistry();
+      const operationId = registry.readOnlySnapshot().heldDeliveries[delivery.id]?.command.operationId ?? null;
+      const withdrawn = await registry.deliveryWrite({ label: "delivery.withdraw", operationId },
+        () => registry.withdrawHeldDelivery(delivery.id, operationId, reason));
+      return withdrawn.acquired ? withdrawn.value : "unknown";
     },
     now: () => Date.now(),
     refreshLifecycle: (pipelines) => {
@@ -988,16 +1048,17 @@ const SEAT_DEPLOY_LIMIT = 5;
  * cannot be read for one deployment leaves it out of this check only; the
  * next check asks again, and nothing is announced that was not seen.
  */
-function settledSeatDeploys(
+async function settledSeatDeploys(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
   context: { now: number; backlogAfterMs: number },
   sources: SeatTickSources,
-): SeatTickDeployInput[] {
+): Promise<SeatTickDeployInput[]> {
   if (!seat || !sources.seatDeployments || !sources.deployment) return [];
   const settled: SeatTickDeployInput[] = [];
   let records: readonly SeatDeploymentRecord[];
   try {
+    if (sources.deploymentByKey) await recoverSeatDeploymentRequests(seat.conversationId, sources.deploymentByKey);
     records = sources.seatDeployments(seat.conversationId);
   } catch {
     return [];
@@ -1344,6 +1405,20 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
   return found;
 }
 
+async function diskPressureSignals(sources: SeatTickSources): Promise<SeatTickSignalInput[]> {
+  if (!sources.diskPressure) return [];
+  let pressure: DiskPressure;
+  try {
+    pressure = await sources.diskPressure();
+  } catch {
+    /* A failed volume read wakes nobody; the System panel still shows the last one. */
+    return [];
+  }
+  /* One item per episode: it waits for the consumer sizes, so the one the
+     orchestrator gets names them. */
+  return pressure.episode && diskPressureWakeReady(pressure) ? [{ id: "disk-space", episode: pressure.episode, label: diskPressureLabel(pressure) }] : [];
+}
+
 export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending"> & Pick<Partial<AutoState>, "drain">): SeatTickSignalInput[] {
   if (auto.off) return [{ id: "self-update-off", label: `self-update: automatic updates turned off — ${auto.off.reason}` }];
   if (auto.drain?.overranAt) {
@@ -1485,6 +1560,7 @@ function eventsSince(
   project: string,
   cursor: number | null,
   openPipelineIds: ReadonlySet<string>,
+  pipelines: readonly Pipeline[],
   sources: SeatTickSources,
 ): { events: SeatTickEventInput[]; cursor: number } {
   const journal = sources.lifecycleJournal();
@@ -1501,21 +1577,28 @@ function eventsSince(
      is the seat's, and it moves only when a wake lands. */
   if (cursor === null) return { events: [], cursor: head };
   const page = pageFromEvents(journal, { project, afterSeq: cursor, limit: EVENT_PAGE });
+  const merged = new Map(pipelines.filter(lane => lane.merge?.state === "merged").map(lane => [lane.id, lane]));
   return {
-    events: page.events.map((event) => ({
-      seq: event.seq,
-      at: event.at,
-      type: event.type,
-      summary: event.summary,
-      pipelineId: event.pipelineId,
-      /* An open lane is always in the hot store; the archive only ever takes
-         SETTLED records. So a pipeline id the store no longer lists names a
-         lane that ended long enough ago to have been archived, and reading it
-         as terminal is the same answer arrived at from the other side. An event
-         that names no pipeline is never terminal here — nothing about a deploy
-         outcome or a held delivery has finished (#1285). */
-      pipelineTerminal: event.pipelineId !== null && !openPipelineIds.has(event.pipelineId),
-    })),
+    events: page.events.map((event) => {
+      const lane = event.pipelineId ? merged.get(event.pipelineId) : undefined;
+      return {
+        seq: event.seq,
+        at: event.at,
+        type: event.type,
+        // Enrich older journal summaries from the durable lane while it is hot.
+        summary: event.type === "pipeline_merged" && lane
+          ? `pull request #${lane.merge!.prNumber} merged, head ${lane.merge!.mergedHead ?? "unavailable"} — ${redactBounded(lane.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT)}`
+          : event.summary,
+        pipelineId: event.pipelineId,
+        /* An open lane is always in the hot store; the archive only ever takes
+           SETTLED records. So a pipeline id the store no longer lists names a
+           lane that ended long enough ago to have been archived, and reading it
+           as terminal is the same answer arrived at from the other side. An event
+           that names no pipeline is never terminal here — nothing about a deploy
+           outcome or a held delivery has finished (#1285). */
+        pipelineTerminal: event.pipelineId !== null && !openPipelineIds.has(event.pipelineId),
+      };
+    }),
     cursor,
   };
 }
@@ -2317,7 +2400,7 @@ export async function gatherSeatTickInput(
 
   const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
   const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes);
-  const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
+  const settledDeploys = await settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
   let endedMaintenance: readonly MaintenanceRun[] = [];
   try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
   catch { /* The maintenance controller journals its own store failure; unrelated seat work still wakes. */ }
@@ -2335,7 +2418,7 @@ export async function gatherSeatTickInput(
   } catch (error) {
     console.error("[seat tick] lifecycle projection failed", error instanceof Error ? error.name : "unknown");
   }
-  const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, sources);
+  const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
   /* The children source's run of failures (#1465), kept exactly as the
      pull-request source's: advanced by a check that could not account for
@@ -2372,7 +2455,7 @@ export async function gatherSeatTickInput(
     pullRequests,
     pullRequestsUnavailable,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: signals(canonical, seat, sources),
+    signals: [...signals(canonical, seat, sources), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

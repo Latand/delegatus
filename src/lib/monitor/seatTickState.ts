@@ -1,3 +1,6 @@
+import { normalizeSeatAutoRotation } from "./seatAutoRotation";
+import { normalizeSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
+import { normalizeSeatAuthIncident, normalizeSeatAuthTelegramNotice, normalizeSeatAuthCardNotice } from "./seatAuthIncident";
 import fs from "node:fs";
 import path from "node:path";
 import { SeatTickAccounting } from "./seatTickAccounting";
@@ -57,6 +60,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
   if (typeof raw.fingerprint !== "string" || !raw.fingerprint) return null;
   if (typeof raw.eventsThrough !== "number" || !Number.isInteger(raw.eventsThrough) || raw.eventsThrough < 0) return null;
   return {
+    ...(raw.diskPressure && typeof raw.diskPressure === "object" && "episode" in raw.diskPressure && "version" in raw.diskPressure && typeof raw.diskPressure.episode === "string" && typeof raw.diskPressure.version === "string" ? { diskPressure: { episode: raw.diskPressure.episode, version: raw.diskPressure.version } } : {}),
     proposal: raw.proposal === true,
     reasons: (Array.isArray(raw.reasons) ? raw.reasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
@@ -232,6 +236,22 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     if (typeof count === "number" && Number.isInteger(count) && count >= 0) wakesWithoutChange[kind] = count;
   }
   return {
+    ...(normalizeSeatAutoRotation(raw.autoRotation) ? { autoRotation: normalizeSeatAutoRotation(raw.autoRotation) } : {}),
+    authIncident: normalizeSeatAuthIncident(raw.authIncident),
+    ...(Array.isArray(raw.authNoticesOwed) ? { authNoticesOwed: raw.authNoticesOwed.flatMap((value) => {
+      const incident = normalizeSeatAuthIncident(value);
+      return incident?.recoveredThrough !== undefined ? [incident] : [];
+    }) } : {}),
+    ...(Array.isArray(raw.authCardsOwed) ? { authCardsOwed: raw.authCardsOwed.flatMap((value) => {
+      const notice = normalizeSeatAuthCardNotice(value); return notice ? [notice] : [];
+    }) } : {}),
+    authCredentialObserved: normalizeSeatAuthCredentialBaseline(raw.authCredentialObserved),
+    ...(Array.isArray(raw.authTelegramOwed) ? { authTelegramOwed: raw.authTelegramOwed.flatMap((value) => {
+      const notice = normalizeSeatAuthTelegramNotice(value);
+      return notice ? [notice] : [];
+    }) } : {}),
+    ...(typeof raw.authRecoveredThrough === "number" && Number.isFinite(raw.authRecoveredThrough) ? { authRecoveredThrough: raw.authRecoveredThrough } : {}),
+    ...(typeof raw.diskPressureShown === "string" ? { diskPressureShown: raw.diskPressureShown } : {}),
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
     lastCheckAt: isoOrNull(raw.lastCheckAt),
     lastWakeAt: isoOrNull(raw.lastWakeAt),
@@ -342,6 +362,13 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
   return {
     ...emptySeatTickState(),
     seatEpoch,
+    autoRotation: row.autoRotation,
+    authIncident: row.authIncident,
+    authNoticesOwed: row.authNoticesOwed,
+    authTelegramOwed: row.authTelegramOwed,
+    authCardsOwed: row.authCardsOwed,
+    authCredentialObserved: row.authCredentialObserved,
+    diskPressureShown: row.diskPressureShown,
     eventsThrough: row.eventsThrough,
     lastWakeAt: row.lastWakeAt,
     lastProposalAt: row.lastProposalAt,

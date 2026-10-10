@@ -1073,12 +1073,15 @@ function providerStoreFixture(): Pipeline {
 
 test("malformed provider waits and histories are rejected at the persistence boundary", async () => isolatedDelivery(() => {
   for (const bad of [{}, { condition: {} }, { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, resumeAt: "invalid" },
-    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, capacityProbes: -1 }]) {
+    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, capacityProbes: -1 },
+    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, stageRetry: {} },
+    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, stageRetry: { controlGeneration: 1, detail: "retry" } }]) {
     const lane = providerStoreFixture();
     lane.runs[0]!.attempts[0]!.providerWait = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
   }
-  for (const bad of [{}, { tries: -1, startedAt: "2026-10-02T10:00:00Z" }, { tries: 1, startedAt: "invalid" }]) {
+  for (const bad of [{}, { tries: -1, startedAt: "2026-10-02T10:00:00Z" }, { tries: 1, startedAt: "invalid" },
+    { tries: 1, startedAt: "2026-10-02T10:00:00Z", failedAccounts: [42] }]) {
     const lane = providerStoreFixture();
     lane.runs[0]!.attempts[0]!.providerRecoveryBudget = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
@@ -1107,19 +1110,36 @@ test("provider evidence timestamps accept finite fractional milliseconds and rej
 
 test("loaded provider recovery state does not alias the cached persisted record", async () => isolatedDelivery(() => {
   const lane = providerStoreFixture();
-  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 2, startedAt: "2026-10-02T00:00:00Z" };
+  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 2, startedAt: "2026-10-02T00:00:00Z", triedAccounts: ["account-a"], failedAccounts: ["account-c"] };
   lane.runs[0]!.attempts[0]!.providerWait!.capacityProbes = 1;
+  lane.runs[0]!.attempts[0]!.providerWait!.stageRetry = { controlGeneration: null, detail: "automatic retry" };
   savePipelines([lane]);
   const first = loadPipelines()[0]!.runs[0]!.attempts[0]!;
   first.providerWait!.condition.label = "mutated";
   first.providerWait!.failedAccounts!.push("account-other");
   first.providerRecoveryBudget!.tries = 3;
+  first.providerRecoveryBudget!.triedAccounts!.push("account-b");
+  first.providerRecoveryBudget!.failedAccounts!.push("account-d");
   first.providerWait!.capacityProbes = 2;
+  first.providerWait!.stageRetry!.detail = "mutated";
   first.providerRecoveries![0]!.condition.label = "mutated";
   const second = loadPipelines()[0]!.runs[0]!.attempts[0]!;
   expect(second.providerWait!.condition.label).toBe("auth refresh race");
+  expect(second.providerWait!.stageRetry!.detail).toBe("automatic retry");
   expect(second.providerWait!.failedAccounts).toEqual([]);
   expect(second.providerRecoveryBudget!.tries).toBe(2);
+  expect(second.providerRecoveryBudget!.triedAccounts).toEqual(["account-a"]);
+  expect(second.providerRecoveryBudget!.failedAccounts).toEqual(["account-c"]);
   expect(second.providerWait!.capacityProbes).toBe(1);
   expect(second.providerRecoveries![0]!.condition.label).toBe("auth refresh race");
+}));
+
+test("runtime-switch state survives store reopening and malformed targets are refused", async () => isolatedDelivery(async () => {
+  const pipeline = deliveryFixture("runtime-switch-store");
+  pipeline.state = "running";
+  const seat = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", serviceTier: null, accountId: "account-a" };
+  const record = { id: "runtime-switch-store:build:1:1", seq: 1, requestedAt: "2026-10-02T10:00:00.000Z", actor: { kind: "operator" as const }, mode: "fork" as const, phase: "requested" as const, from: { ...seat, conversationId: "conversation_store", launchId: "launch-store", sessionId: "session-store", agentPath: "/sessions/store.jsonl" }, to: { ...seat, accountId: "account-b", accountPinned: false } };
+  pipeline.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole), launchId: "launch-store", conversationId: "conversation_store", sessionId: "session-store", agentPath: "/sessions/store.jsonl", paneId: null, flowId: null, startedAt: record.requestedAt, completedAt: null, input: "brief", activatedBy: null, output: null, verdict: null, error: null, runtimeSwitches: [record] });
+  savePipelines([pipeline]); expect(loadPipelines()[0]?.runs[0]?.attempts[0]?.runtimeSwitches).toEqual([record]);
+  record.to.model = 123 as never; expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record"); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.to.model).toBe("gpt-6.1-sol");
 }));

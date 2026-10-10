@@ -25,18 +25,36 @@ declare const leaseBrand: unique symbol;
 /** The right to act inside one conversation's section, valid while that section runs. */
 export interface ActuationLease {
   readonly conversationId: string;
+  /** Declares the operation the section acts on now. Observers (a later pass,
+      the watchdog) leave that operation's progress record to its actor. */
+  act(operationId: string | null): void;
   readonly [leaseBrand]: true;
 }
 
 interface ActuationState {
   tails: Map<string, Promise<void>>;
   holders: Map<string, ActuationLease>;
+  /* Optional: a realm that loaded an earlier build may have made the state. */
+  acting?: Map<string, string>;
 }
 
 const processState = process as typeof process & { __llvDeliveryActuation?: ActuationState };
 
 function state(): ActuationState {
-  return processState.__llvDeliveryActuation ??= { tails: new Map(), holders: new Map() };
+  const current: ActuationState = processState.__llvDeliveryActuation ??= { tails: new Map(), holders: new Map() };
+  current.acting ??= new Map();
+  return current;
+}
+
+/** The operation the conversation's section holder declared it acts on, or null. */
+export function actingOperation(conversationId: string): string | null {
+  const { holders, acting } = state();
+  return holders.has(conversationId) ? acting!.get(conversationId) ?? null : null;
+}
+
+/** Whether a section for the conversation is held or waited for. */
+export function actuationBusy(conversationId: string): boolean {
+  return state().tails.has(conversationId);
 }
 
 function holds(conversationId: string, lease: ActuationLease | null | undefined): lease is ActuationLease {
@@ -44,15 +62,25 @@ function holds(conversationId: string, lease: ActuationLease | null | undefined)
 }
 
 function enter<T>(conversationId: string, work: (lease: ActuationLease) => T | Promise<T>): Promise<T> {
-  const { tails, holders } = state();
-  const lease = { conversationId } as ActuationLease;
+  const { tails, holders, acting } = state();
+  const lease = {
+    conversationId,
+    act(operationId: string | null) {
+      if (holders.get(conversationId) !== lease) return;
+      if (operationId) acting!.set(conversationId, operationId);
+      else acting!.delete(conversationId);
+    },
+  } as ActuationLease;
   const previous = tails.get(conversationId) ?? Promise.resolve();
   const run = previous.then(async () => {
     holders.set(conversationId, lease);
     try {
       return await work(lease);
     } finally {
-      if (holders.get(conversationId) === lease) holders.delete(conversationId);
+      if (holders.get(conversationId) === lease) {
+        holders.delete(conversationId);
+        acting!.delete(conversationId);
+      }
     }
   });
   const tail = run.then(() => undefined, () => undefined);

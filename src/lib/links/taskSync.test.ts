@@ -84,6 +84,75 @@ function peerRow(base: Partial<WireTask> & { id: string }, stampMs: number, pref
     s: { text: stamp, status: stamp, look: stamp, place: stamp, links: stamp, machine: stamp, handover: stamp }, ...base };
 }
 
+test("finding identity and occurrence history stay local across linked task exchange", () => {
+  const { file } = linkedInstall();
+  const local = create(file, "Recurring error");
+  const keyed = edit(file, local.id, { findingKey: "local-reporter:key" });
+  const published = wire(keyed);
+  expect(Object.hasOwn(published, "findingKey")).toBe(false);
+  expect(Object.hasOwn(published, "finding")).toBe(false);
+  const { s: _stamps, ...fields } = published;
+  const remoteId = randomUUID();
+  const arriving = peerRow({ ...fields, id: remoteId, machine: PEER }, Date.now() + 1000);
+  applyTaskRows([arriving], peerLink, { filePath: file });
+  expect(find(file, remoteId)).toMatchObject({ text: published.text });
+  expect(find(file, remoteId)?.findingKey).toBeUndefined();
+  expect(find(file, remoteId)?.finding).toBeUndefined();
+  // A linked edit to the original task retains this install's reporter state.
+  const edited = peerRow({ ...fields, text: "Peer corrected the title" }, Date.now() + 2000);
+  applyTaskRows([edited], peerLink, { filePath: file });
+  expect(find(file, local.id)).toMatchObject({ text: edited.text, findingKey: keyed.findingKey, finding: keyed.finding });
+});
+
+test("peer reopening keeps a keyed Done task closed while its open successor holds the key", () => {
+  const { file } = linkedInstall();
+  const body = { project: key, text: "Recurring error", placement: "unplaced", findingKey: "local-reporter:key" };
+  const observe = () => mutateTasks(tasks => {
+    const outcome = createTask(tasks, body, [], { explicit: true });
+    if (!outcome.ok) throw new Error(outcome.error);
+    return { tasks: outcome.tasks, result: outcome };
+  }, file);
+  const initial = observe().task;
+  const done = edit(file, initial.id, { status: "done" });
+  const successor = observe().task;
+  expect(successor.finding?.previousTaskId).toBe(initial.id);
+  const at = Date.now() + 1000;
+  const reopening = peerRow({ ...wire(done), status: "inbox" }, at);
+  reopening.s = { ...wire(done).s, status: nextStamp(done.sync!.s.status!, at, peerLink.prefix) };
+  expect(applyTaskRows([reopening], peerLink, { filePath: file }).changed).toBe(1);
+  const rejected = find(file, initial.id)!;
+  expect(rejected).toMatchObject({ status: "done", findingKey: body.findingKey, finding: done.finding });
+  expect(rejected.sync!.s.status! > reopening.s.status).toBe(true);
+  expect(loadTasks(file).filter(task => task.findingKey === body.findingKey && task.status !== "done")).toHaveLength(1);
+
+  // Independent peer edits still merge while the conflicting status stays held.
+  const edited = { ...reopening, text: "Peer corrected the completed title", s: { ...reopening.s, text: nextStamp(reopening.s.text, at + 1, peerLink.prefix) } };
+  expect(applyTaskRows([edited], peerLink, { filePath: file }).changed).toBe(1);
+  expect(find(file, initial.id)).toMatchObject({ status: "done", text: edited.text, findingKey: body.findingKey, finding: done.finding, sync: { s: { status: rejected.sync!.s.status } } });
+  expect(applyTaskRows([edited], peerLink, { filePath: file }).changed).toBe(0);
+  expect(observe()).toMatchObject({ matched: true, task: { id: successor.id, finding: { count: 2 } } });
+
+  // A refused reopen stays refused. A fresh peer decision can reopen once
+  // the successor finishes; stale acknowledgements cannot resurrect it.
+  edit(file, successor.id, { status: "done" });
+  expect(applyTaskRows([edited], peerLink, { filePath: file }).changed).toBe(0);
+  const fresh = { ...edited, s: { ...edited.s, status: nextStamp(rejected.sync!.s.status!, at + 2, peerLink.prefix) } };
+  expect(applyTaskRows([fresh], peerLink, { filePath: file }).changed).toBe(1);
+  expect(find(file, initial.id)).toMatchObject({ status: "inbox", findingKey: body.findingKey });
+  expect(observe()).toMatchObject({ matched: true, task: { id: initial.id, finding: { count: 2 } } });
+});
+
+test("a peer can still reopen a keyless Done task", () => {
+  const { file } = linkedInstall();
+  const done = edit(file, create(file, "Ordinary task").id, { status: "done" });
+  const at = Date.now() + 1000;
+  const reopening = peerRow({ ...wire(done), status: "inbox" }, at);
+  reopening.s = { ...wire(done).s, status: nextStamp(done.sync!.s.status!, at, peerLink.prefix) };
+  expect(applyTaskRows([reopening], peerLink, { filePath: file }).changed).toBe(1);
+  expect(find(file, done.id)).toMatchObject({ status: "inbox" });
+  expect(find(file, done.id)?.findingKey).toBeUndefined();
+});
+
 test("prototype metadata is stamped, replicated and preserved across an older peer's text edit", () => {
   const { file } = linkedInstall();
   const local = create(file, "Prototype task");

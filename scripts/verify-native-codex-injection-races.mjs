@@ -93,7 +93,7 @@ const carrying=(name,since)=>wire.filter(entry=>entry.at>=since&&entry.files.som
 const injectRpc=name=>runtime.rpc.filter(call=>call.method==='thread/inject_items'&&(!name||JSON.stringify(call.params).includes(name))).length;
 /* Long enough for a press that was going to reach the wire to have reached it. */
 const quiet=()=>Bun.sleep(1500);
-const results={codexVersion:Bun.spawnSync([values.codex,'--version']).stdout.toString().trim(),threadIdPrefix:threadId.slice(0,8),cases:{}};
+const results={codexVersion:Bun.spawnSync([values.codex,'--version'],{timeout:5000,killSignal:'SIGKILL'}).stdout.toString().trim(),threadIdPrefix:threadId.slice(0,8),cases:{}};
 const run=async(name,body)=>{
  const record={};results.cases[name]=record;
  try{await body(record);record.pass=true;}

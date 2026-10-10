@@ -8,7 +8,7 @@ export type PipelineSandbox = "full" | "restricted";
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
 export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision" | "addRounds";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -43,7 +43,7 @@ export type PipelineRoleId =
 
 /**
  * Roles a pipeline stage may not use. Deployer demands an explicit
- * `confirm: "deploy"` gate (resolveSpawnRole / DraftAgentPane) that a pipeline —
+ * `confirm: "deploy"` gate (resolveSpawnRole) that a pipeline —
  * which spawns its stages automatically, without a per-stage confirmation — has
  * no way to honor, so it is excluded from the builder and rejected by the API.
  */
@@ -267,6 +267,7 @@ export type PipelineGraphEdit = {
       edge or an order change, which apply at the next routing decision. */
   appliesFromAttempt: number | null;
   summary: string;
+  runtimeSwitch?: { attempt: number; id: string };
 };
 
 /** What the server itself observed about a stage attempt's work at the moment
@@ -344,8 +345,32 @@ export type PipelineDecisionAnswer = {
   at: string;
 };
 
+export type PipelineRuntimeSeat = {
+  engine: FlowEngine; model: string | null; effort: string | null;
+  serviceTier: string | null; accountId: string | null;
+};
+export type PipelineRuntimeSwitch = {
+  id: string; seq: number; requestedAt: string; actor: PauseResumeActor;
+  mode: "fork" | "handoff";
+  from: PipelineRuntimeSeat & { conversationId: string; launchId: string | null; sessionId: string | null; agentPath: string | null };
+  to: PipelineRuntimeSeat & { accountPinned: boolean };
+  phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
+  cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  rollback?: boolean;
+  reconfigureNoop?: boolean;
+  continuationKey?: string;
+  continuationDispatch?: { key: string; at: string };
+  launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };
+  handoff?: { prompt: string; digest: string; bytes: number };
+};
+
 export type PipelineStageAttempt = {
   n: number;
+  runtimeSwitches?: PipelineRuntimeSwitch[];
+  /** Monotonic verdict fence survives bounded switch-history retention. */
+  runtimeEvidenceSince?: string;
+  /** Explicit account policy for the live attempt after an apply-now edit. */
+  runtimeAccountPin?: string | null;
   /** Answer that created this continuation; forces lease-free activation. */
   decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
@@ -388,7 +413,13 @@ export type PipelineStageAttempt = {
       engine. Entries written before it was recorded omit it. */
   usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
   /** Recovery expenditure survives condition changes and host relaunches. */
-  providerRecoveryBudget?: { tries: number; startedAt: string };
+  providerRecoveryBudget?: {
+    tries: number; startedAt: string; engine?: FlowEngine; triedAccounts?: string[];
+    /** Auth and exhausted target failures remain excluded across quota resets. */
+    failedAccounts?: string[];
+  };
+  /** Unknown-reset fallback is spent across automatic stage replacements. Manual retry starts anew. */
+  providerFallbackRetries?: number;
   providerWait?: {
     condition: import("./providerConditions").ProviderCondition;
     text: string;
@@ -399,9 +430,15 @@ export type PipelineStageAttempt = {
     resumeAt: string;
     resetsAt: number | null;
     actionAt?: string;
+    /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
+    continuationRequestedAt?: string;
     switchedAccountId?: string;
     failedAccounts?: string[];
     capacityProbes?: number;
+    retryCancelled?: boolean;
+    /** A parked quota cut owes a fresh retry-stage after resumeAt. An operator
+        control change or a different park cancels this obligation. */
+    stageRetry?: { controlGeneration: string | null; detail: string; fallback?: boolean };
   };
   providerRecoveries?: Array<{
     at: string;
@@ -472,6 +509,9 @@ export type PipelineStageAttempt = {
     /** Present only on compatibility records written by the continuation implementation. */
     clientMessageId?: string;
     lastRecordAt: number | null;
+    /** Verified prompt ordinal before termination; retained across uncertain
+        reads and later boots so a delivered operator prompt still fences it. */
+    promptBoundary?: number;
     replacementAttempt?: number;
     replacedAttempt?: number;
     /** Set once a stop this recovery issued ended a live host: the evidence
@@ -483,7 +523,14 @@ export type PipelineStageAttempt = {
   };
   /** Prompt context for a fresh attempt created after this attempt was interrupted.
       `cause` is absent on records written before causes were told apart. */
-  restartContext?: { previousAttempt: number; transcriptPath: string; cause?: PipelineStageInterruptionCause };
+  restartContext?: {
+    previousAttempt: number;
+    /** Null when the attempt was cut before its transcript was discovered. */
+    transcriptPath: string | null;
+    cause?: PipelineStageInterruptionCause;
+    /** The interrupted attempt's newest message, bounded, for the replacement's first message. */
+    lastReport?: string;
+  };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it
@@ -514,6 +561,32 @@ export type PipelineStageAttempt = {
     messageTs: number;
     requestedAt?: string;
     clientMessageId?: string;
+  };
+  /** The one repair the controller asked this attempt for after a repository
+      hook refused the commit of its passed work; the stage repairs its files
+      or reports a blocked verdict, which parks. `detail` is the park text that refusal would have produced and
+      `messageTs` the stage's last message when it was refused, so the repair
+      is over on the first completed turn after it. `sendingAt` is stored
+      before a request leaves and kept until the delivery surface answers, so a
+      replay after a crash keeps it; only an outright refusal clears it, and
+      never after `sendUncertain` recorded an answer that may have followed an
+      admission; `requestedAt` takes that moment once the
+      surface accepted the request. `outcome` and `settledAt` checkpoint the
+      accepted or rejected repair before final settlement, so a rejected repair
+      replays as parked with its reason. `refusedAt` bounds the whole wait. A
+      refusal that finds this record already written parks. */
+  commitRepair?: {
+    refusedAt: string;
+    detail: string;
+    paths: string[];
+    messageTs: number | null;
+    sendingAt?: string;
+    sendUncertain?: true;
+    requestedAt?: string;
+    clientMessageId?: string;
+    /** Missing on older settled repairs, which already permitted a commit. */
+    outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
+    settledAt?: string;
   };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
@@ -634,8 +707,8 @@ export type PipelineReviewPending = {
   at: string;
 };
 
-/** One accepted `continue-review` (#1938), append-only. `rounds` adds to the
-    review stage's fail-edge `maxRounds`, which itself stays frozen evidence. */
+/** Historical accepted budget extension, append-only. New extensions are
+    refused; existing records remain readable and their receipts replayable. */
 export type PipelineReviewGrant = {
   clientRequestId: string;
   expectedRevision: string;
@@ -755,6 +828,11 @@ export type PipelinePublicationFailure = {
   changedFiles?: number;
   /** The command budget the step ran past, when that is what ended it. */
   timedOutMs?: number;
+  /** The push budget at which the repository hook stopped a check that was
+      still running, so the push carries no verdict. */
+  hookBudgetMs?: number;
+  /** The check the hook named as stopped without a verdict. */
+  hookStoppedCheck?: string;
 };
 
 export type PipelinePublicationResult = (
@@ -953,6 +1031,7 @@ export type Pipeline = {
   /** Who cleared the lane off the queue at `dismissedAt`, attributed on the
       server (docs/design/needs-attention.md §5). Absent on a dismissal written
       before attribution existed. */
+  dismissedNote?: string;
   dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
@@ -1147,6 +1226,7 @@ export type PatchPipelineRequest = {
   acceptedSha?: string;
   reason?: string;
   action: PipelineAction;
+  applyNow?: boolean;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
   /** for link-task (#2187 §5.1): whether this pipeline finishes the task.
@@ -1187,8 +1267,13 @@ export type PatchPipelineRequest = {
   /** with `expectedStageId`: the `n` of that stage's latest own (non-historical)
       attempt the caller saw, or `0` when it saw none yet (a provisioning park).
       A different latest attempt answers 409 `STAGE_CHANGED`; `null` and other
-      non-integers are malformed. */
+      non-integers are malformed. On override-stage with `applyNow` it stands
+      alone and names the running attempt the caller saw. */
   expectedAttempt?: number;
+  /** for override-stage with `applyNow`: the conversation the caller saw
+      running the attempt. An attempt another conversation runs by then answers
+      409 `STAGE_CHANGED` before any runtime or definition is changed. */
+  expectedConversationId?: string;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

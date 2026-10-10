@@ -32,6 +32,8 @@ import {
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
+import { lessonTextLength, MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
+import { LESSON_MATCH_MIN_CHARS } from "@/lib/memory/roleConsolidate";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -61,10 +63,12 @@ export const MCP_TOOL_NAMES = [
   "create_pipeline",
   "pipeline_action",
   "stage_report",
+  "leave_lesson",
   "link_task_to_pipeline",
   "list_conversations",
   "search_transcripts",
   "search_memory",
+  "backfill_worktree_projects",
   "get_conversation",
   "conversation_deliverability",
   "conversation_messages",
@@ -113,6 +117,7 @@ export type McpToolName = typeof MCP_TOOL_NAMES[number];
 type ReceiptRetention = "bounded" | "durable";
 
 export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
+  "backfill_worktree_projects",
   "spawn_agent",
   "send_message",
   "create_task",
@@ -124,6 +129,10 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      recorded rather than replace it a second time, and that record outlives
      this process. */
   "stage_report",
+  /* Appends the calling attempt's lessons to role memory. A replayed
+     clientRequestId must answer with the rules the first call left rather than
+     leave them a second time. */
+  "leave_lesson",
   "link_task_to_pipeline",
   "deploy_exact_sha",
   "flow_action",
@@ -259,6 +268,8 @@ function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs):
 export type McpToolArgs = Record<string, unknown> & { clientRequestId?: unknown };
 export type McpToolPayload = Record<string, unknown>;
 export interface McpToolCallContext {
+  /** Trusted read projection; never accepted from serialized tool arguments. */
+  redactText?: (text: string) => string;
   signal?: AbortSignal;
   deadlineAt?: number;
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
@@ -349,6 +360,9 @@ export interface McpDispatchTracker {
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
   /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
   authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+  /** Fresh admission checks, after authority and existing-receipt lookup,
+      before any claim. Mutable names must not conceal a recorded result. */
+  prepareAdmission?: (args: McpToolArgs) => void | Promise<void>;
   /** Who the receipt belongs to, as the Viewer decides it for this call (the
       caller and the target it is allowed to reach). Asked before every receipt
       read, claim or in-process join, and part of the receipt's key, so one
@@ -2326,9 +2340,15 @@ export interface McpRecoveryEvidence {
 }
 
 export interface McpRecoverableTool {
-  /** Resolve the server-derived caller and target for these arguments. Runs
-      before the receipt store is touched; may throw {@link McpToolRefusal}. */
+  /** Resolve the server-derived caller and target for fresh admission. Runs
+      before receipt access unless bindForRecovery authenticates that access first. */
   bind(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Fresh-request admission after an absent receipt lookup, before any claim.
+      Existing receipts retain their recorded caller and digest checks. */
+  authorizeClaim?(args: McpToolArgs, binding: McpRequestBindingInput): void | Promise<void>;
+  /** Authenticate recovery without resolving a mutable target name. Existing
+      receipts supply their own target; absent receipts still run bind before admission. */
+  bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
   /** Read-only: what the downstream durable records say about this binding.
       Must never dispatch, enqueue, retry, withdraw or spawn. */
   recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs }): Promise<McpRecoveryEvidence>;
@@ -2374,6 +2394,21 @@ export class McpDispatchVerdictError extends McpToolRefusal {
   constructor(message: string, details: McpToolPayload & { status: number }) {
     super(message, details);
     this.name = "McpDispatchVerdictError";
+  }
+}
+
+/** A final dispatch was affirmatively refused after an earlier effect was
+    confirmed. The binding preserves that effect separately; the composite
+    request closes with a refusal and cannot authorize another creation. */
+export class McpDispatchSettledRefusalError extends McpToolRefusal {
+  constructor(message: string, details: McpToolPayload) {
+    super(message, {
+      ...details,
+      outcome: "settled",
+      evidence: "dispatch-refused",
+      nextAction: "follow-disposition",
+    });
+    this.name = "McpDispatchSettledRefusalError";
   }
 }
 
@@ -2537,7 +2572,8 @@ export function createMcpToolService(
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
       // Explicit keys continue through the unchanged claim/replay path below.
-      if (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool)) {
+      if ((typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
+        || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
         try {
@@ -2587,7 +2623,11 @@ export function createMcpToolService(
         const authorize = bindings[typedTool].authorizeReceipt;
         if (authorize) await authorize(effectiveArgs);
       } catch (error) {
-        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
+        return finish(failure(typedTool, requestId,
+          error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+          error instanceof Error ? error.message : String(error),
+          error instanceof McpToolRefusal && error.details.retryable === true, false,
+          error instanceof McpToolRefusal ? error.details : undefined), "failure");
       }
       let scope: string | null;
       try {
@@ -2628,7 +2668,7 @@ export function createMcpToolService(
         let bound: McpRequestBindingInput;
         const callerStartedAt = performance.now();
         try {
-          bound = await tool.bind(digestArgs);
+          bound = await (tool.bindForRecovery ?? tool.bind)(digestArgs);
         } catch (error) {
           outcome = "failure";
           return failure(
@@ -2643,7 +2683,7 @@ export function createMcpToolService(
         } finally {
           phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - callerStartedAt;
         }
-        const binding: McpRequestBinding = {
+        let binding: McpRequestBinding = {
           version: 1,
           toolName: typedTool,
           clientRequestId: requestId,
@@ -2838,7 +2878,30 @@ export function createMcpToolService(
           return answerFromEvidence(evidence, true, record.result);
         };
         const claimStartedAt = performance.now();
-        if (recoveryOnly) {
+        if (tool.bindForRecovery) {
+          let record: McpReceiptRecord | null;
+          try {
+            record = await store.lookup(key);
+          } catch (cause) {
+            return unreadableReceipt(cause, false);
+          }
+          if (record) return recoverRecord(record);
+          // An absent lookup is no admission verdict: the original may still
+          // arrive. Resolve current names only when this call can admit work.
+          if (!recoveryOnly) {
+            try {
+              const fresh = await tool.bind(digestArgs);
+              if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
+              binding = { ...binding, ...fresh };
+            } catch (error) {
+              return failure(typedTool, requestId,
+                error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof McpToolRefusal ? error.details : undefined);
+            }
+          }
+        }
+        if (recoveryOnly || tool.authorizeClaim) {
           let record: McpReceiptRecord | null;
           try {
             record = await store.lookup(key);
@@ -2847,6 +2910,15 @@ export function createMcpToolService(
           }
           phaseDurations.claim = performance.now() - claimStartedAt;
           if (record) return recoverRecord(record);
+          try {
+            await tool.authorizeClaim?.(digestArgs, binding);
+          } catch (error) {
+            outcome = "failure";
+            return failure(typedTool, requestId,
+              error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof McpToolRefusal ? error.details : undefined);
+          }
           /* Nothing has claimed this key HERE — an observation, never a
              verdict: the original may be a moment from claiming it, in this
              process or another, and a lookup that wrote anything under the
@@ -2856,13 +2928,15 @@ export function createMcpToolService(
              establishes whose work a downstream record under this key would
              be, so an answer built from it could hand one caller another's
              ids. The answer stays unknown while execution remains possible. */
-          outcome = "failure";
-          return recoveryAnswer(typedTool, requestId, {
-            outcome: "unknown",
-            evidence: "none",
-            reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
-            ids: {},
-          }, false);
+          if (recoveryOnly) {
+            outcome = "failure";
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown",
+              evidence: "none",
+              reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
+              ids: {},
+            }, false);
+          }
         }
         let claim: ReceiptClaim;
         try {
@@ -2953,10 +3027,11 @@ export function createMcpToolService(
           outcome = error instanceof DeadlineExceededError ? "deadline" : "failure";
           const refusal = error instanceof McpToolRefusal || error instanceof McpDispatchNotExecutedError ? error.details : {};
           const admitted = typeof refusal.operationId === "string" || typeof refusal.launchId === "string";
-          const proven = !admitted && (
+          const terminalRefusal = error instanceof McpDispatchSettledRefusalError;
+          const proven = terminalRefusal || (!admitted && (
             error instanceof McpDispatchNotExecutedError
             || !dispatch.attempted
-          );
+          ));
           if (!proven) {
             outcome = context.signal?.aborted ? "cancelled" : "failure";
             const message = error instanceof Error ? error.message : String(error);
@@ -2968,16 +3043,16 @@ export function createMcpToolService(
           }
           const details: McpToolPayload = {
             ...refusal,
-            outcome: "not-executed",
+            outcome: terminalRefusal ? "settled" : "not-executed",
             evidence: "dispatch-refused",
-            nextAction: "new-request-permitted",
+            nextAction: terminalRefusal ? "follow-disposition" : "new-request-permitted",
           };
           settled = failure(
             typedTool,
             requestId,
-            "tool_failed",
+            terminalRefusal && typeof refusal.code === "string" ? refusal.code : "tool_failed",
             error instanceof Error ? error.message : String(error),
-            true,
+            !terminalRefusal,
             false,
             details,
           );
@@ -3009,6 +3084,29 @@ export function createMcpToolService(
       };
       const result = (async (): Promise<McpToolResult> => {
         if (recoverable && recoveryStore) return recoverableCall(recoverable, recoveryStore);
+        const prepare = bindings[typedTool].prepareAdmission;
+        if (prepare) {
+          let existing: McpReceiptRecord | null = null;
+          if (supportsMcpRecovery(receipts)) {
+            try {
+              existing = await measure("replay", () => receipts.lookup(key));
+            } catch {
+              return recoveryAnswer(typedTool, requestId, {
+                outcome: "unknown", evidence: "mcp-receipt", reason: "the receipt store could not be read", ids: {},
+              }, false);
+            }
+          }
+          if (!existing) {
+            try {
+              await measure("caller", () => prepare(effectiveArgs));
+            } catch (error) {
+              return failure(typedTool, requestId,
+                error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof McpToolRefusal ? error.details : undefined);
+            }
+          }
+        }
         const claim = await measure("claim", () => receipts.claim(key, digest, retention));
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -3059,10 +3157,11 @@ export function createMcpToolService(
           const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
-          /* #2518: issue_report's refusals and the cross-project refusal name
-             their code too, and say whether the same call can succeed later. */
+          /* Named issue, cross-project and orchestrator refusals preserve the
+             server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (typedTool === "issue_report" || error.details.code === "cross_project_refused")
+            && (typedTool === "issue_report" || error.details.code === "cross_project_refused"
+              || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"].includes(typedTool))
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
@@ -3157,6 +3256,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
+    'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
     "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
     "When a turn of the new agent ends, Delegatus sends you, the caller, one message from it: its title and id, how long it ran, its Verdict line first, and its final message (up to 4 KB). Briefs need no 'report back' line. Pass `notifyLauncher: false` to turn this off; the answer's `launcherNotice` says whether it is on.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -3212,7 +3312,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
     "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
-  pipeline_action: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; a terminal gate re-checks once and completes only on pass, otherwise parks with the findings count. A nonterminal gate continues along its pass edge. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. add-stage with a `review-loop` stage stores it as a read-only reviewer and a fix stage (role builder, mode apply-fixes, with its predecessor's domain and size, so its runtime comes from the fix row), joined by an advance fail edge, and answers convertedStages [{reviewer, fixer}]; when that needs a guess (no read-write predecessor, no free stage slot) the stage is stored as sent and the answer carries legacyReview [{stageId, refusals}]. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  pipeline_action: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; a terminal gate re-checks once and completes only on pass, otherwise parks with the findings count. A nonterminal gate continues along its pass edge. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. add-stage with a `review-loop` stage stores it as a read-only reviewer and a fix stage (role builder, mode apply-fixes, with its predecessor's domain and size, so its runtime comes from the fix row), joined by an advance fail edge, and answers convertedStages [{reviewer, fixer}]; when that needs a guess (no read-write predecessor, no free stage slot) the stage is stored as sent and the answer carries legacyReview [{stageId, refusals}]. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Completion fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], a short summary, and optional blocked/blockedReason. Set blocked:true only when a fixer cannot proceed (cannot build, cannot run required checks, or a handed finding is impossible within the specification); it requires fail and a non-empty blockedReason. Prose never classifies blocked state.",
@@ -3224,10 +3324,18 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
     "This call is the stage's only completion channel: a fenced JSON verdict in the final turn is the fallback, written only when this call returned an error or the tool is absent from the session, and when both exist this call wins.",
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
+    "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
+  ].join(" "),
+  leave_lesson: [
+    "Leave what this pipeline stage taught you as learned rules (role memory) for the agents who come after you; the answer to an accepted stage_report asks for it.",
+    "Give one to three lessons, each an abstract rule (a class of mistake or situation and what to do about it) with a one-line why and a scope: role (the next agent of your role on this project, or of the role you name), project (every role on this project) or machine (every project on this machine). Or give none with one line saying why.",
+    "The server resolves the calling conversation to its own attempt and records every piece of provenance itself. Reviewers, verifiers, the issue reporter and review-gate stages leave no lessons, and no rule may be addressed to them. A project with learned rules switched off refuses the call.",
+    "Rules are kept on this machine only. Write no names of people, accounts, emails, tokens, ids or absolute paths; the answer names any such text it sees as a hint and stores the rule.",
   ].join(" "),
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
   search_transcripts: "Search indexed user and assistant message bodies across engines and accounts. Ask it \"has this been solved before?\", using several phrasings, project-scoped then unscoped. Default relevance ranks conversations by query coverage and returns six conversations with up to three linked fragments each. Check matched, missing and interpretedAs. A unit ending in ~ matched loosely, by a compound term's parts near each other or by an identifier prefix: its fragment decides whether the hit is on topic. Copies fold into alsoIn. Open a hit with conversation_messages at transcriptPath and timestamp as since. order: newest returns matching messages newest first, requiring every query unit. byteOffset and lineNumber pin the exact line. Pass nextCursor unchanged to continue the snapshot. project accepts a key, repository name or path; an unrecognised value searches everywhere and projectScope says so. Queries read only the index, never transcript files.",
+  backfill_worktree_projects: "Read-only diagnostic for the automatic worktree project recovery that runs at Viewer startup and after full catalog rescans. dryRun defaults to true and writes nothing, including no MCP receipt. dryRun:false is refused. Optional project narrows the target repository. Reports corroborated folded candidates and leftAlone entries with reasons.",
   search_memory: "Search the local read-only index of Claude and Codex memories, global instructions and single-fact skills. Supply query with optional project and kind; results rank by text relevance and include source paths, kinds, scopes and dates, bounded to 16 KB. Omit project for cross-project search. Supply a hit id in a second call to open its bounded body and record an opened outcome. Background information may be stale; verify the source before relying on it. The engines remain the only writers of their memory stores.",
   get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
@@ -3261,12 +3369,12 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
-  publish_prototype_review: "Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
-  read_prototype_review: "Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Pipeline callers may omit taskId; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
+  publish_prototype_review: "questions (3–7): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id, and skipped:true means the operator took the recommendations. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
-    "Clear a needs-you flag the operator is shown, without answering anything (docs/design/needs-attention.md): a conversation's question, plan, prompt or undelivered message, a lane parked on a decision or a spent review budget, or everything on a task's card stops raising needs-you until something newer asks. Nothing else moves \u2014 no question is answered, no lane changes state, no message is dropped \u2014 and the card says who cleared it.",
-    "Authority is the same as request_attention's: the operator's own root/gateway session or the target project's designated orchestrator seat. A worker or unidentified caller is refused (DISMISS_NOT_PERMITTED) with nothing recorded, so a stage agent cannot clear its own question off the operator's board.",
-    "Targets: { kind: \"conversation\", conversationId | path }, { kind: \"pipeline\", pipelineId }, or { kind: \"task\", taskId } for its conversations and the lanes filed under it. undo: true brings back what was cleared. The answer lists what was dismissed and what was alreadyClear (a lane that asks nothing, one already cleared, an undo of nothing), neither of which is an error. Attributed to the calling session on the server; idempotent by clientRequestId. pipeline_action dismiss/undismiss is the same write.",
+    "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
+    "With target, clear one conversation reason, parked lane, report question or waiting prototype round; task targets include the waiting round. Only the operator's root/gateway session and this project's designated seat may clear. Its maintainer may read and cannot clear; workers and unidentified callers are refused. Update decisions stay answer-only.",
+    'Targets: {kind:"conversation",conversationId|path,reasonId}, {kind:"pipeline",pipelineId,laneMovedAt}, {kind:"report",seq}, {kind:"prototype",taskId,reviewId}, {kind:"task",taskId}. Optional reason is one line up to 200 characters, retained beside server attribution in the read\'s cleared list. undo:true restores the mark. New reasons and rounds ask again. Dismissal resolves a report question in its log and leaves prototype choices open. pipeline_action dismiss/undismiss is the same lane write.',
   ].join(" "),
   bridge_report: [
     "Append one report to the durable bridge log: the report log beside the orchestrator chat, the voice relay, and, for the designated orchestrator of a project that set one, the project's Telegram chat, posted by Delegatus from the same report. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
@@ -3279,6 +3387,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
   send_message_to_orchestrator: [
     "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. Workers, pipeline stages, deputies and unidentified callers are refused. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
+    "For a shared project, pass machine as the linked machine label, install id or prefix; get_orchestrator names linkedSeats. Both machines must support seat messages. Unshared, revoked, unreachable and older peers are refused with project_not_linked, link_revoked, peer_unreachable or peer_cannot_relay. Only the shared project's seat sends remotely. Replies use the same tool back to the sending machine. A remote operationId has prefix seatmsg_; message_receipt reports queued, accepted or refused.",
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
@@ -3355,6 +3464,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
 };
 
 const clientRequestIdSchema = z.string().min(1).describe("Stable idempotency key for this logical call.");
+/** Lesson text limits count code points, as the role memory store does; a
+    UTF-16 bound would refuse valid text in supplementary scripts. */
+const lessonTextSchema = (min: number, max: number) => z.string()
+  .refine((value) => { const length = lessonTextLength(value); return length >= min && length <= max; }, { message: `must be ${min}–${max} characters (Unicode code points)` });
 /* #1490: the one recovery switch. Excluded from the argument digest, so the
    same logical call with and without it is one call. */
 const recoveryOnlySchema = z.boolean().optional()
@@ -3561,6 +3674,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Codex only: catalog tier id such as priority or ultrafast; refused if the model/account does not offer it. default or standard opts out of a role tier."),
     fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier when both are present."),
     role: z.enum(ROLE_IDS).optional(),
+    confirm: z.string().optional()
+      .describe('For deployer, must be "deploy": honoured only for the target project\'s designated orchestrator seat and the operator\'s own session. Other roles ignore this field.'),
     roleParams: z.record(z.string(), z.unknown()).optional()
       .describe("Role-specific parameters. Bounded integers accept numeric strings, clamp to their declared role bounds, and report the applied value in clamped."),
     reviews: z.string().optional(),
@@ -3593,6 +3708,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
+    findingKey: z.string().max(400).refine(value => [...value].length <= 200).optional()
+      .describe("Opaque finding identity, at most 200 characters, unique among this project's open tasks. A recurring create increments count and lastSeenAt, replaces note (omitted clears it), preserves text, and answers the existing id with matched:true. After Done a new task links through finding.previousTaskId. Local to this install; never synced."),
+    note: z.string().nullable().optional().describe("Current situation for a keyed finding, at most 280 characters. Author and time are server-derived; omitted clears the previous note on a match."),
     project: z.string().min(1),
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
@@ -3622,6 +3740,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   update_task: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
+    findingKey: z.string().max(400).refine(value => [...value].length <= 200).nullable().optional()
+      .describe("Set an opaque finding identity of at most 200 characters; null clears it and its occurrence metadata. Another open task holding it in this project refuses the update, including a reopen. Setting a new key starts count at one. Local to this install; never synced."),
     note: z.string().nullable().optional().describe("Current situation for the operator, at most 280 characters; replaces the note, null clears it. Author and updatedAt are server-derived."),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     taskId: entityIdSchema.optional().describe("Required for every update except refine; refine defaults to every pending task the calling conversation is linked to."),
@@ -3700,7 +3820,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     pipelineId: entityIdSchema,
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
-    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator adds an explicit bounded addRounds grant to the same lane. A needs_review lane reviews its unreviewed head; a needs_decision lane parked by a failed terminal budget re-check sends its retained findings to fix first, then runs a fresh reviewer on the new head for the granted rounds. Failed heads are never accepted by this action. Requires addRounds and expectedRevision from get_pipeline. accept-head (#2187): the creator or operator takes that unreviewed head as it is, and the lane follows the review stage's pass edge or completes; refused outside needs_review. Requires expectedRevision from get_pipeline. retry-merge (#2187): a completed lane whose automatic merge stopped (merge.state blocked or cancelled) goes back into its repository's merge queue; refused while the project's merge setting is off. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
+    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review: new addRounds grants are refused because the review budget is fixed after work starts. Previously accepted requests can replay their receipts without increasing the budget. accept-head (#2187): the creator or operator takes that unreviewed head as it is, and the lane follows the review stage's pass edge or completes; refused outside needs_review. Requires expectedRevision from get_pipeline. retry-merge (#2187): a completed lane whose automatic merge stopped (merge.state blocked or cancelled) goes back into its repository's merge queue; refused while the project's merge setting is off. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
     stageId: z.string().min(1).optional().describe("The stage a graph edit, a legacy-review conversion or a retry-stage names. retry-stage: the stage the pipeline waits on, retried whatever ended its attempt; without launchId it is sent as expectedStageId with that stage's current attempt as expectedAttempt, so a stage or attempt that moved on is refused with STAGE_CHANGED."),
     stage: pipelineStageSchema.optional().describe("add-stage: the complete stage definition. Keeps next and onFail as supplied unless after explicitly selects a pass edge to insert into."),
     after: z.string().min(1).optional().describe("add-stage only: splice into this stage's pass edge. That stage points to the new stage, which inherits its former next; every other edge stays unchanged. Independent of index."),
@@ -3713,6 +3833,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     maxRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("set-edge fail edge: review budget, default 3. More than 3 requires an explicit value."),
     onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional().describe("set-edge fail edge: action when its review budget is spent."),
     role: pipelineStageSchema.shape.role.nullable().describe("override-stage: role reference, or null to clear it."),
+    applyNow: z.boolean().optional().describe("override-stage: interrupt the running run stage and continue the SAME attempt on the new runtime."),
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
@@ -3722,12 +3843,13 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     "prompt": z.string().optional().describe("override-stage: replacement prompt."),
     launchId: z.string().min(1).optional().describe("retry-stage only, optional, and only for an attempt whose launch failed: the launchId get_pipeline with stageId answers for it, sent with stageId. The engine then retries only a failed or conflicted launch receipt, so omit it for an agent that started and then failed or parked. A launch that is no longer the current attempt's is refused."),
     answer: z.string().min(1).max(12_000).optional(),
-    addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("continue-review only: explicit additional review rounds, 1..MAX_FAIL_EDGE_ROUNDS. For a failed terminal budget re-check, each granted round fixes retained findings then runs a fresh review; the last failed review parks in needs_decision and requires another grant. A needs_review lane reviews its current head first; stop-after-fix hands the last failed review to one fix and parks a new unreviewed head in needs_review."),
+    addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("Legacy continue-review field: new additional rounds are refused; retained only to replay an already accepted historical request"),
     reviewLimit: z.number().int().optional().describe("preview/convert-legacy-review only: the finite review count the converted reviewer gets, 1–9. It runs that many times when every review fails, the final review included; the default is the limit recorded on the stage's review flow, or 3 when none is recorded. More than 3 requires an explicit value."),
     implementerStageId: z.string().min(1).optional().describe("preview/convert-legacy-review only: the run stage whose role the fix stage copies, when more than one run passes into the review."),
     expectedRevision: z.string().regex(/^[0-9a-f]{64}$/).optional(),
     expectedStageId: z.string().min(1).optional(),
-    expectedAttempt: z.number().int().nonnegative().optional(),
+    expectedAttempt: z.number().int().nonnegative().optional().describe("With expectedStageId, or with override-stage applyNow: the attempt number the caller saw."),
+    expectedConversationId: z.string().min(1).optional().describe("override-stage applyNow only: the conversation the caller saw running the attempt; another one is refused with STAGE_CHANGED."),
     expectedOwner: z.string().optional(),
     expectedEpoch: z.number().int().positive().optional(),
     reason: z.string().optional(),
@@ -3758,6 +3880,16 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     stageId: z.string().min(1).optional()
       .describe("Only when this conversation holds more than one live stage; the refusal lists them."),
   }).passthrough(),
+  leave_lesson: z.object({
+    clientRequestId: clientRequestIdSchema,
+    lessons: z.array(z.object({
+      scope: z.enum(["role", "project", "machine"]).describe("role: the next agent of a role on this project (yours unless role names another); project: every role on this project; machine: every project on this machine."),
+      role: z.enum(ROLE_IDS).optional().describe("With scope role only: the role the rule is for, when another role would have prevented or caught the problem earlier."),
+      rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS).describe(`One or two imperative sentences, true beyond this task: a class of mistake or situation and what to do about it. ${RULE_MIN_CHARS}–${RULE_MAX_CHARS} characters.`),
+      why: lessonTextSchema(1, WHY_MAX_CHARS).describe(`One line: what went wrong here, or what it cost. At most ${WHY_MAX_CHARS} characters; at least ${LESSON_MATCH_MIN_CHARS} letters or digits, as the rule needs too.`),
+    })).max(MAX_LESSONS_PER_ATTEMPT).optional(),
+    none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe(`When this stage taught nothing new: one line saying why, at most ${WHY_MAX_CHARS} characters.`),
+  }),
   link_task_to_pipeline: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
@@ -3782,6 +3914,11 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     order: z.enum(["relevance", "newest"]).optional().describe("relevance (default): rank conversations by coverage, with linked fragments. newest: messages newest first, every unit required."),
     cursor: z.string().min(1).optional().describe("Opaque cursor returned by the preceding page for this query and project."),
     limit: boundedNumericInput("search_transcripts", "limit").describe("Integer 1..100; default 6 conversations for relevance, 20 messages for newest. Numeric strings coerce and out-of-range values clamp."),
+  }).passthrough(),
+  backfill_worktree_projects: z.object({
+    clientRequestId: clientRequestIdSchema.optional(),
+    dryRun: z.boolean().optional().describe("Defaults to true. Set false only for an explicit operator-requested recovery."),
+    project: z.string().regex(/^repo-[0-9a-f]{32}$/).optional(),
   }).passthrough(),
   search_memory: z.object({
     clientRequestId: clientRequestIdSchema.max(256, "clientRequestId must be at most 256 characters for the bounded memory response"),
@@ -4047,11 +4184,20 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       z.object({
         kind: z.literal("conversation"),
         conversationId: z.string().min(1).optional().describe('Durable "conversation_…" id. The form to prefer.'),
+        reasonId: z.string().min(1).optional(),
         path: z.string().min(1).optional().describe("Transcript .jsonl path. Supply at least one of the two."),
       }).passthrough(),
-      z.object({ kind: z.literal("pipeline"), pipelineId: z.string().min(1) }).passthrough(),
+      z.object({ kind: z.literal("pipeline"), pipelineId: z.string().min(1), laneMovedAt: z.number().nullable().optional() }).passthrough(),
       z.object({ kind: z.literal("task"), taskId: z.string().min(1).describe("Board task id: its assignments and the lanes filed under it.") }).passthrough(),
-    ]).describe("What to clear."),
+      z.object({ kind: z.literal("update"), decisionId: z.string().optional() }).passthrough(),
+      z.object({ kind: z.literal("report"), seq: z.number().int().positive() }).passthrough(),
+      z.object({ kind: z.literal("prototype"), taskId: z.string().min(1), reviewId: z.string().min(1) }).passthrough(),
+    ]).optional().describe("What to clear; omit to read the project panel."),
+    project: z.string().min(1).optional().describe("Read form; defaults to your seat or maintenance project."),
+    kinds: z.array(z.enum(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"])).optional(),
+    full: z.boolean().optional(),
+    cursor: z.string().optional(),
+    reason: z.string().max(200).optional().describe("One line retained beside who cleared the row."),
     undo: z.boolean().optional().describe("true brings back what an earlier dismissal cleared."),
   }).passthrough(),
   bridge_report: z.object({
@@ -4099,6 +4245,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
     project: z.string().min(1).describe("Project whose selected orchestrator receives the message."),
+    machine: z.string().min(1).optional().describe("Linked machine label, install id or 8-hex prefix for this shared project; omit for the local seat."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),
   ask_orchestrator_in_parallel: z.object({
@@ -4130,6 +4277,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    autoRotate: z.object({ enabled: z.boolean().optional(), thresholdPercent: z.union([z.number(), z.string(), z.null()]).optional(), why: z.string().nullable().optional() }).optional()
+      .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
     maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
       .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason."),
     clientRequestId: clientRequestIdSchema,

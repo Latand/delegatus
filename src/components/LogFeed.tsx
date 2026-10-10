@@ -571,6 +571,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const lastPrependRef = useRef(0);
   const pulseTimer = useRef<number | null>(null);
   const glueAtRef = useRef(0);
+  /* A glue wrote the offset and the scroll event for that write has not come.
+     A frame dispatches its scroll events before its animation callbacks, so
+     the next frame's callback ends the wait: a glue whose writes moved
+     nothing leaves no mark on a later scroll. */
+  const glueScrollPendingRef = useRef(false);
+  const glueScrollFrameRef = useRef<number | null>(null);
   const scrollCauseRef = useRef<ScrollCause | null>(null);
   /* One scrollbar press can drive many scroll events. Its moving baseline
      lives through the gesture; a stamped programmatic cause still wins. */
@@ -694,6 +700,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   };
   useEffect(() => () => {
     if (restFrameRef.current !== null) cancelAnimationFrame(restFrameRef.current);
+    if (glueScrollFrameRef.current !== null) cancelAnimationFrame(glueScrollFrameRef.current);
   }, []);
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
@@ -711,6 +718,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     markProgrammaticScroll();
     el.scrollTop = el.scrollHeight;
     alignFollowedTop(el);
+    glueScrollPendingRef.current = true;
+    if (typeof requestAnimationFrame === "function") {
+      if (glueScrollFrameRef.current !== null) cancelAnimationFrame(glueScrollFrameRef.current);
+      glueScrollFrameRef.current = requestAnimationFrame(() => {
+        glueScrollFrameRef.current = null;
+        glueScrollPendingRef.current = false;
+      });
+    }
     const pendingUser = scrollCauseRef.current;
     if (pendingUser?.kind === "user") pendingUser.fromBottom = distanceFromBottom(el);
   };
@@ -1458,21 +1473,23 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      record names itself only by the engine's id, which nothing in the
      browser can compute and the broker's ledger may join to its submission
      a beat after the record is visible. Its words used to bind it meanwhile;
-     they no longer may, so while any of the operator's rows is still waiting
-     and the ledger has not finished answering for this id, the record waits
-     too — bounded by the lookup's own revalidation schedule, and never a
-     guess about whose it is. */
+     they no longer may. Every unresolved SDK row waits for its first evidence
+     read, including a cold open with no local outbox. A known held mandate
+     stays visible meanwhile. Only a known mandate or pending outbox keeps
+     waiting through bounded revalidation for its delayed ledger join. */
   const withheldNativeRecords = useMemo(() => {
     const withheld = new Set<string>();
-    if (!pendingOutbox.length) return withheld;
     for (const { item } of visibleItems) {
       if (item.kind !== "sysmsg") continue;
       const id = item.deliveredMessage?.engineMessageId;
       if (!id || provenanceLookup.forItem(item)) continue;
-      if (provenanceLookup.messagePending(id)) withheld.add(id);
+      const pending = pendingOutbox.length > 0 || holdsMandate
+        ? provenanceLookup.messagePending(id)
+        : provenanceLookup.messageReadPending(id);
+      if (pending) withheld.add(id);
     }
     return withheld;
-  }, [visibleItems, pendingOutbox, provenanceLookup]);
+  }, [visibleItems, provenanceLookup, pendingOutbox, holdsMandate]);
   const conversationRows = useMemo<ConversationRow[]>(() => {
     /* Which submissions the transcript is already answering for in THIS
        render. The tail below skips them, so one message can never have two
@@ -2002,14 +2019,19 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           if (scrollbarPointer) scrollbarPointer.fromBottom = fromBottom;
           if (scrollbarPointer || cause?.kind !== "user" || userDelta !== 0) scrollCauseRef.current = null;
           const settling = nowMs() - glueAtRef.current < GLUE_SETTLE_MS;
+          const glueOwnScroll = glueScrollPendingRef.current;
+          glueScrollPendingRef.current = false;
           if (!settling || userInitiated) pendingRestoreRef.current = null;
           if (userReturnedToBottom && !magnetRef.current) setMagnet(true, true);
           else if ((userReleasedMagnet || !atBottom) && magnetRef.current) {
             /* Off-bottom right after a programmatic glue is layout settling
                (initial row windows, pane resizes during a scheme
                reshuffle) — hold the magnet and glue again. A preceding input
-               event identifies an operator release inside the same window. */
-            if (settling && !userInitiated) glue();
+               event identifies an operator release inside the same window.
+               A glue's own scroll event holds it whenever it arrives: a busy
+               page delivers it past the window, after rows that landed
+               above have left the offset short of the tail. */
+            if ((settling || glueOwnScroll) && !userInitiated) glue();
             else setMagnet(false);
           }
           if (memoryKey && file && (!settling || userInitiated)) {

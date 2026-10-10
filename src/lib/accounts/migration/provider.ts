@@ -490,6 +490,12 @@ async function publishClaudeSuccessorHost(
       if (!cleanupConfirmed(cancelled)) throw new Error("successor Claude host transition is still pending");
       await forgetResumePaneIfMatches(input.receipt.path, tmuxHost);
     }
+    // Retirement awaits external cleanup. The operation and its account grant
+    // must still own this successor before any native process can start.
+    if (input.ownsOperation && !await input.ownsOperation()) {
+      input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+      return async () => {};
+    }
     identity = successorCapability(input);
     access = materializeStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
@@ -1557,7 +1563,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     profile: LaunchProfile,
     source: AccountContext,
     target: AccountContext,
-    recordContinuityPath: (pathname: string) => void,
+    recordContinuityPath: (pathname: string) => void | Promise<void>,
   ): Promise<ProviderReceipt> {
     const journalRoot = this.dependencies.claudeJournalRoot ?? statePath("migration-provider-claude-operations");
     void conversationId;
@@ -1578,7 +1584,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     profile: LaunchProfile,
     source: AccountContext,
     target: AccountContext,
-    recordContinuityPath: (pathname: string) => void,
+    recordContinuityPath: (pathname: string) => void | Promise<void>,
     assertLeaseOwned: () => void,
   ): Promise<ProviderReceipt> {
     const status = await this.dependencies.claudeStatus(target.home);
@@ -1590,7 +1596,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     /* The continuity record precedes the file on purpose: from the moment the
        fork exists the scanner must already know which conversation owns it, so
        no tick can seat it as a lookalike of its own (issue #889). */
-    recordContinuityPath(successorPath);
+    await recordContinuityPath(successorPath);
     /* The CLI's own `--fork-session` needs a prompt to write anything, and a
        successor has no prompt to give — the operator's message is held for
        after the commit. The viewer writes the fork itself and the broker host
@@ -1624,7 +1630,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     profile: LaunchProfile,
     source: AccountContext,
     target: AccountContext,
-    recordContinuityPath: (pathname: string) => void,
+    recordContinuityPath: (pathname: string) => void | Promise<void>,
   ): Promise<ProviderReceipt> {
     const journalRoot = this.dependencies.journalRoot ?? statePath("migration-provider-operations");
     return withCodexOperationLease(journalRoot, `move:${sourceNativeId}`, (assertLeaseOwned) => this.createCodexLocked(
@@ -1649,7 +1655,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     profile: LaunchProfile,
     source: AccountContext,
     target: AccountContext,
-    recordContinuityPath: (pathname: string) => void,
+    recordContinuityPath: (pathname: string) => void | Promise<void>,
     journalRoot: string,
     assertLeaseOwned: () => void,
   ): Promise<ProviderReceipt> {
@@ -1757,8 +1763,8 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         catch { return []; }
       });
     const sourceFork = adopted.path;
-    recordContinuityPath(sourceFork);
-    for (const superseded of supersededForks) recordContinuityPath(superseded.path);
+    await recordContinuityPath(sourceFork);
+    for (const superseded of supersededForks) await recordContinuityPath(superseded.path);
     /* Paginated Codex forks retain `forked_from_id` and resolve their earlier
        turns from the parent rollout inside the app-server's own session root.
        A target-account app-server cannot follow that lineage back into the
@@ -1775,7 +1781,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       operationId: codexLineageCopyOperationId(journal.sourceRoot, journal.targetRoot, sourceNativeId),
       replaceOwnedDestination: true,
     });
-    recordContinuityPath(stagedSource.path);
+    await recordContinuityPath(stagedSource.path);
     const relative = path.relative(source.transcriptRoot, sourceFork);
     assertLeaseOwned();
     const copied = safeCopyHistory({
@@ -1787,7 +1793,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       priorOperationIds,
       afterDestinationPublished: this.dependencies.afterCodexCopyPublished,
     });
-    recordContinuityPath(copied.path);
+    await recordContinuityPath(copied.path);
     const targetClient = await this.dependencies.startCodex(target.home);
     try {
       const account = await targetClient.readAccount();

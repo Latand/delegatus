@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { seatTickWakeMessage } from "./report";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
+import { observeDiskPressureReport } from "@/lib/state/diskPressure";
 
 import {
   DEFAULT_SEAT_TICK_POLICY,
@@ -149,6 +153,71 @@ function reasonsOf(verdict: SeatTickVerdict): string[] {
 function plan(verdict: SeatTickVerdict, fingerprint: string, eventsThrough: number): SeatTickWakeCommit {
   return seatTickWakeCommitPlan(verdict, { fingerprint, eventsThrough })!;
 }
+
+describe("completed lane merges", () => {
+  const merge = (seq: number, over: Partial<SeatTickEventInput> = {}) => event({
+    seq, type: "pipeline_merged", pipelineId: `pipeline_merge_${seq}`, pipelineTerminal: true,
+    summary: `ship feature ${seq} — pull request #${seq} merged, head ${"a".repeat(40)}`, ...over,
+  });
+  const idle = (over: Partial<SeatTickCheckInput> = {}) => input({
+    pipelines: [], tasks: [], state: stateWith({ eventsThrough: 0, lastProposalAt: new Date(NOW).toISOString() }), ...over,
+  });
+
+  test("a lost wake leaves every merge owed, and a delivered bounded wake leaves the remainder", () => {
+    const events = [merge(1), merge(2), merge(3), event({ seq: 4, type: "task_finished", pipelineTerminal: true })];
+    const first = seatTickDecision(idle({ events, policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 2 } }));
+    expect(first.verdict.kind).toBe("wake");
+    if (first.verdict.kind !== "wake") return;
+    expect(first.verdict.items.map(item => item.id)).toEqual(["pipeline_merge_1", "pipeline_merge_2"]);
+    expect(first.verdict.deferred).toBe(1);
+    expect(first.state.eventsThrough).toBe(0);
+    expect(seatTickDecision(idle({ events, state: first.state })).verdict.kind).toBe("wake");
+    const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 4), NOW);
+    expect(landed.eventsThrough).toBe(2);
+    const next = seatTickDecision(idle({ events: events.filter(event => event.seq > 2), state: landed, now: NOW + 61 * MINUTE }));
+    expect(next.verdict.kind).toBe("wake");
+    if (next.verdict.kind !== "wake") return;
+    expect(next.verdict.items.map(item => item.id)).toEqual(["pipeline_merge_3"]);
+    const done = seatTickWakeCommit(next.state, plan(next.verdict, "fp-1", 4), NOW + 61 * MINUTE);
+    expect(seatTickDecision(idle({ state: done, now: NOW + 122 * MINUTE })).verdict.kind).toBe("quiet");
+  });
+
+  test("a merge omitted from the rendered wake remains owed", () => {
+    const events = [merge(1), merge(2)];
+    const decision = seatTickDecision(idle({ events }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    // The renderer can retain a later short line while cutting an earlier one.
+    const frozenText = seatTickWakeMessage({ project: PROJECT, reasons: decision.verdict.reasons,
+      items: decision.verdict.items.slice(1), deferred: 1, signals: [] });
+    const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "fp-1", eventsThrough: 2, frozenText })!;
+    const landed = seatTickWakeCommit(decision.state, commit, NOW);
+    expect(landed.eventsThrough).toBe(0);
+    const next = seatTickDecision(idle({ events, state: landed, now: NOW + 61 * MINUTE }));
+    expect(next.verdict.kind).toBe("wake");
+    if (next.verdict.kind !== "wake") return;
+    expect(next.verdict.items.map(item => item.id)).toEqual(["pipeline_merge_1"]);
+  });
+
+  test("merges respect the configured interval and survive an exhausted reason guard", () => {
+    const settings = effectiveSeatTickSettings({ ...defaultSeatTickSettings(PROJECT), wakeIntervalMinutes: 15 }, NOW, SEAT_TICK_WAKE_INTERVAL_MS);
+    const state = stateWith({ eventsThrough: 0, lastWakeAt: new Date(NOW).toISOString(), lastProposalAt: new Date(NOW).toISOString(),
+      wakesWithoutChange: { "lane-event": DEFAULT_SEAT_TICK_POLICY.retryGuard }, lastWakeFingerprint: "fp-1" });
+    const events = [merge(1, { at: new Date(NOW).toISOString() })];
+    const early = seatTickDecision(idle({ events, state, settings, now: NOW + 14 * MINUTE }));
+    expect(early.verdict.kind).toBe("quiet");
+    expect(early.state.eventsThrough).toBe(0);
+    expect(seatTickDecision(idle({ events, state: early.state, settings, now: NOW + 15 * MINUTE })).verdict.kind).toBe("wake");
+  });
+
+  test("old or undated merges and other completed-lane events remain history", () => {
+    const events = [merge(1, { at: new Date(NOW - DEFAULT_SEAT_TICK_POLICY.backlogAfterMs - 1).toISOString() }),
+      merge(2, { at: "unreadable" }), event({ seq: 3, pipelineTerminal: true })];
+    const decision = seatTickDecision(idle({ events }));
+    expect(decision.verdict.kind).toBe("quiet");
+    expect(decision.state.eventsThrough).toBe(3);
+  });
+});
 
 test("a project with open work and no active seat reports no-seat and asks for one card, never a spawn", () => {
   const decision = seatTickDecision(input({ seat: null, pipelines: [lane()] }));
@@ -431,7 +500,7 @@ test("events whose lanes have finished are history, and a project holding only t
     tasks: [card({ status: "inbox" })],
     state: stateWith({ eventsThrough: 59, lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 /* And the count beside the reason says how much of it is live. "18 more" over a
@@ -517,7 +586,7 @@ test("a live event past the page waits for the check that can name it, rather th
     tasks: [card({ status: "inbox" })],
     state: stateWith({ eventsThrough: 59, lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   expect(decision.state.eventsThrough).toBe(60);
 });
 
@@ -549,7 +618,7 @@ test("a merged batch goes quiet on its own", () => {
     tasks: [card({ status: "inbox" })],
     state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 /* It is a reason, never a route around the bound: the hourly interval applies
@@ -881,7 +950,7 @@ test("a check inside the interval is quiet rather than an error", () => {
     tasks: [card({ status: "inbox" })],
     state: stateWith({ lastWakeAt: new Date(NOW - MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 /* A tick that is off is off; nothing was read, so there is nothing to report
@@ -972,7 +1041,7 @@ test("the hourly interval never wakes an empty agenda", () => {
     tasks: [card({ status: "inbox" })],
     state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 test("a signal alone is agenda enough for the interval to wake", () => {
@@ -1013,14 +1082,14 @@ test("a proposal slot that is not due leaves an idle seat quiet", () => {
   const decision = seatTickDecision(input({
     state: stateWith({ lastProposalAt: new Date(NOW - 60 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "the board is done and the proposal slot is not due" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due" });
 });
 
 test("a proposal card still open on the board holds the next proposal off", () => {
   /* The card lands in `inbox`, which is open work, so the board is no longer
      idle and the slot cannot come round again until the operator moves it. */
   const decision = seatTickDecision(input({ tasks: [card({ status: "inbox" })] }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 test("a fruitless child outcome is re-sent at most twice, then becomes a card", () => {
@@ -1343,8 +1412,8 @@ test("a terminal child is a wake reason of its own, named as an item (#1465)", (
   const decision = seatTickDecision(input({ children: [finished], state: stateWith(OVERDUE_STATE) }));
   expect(decision.verdict).toMatchObject({
     kind: "wake",
-    reasons: [{ kind: "child-terminal", detail: "a spawned child finished and its outcome is unharvested" }],
-    items: [{ kind: "child", id: finished.conversationId, label: "build the exporter — spawned child finished, outcome unharvested" }],
+    reasons: [{ kind: "child-terminal", detail: "a spawned child finished and its outcome is not yet announced by a delivered seat-tick wake. Reading the transcript alone does not acknowledge this announcement" }],
+    items: [{ kind: "child", id: finished.conversationId, label: "build the exporter — spawned child finished, outcome announcement owed" }],
     deferred: 0,
   });
 });
@@ -1359,7 +1428,7 @@ test("a finished child this seat launched with notices on is the notice's, never
   expect(optedOut.verdict).toMatchObject({ kind: "wake", reasons: [{ kind: "child-terminal" }] });
   /* A launch that failed before it ran never ends a turn, so no notice covers it. */
   const failed = seatTickDecision(input({ children: [{ ...finished, outcome: "failed" }], state: stateWith(OVERDUE_STATE) }));
-  expect(failed.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is unharvested" }] });
+  expect(failed.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is not yet announced by a delivered seat-tick wake. Reading the transcript alone does not acknowledge this announcement" }] });
   /* A running notified child is still open work the interval agenda names. */
   const running = seatTickDecision(input({ children: [child({ launcherNotice: true })], state: stateWith(OVERDUE_STATE) }));
   expect(running.verdict).toMatchObject({ items: [{ kind: "child", label: "build the exporter — spawned child running" }] });
@@ -1368,17 +1437,16 @@ test("a finished child this seat launched with notices on is the notice's, never
 test("a failed launch is a terminal child too, and the reason says so (#1465)", () => {
   const failed = child({ status: "terminal", outcome: "failed", terminalAt: new Date(NOW - 20 * MINUTE).toISOString() });
   const decision = seatTickDecision(input({ children: [failed], state: stateWith(OVERDUE_STATE) }));
-  expect(decision.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is unharvested" }] });
+  expect(decision.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is not yet announced by a delivered seat-tick wake. Reading the transcript alone does not acknowledge this announcement" }] });
 });
 
-test("a settled child is due one check interval after the last wake, not the hour (#1465, #1881)", () => {
+test("a newly owed settled child is due on the next check despite a recent wake (#2346)", () => {
   const finished = child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 2 * MINUTE).toISOString() });
   const at = (minutes: number) => stateWith({ lastWakeAt: new Date(NOW - minutes * MINUTE).toISOString() });
-  /* Inside the settled-child bound the wake still waits: two wakes minutes
-     apart are the storm the bound exists to stop. */
-  expect(seatTickDecision(input({ children: [finished], state: at(4) })).verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
-  expect(seatTickDecision(input({ children: [finished], state: at(SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS / MINUTE) })).verdict)
-    .toMatchObject({ kind: "wake", reasons: [{ kind: "child-terminal" }] });
+  for (const minutes of [0, 1, 4, SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS / MINUTE]) {
+    expect(seatTickDecision(input({ children: [finished], state: at(minutes) })).verdict)
+      .toMatchObject({ kind: "wake", reasons: [{ kind: "child-terminal" }] });
+  }
 });
 
 test("running children bring the interval wake to a quarter of an hour, and a still board keeps the hour (#1881)", () => {
@@ -1437,7 +1505,7 @@ test("terminal children are named oldest outcome first, and the plan records onl
   expect(decision.verdict).toMatchObject({ kind: "wake", deferred: 1 });
   const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
   expect(verdict.items.map((item) => item.id)).toEqual([child().conversationId, SECOND_CHILD]);
-  expect(verdict.reasons[0]!.detail).toBe("a spawned child finished and its outcome is unharvested and 2 more");
+  expect(verdict.reasons[0]!.detail).toBe("a spawned child finished and its outcome is not yet announced by a delivered seat-tick wake and 2 more. Reading the transcript alone does not acknowledge this announcement");
   const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "fp-2", eventsThrough: 0, terminalChildren: children.map((entry) => entry.conversationId) })!;
   expect(commit.children).toEqual([child().conversationId, SECOND_CHILD]);
 });
@@ -1469,9 +1537,9 @@ test("a proposal landing harvests nothing (#1465)", () => {
 
 test("an unknown child is neither open work nor a harvest, and the quiet line counts it (#1465)", () => {
   const decision = seatTickDecision(input({ children: [child({ status: "unknown" })], state: stateWith({ lastWakeAt: new Date(NOW - 5 * MINUTE).toISOString(), lastProposalAt: new Date(NOW - MINUTE).toISOString() }) }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "the board is done and the proposal slot is not due; 1 spawned child(ren) in an unknown state" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due; 1 spawned child(ren) in an unknown state" });
   const beside = seatTickDecision(input({ children: [child({ status: "unknown" })], tasks: [card({ status: "inbox" })], state: stateWith(OVERDUE_STATE) }));
-  expect(beside.verdict).toEqual({ kind: "quiet", detail: "nothing owed; 1 spawned child(ren) in an unknown state" });
+  expect(beside.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; 1 spawned child(ren) in an unknown state" });
 });
 
 test("a stalled child wakes only once it has persisted across two consecutive checks (#1465)", () => {
@@ -1771,6 +1839,37 @@ describe("delivered agenda versions", () => {
 });
 
 
+/* A board that waits only on the operator must go quiet. Since #2346 (#2632)
+   re-offers open lanes on every interval, the stall token on a parked lane's
+   item is the one thing that keeps it out of that periodic reminder; #2486's
+   versioned agenda keeps a PR waiting for a merge word out of it once shown.
+   This replays 24 hourly checks over a board that never moves, each wake
+   committed as landed, and records what the seat would have been told. */
+describe("a board that waits only on the operator", () => {
+  function replayDay(board: Partial<SeatTickCheckInput>): string[][] {
+    let state = emptySeatTickState();
+    const wakes: string[][] = [];
+    for (let hour = 0; hour < 24; hour++) {
+      const now = NOW + hour * 61 * MINUTE;
+      const decision = seatTickDecision(input({ ...board, now, state, changeFingerprint: "unchanged" }));
+      if (decision.verdict.kind === "wake") {
+        wakes.push(reasonsOf(decision.verdict));
+        state = seatTickWakeCommit(decision.state, plan(decision.verdict, "unchanged", 0), now);
+      } else state = decision.state;
+    }
+    return wakes;
+  }
+
+  test("a lane parked on an operator decision wakes the seat for its interval, then once as stalled, then stays quiet", () => {
+    const parked = lane({ state: "inert", title: "park the design decision" });
+    expect(replayDay({ pipelines: [parked] })).toEqual([["interval"], ["stalled"]]);
+  });
+
+  test("a pull request waiting for the operator's merge word wakes the seat once", () => {
+    expect(replayDay({ pullRequests: [pullRequest()] })).toEqual([["unmerged-pr"]]);
+  });
+});
+
 test("a shown PR stays silent after its lane announcement is discharged", () => {
   const first = seatTickDecision(input({ pullRequests: [pullRequest()], ownLanes: [ownLane({ settled: "completed" })] }));
   const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
@@ -1889,4 +1988,49 @@ test("cropped outcome bullets leave child, deployment and maintenance obligation
   expect(landed.announcedMaintenance).toEqual([]);
   expect(landed.reportedStalls ?? []).toEqual([]);
   expect(landed.reportsOwed!.map(outcome => outcome.key)).toEqual(["lane:visible-lane:completed"]);
+});
+
+test("disk pressure is shown once per episode despite free-space changes and agenda eviction", () => {
+  const episode = "2026-10-06T10:00:00Z";
+  const check = input({ signals: [{ id: "disk-space", episode, label: "Disk space low: state/worktrees 1.00 GiB free; worktrees 20 GiB" }] });
+  const decision = seatTickDecision(check);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
+  /* With no open work at all, the episode alone wakes the seat, and leads. */
+  expect(decision.verdict.reasons.map(reason => reason.kind)).toEqual(["disk-pressure"]);
+  expect(decision.verdict.items[0]).toMatchObject({ kind: "signal", id: "disk-space", diskPressureEpisode: episode });
+  /* It does not wait for the wake interval. */
+  const recent = seatTickDecision({ ...check, state: { ...emptySeatTickState(), lastWakeAt: new Date(NOW - 60_000).toISOString() } });
+  expect(recent.verdict.kind).toBe("wake");
+  const landed = seatTickWakeCommit(decision.state, plan(decision.verdict, check.changeFingerprint, 0), NOW);
+  expect(landed.diskPressureShown).toBe(episode);
+  const next = input({ now: NOW + 2 * SEAT_TICK_WAKE_INTERVAL_MS, state: { ...landed, itemsShown: [] },
+    signals: [{ id: "disk-space", episode, label: "Disk space low: state/worktrees 0.80 GiB free; worktrees 22 GiB" }] });
+  const repeat = seatTickDecision(next);
+  expect(repeat.verdict.kind).not.toBe("wake");
+  const crossing = seatTickDecision({ ...next, signals: [{ id: "disk-space", episode: "2026-10-07T10:00:00Z", label: "Disk space low again" }] });
+  expect(crossing.verdict.kind).toBe("wake");
+});
+
+test("a restarted disk reader joins the shared episode and does not wake the seat again", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-pressure-"));
+  const file = path.join(directory, "disk-pressure-report.json");
+  try {
+    const volumes = () => [{ roles: ["state"], freeBytes: 1024 ** 3, level: "critical" as const }];
+    // This reader predates the pressure episode; it has nothing to announce.
+    observeDiskPressureReport(file, () => [], "2026-10-06T10:00:00Z");
+    const opened = observeDiskPressureReport(file, volumes, "2026-10-06T10:20:00Z");
+    const check = input({ signals: [{ id: "disk-space", episode: opened.episode!, label: "Disk space low" }] });
+    const decision = seatTickDecision(check);
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
+    const landed = seatTickWakeCommit(decision.state, plan(decision.verdict, check.changeFingerprint, 0), NOW);
+    const restarted = observeDiskPressureReport(file, volumes, "2026-10-06T10:40:00Z");
+    const next = input({ now: NOW + 2 * SEAT_TICK_WAKE_INTERVAL_MS,
+      state: JSON.parse(JSON.stringify({ ...landed, itemsShown: [] })),
+      signals: [{ id: "disk-space", episode: restarted.episode!, label: "Disk space low" }],
+    });
+    expect(restarted.episode).toBe(opened.episode);
+    expect(seatTickDecision(next).verdict.kind).not.toBe("wake");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

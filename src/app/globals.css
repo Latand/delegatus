@@ -146,6 +146,23 @@ body {
   .incumbent-inline [data-seat-reports-value] {
     display: none;
   }
+  /* The switch's thumb carries the word, so without it the thumb is a round
+     knob. The pill halves its travel as well: the side-docked seat's row had
+     35 px to spare in Ukrainian with the old chip down to its glyph and dot,
+     and a knob on the full travel is 56 px wider than that chip was. */
+  .incumbent-inline .seat-tick-switch {
+    --tick-thumb: var(--tick-knob) !important;
+    --tick-travel: 30px !important;
+    --tick-clear: var(--tick-knob-clear) !important;
+  }
+  /* An expiry's hourglass rides in the empty knob: beside it, it took the
+     side-docked seat's row in Ukrainian 9 px past «Зупинити хост». */
+  .incumbent-inline .seat-tick-switch [data-seat-tick-until] {
+    display: none;
+  }
+  .incumbent-inline .seat-tick-switch .seat-tick-knob-until {
+    display: block;
+  }
   /* Inline only: in the dock the link is a row of its own under the identity,
      so it costs the controls nothing and stays at every width. */
   .incumbent-inline [data-orchestrator-predecessor] {
@@ -160,6 +177,87 @@ body {
   [data-seat-tick-face],
   [data-seat-reports-value] {
     display: none;
+  }
+  .seat-tick-switch {
+    --tick-thumb: var(--tick-knob) !important;
+    --tick-travel: 30px !important;
+    --tick-clear: var(--tick-knob-clear) !important;
+  }
+  .seat-tick-switch [data-seat-tick-until] {
+    display: none;
+  }
+  .seat-tick-switch .seat-tick-knob-until {
+    display: block;
+  }
+}
+
+/*
+ * The seat tick switch (docs/design/seat-tick-slider.md, variant 4). One ramp
+ * from the app's own tokens, so the dark theme follows without a second
+ * palette: grey for off, a calm blue at 4 h, the accent at the default hour, a
+ * warm violet-magenta at 10 min. Green and amber stay with the health dot.
+ *
+ * `--tick-pos` (in stops, 0..3) and `--tick` (the colour there) are written by
+ * `SeatTickSwitch` on its own root from a spring, so the thumb, the tint behind
+ * it and the word's colour travel together. The thumb's width, the inset and
+ * the travel are the component's, which keeps a step the same number of pixels
+ * whatever the word is.
+ *
+ * A mix that can have grey on both sides (the tint over the pill, the hover
+ * border and the drag halo over transparent) is made in oklab: Chrome reads
+ * the hue of a grey as missing in oklch, takes it as 0°, and the off pill came
+ * out wine-red in the dark theme.
+ */
+:root {
+  --tick-0: var(--effort-empty);
+  --tick-1: color-mix(in oklch, var(--color-accent) 55%, var(--color-info));
+  --tick-2: var(--color-accent);
+  --tick-3: color-mix(in oklch, var(--color-accent) 35%, var(--color-openclaw));
+}
+.seat-tick-switch {
+  --tick-pos: 2;
+  --tick: var(--tick-2);
+  --tick-knob: 18px;
+  /* `--tick-clear` for the knob, in stops: its half, the notch's 2 px radius
+     and a 2 px gap, over the knob's 10 px step. */
+  --tick-knob-clear: 1.3;
+  --tick-left: calc(var(--tick-pos) / 3 * var(--tick-travel) + var(--tick-inset));
+}
+.seat-tick-switch[data-seat-tick-surface="mobile"] {
+  --tick-knob: 28px;
+  --tick-knob-clear: 1.8;
+}
+.seat-tick-track {
+  width: calc(var(--tick-thumb) + var(--tick-travel) + 2 * var(--tick-inset) + 2px);
+  background: var(--color-sunken);
+}
+/* The tint is a pill of its own from the left end to the thumb's far edge
+   and the inset past it, so its right end is rounded around the thumb and
+   at the last stop it fills the whole pill. A hard edge at the thumb's
+   centre showed in the ring as a bare crescent beside it. */
+.seat-tick-fill {
+  width: calc(var(--tick-left) + var(--tick-thumb) + var(--tick-inset));
+  background: color-mix(in oklab, var(--tick) 18%, var(--color-sunken));
+}
+.seat-tick-knob-until {
+  display: none;
+}
+/* A notch marks a stop the thumb is not on. Closer to the thumb than
+   `--tick-clear` stops (the component's, from the thumb's width) it would sit
+   under the thumb's edge or against it, so it is gone there and fades back in
+   over the next 0.3 of a stop, following the thumb as it travels. */
+.seat-tick-notch {
+  left: calc(var(--tick-notch) / 3 * var(--tick-travel) + var(--tick-inset) + var(--tick-thumb) / 2);
+  opacity: clamp(0, (max(var(--tick-notch) - var(--tick-pos), var(--tick-pos) - var(--tick-notch)) - var(--tick-clear)) / 0.3, 1);
+}
+.seat-tick-thumb {
+  left: var(--tick-left);
+  width: var(--tick-thumb);
+  transition: box-shadow 150ms ease, border-color 150ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .seat-tick-thumb {
+    transition: none;
   }
 }
 
@@ -704,7 +802,7 @@ body {
    whatever its specificity — which is why the mark reads on a card and on a
    reader pane alike. With the blink refused there is no animation to do that,
    and a surface that dresses itself more specifically than an attribute
-   (`.kb .reader-full .reader.conv` carries four classes) simply kept its own
+   (`.kb .agent-window .reader.conv` carries four classes) simply kept its own
    shadow: the operator was handed to a pane with nothing lit on it. Weight is
    the whole of the problem, so it is settled here rather than by counting
    attribute repetitions until the next surface out-dresses them — and it

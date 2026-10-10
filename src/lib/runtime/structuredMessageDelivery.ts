@@ -1,8 +1,12 @@
+import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
 
 import {
   agentRegistry,
   DeliveryReservationConflictError,
+  REGISTRY_WRITER_BUSY,
   type AgentRegistry,
   type RegistryConversation,
 } from "@/lib/agent/registry";
@@ -10,7 +14,7 @@ import { structuredHostsEnabled } from "./flags";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import { actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -31,6 +35,7 @@ import {
   type RuntimeOperationResult,
   type RuntimeSendSettings,
   type RuntimeSession,
+  runtimeIdleKillMatches,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
@@ -40,14 +45,21 @@ import {
   assertStructuredTextEnvelope,
   structuredContent,
   StructuredEnvelopeTooLargeError,
+  type RuntimeImageCapability,
   type StructuredImageRef,
 } from "./structuredContent";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
+import type { DeliveryWaitReason } from "./deliveryWaitReason";
+import { recordAdmissionWait, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
+import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
-import { RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
+import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 
 export interface StructuredMessageRequest {
+  /** Live authorization at fresh reservation, after runtime and lock waits. */
+  admissionGuard?: () => void;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -55,6 +67,7 @@ export interface StructuredMessageRequest {
   kind?: "send" | "steer" | "inject";
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
+  onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   text: string;
   images?: RuntimeImageUpload[];
   imageRefs?: StructuredImageRef[];
@@ -95,6 +108,10 @@ export type StructuredMessageResult =
   | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string; admission?: "refused" };
 
 export interface StructuredMessageDependencies {
+  /** Trusted caller fence, repeated immediately before first-prompt dispatch. */
+  authorizeDispatch?: () => void | Promise<void>;
+  /** Controller-only eligibility, checked after runtime reads and before admission. */
+  idleContinuationAllowed?: () => boolean | Promise<boolean>;
   /** The actuation section a caller already holds for this conversation (the migration drain), handed down
       explicitly; without it the send waits for the section like any other actuator. */
   actuationLease?: ActuationLease;
@@ -118,6 +135,104 @@ export interface StructuredMessageDependencies {
       a request body carries can set it. It admits that continuation to a
       seat's live deputy, whose one job the release cut. */
   interruptionContinuation?: boolean;
+  /** Where the admitted operation's waits are recorded; the Viewer's own
+      store by default, and nothing in a process that holds none. */
+  progress?: DeliveryProgressPort | null;
+}
+
+function progressPort(progress: DeliveryProgressPort | null | undefined): DeliveryProgressPort | null {
+  return progress === undefined ? ownedDeliveryProgressStore() : progress;
+}
+
+/**
+ * A step after a command left the process (rule a, step 4): it may race the
+ * delivery queue, which continues the same record once the journal lists the
+ * operation, so it writes only while the record is still the one this request
+ * wrote last.
+ */
+function recordWaitUnlessContinued(
+  progress: DeliveryProgressPort | null,
+  registry: AgentRegistry,
+  reservation: HeldDelivery,
+  written: DeliveryProgressRecord | null,
+  wait: RecordedWait,
+): DeliveryProgressRecord | null {
+  if (!progress || !written) return null;
+  try {
+    if (!stillAtStep(progress.get(reservation.command.operationId), written)) return null;
+  } catch {
+    return null;
+  }
+  return recordWait(progress, registry, reservation, wait);
+}
+
+/** The ending a request decided for its own send, on its record. */
+function settleRecord(progress: DeliveryProgressPort | null, operationId: string, state: "delivered" | "failed" | "uncertain", reason: string | null): void {
+  if (!progress) return;
+  try {
+    progress.settle?.(operationId, state, reason);
+  } catch (error) {
+    spawnDiagnosticError("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/**
+ * Whether a payload can be handed to a host with this image capability
+ * (Note 2). Admission and the account-migration drain both ask it, from the
+ * stored refs, so a rejection admission decided but could not write is
+ * enforced again before the drain's command.
+ */
+export function payloadRefusal(
+  capability: RuntimeImageCapability,
+  engine: "claude" | "codex" | "copilot",
+  refs: readonly StructuredImageRef[],
+  wantsImages = refs.length > 0,
+): { error: string; status: number } | null {
+  if (!wantsImages) return null;
+  if (!capability.supported && engine !== "codex") {
+    return { error: capability.reason ?? "structured image delivery is unavailable", status: 409 };
+  }
+  const encodedBytes = refs.reduce((total, ref) => total + 4 * Math.ceil(ref.bytes / 3), 0);
+  if (encodedBytes > capability.maxEncodedBytesPerRequest) {
+    return { error: "runtime image request encoding is too large", status: 413 };
+  }
+  return null;
+}
+
+/**
+ * Ends a reservation the request itself decided cannot be delivered: a resume
+ * that cannot publish, a payload the recovered host cannot take. The write
+ * waits for the lock off the loop (rule c). Refused, nothing was written and
+ * the send stays accepted: the request answers it held, its record names the
+ * ending still owed, and the drain reaches the same ending (Note 2).
+ */
+async function endReservationForRequest(
+  registry: AgentRegistry,
+  progress: DeliveryProgressPort | null,
+  reservation: HeldDelivery,
+  failure: string,
+  refusedReason: DeliveryWaitReason = "awaiting-host",
+): Promise<{ ended: true; error: string } | { ended: false }> {
+  const operationId = reservation.command.operationId;
+  const ended = await registry.deliveryWrite({ label: "delivery.terminalize", operationId },
+    () => registry.terminalizeHeldDelivery(reservation.id, failure));
+  if (!ended.acquired) {
+    recordWait(progress, registry, reservation, { reason: refusedReason, detail: `its ending could not be written yet (${failure})` });
+    return { ended: false };
+  }
+  const error = ended.value.error ?? failure;
+  settleRecord(progress, operationId, "failed", error);
+  return { ended: true, error };
+}
+
+function acceptedHeld(operationId: string, target: string | null = null, spawned = false): StructuredMessageResult {
+  return { ok: true, structured: true, target, outcome: "held", operationId, ...(spawned ? { spawned: true } : {}) };
+}
+
+/** The reservation behind one accepted operation, read by its key. */
+function reservationFor(registry: AgentRegistry, operationId: string): HeldDelivery | null {
+  return Object.values(registry.deliverySnapshotForOperation(operationId).heldDeliveries)
+    .find((candidate) => candidate.command.operationId === operationId) ?? null;
 }
 
 /** Serializes preflight → publication → reservation per (conversation,
@@ -158,6 +273,8 @@ export interface HeldStructuredMessageDependencies {
   startupRecovered?: () => void;
   republish?: (key: RuntimeSession["sessionKey"]) => Promise<boolean>;
   recover?: typeof recoverDeadStructuredConversation;
+  /** Where each drain attempt's wait is recorded; the Viewer's own store by default. */
+  progress?: DeliveryProgressPort | null;
 }
 
 /** A held delivery that never reached dispatch, left queued with the reason
@@ -166,12 +283,21 @@ export interface HeldStructuredMessageDependencies {
 export interface HeldForRetry {
   outcome: "held";
   cause: string;
+  /** What the send waits on meanwhile, for its progress record. */
+  waitReason?: DeliveryWaitReason;
 }
 
-export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldForRetry | null;
+/** A payload the host the drain reached cannot take (Note 2): never
+    dispatched, so it ends `failed` with the cause and may be sent again. */
+export interface HeldRejection {
+  outcome: "rejected";
+  cause: string;
+}
 
-function heldForRetry(cause: string): HeldForRetry {
-  return { outcome: "held", cause };
+export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldForRetry | HeldRejection | null;
+
+function heldForRetry(cause: string, waitReason: DeliveryWaitReason = "awaiting-host"): HeldForRetry {
+  return { outcome: "held", cause, waitReason };
 }
 
 /**
@@ -240,6 +366,9 @@ function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): b
 }
 
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
+  if (error instanceof DeliveryAdmissionRefusedError) return refusedBeforeReservation({
+    ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: 409,
+  });
   return {
     ok: false,
     structured: true,
@@ -288,6 +417,7 @@ function commandInput(request: StructuredMessageRequest) {
     ...(request.kind ? { kind: request.kind } : {}),
     ...(request.policy ? { policy: request.policy } : {}),
     ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+    ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
     ...(request.origin ? { origin: request.origin } : {}),
     ...(request.cohortAt ? { cohortAt: request.cohortAt } : {}),
   };
@@ -341,7 +471,7 @@ function heldOutcomeDuringRuntimeSynchronization(
   // retry that retains the runtime-read cause.
   if (owner?.kind === "legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
   const ownerHint = owner?.kind === "structured" ? "structured runtime owner is synchronizing" : "runtime owner is unavailable";
-  return heldForRetry(`${ownerHint}: ${cause}`);
+  return heldForRetry(`${ownerHint}: ${cause}`, "evidence-unreadable");
 }
 
 /**
@@ -357,12 +487,20 @@ interface SynchronizationImageAdmission {
   withImageAdmissionLock?: StructuredMessageDependencies["withImageAdmissionLock"];
 }
 
+/** What a send held at admission waits on, and where that is recorded. */
+interface HeldAdmissionWait {
+  progress: DeliveryProgressPort | null;
+  reason: DeliveryWaitReason;
+  detail?: string | null;
+}
+
 async function holdDuringRuntimeSynchronization(
   request: StructuredMessageRequest,
   registry: AgentRegistry,
   requestTick: () => void,
   allowReclaimed = false,
   admission: SynchronizationImageAdmission = {},
+  wait: HeldAdmissionWait = { progress: null, reason: "awaiting-host" },
 ): Promise<StructuredMessageResult | null> {
   const owner = persistedCurrentOwner(request, registry);
   const unresolvedConversation = request.conversationId?.startsWith("conversation_")
@@ -390,7 +528,7 @@ async function holdDuringRuntimeSynchronization(
   const rejectedHold = supersededRejection(registry, persistedConversation);
   if (rejectedHold) return rejectedHold;
   if (owner?.kind === "legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
-  let conversation = persistedConversation;
+  const conversation = persistedConversation;
   /**
    * #1560: the last way an injection could become a held reservation.
    *
@@ -446,8 +584,8 @@ async function holdDuringRuntimeSynchronization(
     const deliveryText = content?.content.text ?? request.text;
     const contentDigest = content?.contentDigest ?? null;
     const payloadKind = refs.length ? "runtime-images" : "text";
-    /* Conflict and terminal replay outcomes remain side-effect free. Accepted
-       sends establish the durable account fence before reservation placement. */
+    /* Conflict and terminal replay outcomes remain side-effect free. The
+       account fence and fresh reservation commit under the same guard. */
     const replay = registry.preflightDeliveryReservation(
       conversation.id,
       deliveryText,
@@ -469,21 +607,27 @@ async function holdDuringRuntimeSynchronization(
         status: 409,
       };
     }
+    if (!replay && request.admissionGuard
+      && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
     const generation = conversation.generations.at(-1);
     const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
-    if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
-      conversation = registry.requestConversationMigrationToActiveAccount(conversation.id, { launchId: request.launchId });
-    }
-    const place = () => registry.holdDelivery(
-      conversation.id,
-      deliveryText,
-      idempotencyKey,
-      payloadKind,
-      refs,
-      contentDigest,
-      commandInput(request),
-      { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
-    );
+    const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
+    /* The registry write lock is waited for off the event loop. */
+    const place = async (): Promise<HeldDelivery> => {
+      const held = await registry.holdDeliveryOffLoop(
+        conversation.id,
+        deliveryText,
+        idempotencyKey,
+        payloadKind,
+        refs,
+        contentDigest,
+        commandInput(request),
+        { recoveryIntent: allowReclaimed ? "reclaimed-host" : null, admissionGuard: request.admissionGuard,
+          ...(needsAccountReseat ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
+      );
+      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      return held;
+    };
     /* Publication and reservation are one section per key, as on the live
        path: two racing attempts under the same client message id see a durable
        winner, and the bytes are published once, before the row that names
@@ -521,6 +665,9 @@ async function holdDuringRuntimeSynchronization(
         status: 409,
       };
     }
+    /* A replay of a key the queue already leads leaves its record as it is;
+       the wake still goes out. */
+    recordAdmissionWait(wait.progress, registry, reservation, wait);
     requestTick();
     return {
       ok: true,
@@ -641,10 +788,10 @@ function uncertainReservationFailure(reservation: HeldDelivery): StructuredMessa
 function requestDeliveryDrain(kick: () => void | Promise<void>): void {
   try {
     void Promise.resolve(kick()).catch((error) => {
-      console.error("[structured delivery] drain request failed", error);
+      spawnDiagnosticError("[structured delivery] drain request failed", error);
     });
   } catch (error) {
-    console.error("[structured delivery] drain request failed", error);
+    spawnDiagnosticError("[structured delivery] drain request failed", error);
   }
 }
 
@@ -667,17 +814,18 @@ async function recoverReclaimedMessage(
     ? registry.conversation(request.conversationId as ViewerConversationId)
     : registry.conversationForPath(request.path);
   if (!conversation) return ownershipUnavailable("unknown");
+  const progress = progressPort(dependencies.progress);
   const admitted = await holdDuringRuntimeSynchronization(
     request,
     registry,
     dependencies.requestMigrationTick ?? requestAccountMigrationTick,
     true,
     synchronizationImageAdmission(dependencies, rawImages),
+    { progress, reason: "recovering-host", detail: "the conversation's host was reclaimed" },
   );
   if (!admitted) return ownershipUnavailable("unknown");
   if (!admitted.ok || admitted.outcome === "delivered") return admitted;
-  const reservation = Object.values(registry.deliverySnapshotForOperation(admitted.operationId).heldDeliveries)
-    .find((candidate) => candidate.command.operationId === admitted.operationId);
+  const reservation = reservationFor(registry, admitted.operationId);
   if (reservation?.state === "delivery-uncertain") {
     return uncertainReservationFailure(reservation);
   }
@@ -698,16 +846,21 @@ async function recoverReclaimedMessage(
   } catch (error) {
     const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`;
     if (error instanceof StructuredResumeUnpublishedError) {
-      const settled = registry.terminalizeHeldDelivery(reservation.id, failure);
+      const settled = await endReservationForRequest(registry, progress, reservation, failure);
+      if (!settled.ended) return acceptedHeld(admitted.operationId);
       return {
         ok: false,
         structured: true,
         outcome: "failed",
-        error: settled.error ?? failure,
+        error: settled.error,
         status: 503,
         operationId: admitted.operationId,
       };
     }
+    recordAdmissionWait(progress, registry, reservation, {
+      reason: "awaiting-host",
+      detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
     requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
     return {
       ok: true,
@@ -719,12 +872,13 @@ async function recoverReclaimedMessage(
   }
   if (!recovered) {
     const failure = deliverabilityFailureMessage({ condition: "reclaimed" });
-    const settled = registry.terminalizeHeldDelivery(reservation.id, failure);
+    const settled = await endReservationForRequest(registry, progress, reservation, failure);
+    if (!settled.ended) return acceptedHeld(admitted.operationId);
     return {
       ok: false,
       structured: true,
       outcome: "failed",
-      error: settled.error ?? failure,
+      error: settled.error,
       status: 503,
       operationId: admitted.operationId,
     };
@@ -741,21 +895,146 @@ async function recoverReclaimedMessage(
   };
 }
 
+/**
+ * The progress record of one drain attempt on a reservation the journal does
+ * not hold yet. The attempt is counted once, on its first note. A drain that
+ * reconciles an earlier attempt counts none, and records the waits it performs
+ * itself (a session read, a recovery, a republish) only on a record no queue
+ * executor leads: one the queue wrote is that executor's, which may be acting
+ * on the operation right now, so its phase, clocks and stall stay (A5).
+ */
+function heldDrainProgress(
+  progress: DeliveryProgressPort | null,
+  registry: AgentRegistry,
+  request: HeldStructuredMessageRequest,
+) {
+  const operationId = request.command?.operationId ?? request.deliveryId;
+  let delivery: HeldDelivery | null | undefined;
+  let attempted = false;
+  let written: DeliveryProgressRecord | null = null;
+  /** Asked at each write, since a queue may list the operation meanwhile. */
+  const queueLeads = (): boolean => {
+    try {
+      const current = progress?.get(operationId) ?? null;
+      return Boolean(current && (current.terminal || current.executorId !== null));
+    } catch {
+      return true;
+    }
+  };
+  const wait = (reason: DeliveryWaitReason, detail: string | null = null, sinceMs?: number) => {
+    if (!progress) return;
+    if (request.reconcileUncertain && queueLeads()) return;
+    if (delivery === undefined) {
+      try { delivery = reservationFor(registry, operationId); }
+      catch { delivery = null; }
+    }
+    if (!delivery) return;
+    const counts = !attempted && !request.reconcileUncertain;
+    written = recordWait(progress, registry, delivery, { reason, detail, ...(counts ? { attempted: true } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}) });
+    attempted = true;
+  };
+  return {
+    wait,
+    /** A read the attempt waits on before its first recorded step. It stays
+        off the record while it answers within the stall bound, as the queue's
+        own reads do, so a pass does not restart the phase the send already
+        shows; one that lasts is recorded as `checking` from when it began. */
+    async step<T>(detail: string, read: () => Promise<T>): Promise<T> {
+      if (!progress) return read();
+      const began = Date.now();
+      const bound = setTimeout(() => wait("checking", detail, began), STRUCTURED_DELIVERY_TIMING.stallMs);
+      (bound as { unref?: () => void }).unref?.();
+      try {
+        return await read();
+      } finally {
+        clearTimeout(bound);
+      }
+    },
+    /** A reconcile whose runtime read failed says so on a record no queue
+        leads: one read that failed proves nothing about the journal, and a
+        record a queue executor wrote (its phase, clocks and stall) is that
+        executor's, which may be acting on the operation right now. */
+    unreadable(cause: string) {
+      if (!progress || !request.reconcileUncertain || queueLeads()) return;
+      let reservation: HeldDelivery | null = null;
+      try { reservation = reservationFor(registry, operationId); }
+      catch { reservation = null; }
+      if (reservation) recordWait(progress, registry, reservation, { reason: "evidence-unreadable", detail: `the runtime journal could not be read: ${cause}` });
+    },
+    /** The payload was refused before any command. */
+    rejected(cause: string) {
+      settleRecord(progress, operationId, "failed", cause);
+    },
+    /** The journal admitted the attempt: the record says so unless the queue,
+        further along, already wrote it. */
+    admitted() {
+      if (!progress || !written) return;
+      try {
+        if (!stillAtStep(progress.get(operationId), written)) return;
+        progress.note(operationId, written.conversationId, {
+          waitReason: "queued",
+          nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
+        });
+      } catch (error) {
+        spawnDiagnosticError("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+      }
+    },
+  };
+}
+
+function ownerFirstPromptAllowed(registry: AgentRegistry, operationId: string): boolean {
+  if (!operationId.startsWith("spawn_message_")) return true;
+  const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
+  return ownerRelaySpawnAuthorized(receipt?.clientAttemptId);
+}
+
 export async function deliverHeldStructuredMessage(
   request: HeldStructuredMessageRequest,
   dependencies: HeldStructuredMessageDependencies = {},
 ): Promise<HeldStructuredMessageOutcome> {
   if (!(dependencies.enabled ?? structuredHostsEnabled)()) return null;
   const registry = (dependencies.registry ?? agentRegistry)();
+  const progress = heldDrainProgress(progressPort(dependencies.progress), registry, request);
+  const outcome = await deliverHeldAttempt(request, dependencies, registry, progress);
+  if (typeof outcome === "object" && outcome) {
+    if (outcome.outcome === "rejected") progress.rejected(outcome.cause);
+    else progress.wait(outcome.waitReason ?? "awaiting-host", outcome.cause);
+  }
+  return outcome;
+}
+
+async function deliverHeldAttempt(
+  request: HeldStructuredMessageRequest,
+  dependencies: HeldStructuredMessageDependencies,
+  registry: AgentRegistry,
+  progress: ReturnType<typeof heldDrainProgress>,
+): Promise<HeldStructuredMessageOutcome> {
+  const operationId = request.command?.operationId
+    ?? registry.readOnlySnapshot().heldDeliveries[request.deliveryId]?.command.operationId ?? request.deliveryId;
+  const refuseOwnerPrompt = async (): Promise<HeldStructuredMessageOutcome | undefined> => {
+    if (ownerFirstPromptAllowed(registry, operationId)) return undefined;
+    const delivery = reservationFor(registry, operationId);
+    if (!delivery) return "failed";
+    const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId },
+      () => registry.terminalizeHeldDelivery(delivery.id, "owner relay first prompt authorization revoked"));
+    return ended.acquired ? "failed" : heldForRetry("owner first prompt cancellation awaits the registry writer");
+  };
+  const refused = await refuseOwnerPrompt();
+  if (refused !== undefined) return refused;
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
+    progress.unreadable("runtime host client is unavailable");
     return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime host client is unavailable");
   }
   let session: RuntimeSession | null;
   try {
-    session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
+    session = await progress.step("reading the recipient's runtime session",
+      () => readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined }));
   } catch (error) {
-    console.error("[structured delivery] runtime session read failed", error);
+    spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
+      `spawn_message_${receipt.launchId}` === request.command?.operationId)?.clientAttemptId,
+      "[structured delivery] runtime session read failed", error);
+    progress.unreadable(error instanceof Error ? error.message : String(error));
     return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
@@ -778,6 +1057,10 @@ export async function deliverHeldStructuredMessage(
        used to be recorded `delivery-uncertain`, which settlement must treat
        as possibly executed, for a message that provably never left. */
     if (deliverability.condition !== "reclaimed") return heldForRetry(deliverability.reason);
+    /* Recorded before the recovery is awaited (A5): a recovery that hangs is
+       named on the send's record and stalls within the bound. A refused one
+       leaves the reservation for the next pass, recorded `awaiting-host`. */
+    progress.wait("recovering-host", "the conversation's host was reclaimed");
     try {
       const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path,
@@ -793,16 +1076,20 @@ export async function deliverHeldStructuredMessage(
       });
       return recovered ? "held" : heldForRetry(deliverabilityFailureMessage({ condition: "reclaimed" }));
     } catch (error) {
-      if (error instanceof StructuredRecoveryHeldForUpdateError) return "held";
+      if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        progress.wait("update-handoff");
+        return "held";
+      }
       return heldForRetry(`${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   try {
-    const refreshed = await refreshRepublishedSession(
-      session,
+    const current = session;
+    const refreshed = await progress.step("making the recipient's host ready", () => refreshRepublishedSession(
+      current,
       client,
       dependencies.republish ?? republishStructuredDeliveryHost,
-    );
+    ));
     session = refreshed.session;
     if (refreshed.republished && (session.host === "dead" || session.host === "unhosted")) {
       return heldForRetry("the recipient's host was republished without a live process");
@@ -816,18 +1103,24 @@ export async function deliverHeldStructuredMessage(
     const refs = request.imageRefs ?? [];
     const imageCapability = session.capabilities.imageInput
       ?? runtimeImageCapability(session.sessionKey.engine, false);
-    if (refs.length > 0 && !imageCapability.supported && session.sessionKey.engine !== "codex") return "failed";
+    /* The same predicate admission asks (Note 2): a rejection admission
+       decided and could not write is reached again here, before any command. */
+    const refusal = payloadRefusal(imageCapability, session.sessionKey.engine, refs);
+    if (refusal) return { outcome: "rejected", cause: refusal.error };
     const content = structuredContent(request.text, refs);
     const command = request.command ?? {
       operationId: request.deliveryId,
       kind: "send" as const,
       policy: "interrupt-active" as const,
     };
+    progress.wait("dispatching");
+    if (!ownerFirstPromptAllowed(registry, operationId))
+      return await refuseOwnerPrompt() ?? heldForRetry("owner first prompt authorization changed");
     const result = await client.command({
       kind: command.kind,
       operationId: command.operationId,
       conversationId: request.runtimeConversationId ?? request.conversationId,
-      idempotencyKey: request.clientMessageId,
+      idempotencyKey: continuationJournalKey(command, request.clientMessageId),
       text: content.content.text,
       ...(refs.length ? { images: refs } : {}),
       contentDigest: content.contentDigest,
@@ -836,10 +1129,12 @@ export async function deliverHeldStructuredMessage(
          holds were refused would die here too. */
       ...(command.kind === "inject" ? {} : { policy: command.policy }),
       ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
+      ...(command.onlyIfIdle ? { onlyIfIdle: command.onlyIfIdle } : {}),
       /* #1117: the authorship persisted on the held record survives the
          migration hold — the drained message re-attributes exactly as admitted. */
       ...(command.origin ? { origin: command.origin } : {}),
     });
+    if (result.receipt.status === "queued" || result.receipt.status === "pending") progress.admitted();
     try {
       await (dependencies.kick ?? kickStructuredDeliveryQueue)();
     } catch {
@@ -854,10 +1149,50 @@ export async function deliverHeldStructuredMessage(
   }
 }
 
+/* A confirmed admission refusal has no effect to replay. Its replacement
+   reservation owns a fresh journal key, while the caller's key still resolves
+   the durable reservation. Unknown-fate retries keep that reservation intact. */
+const IDLE_CONTINUATION_RETRY_PREFIX = "idle-continuation-retry_";
+
+function continuationJournalKey(command: HeldDeliveryCommand, clientMessageId: string): string {
+  return command.onlyIfIdle && command.operationId.startsWith(IDLE_CONTINUATION_RETRY_PREFIX)
+    ? command.operationId : clientMessageId;
+}
+
+function idleContinuationRefusedBeforeExecution(result: RuntimeOperationResult | null): boolean {
+  if (result?.receipt.kind !== "send") return false;
+  return result?.receipt.status === "rejected" && result.receipt.reason === "idle-continuation-cancelled"
+    || result?.receipt.status === "failed" && result.receipt.reason === "idle-continuation-pre-execution-refused";
+}
+
+/** Positive journal proof for retrying one unchanged automatic continuation.
+    Unknown outcomes and operations that began execution grant no authority. */
+export async function idleContinuationDeliveryRetryable(conversationId: string, clientMessageId: string,
+  dependencies: Pick<StructuredMessageDependencies, "registry" | "client"> = {}): Promise<boolean> {
+  try {
+    const registry = (dependencies.registry ?? agentRegistry)();
+    const evidence = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
+    if (evidence.outcome !== "admitted" || evidence.state !== "failed") return false;
+    const previous = registry.conversationDeliverySnapshot({ conversationId }).heldDeliveries[evidence.deliveryId];
+    const captured = previous?.command.onlyIfIdle;
+    const client = (dependencies.client ?? runtimeHostClient)();
+    if (!client || !previous || !captured || !["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return false;
+    const session = await readRuntimeSession(client, { conversationId });
+    if (!session || captured.writerClaim !== session.writerClaim || previous.generationId !== session.sessionKey.sessionId
+      || captured.revision === session.revision || !runtimeIdleKillMatches(session, session.sessionKey,
+        { revision: session.revision, writerClaim: captured.writerClaim })) return false;
+    const result = await client.operationStatus(previous.command.operationId);
+    return result?.operationId === previous.command.operationId && idleContinuationRefusedBeforeExecution(result);
+  } catch { return false; } // Unconfirmed receipt or owner remains pending.
+}
+
 export async function enqueueStructuredMessage(
   request: StructuredMessageRequest,
   dependencies: StructuredMessageDependencies = {},
 ): Promise<StructuredMessageResult | null> {
+  const continuationRefused = (reason: string) => refusedBeforeReservation({ ok: false, structured: true, outcome: "failed",
+    error: `automatic continuation unavailable: ${reason}`, status: 409 });
+  if (dependencies.idleContinuationAllowed && !await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed");
   /* A seat's deputy takes its one ask and nothing after it, whoever sends and
      whether it is live or ended (docs/design/ghost-seat.md §4). Refused before
      anything is reserved, so no host is resumed for it. The one exception is
@@ -867,7 +1202,7 @@ export async function enqueueStructuredMessage(
     ...request,
     interruptionContinuation: dependencies.interruptionContinuation === true
       && request.origin?.role === RECOVERY_NOTICE_ORIGIN.role
-      && isInterruptionObligationId(request.clientMessageId),
+      && (isInterruptionObligationId(request.clientMessageId) || isInterruptedCodexContinuationId(request.clientMessageId)),
   });
   if (deputyRefusal) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...deputyRefusal });
   if (!(dependencies.enabled ?? structuredHostsEnabled)()) return null;
@@ -881,28 +1216,117 @@ export async function enqueueStructuredMessage(
   if (durableOwner?.kind === "legacy") {
     return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   }
+  const progress = progressPort(dependencies.progress);
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
+    if (dependencies.idleContinuationAllowed) return continuationRefused("runtime host is unreachable");
     return holdDuringRuntimeSynchronization(
       request,
       registry,
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
       false,
       synchronizationImageAdmission(dependencies, rawImages),
+      { progress, reason: "evidence-unreadable", detail: "the runtime host is unreachable" },
     );
   }
   let session: RuntimeSession | null;
   try {
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
-    console.error("[structured delivery] runtime session read failed", error);
+    spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
+      receipt.launchId === request.launchId || `spawn_message_${receipt.launchId}` === request.operationId)?.clientAttemptId,
+      "[structured delivery] runtime session read failed", error);
+    if (dependencies.idleContinuationAllowed) return continuationRefused(`runtime session read failed: ${error instanceof Error ? error.message : String(error)}`);
     return holdDuringRuntimeSynchronization(
       request,
       registry,
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
       false,
       synchronizationImageAdmission(dependencies, rawImages),
+      { progress, reason: "evidence-unreadable", detail: `the runtime session could not be read: ${error instanceof Error ? error.message : String(error)}` },
     );
+  }
+  let continuationRecoveredHost = false;
+  if (dependencies.idleContinuationAllowed) {
+    /* Startup leaves pipeline cuts to their controller. Requiring a hosted
+       idle fence before recovering that host left restart-cut stages waiting
+       forever on an unhosted session. Recover only the durable current owner,
+       without reserving a send that the drain could deliver past this guard. */
+    if (!session || session.host === "dead" || session.host === "unhosted") {
+      const owner = persistedCurrentOwner(request, registry);
+      if (owner?.kind !== "structured") return continuationRefused("no durable structured owner is available for recovery");
+      const retired = supersededRejection(registry, owner.conversation);
+      if (retired) return retired;
+      if (deliveryFence(owner.conversation) === "held") return continuationRefused("an account migration owns the conversation");
+      const generation = owner.conversation.generations.at(-1)!;
+      if (session && (session.sessionKey.engine !== owner.conversation.engine || session.sessionKey.sessionId !== generation.id)) {
+        return continuationRefused("runtime session is not the conversation's current generation");
+      }
+      const key = request.clientMessageId?.trim();
+      if (key && registry.deliveryAdmissionForKey(owner.conversation.id, key).outcome !== "not-executed") {
+        return continuationRefused("an earlier continuation admission must be reconciled before host recovery");
+      }
+      const overlong = key ? refusedIdempotencyKey(key) : null;
+      if (overlong) return overlong;
+      try {
+        assertStructuredTextEnvelope(request.text);
+        const republish = dependencies.republish ?? republishStructuredDeliveryHost;
+        if (session) session = (await refreshRepublishedSession(session, client, republish)).session;
+        else if (await republish({ engine: owner.conversation.engine, sessionId: generation.id })) {
+          // A live durable owner can survive the loss of its runtime projection;
+          // recovery hands that owner back without publishing it.
+          session = await readRuntimeSession(client, { conversationId: owner.conversation.id });
+        }
+        if (!await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed during host republication");
+        if (!session || session.host === "dead" || session.host === "unhosted") {
+          const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
+            path: generation.path, conversationId: owner.conversation.id, origin: request.origin,
+          }, { registry, client });
+          if (!recovered) return continuationRefused("the conversation cannot be resumed");
+          if (recovered.hold) return continuationRefused("the recovered host's account is parked");
+          continuationRecoveredHost = recovered.spawned;
+          session = await readRuntimeSession(client, { conversationId: owner.conversation.id });
+        }
+      } catch (error) {
+        return continuationRefused(`host recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (!await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed during host recovery");
+    if (!session) return continuationRefused("no runtime session is registered after host recovery");
+    if (!session.writerClaim) return continuationRefused(`recipient host is ${session.host} and has no writer claim`);
+    if (!runtimeIdleKillMatches(session, session.sessionKey,
+      { revision: session.revision, writerClaim: session.writerClaim })) {
+      return continuationRefused(`recipient is not ready for an idle continuation (host=${session.host}, turn=${session.turn}, active turn=${session.activeTurnId !== null}, attention=${session.attentionIds.length}, retirement blocked=${session.retirementBlocked === true})`);
+    }
+    let fence = { revision: session.revision, writerClaim: session.writerClaim };
+    const key = request.clientMessageId?.trim();
+    if (key) {
+      const evidence = registry.deliveryAdmissionForKey(session.conversationId, key);
+      if (evidence.outcome === "unknown") return continuationRefused("earlier continuation admission is unknown");
+      if (evidence.outcome === "admitted") {
+        const previous = registry.conversationDeliverySnapshot({ conversationId: session.conversationId }).heldDeliveries[evidence.deliveryId];
+        const captured = previous?.command.onlyIfIdle;
+        if (!captured) return continuationRefused("earlier continuation has no idle fence");
+        if (captured.writerClaim !== session.writerClaim) return continuationRefused("earlier continuation belongs to a different host writer");
+        if (previous.generationId !== session.sessionKey.sessionId) return continuationRefused("earlier continuation belongs to a different generation");
+        if (previous.state === "failed") {
+          if (!["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return continuationRefused(`earlier continuation failed: ${previous.error || "no failure reason recorded"}`);
+          if (captured.revision === session.revision) return continuationRefused("idle revision has not changed since the earlier refusal");
+          /* The journal proves either admission rejection or refusal before
+             claiming the effect. Other execution failures and missing replies
+             retain their key. Stage evidence is rechecked at actuation. */
+          let rejected: RuntimeOperationResult | null;
+          try { rejected = await client.operationStatus(previous.command.operationId); }
+          catch { return continuationRefused("earlier continuation journal receipt could not be read"); }
+          if (rejected?.operationId !== previous.command.operationId || !idleContinuationRefusedBeforeExecution(rejected)) return continuationRefused("journal does not prove the earlier continuation was refused before execution");
+          request = { ...request, operationId: `${IDLE_CONTINUATION_RETRY_PREFIX}${crypto.randomUUID()}` };
+        } else {
+          fence = captured;
+          request = { ...request, operationId: previous.command.operationId };
+        }
+      }
+    }
+    request = { ...request, policy: "queue", turnId: null, onlyIfIdle: fence };
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session) {
@@ -919,6 +1343,7 @@ export async function enqueueStructuredMessage(
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
       false,
       synchronizationImageAdmission(dependencies, rawImages),
+      { progress, reason: "awaiting-host", detail: "no runtime session is registered for the conversation" },
     );
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
@@ -950,8 +1375,9 @@ export async function enqueueStructuredMessage(
      recovery of a retired round would silently fork it (issue #383). */
   const rejected = supersededRejection(registry, registry.conversation(session.conversationId as ViewerConversationId));
   if (rejected) return rejected;
-  let conversation = registry.conversation(session.conversationId as ViewerConversationId);
-  if (!conversation) return ownershipUnavailable();
+  const currentConversation = registry.conversation(session.conversationId as ViewerConversationId);
+  if (!currentConversation) return ownershipUnavailable();
+  let conversation: RegistryConversation = currentConversation;
   const idempotencyKey = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;
   const overlong = refusedIdempotencyKey(idempotencyKey);
   if (overlong) return overlong;
@@ -972,6 +1398,8 @@ export async function enqueueStructuredMessage(
       content.contentDigest,
       commandInput(request),
     );
+    if (!terminalReplay && request.admissionGuard
+      && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
   } catch (error) {
     return deliveryFailure(error);
   }
@@ -989,11 +1417,92 @@ export async function enqueueStructuredMessage(
   }
   const generation = conversation.generations.at(-1);
   const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
-  /* Request an active-account reseat before any predecessor host republish or
-     recovery. An accepted migration fence assigns this send to the successor. */
-  if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
+  const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
+  /* Conflict preflight computes candidate refs and digest before writing.
+     A changed payload under an existing client message id rejects with zero
+     blob publication, GC, or registry effects. First admissions publish
+     before the reservation references them. */
+  const admissionKey = request.clientMessageId?.trim()
+    ? `${conversation.id}\u0000${request.clientMessageId.trim()}`
+    : null;
+  /* The attachment bytes are published ONCE per request, however many times
+     the admission is entered. A dead-host send enters it twice — before the
+     resume to make the payload durable, and after it to read the reservation
+     the drain may have assigned — and re-publishing on the second pass is
+     duplicated work against the blob store for bytes that are already there
+     under the same content address. */
+  let publishedImages = false;
+  const admitDurably = () => withAdmissionSection(admissionKey, async () => {
+    const admit = async (): Promise<HeldDelivery> => {
+      const replay = registry.preflightDeliveryReservation(
+        conversation.id,
+        content.content.text,
+        idempotencyKey,
+        refs.length ? "runtime-images" : "text",
+        refs,
+        content.contentDigest,
+        commandInput(request),
+      );
+      if (replay) return replay;
+      if (request.admissionGuard
+        && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
+      if (rawImages.length > 0 && !publishedImages) {
+        (dependencies.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
+        publishedImages = true;
+      }
+      /* A reservation race can follow publication when another process runs
+         older code or when a structured spawn published the same digest.
+         The grace-period collector owns orphan cleanup. Synchronous removal
+         cannot distinguish this admission's blob from a deduplicated blob
+         whose durable reservation is still pending.
+
+         The write lock is waited for off the event loop and kept for the
+         write (incident 2026-10-06); one another writer keeps past its
+         deadline reserves nothing and refuses the send. */
+      const held = await registry.holdDeliveryOffLoop(
+        conversation.id,
+        content.content.text,
+        idempotencyKey,
+        refs.length ? "runtime-images" : "text",
+        refs,
+        content.contentDigest,
+        commandInput(request),
+        { admissionGuard: request.admissionGuard,
+          ...(needsAccountReseat && request.kind !== "inject" ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
+      );
+      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      return held;
+    };
+    if (rawImages.length === 0) return withAccountMutationLockAsync(admit, { holder: "send admission", caller: "send admission" });
+    return (dependencies.withImageAdmissionLock
+      ?? ((operation) => withAccountMutationLockAsync(operation, { holder: "image send admission", caller: "send" })))(admit);
+  });
+  let reseatReservation: HeldDelivery | null = null;
+  /* Reserve the send and request its active-account reseat in one mutation
+     before any predecessor republish or recovery can run. */
+  if (needsAccountReseat) {
     try {
-      conversation = registry.requestConversationMigrationToActiveAccount(conversation.id, { launchId: request.launchId });
+      if (request.kind === "inject") {
+        // Injection keeps its existing source-thread admission rules.
+        const reseatFor = conversation.id;
+        const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" }, () => {
+          if (!terminalReplay) request.admissionGuard?.();
+          return registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId });
+        });
+        if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
+        conversation = reseat.value;
+      } else {
+        reseatReservation = await admitDurably();
+        if (reseatReservation.state === "delivered") {
+          return deliveredReservationReplay(reseatReservation, idempotencyKey, conversation.id, false);
+        }
+        if (reseatReservation.state === "failed") {
+          return { ok: false, structured: true, outcome: "failed",
+            error: reseatReservation.error || "delivery target is unavailable", status: 409,
+            operationId: reseatReservation.command.operationId };
+        }
+        conversation = registry.conversation(conversation.id)!;
+      }
     } catch (error) {
       return deliveryFailure(error);
     }
@@ -1049,62 +1558,19 @@ export async function enqueueStructuredMessage(
          A deterministic refusal before admission closes the MCP receipt with
          its actual reason instead of leaving it unknown forever. */
       if (!isRuntimeHostTransportFailure(error)) {
+        if (reseatReservation) {
+          const failure = deliveryFailure(error);
+          const settled = await endReservationForRequest(registry, progress, reseatReservation, failure.error);
+          if (!settled.ended) return acceptedHeld(reseatReservation.command.operationId);
+          return { ...failure, operationId: reseatReservation.command.operationId };
+        }
         return refusedBeforeReservation(deliveryFailure(error));
       }
     }
   }
   const recoveryRequired = !migrationOwnsSend
     && requiresDeadConversationRecovery(session, registry, conversation);
-  /* Conflict preflight computes candidate refs and digest before writing.
-     A changed payload under an existing client message id rejects with zero
-     blob publication, GC, or registry effects. First admissions publish
-     before the reservation references them. */
-  const admissionKey = request.clientMessageId?.trim()
-    ? `${conversation.id}\u0000${request.clientMessageId.trim()}`
-    : null;
-  /* The attachment bytes are published ONCE per request, however many times
-     the admission is entered. A dead-host send enters it twice — before the
-     resume to make the payload durable, and after it to read the reservation
-     the drain may have assigned — and re-publishing on the second pass is
-     duplicated work against the blob store for bytes that are already there
-     under the same content address. */
-  let publishedImages = false;
-  const admitDurably = () => withAdmissionSection(admissionKey, async () => {
-    const admit = () => {
-      const replay = registry.preflightDeliveryReservation(
-        conversation.id,
-        content.content.text,
-        idempotencyKey,
-        refs.length ? "runtime-images" : "text",
-        refs,
-        content.contentDigest,
-        commandInput(request),
-      );
-      if (replay) return replay;
-      if (rawImages.length > 0 && !publishedImages) {
-        (dependencies.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
-        publishedImages = true;
-      }
-      /* A reservation race can follow publication when another process runs
-         older code or when a structured spawn published the same digest.
-         The grace-period collector owns orphan cleanup. Synchronous removal
-         cannot distinguish this admission's blob from a deduplicated blob
-         whose durable reservation is still pending. */
-      return registry.holdDelivery(
-        conversation.id,
-        content.content.text,
-        idempotencyKey,
-        refs.length ? "runtime-images" : "text",
-        refs,
-        content.contentDigest,
-        commandInput(request),
-      );
-    };
-    if (rawImages.length === 0) return withAccountMutationLockAsync(admit, { holder: "send admission", caller: "send admission" });
-    return (dependencies.withImageAdmissionLock
-      ?? ((operation) => withAccountMutationLockAsync(operation, { holder: "image send admission", caller: "send" })))(async () => admit());
-  });
-  let recoveryReservation: HeldDelivery | null = null;
+  let recoveryReservation: HeldDelivery | null = reseatReservation;
   if (recoveryRequired) {
     /* The WHOLE message is reserved before the host is raised — the text and
        the attachment bytes, under one key, through the one admission every
@@ -1126,8 +1592,14 @@ export async function enqueueStructuredMessage(
     if (recoveryReservation.state === "delivery-uncertain") {
       return uncertainReservationFailure(recoveryReservation);
     }
+    /* Accepted from here: its record says the host is being resumed for it. */
+    recordAdmissionWait(progress, registry, recoveryReservation, {
+      reason: "recovering-host",
+      detail: "the conversation's host is being resumed",
+      nextWakeMs: null,
+    });
   }
-  let recoveredHost = false;
+  let recoveredHost = continuationRecoveredHost;
   /* Ownership recovery comes BEFORE capability evaluation: a dead projection
      carries no image capability, and judging the payload against it would 409
      a session whose recovered host advertises image input. */
@@ -1145,17 +1617,23 @@ export async function enqueueStructuredMessage(
     } catch (error) {
       const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;
       if (recoveryReservation && error instanceof StructuredResumeUnpublishedError) {
-        const settled = registry.terminalizeHeldDelivery(recoveryReservation.id, failure);
+        const settled = await endReservationForRequest(registry, progress, recoveryReservation, failure);
+        if (!settled.ended) return acceptedHeld(recoveryReservation.command.operationId);
         return {
           ok: false,
           structured: true,
           outcome: "failed",
-          error: settled.error ?? failure,
+          error: settled.error,
           status: 503,
           operationId: recoveryReservation.command.operationId,
         };
       }
       if (!recoveryReservation) return ownershipUnavailable("reclaimed");
+      /* Accepted, and its resume failed: the drain retries it. */
+      recordAdmissionWait(progress, registry, recoveryReservation, {
+        reason: "awaiting-host",
+        detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
       requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
       return {
         ok: true,
@@ -1169,13 +1647,14 @@ export async function enqueueStructuredMessage(
       /* Past the reservation: a recovery ran, so this is no pre-admission refusal. */
       const failure = deliverabilityFailureMessage({ condition: "reclaimed" });
       const settled = recoveryReservation
-        ? registry.terminalizeHeldDelivery(recoveryReservation.id, failure)
+        ? await endReservationForRequest(registry, progress, recoveryReservation, failure)
         : null;
+      if (recoveryReservation && settled && !settled.ended) return acceptedHeld(recoveryReservation.command.operationId);
       return {
         ok: false,
         structured: true,
         outcome: "failed",
-        error: settled?.error ?? failure,
+        error: settled?.ended ? settled.error : failure,
         status: 503,
         ...(recoveryReservation ? { operationId: recoveryReservation.command.operationId } : {}),
       };
@@ -1202,21 +1681,21 @@ export async function enqueueStructuredMessage(
      before recovery now, so leaving it held would park an impossible message
      in the queue forever. Terminalizing it names the real reason on the
      operator's bubble and releases the key. */
-  const refuseReservedPayload = (error: string, status: number): StructuredMessageResult => {
+  /* An ending the lock refused leaves the send accepted and answered held;
+     the drain asks the same predicate before its command (Note 2). */
+  const refuseReservedPayload = async (error: string, status: number): Promise<StructuredMessageResult> => {
     if (recoveryReservation) {
-      registry.terminalizeHeldDelivery(recoveryReservation.id, error);
+      const settled = await endReservationForRequest(registry, progress, recoveryReservation, error, "checking");
+      if (!settled.ended) return acceptedHeld(recoveryReservation.command.operationId, null, recoveredHost);
       return { ok: false, structured: true, outcome: "failed", error, status, operationId: recoveryReservation.command.operationId };
     }
     return { ok: false, structured: true, outcome: "failed", error, status };
   };
-  if (wantsImages && !imageCapability.supported && activeSession.sessionKey.engine !== "codex") {
-    return refuseReservedPayload(imageCapability.reason ?? "structured image delivery is unavailable", 409);
-  }
-  const encodedImageBytes = rawImages.reduce((total, image) => total + Buffer.byteLength(image.base64), 0);
-  if (encodedImageBytes > imageCapability.maxEncodedBytesPerRequest) {
-    return refuseReservedPayload("runtime image request encoding is too large", 413);
-  }
+  const payloadRefused = payloadRefusal(imageCapability, activeSession.sessionKey.engine, refs, wantsImages);
+  if (payloadRefused) return refuseReservedPayload(payloadRefused.error, payloadRefused.status);
   let commandResult: RuntimeOperationResult | null = null;
+  /* The record this request wrote last, for the lost-acknowledgement note. */
+  let lastWritten: DeliveryProgressRecord | null = null;
   /* The operation a claimed reservation was accepted under. The claim leaves
      the reservation `delivery-uncertain`, so from here a throw is an accepted
      send whose fate is unknown, and it answers with this handle. */
@@ -1229,14 +1708,32 @@ export async function enqueueStructuredMessage(
     let reservation = await admitDurably();
     let claimedReservationId: string | null = null;
     if (reservation.state === "delivery-uncertain") {
-      reservation = registry.retryUncertainDelivery(reservation.id);
+      /* The same-key resend re-arms its reservation (P16), off the loop; one
+         the lock refused stays uncertain and answers so. */
+      const uncertain = reservation;
+      const rearmed = await registry.deliveryWrite({ label: "delivery.rearm", operationId: uncertain.command.operationId },
+        () => registry.retryUncertainDelivery(uncertain.id));
+      if (!rearmed.acquired) return uncertainReservationFailure(uncertain);
+      reservation = rearmed.value;
     }
     if (reservation.state === "held") {
       /* The switch landed between the check above and the reservation. The
          reservation exists but nothing has been handed to any engine, so
          releasing it leaves the thread untouched (#1560). */
       if (request.kind === "inject") {
-        registry.terminalizeHeldDelivery(reservation.id, "injected context cannot be held across an account switch");
+        const injected = reservation;
+        /* Rule (a): the record exists from the reservation on, before the
+           ending is awaited. */
+        recordWait(progress, registry, injected, { reason: "switching-accounts" });
+        const released = await registry.deliveryWrite({ label: "delivery.terminalize", operationId: injected.command.operationId },
+          () => registry.terminalizeHeldDelivery(injected.id, "injected context cannot be held across an account switch"));
+        /* Refused for the lock: it stays held, and the switch's commit fails a
+           held injection with its own reason, or a rollback returns it to
+           this thread. Never replayed into the successor's. */
+        if (!released.acquired) {
+          return acceptedHeld(injected.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
+        }
+        settleRecord(progress, injected.command.operationId, "failed", "injected context cannot be held across an account switch");
         return {
           ok: false,
           structured: true,
@@ -1246,16 +1743,10 @@ export async function enqueueStructuredMessage(
           operationId: reservation.command.operationId,
         };
       }
+      recordWait(progress, registry, reservation, { reason: "switching-accounts" });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
-      return {
-        ok: true,
-        structured: true,
-        target: recoveredHost ? null : conversation.id,
-        outcome: "held",
-        operationId: reservation.command.operationId,
-        ...(recoveredHost ? { spawned: true } : {}),
-      };
+      return acceptedHeld(reservation.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
     }
     if (reservation.state === "delivered") {
       return deliveredReservationReplay(
@@ -1275,18 +1766,64 @@ export async function enqueueStructuredMessage(
       };
     }
     const assigned = { id: reservation.id, generationId: reservation.generationId, command: reservation.command, runtimeConversationId: reservation.runtimeConversationId };
+    const accepted = reservation;
+    /* Rule (a): the record exists from the reservation on, and each step of
+       this request writes its wait on it. None of these waits has a next
+       wake: the request itself is in them, and every one is bounded (the
+       lock 5 s, the socket call 3 s, the section by its holder's bounds). */
+    let written = recordWait(progress, registry, accepted, {
+      reason: "checking",
+      detail: "claiming the delivery record",
+      nextWakeMs: null,
+    });
+    if (!dependencies.actuationLease && actuationBusy(conversation.id)) {
+      written = recordWait(progress, registry, accepted, {
+        reason: "conversation-busy",
+        detail: "an earlier send on this conversation is being admitted",
+        nextWakeMs: null,
+      }) ?? written;
+    }
     /* #1709: the claim and the command's admission to the journal run in the conversation's actuation section,
        so a send claimed after another reaches the journal after it. */
-    const admitted = await withConversationActuation(conversation.id, async () => {
-      const claimed = registry.beginDeliveryAttempt(assigned.id, assigned.generationId);
+    /* A claim whose write lock another writer kept past its deadline changed
+       nothing: the reservation stays assigned for the drain. */
+    let claimDeferred = false;
+    const admitted = await withConversationActuation(conversation.id, async (lease) => {
+      if (dependencies.idleContinuationAllowed && !await dependencies.idleContinuationAllowed()) {
+        const ended = await registry.recordDeliveryOutcomeOffLoop(assigned.command.operationId, assigned.id, "failed", "automatic continuation cancelled after newer stage activity");
+        if (!ended) { claimDeferred = true; return null; }
+        return "continuation-cancelled" as const;
+      }
+      lease.act(assigned.command.operationId);
+      const claim = await registry.beginDeliveryAttemptOffLoop(assigned.command.operationId, assigned.id, assigned.generationId);
+      if (!claim.acquired) claimDeferred = true;
+      const claimed = claim.acquired ? claim.value : null;
       if (!claimed) return null;
       claimedReservationId = claimed.id;
       claimedOperationId = claimed.command.operationId;
+      written = recordWait(progress, registry, claimed, {
+        reason: "checking",
+        detail: "admitting to the runtime journal",
+        nextWakeMs: null,
+      }) ?? written;
+      lastWritten = written;
+      try {
+        if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
+        await dependencies.authorizeDispatch?.();
+        if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
+      }
+      catch {
+        // Nothing reached the journal: terminalize the reservation so recovery
+        // cannot dispatch this first prompt later as an uncertain send.
+        const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId: assigned.command.operationId },
+          () => registry.terminalizeHeldDelivery(assigned.id, "autonomous first prompt authorization revoked"));
+        return ended.acquired ? "caller-revoked" as const : "caller-revocation-pending" as const;
+      }
       commandResult = await client.command({
         kind: assigned.command.kind,
         operationId: assigned.command.operationId,
         conversationId: assigned.runtimeConversationId,
-        idempotencyKey,
+        idempotencyKey: continuationJournalKey(assigned.command, idempotencyKey),
         text: content.content.text,
         ...(refs.length ? { images: refs } : {}),
         contentDigest: content.contentDigest,
@@ -1297,33 +1834,48 @@ export async function enqueueStructuredMessage(
            was for every other kind. */
         ...(assigned.command.kind === "inject" ? {} : { policy: request.policy ?? "interrupt-active" }),
         ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+        ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
         ...(request.runtime ? { runtime: request.runtime } : {}),
         ...(request.selectedContext ? { selectedContext: request.selectedContext } : {}),
         ...(request.origin ? { origin: request.origin } : {}),
       });
       return commandResult;
     }, dependencies.actuationLease ?? null);
+    if (admitted === "caller-revoked") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt authorization revoked", status: 403 };
+    if (admitted === "caller-revocation-pending") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt cancellation awaits the registry writer", status: 503, operationId: assigned.command.operationId, transportUncertain: true };
+    if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
     if (!admitted) {
-      /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order. */
-      registry.requeueHeldDelivery(reservation.id);
+      /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order.
+         The requeue waits for the lock off the loop; refused, the reservation stays assigned and unclaimed. */
+      let requeueRefused = false;
+      let requeued = accepted;
+      if (!claimDeferred) {
+        const requeue = await registry.deliveryWrite({ label: "delivery.requeue", operationId: accepted.command.operationId },
+          () => registry.requeueHeldDelivery(accepted.id));
+        if (requeue.acquired) requeued = requeue.value;
+        else requeueRefused = true;
+      }
+      recordWait(progress, registry, requeued, claimDeferred
+        ? { reason: "checking", detail: "the writer claim waited past its lock deadline" }
+        : requeueRefused
+          ? { reason: "checking", detail: "the requeue waited past its lock deadline" }
+          : { reason: "conversation-busy", detail: "an earlier delivery on this conversation is still being claimed" });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
-      return {
-        ok: true,
-        structured: true,
-        target: recoveredHost ? null : conversation.id,
-        outcome: "held",
-        operationId: reservation.command.operationId,
-        ...(recoveredHost ? { spawned: true } : {}),
-      };
+      return acceptedHeld(reservation.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
     }
     const result = admitted;
     const receipt = result.receipt;
     if (receipt.status === "rejected" || receipt.status === "failed" || receipt.status === "uncertain") {
       if (claimedReservationId && receipt.status !== "uncertain") {
-        registry.recordDeliveryOutcome(claimedReservationId, "failed", receipt.reason || "structured host delivery failed");
+        /* Off the loop; refused, the reservation stays `delivery-uncertain`
+           and the drain or the sweep projects the journal's receipt. */
+        const settledId = claimedReservationId;
+        await registry.deliveryWrite({ label: "delivery.settle", operationId: result.operationId },
+          () => registry.recordDeliveryOutcome(settledId, "failed", receipt.reason || "structured host delivery failed"));
         requestMigrationProgress(registry, conversation.id, dependencies.requestMigrationTick ?? requestAccountMigrationTick);
       }
+      settleRecord(progress, result.operationId, receipt.status === "uncertain" ? "uncertain" : "failed", receipt.reason || "structured host delivery failed");
       return {
         ok: false,
         structured: true,
@@ -1335,8 +1887,19 @@ export async function enqueueStructuredMessage(
       };
     }
     if (claimedReservationId && ["delivered", "turn-started", "steered"].includes(receipt.status)) {
-      registry.recordDeliveryOutcome(claimedReservationId, "delivered");
+      const settledId = claimedReservationId;
+      await registry.deliveryWrite({ label: "delivery.settle", operationId: result.operationId },
+        () => registry.recordDeliveryOutcome(settledId, "delivered"));
       requestMigrationProgress(registry, conversation.id, dependencies.requestMigrationTick ?? requestAccountMigrationTick);
+      settleRecord(progress, result.operationId, "delivered", null);
+    }
+    /* The journal holds it now. The queue may already continue the record,
+       so this answer is written only over the record this request wrote. */
+    if (receipt.status === "queued" || receipt.status === "pending") {
+      recordWaitUnlessContinued(progress, registry, accepted, written, {
+        reason: "queued",
+        nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
+      });
     }
     (dependencies.kick ?? kickStructuredDeliveryQueue)();
     const outcome = receipt.status === "delivering" || receipt.status === "delivered" ? receipt.status : "queued";
@@ -1357,7 +1920,25 @@ export async function enqueueStructuredMessage(
     if (!handedOver) {
       /* Thrown before the runtime answered, after the claim: the command may
          have reached the journal, so the send stays uncertain and keeps the
-         operation it was accepted with. */
+         operation it was accepted with (P7). Its record says so, counts the
+         attempt, and the queue is woken: nobody else would before its safety
+         pass, and if the journal did admit it the queue continues the same
+         record within one pass. */
+      if (claimedOperation) {
+        const claimedReservation = reservationFor(registry, claimedOperation);
+        /* Only over the record this request wrote: a journal that admitted
+           the command before its reply was lost may have been listed by the
+           queue, which owns the record from then on. */
+        if (claimedReservation && stillOwnsRecord(progress, claimedOperation, lastWritten)) {
+          recordWait(progress, registry, claimedReservation, {
+            reason: "evidence-unreadable",
+            detail: `the runtime journal did not acknowledge the admission: ${failure.error}`,
+            attempted: true,
+            nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
+          });
+        }
+        requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
+      }
       return claimedOperation
         ? { ...failure, operationId: claimedOperation, transportUncertain: true }
         : failure;

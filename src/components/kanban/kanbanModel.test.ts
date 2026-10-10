@@ -736,6 +736,28 @@ test("a launched card with its reader open lands under the agent being read, whe
 });
 
 
+test("a launched card whose turn ended keeps its place under the agent being read while both readers stay open", () => {
+  const working = (startedAt: number) => ({ activity: "live" as const, proc: "running" as const, authoritativeTurn: { state: "busy" as const, source: "lifecycle" as const, terminalAt: null }, lastTurn: { startedAt, endedAt: null } });
+  const read = file(1, { ...working(NOW * 1_000 - 1_000), mtime: NOW - 3_000 });
+  const launchedFile = file(2, { mtime: NOW - 1, activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: "2026-09-14T12:30:00.000Z" } });
+  const other = file(3, { ...working(NOW * 1_000 - 9_000), mtime: NOW - 2_000 });
+  const tasks = [task("read", "assigned", [read.path]), task("launched", "assigned", [launchedFile.path]), task("other", "assigned", [other.path])];
+  const files = [read, launchedFile, other];
+  const projection = projectTaskWorkflows([...tasks], [], [], files);
+  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
+  const isLaunched = (entry: FileEntry) => entry.path === launchedFile.path;
+  const order = (openReaders: ReadonlySet<string>, launched?: (entry: FileEntry) => boolean) =>
+    buildKanbanModel({ bands, tasks, pipelines: [], projection, files, openReaders, launched, now: NOW })
+      .columns.assigned.cards.map((card) => card.task!.id);
+  const both = new Set([conversationIdentity(read), conversationIdentity(launchedFile)]);
+  /* The finished card sorts under every working one: without the rule a card stands between it and the card being read. */
+  expect(order(both)).toEqual(["read", "other", "launched"]);
+  expect(order(both, isLaunched)).toEqual(["read", "launched", "other"]);
+  /* Closing the launched card's reader lets it sort as any other. */
+  expect(order(new Set([conversationIdentity(read)]), isLaunched).at(-1)).toBe("launched");
+});
+
+
 test("a launched card with its reader open stands first when no other card is read, above a needs-you card", () => {
   const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000 });
   const launchedFile = file(2, { mtime: NOW - 1 });
@@ -979,8 +1001,9 @@ test("seat conversations draw no band: a seat-only task is the seat panel's, and
   expect(board.totals.tasks).toBe(4);
   expect(board.columns.assigned.cards.length).toBe(2);
   expect(board.columns.done.cards.length).toBe(1);
-  /* The live seat's working conversation is no share of any counter. */
-  expect(board.totals.working).toBe(1);
+  /* The live seat is an agent working: the header counts it, as the sidebar
+     row does, and no column does, because it has no card. */
+  expect(board.totals.working).toBe(2);
   expect(board.columns.assigned.working).toBe(1);
   expect(KANBAN_STATUSES.flatMap((status) => board.columns[status].cards).some((card) => card.members.some((member) => member.file.path === files[3]!.path))).toBe(false);
   /* The mixed band keeps its card and its product conversation, without the seat tile. */
@@ -1183,8 +1206,11 @@ test("holds and provisioning use one motion in cards, headers and the Overview f
   lane.state = "provisioning";
   const board = model(tasks, [], { pipelines: [lane] });
   expect(board.columns.blocked.needsYou).toBe(1);
-  expect(board.columns.assigned.working).toBe(1);
-  expect(board.totals.working).toBe(1);
+  /* A provisioning lane has no agent yet: its card moves as working, and the
+     agent counts wait for the conversation it starts. */
+  expect(board.columns.assigned.cards[0]!.motion.key).toBe("working");
+  expect(board.columns.assigned.working).toBe(0);
+  expect(board.totals.working).toBe(0);
   const live = [...board.columns.assigned.cards, ...board.columns.blocked.cards].filter(cardHasLiveWork);
   expect(live.map(card => card.task!.id).sort()).toEqual(["t901", "t902"]);
   expect(board.columns.blocked.cards.find(card => card.task!.id === "t903")?.motion.key).toBe("waiting");
@@ -1240,7 +1266,7 @@ test("step pipeline references derive motion and group the remaining reasons", (
 });
 
 
-test("zero-member in-flight and step work agree in header, column and Overview totals", () => {
+test("zero-member in-flight and step work move as working and agree in header, column and Overview totals", () => {
   const t = task("t904", "assigned", [], { steps: [{ id: "live", text: "Run the cause", state: "open", ref: "step-work" }] });
   const stepLane = buildingLane("step-work", t.id, { startedAt: iso(NOW - 60) });
   const inFlight = task("t905", "assigned");
@@ -1249,8 +1275,9 @@ test("zero-member in-flight and step work agree in header, column and Overview t
     const board = model([entry], [], { pipelines: [lane], cardFilter: cardHasLiveWork });
     expect(board.columns.assigned.cards[0]!.members).toHaveLength(0);
     expect(board.columns.assigned.cards[0]!.motion.key).toBe("working");
-    expect(board.totals.working).toBe(1);
-    expect(board.columns.assigned.working).toBe(1);
+    /* No transcript is loaded, so no agent is counted working anywhere. */
+    expect(board.totals.working).toBe(0);
+    expect(board.columns.assigned.working).toBe(0);
     expect(board.columns.assigned.shown).toHaveLength(1);
   }
 });
@@ -1267,11 +1294,23 @@ test("a step operator hold keeps its note, age, needs-you total and first positi
 });
 
 
-test("hidden provisioning work remains in the header but outside the visible columns", () => {
+test("hidden provisioning work keeps its motion outside visible columns with zero working agents", () => {
   const hidden = task("t908", "assigned", [], { groupHidden: { at: iso(NOW), by: "operator", admitted: [] } });
   const lane = buildingLane("hidden-provisioning", hidden.id, { startedAt: iso(NOW - 60) });
   lane.state = "provisioning";
   const board = model([hidden], [], { pipelines: [lane] });
+  expect(board.hiddenGroups).toHaveLength(1);
+  expect(board.hiddenGroups[0]!.members).toHaveLength(0);
+  expect(board.hiddenGroups[0]!.motion.key).toBe("working");
+  expect(board.totals.working).toBe(0);
+  expect(board.columns.assigned.working).toBe(0);
+  expect(board.columns.assigned.shown).toHaveLength(0);
+});
+
+test("a hidden group's working agent remains in the header but outside the visible columns", () => {
+  const agent = file(908, { activity: "live", proc: "running", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null } });
+  const hidden = task("t908", "assigned", [agent.path], { groupHidden: { at: iso(NOW), by: "operator", admitted: [agent.conversationId!] } });
+  const board = model([hidden], [agent]);
   expect(board.hiddenGroups).toHaveLength(1);
   expect(board.hiddenGroups[0]!.motion.key).toBe("working");
   expect(board.totals.working).toBe(1);
@@ -1312,8 +1351,9 @@ test("terminal steps do not manufacture work while passed stages await publicati
     expect(card.members).toHaveLength(0);
     expect(card.pipelines[0]!.chips.map(chip => chip.state)).toEqual(["passed", "pending"]);
     expect(card.motion.key).toBe(state === "open" ? "working" : "done");
-    expect(board.totals.working).toBe(state === "open" ? 1 : 0);
-    expect(board.columns.done.working).toBe(state === "open" ? 1 : 0);
+    /* A passed stage awaiting publication runs no agent turn. */
+    expect(board.totals.working).toBe(0);
+    expect(board.columns.done.working).toBe(0);
     expect(board.columns.done.shown).toHaveLength(state === "open" ? 1 : 0);
     expect(card.stepSummary).toMatchObject({ open: state === "open" ? 1 : 0, working: state === "open" ? 1 : 0 });
   }
@@ -1399,4 +1439,11 @@ test("a waiting prototype counts once in needs-you and clears after the choice",
   expect(waiting.columns.inbox.needsYou).toBe(1);
   const decided = model([task("prototype", "inbox", [], { prototypeReview: { ...review, waitingReviewId: null } })], []);
   expect(decided.totals.needsYou).toBe(0);
+});
+
+
+test("a cleared prototype round raises no needs-you count while its choice stays open", () => {
+  const review = { latestReviewId: "round-a", waitingReviewId: "round-a", title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z", waitingDismissal: { at: "2026-10-02T00:00:00Z", by: { kind: "operator" as const } } };
+  expect(model([task("prototype", "inbox", [], { prototypeReview: review })], []).totals.needsYou).toBe(0);
+  expect(review.waitingReviewId).toBe("round-a");
 });

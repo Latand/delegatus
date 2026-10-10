@@ -813,6 +813,7 @@ function pageItems(
   page: readonly CollapsedHit[],
   files: ReadonlyMap<string, TranscriptFileRow>,
   tokens = 24,
+  redactText?: (text: string) => string,
 ): TranscriptSearchItem[] {
   if (!page.length) return [];
   const ids = page.map((group) => group.newest.id);
@@ -822,11 +823,23 @@ function pageItems(
      pass the filter. */
   const snippets = new Map<number, string>();
   const snippetRows = db.query(`
-    SELECT rowid, snippet(transcript_messages_fts, 0, '${SNIPPET_MATCH_OPEN}', '${SNIPPET_MATCH_CLOSE}', '…', ${tokens})
+    SELECT rowid, ${redactText
+      ? `highlight(transcript_messages_fts, 0, '${SNIPPET_MATCH_OPEN}', '${SNIPPET_MATCH_CLOSE}')`
+      : `snippet(transcript_messages_fts, 0, '${SNIPPET_MATCH_OPEN}', '${SNIPPET_MATCH_CLOSE}', '…', ${tokens})`}
     FROM transcript_messages_fts
     WHERE transcript_messages_fts MATCH ? AND +rowid IN (${ids.map(() => "?").join(", ")})
   `).values(query, ...ids) as Array<[number, string]>;
-  for (const [id, snippet] of snippetRows) snippets.set(id, snippet);
+  for (const [id, snippet] of snippetRows) {
+    // A trusted projection sees the complete highlighted source, including a
+    // credential spanning match markers, before either end of the excerpt cuts it.
+    const safe = redactText ? redactText(snippet) : snippet;
+    if (!redactText) { snippets.set(id, safe); continue; }
+    const scalars = Array.from(safe);
+    const match = scalars.indexOf(SNIPPET_MATCH_OPEN);
+    const start = Math.max(0, (match < 0 ? 0 : match) - 80);
+    const end = Math.min(scalars.length, start + 320);
+    snippets.set(id, `${start ? "…" : ""}${scalars.slice(start,end).join("")}${end < scalars.length ? "…" : ""}`);
+  }
   const location = db.query<{ byte_offset: number; line_number: number }, [number]>(
     "SELECT byte_offset, line_number FROM transcript_messages WHERE id = ?",
   );
@@ -918,6 +931,8 @@ export function readTranscriptActivity(fromSec: number, toSec: number): Transcri
  */
 export interface TranscriptSearchOptions {
   query: string;
+  /** Trusted in-process projection of complete source text, before excerpts. */
+  redactText?: (text: string) => string;
   project?: string;
   /** Restrict to one side of the conversation; omitted searches both. */
   speaker?: TranscriptSpeaker;
@@ -1239,7 +1254,7 @@ function relevanceSearch(
   const pageGroups = groupRows.slice(0, limit);
   // Snippet work stays bounded by this page and its at-most-three fragments.
   const messages = pageGroups.flatMap((group) => group[0]!.fragments);
-  const snippets = pageItems(db, expression, messages.map((m) => ({ newest: m, duplicateCount: 1 })), files, 16);
+  const snippets = pageItems(db, expression, messages.map((m) => ({ newest: m, duplicateCount: 1 })), files, 16, options.redactText);
   const byId = new Map(messages.map((m, i) => [m.id, snippets[i]]));
   const items: TranscriptSearchItem[] = [];
   for (const group of pageGroups) {
@@ -1387,7 +1402,7 @@ export function searchTranscripts(options: TranscriptSearchOptions): TranscriptS
       const ranked = newestPage(groups.values(), cursor, limit + 1);
       const total = groups.size;
       const page = ranked.slice(0, limit);
-      const items = pageItems(db, query, page, files);
+      const items = pageItems(db, query, page, files, 24, options.redactText);
       return {
         items,
         nextCursor: ranked.length > limit ? encodeCursor(page.at(-1)!.newest, throughId, scope) : null,

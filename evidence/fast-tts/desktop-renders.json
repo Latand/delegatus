@@ -3,8 +3,8 @@
     "viewport": 1440,
     "scheme": "light",
     "idle": {
-      "x": 1149,
-      "right": 1173,
+      "x": 1336,
+      "right": 1360,
       "width": 24,
       "height": 24,
       "barHeight": 50,
@@ -17,8 +17,8 @@
     "viewport": 1440,
     "scheme": "dark",
     "idle": {
-      "x": 1149,
-      "right": 1173,
+      "x": 1336,
+      "right": 1360,
       "width": 24,
       "height": 24,
       "barHeight": 50,
@@ -31,8 +31,8 @@
     "scheme": "light",
     "narrowDockWidth": 360,
     "control": {
-      "x": 374.171875,
-      "y": 50,
+      "x": 370.078125,
+      "y": 74,
       "width": 24,
       "height": 24
     }
@@ -41,8 +41,8 @@
     "scheme": "dark",
     "narrowDockWidth": 360,
     "control": {
-      "x": 374.171875,
-      "y": 50,
+      "x": 370.078125,
+      "y": 74,
       "width": 24,
       "height": 24
     }

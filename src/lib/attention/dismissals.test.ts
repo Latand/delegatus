@@ -8,6 +8,8 @@ import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentSto
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { readPrototypeReviews, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
 
 import {
   DISMISSAL_CAPACITY,
@@ -20,6 +22,9 @@ import {
   type DismissalPorts,
 } from "./dismissals";
 import type { DismissedBy } from "./dismissalTypes";
+import { needsYouAnswer } from "./needsYouRead";
+import { openBridgeAsks } from "@/lib/bridge/asks";
+import type { BridgeReportLogV1 } from "@/lib/bridge/types";
 
 /*
  * The one dismissal service (docs/design/needs-attention.md §5): a card's click
@@ -46,6 +51,40 @@ afterEach(() => {
 
 const OPERATOR: DismissedBy = { kind: "operator", surface: "desktop" };
 const SEAT: DismissedBy = { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" };
+
+test("rule 3: hide removes a review from both waiting lists, keeps history and undo restores it; task completion alone leaves it waiting", async () => {
+  const task = { id: "task-prototype", project: "repo-fixture", status: "done", assignments: [], text: "Layout",
+    prototypeReviews: [{ id: "review-hide", title: "Layout", createdAt: "2026-09-24T09:00:00Z", source: { conversationId: null }, variants: [] }] } as unknown as BoardTask;
+  const h = harness({ tasks: [task] });
+  const target = { kind: "prototype" as const, taskId: task.id, reviewId: "review-hide" };
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toHaveLength(1);
+  await dismissAttention(target, OPERATOR, { ports: h.ports });
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toEqual([]);
+  const read = readPrototypeReviews(task);
+  expect(read.waitingReviewId).toBeNull();
+  expect(read.rounds).toHaveLength(1);
+  expect(read.rounds[0]!.hidden?.by).toEqual(OPERATOR);
+  expect(read.rounds[0]!.decision).toBeUndefined();
+  h.clock.now = new Date(h.clock.now.getTime() + DISMISSAL_RETENTION_MS + 1);
+  await dismissAttention({ kind: "conversation", conversationId: "conversation_a" }, OPERATOR, { ports: h.ports });
+  expect(readPrototypeReviews(task).waitingReviewId).toBeNull();
+  expect(readPrototypeReviews(task).rounds[0]!.hidden?.by).toEqual(OPERATOR);
+  for (let batch = 0; batch < Math.ceil(DISMISSAL_CAPACITY / 200) + 1; batch++) {
+    const subjects = Array.from({ length: 200 }, (_, index) => ({ kind: "conversation" as const, path: `/fixture/overflow-${batch}-${index}.jsonl` }));
+    await dismissAttention(parseDismissalTarget({ kind: "subjects", subjects }, { allowSubjects: true }), OPERATOR, { ports: h.ports });
+  }
+  expect(readAttentionDismissals().records.filter(record => record.kind !== "prototype")).toHaveLength(DISMISSAL_CAPACITY);
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toEqual([]);
+  expect(readPrototypeReviews(task).rounds[0]!.hidden?.by).toEqual(OPERATOR);
+  const undone = await dismissAttention(target, SEAT, { ports: h.ports, undo: true });
+  expect(undone.alreadyClear).toEqual([]);
+  expect(readPrototypeReviews(task).waitingReviewId).toBe("review-hide");
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toHaveLength(1);
+  await dismissAttention(target, OPERATOR, { ports: h.ports });
+  task.prototypeReviews!.push({ ...task.prototypeReviews![0]!, id: "review-next", createdAt: h.clock.now.toISOString() });
+  expect(readPrototypeReviews(task).waitingReviewId).toBe("review-next");
+  expect(readPrototypeReviews(task).rounds.find(round => round.id === "review-hide")?.hidden?.by).toEqual(OPERATOR);
+});
 
 function lane(id: string, state: Pipeline["state"], over: Partial<Pipeline> = {}): Pipeline {
   return {
@@ -112,6 +151,45 @@ function harness(options: { tasks?: BoardTask[]; lanes?: Pipeline[] } = {}): Har
 
 /** The decision requests the harness's report log holds. */
 const QUESTIONS = new Set([11, 12]);
+
+test.each(["task", "conversation"] as const)("%s clear returns each covered report's reason, attribution and usable undo", async kind => {
+  const task = { id: "task-1", project: "project-a", status: "assigned", assignments: [
+    { conversationId: "conversation_a", path: "/t/a.jsonl", at: "2026-09-24T09:00:00.000Z" },
+  ] } as BoardTask;
+  const h = harness({ tasks: [task] });
+  const reports: BridgeReportLogV1 = { schemaVersion: 1, lastSeq: 12, trimmedThroughSeq: 0, reports: [11, 12].map(seq => ({
+    seq, id: `report-${seq}`, key: `question-${seq}`, class: "question", body: `Choose ${seq}`,
+    project: "project-a", targetSeatConversationId: "conversation_a", at: "2026-09-24T09:30:00.000Z",
+  })), retired: [], resolvedAsks: [] };
+  const asks = openBridgeAsks(reports, { now: h.clock.now }).get("conversation_a")!;
+  const files = [{ path: "/t/a.jsonl", name: "seat", title: "Seat", project: "project-a", conversationId: "conversation_a",
+    root: "claude-projects", kind: "session", engine: "claude", fmt: "claude", parent: null, size: 1,
+    activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null,
+    mtime: h.clock.now.getTime() / 1000, bridgeAsks: asks, bridgeAsk: asks.at(-1),
+  }] as FileEntry[];
+  const read = () => {
+    overlayAttentionDismissals(files);
+    return needsYouAnswer({ files, tasks: [task], pipelines: [] }, null, h.clock.now.getTime() / 1000, "project-a", {
+      tasks: [task], pipelines: [], dismissals: readAttentionDismissals().records, reports, admissions: [], unavailable: [],
+    });
+  };
+  const before = read();
+  expect(before.rows.map(row => row.subject.reportSeq)).toEqual([11, 12]);
+  const target = kind === "task" ? { kind: "task" as const, taskId: task.id } : { kind: "conversation" as const, conversationId: "conversation_a" };
+  const reason = "The operator already answered both questions";
+  await dismissAttention(target, SEAT, { ports: h.ports, reason });
+  const cleared = read();
+  expect(cleared.count).toBe(0);
+  expect(cleared.cleared).toEqual(before.rows.map(row => ({
+    id: row.id, kind: row.kind, title: row.title, taskId: task.id,
+    cleared: { at: h.clock.now.toISOString(), by: SEAT, note: reason },
+    undo: { kind: "conversation", conversationId: "conversation_a" },
+  })));
+  await dismissAttention(cleared.cleared[0]!.undo, SEAT, { ports: h.ports, undo: true });
+  const restored = read();
+  expect(restored.rows.map(row => row.id)).toEqual(before.rows.map(row => row.id));
+  expect(restored.cleared).toEqual([]);
+});
 
 test("a conversation's dismissal is recorded with who made it, and a new one replaces the old", async () => {
   const h = harness();
@@ -326,4 +404,19 @@ test("a report subject is parsed from the operator's route; a seq that is not a 
   expect(parseDismissalTarget({ kind: "subjects", subjects: [{ kind: "report", seq: 7 }] }, { allowSubjects: true })).toEqual({ kind: "subjects", subjects: [{ kind: "report", seq: 7 }] });
   expect(() => parseDismissalTarget({ kind: "subjects", subjects: [{ kind: "report", seq: 0 }] }, { allowSubjects: true })).toThrow();
   expect(() => parseDismissalTarget({ kind: "subjects", subjects: [{ kind: "report" }] }, { allowSubjects: true })).toThrow();
+});
+
+
+test("a task dismissal covers its waiting prototype, keeps its reason, and undo restores it", async () => {
+  const task = { id: "task-prototype", project: "project-a", assignments: [], prototypeReview: {
+    latestReviewId: "review-a", waitingReviewId: "review-a", title: "Layout", rounds: 1, createdAt: "2026-09-24T09:00:00Z",
+  } } as unknown as BoardTask;
+  const h = harness({ tasks: [task] });
+  const first = await dismissAttention({ kind: "task", taskId: task.id }, SEAT, { ports: h.ports, reason: "The publishing lane has moved on" });
+  expect(first.dismissed).toEqual([{ kind: "prototype", taskId: task.id, reviewId: "review-a" }]);
+  expect(readAttentionDismissals().records[0]).toMatchObject({ kind: "prototype", subject: "prototype:review-a", taskId: task.id, by: SEAT, note: "The publishing lane has moved on" });
+  await dismissAttention({ kind: "prototype", taskId: task.id, reviewId: "review-a" }, SEAT, { ports: h.ports, undo: true });
+  expect(readAttentionDismissals().records).toEqual([]);
+  const old = await dismissAttention({ kind: "prototype", taskId: task.id, reviewId: "review-old" }, SEAT, { ports: h.ports });
+  expect(old.alreadyClear).toEqual([{ kind: "prototype", taskId: task.id, reviewId: "review-old" }]);
 });
