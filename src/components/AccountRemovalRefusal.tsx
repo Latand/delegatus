@@ -90,10 +90,13 @@ function LiveWorkList({ refusal, phone }: { refusal: Refusal; phone: boolean }) 
  * answer scrolls its whole block into view, so a refusal on a row near the
  * bottom of the scrolling list never lands below the fold.
  */
-export function AccountRemovalRefusal({ refusal, phone = false, disabled, onDismiss, onRetry, onRefresh, onCancelSignIn }: {
+export function AccountRemovalRefusal({ refusal, phone = false, inset = true, disabled, onDismiss, onRetry, onRefresh, onCancelSignIn }: {
   refusal: Refusal;
   /** Full card width with a 44 px ✕ on the phone screen. */
   phone?: boolean;
+  /** Indented under the row's label, as in the accounts panel. A narrow card
+      (the Copilot list in the rail footer) draws it at its full width. */
+  inset?: boolean;
   disabled: boolean;
   onDismiss: () => void;
   onRetry: () => void;
@@ -118,7 +121,7 @@ export function AccountRemovalRefusal({ refusal, phone = false, disabled, onDism
       ref={block}
       role="alert"
       data-account-refusal={refusal.accountId}
-      className={`flex items-start gap-2 rounded-[8px] bg-danger-soft py-2.5 pl-3 ${phone ? "mb-1.5 mr-2 pr-1" : "mb-2 ml-[30px] mr-3.5 pr-1.5"}`}
+      className={`flex items-start gap-2 rounded-[8px] bg-danger-soft py-2.5 pl-3 ${phone ? "mb-1.5 mr-2 pr-1" : inset ? "mb-2 ml-[30px] mr-3.5 pr-1.5" : "pr-1.5"}`}
     >
       <TriangleAlert className="mt-[2px] h-[13px] w-[13px] shrink-0 text-danger" aria-hidden />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5 text-[11px] leading-[1.45] text-primary">

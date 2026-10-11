@@ -9,6 +9,7 @@ import { formatResetClock } from "./rateLimit";
 
 const base = (over: Partial<EngineAccountsState> = {}): EngineAccountsState => ({
   engine: "codex",
+  hidden: [],
   accounts: [
     // Each capacity chip is reconciled from the account's own windows, so the
     // fixture carries the windows the chip percentages come from.

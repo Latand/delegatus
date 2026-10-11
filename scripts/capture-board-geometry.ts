@@ -50,9 +50,12 @@
  * file left behind, and the clean-up result with names that need a look; a
  * refusal naming its live work as links into each conversation, and Main
  * removed through the same control — armed, hidden with its folder left in
- * place, and shown again (task d7759de2) — at 1440 and 1280 in en and uk,
- * light and dark — and the phone at 390 × 844 for the refusal, the summary,
- * the live work and hidden Main. Nothing is clamped or clipped, the path keeps
+ * place, and shown again from account setup once its summary is closed; and
+ * the Copilot list in the rail footer with the same control — a managed
+ * account armed, a refusal naming live work, Default armed, hidden and
+ * offered back, then shown again (task d7759de2) — at 1440 and 1280 in en and
+ * uk, light and dark — and the phone at 390 × 844 for the refusal, the
+ * summary, the live work, and hidden Main with its offer under the add row. Nothing is clamped or clipped, the path keeps
  * its account id visible, the blocks stay inside the panel, and the phone's
  * targets (buttons and links) are 44 px.
  *
@@ -3061,8 +3064,9 @@ async function accountRemovalMain(): Promise<void> {
       await context.route("**/api/accounts", async (route) => {
         try {
           const response = await route.fetch();
-          const body = await response.json() as { claude?: { accounts?: { id: string }[] } };
+          const body = await response.json() as { claude?: { accounts?: { id: string }[]; hidden?: { id: string; label: string }[] } };
           if (body.claude?.accounts) body.claude.accounts = body.claude.accounts.filter((account) => !gone.has(account.id));
+          if (body.claude) body.claude.hidden = gone.has("default") ? [{ id: "default", label: "Main" }] : [];
           await route.fulfill({ response, json: body });
         } catch {
           /* the context is gone */
@@ -3082,6 +3086,31 @@ async function accountRemovalMain(): Promise<void> {
           /* the context is gone */
         }
       });
+      /* The Copilot list is answered here whole: the capture machine has no Copilot CLI, and its
+         DELETE and Show again change only this list, the way the real route would. */
+      const copilotGone = new Set<string>();
+      let copilotNext: Answer | null = null;
+      const copilotBody = () => ({
+        cli: { present: true, reason: null },
+        active: "work",
+        accounts: [
+          { id: "default", label: "Default", kind: "legacy", active: false, auth: "signed_in", user: "demo-user", loginCommand: null, login: null },
+          { id: "work", label: "Work", kind: "managed", active: true, auth: "signed_in", user: "demo-user", loginCommand: null, login: null },
+        ].filter((account) => !copilotGone.has(account.id)),
+        hidden: copilotGone.has("default") ? [{ id: "default", label: "Default" }] : [],
+      });
+      await context.route("**/api/accounts/copilot", async (route) => {
+        const method = route.request().method();
+        const request = (method === "GET" ? null : route.request().postDataJSON()) as { id?: string; action?: string } | null;
+        if (method === "DELETE") {
+          deletes.push(request);
+          const answer = copilotNext ?? { status: 500, body: { code: "removal_failed" } };
+          if (answer.status === 200 && request?.id) copilotGone.add(request.id);
+          return route.fulfill({ status: answer.status, contentType: "application/json", body: JSON.stringify(answer.status === 200 ? { ...copilotBody(), removed: { id: request?.id } } : answer.body) });
+        }
+        if (method === "POST" && request?.action === "restore" && request.id) copilotGone.delete(request.id);
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(copilotBody()) });
+      });
       await context.route("**/api/accounts/claude", async (route) => {
         /* Show again answers here too, and lists the hidden account back. */
         if (route.request().method() === "POST" && (route.request().postDataJSON() as { action?: string } | null)?.action === "restore") {
@@ -3100,6 +3129,7 @@ async function accountRemovalMain(): Promise<void> {
       return {
         deletes,
         answer(value: Answer) { next = value; },
+        answerCopilot(value: Answer) { copilotNext = value; },
         holdNext(): () => void {
           let release: () => void = () => {};
           hold = new Promise<void>((resolve) => { release = () => { hold = null; resolve(); }; });
@@ -3116,12 +3146,12 @@ async function accountRemovalMain(): Promise<void> {
       await page.waitForSelector('[role="dialog"] [data-account-row]');
       await page.waitForTimeout(400);
     };
-    const shoot = async (page: Page, name: string) => {
-      const panel = await page.evaluate(() => {
-        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) => /Claude/.test(element.getAttribute("aria-label") ?? ""));
+    const shoot = async (page: Page, name: string, dialogLabel = "Claude") => {
+      const panel = await page.evaluate((label: string) => {
+        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) => (element.getAttribute("aria-label") ?? "").includes(label));
         const r = dialog?.getBoundingClientRect();
         return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null;
-      });
+      }, dialogLabel);
       if (panel) await page.screenshot({ path: path.join(OUT_DIR, `removal-${name}.png`), clip: { x: Math.max(0, panel.x - 8), y: Math.max(0, panel.y - 8), width: panel.w + 16, height: panel.h + 16 } });
     };
     const check = (tag: string, state: string, reading: RemovalReading, expect: { text?: string[]; phone?: boolean }) => {
@@ -3305,13 +3335,84 @@ async function accountRemovalMain(): Promise<void> {
       must(await page.evaluate(() => document.querySelector('[data-account-row="default"]') === null), `${tag} Main hidden: Main is still listed`);
       must(!readings.mainHidden.text.includes(lang === "uk" ? "Перенесено" : "Moved"), `${tag} Main hidden: the card says something moved`);
       await shoot(page, `${tag}-main-hidden`);
-      await page.click('[data-account-removal-restore="offered"] button');
-      await page.waitForSelector('[data-account-removal-restore="done"]');
+      /* The summary closed, account setup still offers Main back, under the add-account form. */
+      await page.click(`[data-account-removal-card="removed"] button[aria-label="${lang === "uk" ? "Закрити підсумок" : "Close the summary"}"]`);
+      await page.waitForSelector('[data-account-hidden-offer="default"]');
+      await page.waitForTimeout(300);
+      readings.mainOffer = await page.evaluate(readRemoval, '[data-account-hidden-offer="default"]');
+      check(tag, "Main offered back", readings.mainOffer, { text: [lang === "uk" ? "Main прибрано з Delegatus" : "Main is removed from Delegatus", lang === "uk" ? "Повернути Main" : "Show Main again"] });
+      await shoot(page, `${tag}-main-offer`);
+      await page.click('[data-account-restore="default"]');
       await page.waitForSelector('[data-account-row="default"]');
       await page.waitForTimeout(300);
-      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-removal-card="removed"]');
-      check(tag, "Main shown again", readings.mainRestored, { text: [lang === "uk" ? "знову у списку" : "is listed again"] });
+      must(await page.evaluate(() => document.querySelector("[data-account-hidden-offer]") === null), `${tag} Main shown again: the offer stays up`);
+      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-row="default"]');
+      check(tag, "Main shown again", readings.mainRestored, { text: ["Main"] });
       await shoot(page, `${tag}-main-restored`);
+
+      /* The Copilot list in the rail footer, through the same control (task d7759de2). */
+      await page.keyboard.press("Escape");
+      await page.waitForSelector('[role="dialog"] [data-account-row]', { state: "detached" });
+      if (await page.$('[data-rail-footer="folded"]')) await page.click("[data-rail-footer-toggle]");
+      await page.waitForSelector('[data-engine-limits="copilot"] > button');
+      await page.click('[data-engine-limits="copilot"] > button');
+      await page.waitForSelector('[data-engine-limits="copilot"] [data-copilot-account="work"]');
+      await page.waitForTimeout(300);
+      const copilotLabel = "Copilot";
+      const copilotPanel = () => page.evaluate(() => {
+        const dialog = document.querySelector('[data-engine-limits="copilot"] [role="dialog"]');
+        const r = dialog?.getBoundingClientRect();
+        return r ? { x: r.x, y: r.y, w: r.width, h: r.height, viewport: window.innerHeight } : null;
+      });
+      const panelFits = async (state: string) => {
+        const box = await copilotPanel();
+        must(box !== null && box.y >= -0.5 && box.y + box.h <= box.viewport + 0.5, `${tag} Copilot ${state}: the open list runs out of the window (${JSON.stringify(box)})`);
+        return box;
+      };
+      await page.click('[data-account-remove="work"]');
+      await page.waitForSelector('[data-account-remove-armed="work"]');
+      readings.copilotArmed = await page.evaluate(readRemoval, '[data-account-remove-armed="work"]');
+      check(tag, "Copilot armed", readings.copilotArmed, { text: [lang === "uk" ? "Файл входу буде видалено" : "Its sign-in file is deleted"] });
+      await panelFits("armed");
+      await shoot(page, `${tag}-copilot-armed`, copilotLabel);
+      stub.answerCopilot({ status: 409, body: { code: "account_removal_blocked", blockers: ["live_sessions"], sessions: liveWork, sessionCount: 4 } });
+      await page.click('[data-account-remove-confirm="work"]');
+      await page.waitForSelector('[data-copilot-account="work"] [data-account-refusal="work"] [data-account-refusal-sessions]');
+      await page.waitForTimeout(300);
+      readings.copilotRefusal = await page.evaluate(readRemoval, '[data-copilot-account="work"] [data-account-refusal="work"]');
+      check(tag, "Copilot refusal", readings.copilotRefusal, { text: [liveWork[0]!.title!, lang === "uk" ? "і ще 1" : "and 1 more"] });
+      const refusalText = await page.evaluate(() => {
+        const text = document.querySelector('[data-copilot-account="work"] [data-account-refusal="work"] > div');
+        return text ? text.getBoundingClientRect().width : 0;
+      });
+      must(refusalText >= 140, `${tag} Copilot refusal: its text column is ${refusalText}px wide`);
+      (readings.copilotRefusal as RemovalReading & { textColumn?: number }).textColumn = refusalText;
+      await panelFits("refusal");
+      await shoot(page, `${tag}-copilot-refusal`, copilotLabel);
+      await page.click(`[data-account-refusal="work"] button[aria-label="${lang === "uk" ? "Закрити повідомлення" : "Close this message"}"]`);
+      await page.click('[data-account-remove="default"]');
+      await page.waitForSelector('[data-account-remove-armed="default"]');
+      readings.copilotDefaultArmed = await page.evaluate(readRemoval, '[data-account-remove-armed="default"]');
+      check(tag, "Copilot Default armed", readings.copilotDefaultArmed, { text: [lang === "uk" ? "його можна повернути" : "you can show it again"] });
+      await panelFits("Default armed");
+      await shoot(page, `${tag}-copilot-default-armed`, copilotLabel);
+      stub.answerCopilot({ status: 200, body: null });
+      await page.click('[data-account-remove-confirm="default"]');
+      await page.waitForSelector('[data-engine-limits="copilot"] [data-account-hidden-offer="default"]');
+      await page.waitForTimeout(300);
+      must(await page.evaluate(() => document.querySelector('[data-copilot-account="default"]') === null), `${tag} Copilot Default hidden: Default is still listed`);
+      readings.copilotDefaultHidden = await page.evaluate(readRemoval, '[data-engine-limits="copilot"] [data-account-hidden-offer="default"]');
+      check(tag, "Copilot Default offered back", readings.copilotDefaultHidden, { text: [lang === "uk" ? "Default прибрано з Delegatus" : "Default is removed from Delegatus", lang === "uk" ? "Повернути Default" : "Show Default again"] });
+      await panelFits("Default hidden");
+      await shoot(page, `${tag}-copilot-default-hidden`, copilotLabel);
+      await page.click('[data-engine-limits="copilot"] [data-account-restore="default"]');
+      await page.waitForSelector('[data-copilot-account="default"]');
+      await page.waitForTimeout(300);
+      must(await page.evaluate(() => document.querySelector('[data-engine-limits="copilot"] [data-account-hidden-offer]') === null), `${tag} Copilot Default shown again: the offer stays up`);
+      readings.copilotDefaultRestored = await page.evaluate(readRemoval, '[data-copilot-account="default"]');
+      check(tag, "Copilot Default shown again", readings.copilotDefaultRestored, { text: ["Default"] });
+      await panelFits("Default shown again");
+      await shoot(page, `${tag}-copilot-default-restored`, copilotLabel);
       must(stub.deletes.every((body) => !(body as { force?: unknown }).force), `${tag}: a DELETE carried a force flag`);
       report[tag] = { readings, deletes: stub.deletes.length };
       await context.close();
@@ -3371,6 +3472,22 @@ async function accountRemovalMain(): Promise<void> {
             return Boolean(card && first && card.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING);
           });
           must(leads, `${tag}: the summary does not lead the engine section`);
+          if (kind === "hidden") {
+            /* Closed, the summary leaves Main offered back under the add row. */
+            await page.screenshot({ path: path.join(OUT_DIR, `removal-${tag}.png`), fullPage: false });
+            await page.click(`[data-mobile2-accounts-engine="claude"] [data-account-removal-card="removed"] button[aria-label="${lang === "uk" ? "Закрити підсумок" : "Close the summary"}"]`);
+            const offerSelector = '[data-mobile2-accounts-engine="claude"] [data-account-hidden-offer="default"]';
+            await page.waitForSelector(offerSelector);
+            await page.locator(offerSelector).scrollIntoViewIfNeeded();
+            await page.waitForTimeout(300);
+            const offer = await page.evaluate(readRemoval, offerSelector);
+            check(`${tag}-offer`, "Main offered back", offer, { phone: true, text: [lang === "uk" ? "Повернути Main" : "Show Main again"] });
+            report[`${tag}-offer`] = offer;
+            await page.screenshot({ path: path.join(OUT_DIR, `removal-${tag}-offer.png`), fullPage: false });
+            report[tag] = reading;
+            await context.close();
+            continue;
+          }
         } else {
           const inside = await page.evaluate((account: string) => {
             const card = document.querySelector(`[data-mobile2-account="${account}"]`)!.getBoundingClientRect();

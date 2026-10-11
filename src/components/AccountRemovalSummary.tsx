@@ -3,7 +3,7 @@
 import { TriangleAlert } from "lucide-react";
 import { useState } from "react";
 
-import type { AccountCleanupReport, AccountRemovalSummary as Summary } from "@/hooks/useEngineAccounts";
+import type { AccountCleanupReport, AccountRemovalSummary as Summary, HiddenAccount } from "@/hooks/useEngineAccounts";
 import { type Locale, type TFunction, useLocale } from "@/lib/i18n";
 
 import { copyText } from "./feed/CopyButton";
@@ -259,6 +259,32 @@ export function AccountCleanupFailed({ phone = false, busy, onDismiss, onRetry }
         className={`inline-flex shrink-0 items-center justify-center rounded-[6px] text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${phone ? "h-11 w-11" : "h-11 w-11 sm:h-5 sm:w-5"}`}
       >
         <X className="h-3 w-3" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * An engine's own default home the operator removed, offered back in account
+ * setup beside the add-account form for as long as it stays hidden. The
+ * summary card offers the same Show again, but only until its ✕, the panel
+ * closing or a reload; this line is the way back after that.
+ */
+export function HiddenAccountOffer({ account, busy, phone = false, className = "", onRestore }: {
+  account: HiddenAccount;
+  busy: boolean;
+  phone?: boolean;
+  className?: string;
+  onRestore: () => void;
+}) {
+  const { t } = useLocale();
+  const target = phone ? "min-h-[44px]" : "min-h-[44px] sm:min-h-[24px]";
+  return (
+    <div data-account-hidden-offer={account.id} className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-[1.45] text-secondary ${className}`}>
+      <span className="min-w-0 flex-1 basis-[180px]">{t("accounts.hidden.note", { label: account.label })}</span>
+      <button type="button" data-account-restore={account.id} disabled={busy} onClick={onRestore} className={`${ACTION} ${target}`}>
+        {busy ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+        {t("accounts.removed.restore", { label: account.label })}
       </button>
     </div>
   );

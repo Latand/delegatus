@@ -24,7 +24,7 @@ import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types"
 
 import { EngineMark } from "@/components/EngineMark";
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
-import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary } from "./AccountRemovalSummary";
+import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, HiddenAccountOffer } from "./AccountRemovalSummary";
 import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
 import { AccountRowsSkeleton } from "./skeletons";
 import { MobileMeter, meterTone, type MeterTone } from "./mobile/MobileMeter";
@@ -745,6 +745,23 @@ function rowRefusal(state: EngineAccountsState, accountId: string, phone = false
 /** The footer slot's removal answer (#1857 §5.3, §5.4): the summary of what a
     removal moved, the clean-up result, or a refusal whose row has left the
     list. The phone draws it at the top of the engine section. */
+/** The removed default homes account setup offers back. One whose removal
+    summary is still open is offered there instead, never twice. */
+function HiddenAccountOffers({ state, phone = false, className }: { state: EngineAccountsState; phone?: boolean; className: string }) {
+  const summary = state.removal?.kind === "removed" ? state.removal.summary : null;
+  const offered = (state.hidden ?? []).filter((account) => !(summary?.hiddenHome && summary.accountId === account.id));
+  return offered.map((account) => (
+    <HiddenAccountOffer
+      key={account.id}
+      account={account}
+      phone={phone}
+      busy={state.mutation === "restore"}
+      className={className}
+      onRestore={() => void state.restore(account.id)}
+    />
+  ));
+}
+
 function RemovalOutcome({ state, phone = false }: { state: EngineAccountsState; phone?: boolean }) {
   const removal = state.removal;
   const busy = state.mutation !== null;
@@ -1004,6 +1021,7 @@ export function AccountsPanel({
                 {t("accounts.confirmAdd")}
               </button>
             </form>
+            <HiddenAccountOffers state={state} className="border-t border-border px-3 py-1.5" />
             {engine === "claude" ? <ClaudeProviderEditor state={state} /> : null}
             <div className="flex justify-end border-t border-border px-3 py-1.5">
               <button
@@ -1527,6 +1545,7 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
         </div>
       ) : null}
       <MobileAddAccountRow state={state} engineName={engineName} loginBusy={loginBusy} />
+      <HiddenAccountOffers state={state} phone className="mx-3 mb-1.5 pl-3" />
       {engine === "claude" ? <ClaudeProviderEditor state={state} phone /> : null}
     </section>
   );

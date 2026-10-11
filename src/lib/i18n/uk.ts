@@ -807,6 +807,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "accounts.removed.restoreHint": "Прибрали помилково?",
   "accounts.removed.restoreDone": "{label} знову у списку.",
   "accounts.removed.restoreFailed": "Повернути не вдалося. Спробуйте ще раз.",
+  "accounts.hidden.note": "{label} прибрано з Delegatus. Його папку не чіпали.",
   "accounts.size.b": "{n} Б",
   "accounts.size.kb": "{n} КБ",
   "accounts.size.mb": "{n} МБ",

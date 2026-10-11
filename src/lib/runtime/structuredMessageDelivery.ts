@@ -12,6 +12,8 @@ import {
 } from "@/lib/agent/registry";
 import { structuredHostsEnabled } from "./flags";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { readRetiredAccountIds } from "@/lib/accounts/accountsStore";
+import type { AgentEngine } from "@/lib/agent/cli";
 import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
@@ -494,6 +496,17 @@ interface HeldAdmissionWait {
   detail?: string | null;
 }
 
+/** The engine's routed account a send may reseat onto. Routing left on an
+    account the operator removed (a hidden Main, a retired one) names nothing:
+    spawn admission refuses that account, so reseating onto it would fail the
+    message. An unreadable accounts registry keeps the routing as it is. */
+function deliveryRoutingAccountId(registry: AgentRegistry, engine: AgentEngine): string | null {
+  const routed = registry.engineRouting(engine).activeAccountId;
+  if (!routed || (engine !== "claude" && engine !== "codex")) return routed;
+  const retired = readRetiredAccountIds(engine);
+  return retired.kind === "known" && retired.ids.has(routed) ? null : routed;
+}
+
 async function holdDuringRuntimeSynchronization(
   request: StructuredMessageRequest,
   registry: AgentRegistry,
@@ -508,7 +521,7 @@ async function holdDuringRuntimeSynchronization(
     : registry.conversationForPath(request.path);
   const unresolvedGeneration = unresolvedConversation?.generations.at(-1);
   const activeAccountId = unresolvedConversation
-    ? registry.engineRouting(unresolvedConversation.engine).activeAccountId
+    ? deliveryRoutingAccountId(registry, unresolvedConversation.engine)
     : null;
   const accountReseatWithoutOwner = !owner
     && unresolvedConversation !== null
@@ -610,7 +623,7 @@ async function holdDuringRuntimeSynchronization(
     if (!replay && request.admissionGuard
       && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
     const generation = conversation.generations.at(-1);
-    const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
+    const activeAccountId = deliveryRoutingAccountId(registry, conversation.engine);
     const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
     /* The registry write lock is waited for off the event loop. */
     const place = async (): Promise<HeldDelivery> => {
@@ -1416,7 +1429,7 @@ export async function enqueueStructuredMessage(
     };
   }
   const generation = conversation.generations.at(-1);
-  const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
+  const activeAccountId = deliveryRoutingAccountId(registry, conversation.engine);
   const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
   /* Conflict preflight computes candidate refs and digest before writing.
      A changed payload under an existing client message id rejects with zero

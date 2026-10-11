@@ -564,3 +564,24 @@ test("removing a managed account while Main is hidden routes to another visible 
   expect(agentRegistry().engineRouting("codex").activeAccountId).toBe(second.id);
   expect(activeCodexAccountId()).toBe(second.id);
 });
+
+/* A removal a crash left at `retiring` (home already in the archive, agent
+   registry not yet retired) is finished by recovery. With Main hidden, that
+   retirement must route to a listed account, never back onto Main. */
+test("recovery of a removal interrupted while retiring never routes onto a hidden Main", async () => {
+  const { hideLegacyCodexAccount } = await import("./codex");
+  const fixture = usedCodexHome("Invented Recovery");
+  const other = createManagedCodexAccount("Invented Other");
+  hideLegacyCodexAccount();
+  agentRegistry().setEngineRouting("codex", fixture.account.id);
+  fs.mkdirSync(path.dirname(fixture.archive), { recursive: true, mode: 0o700 });
+  fs.renameSync(fixture.account.home, fixture.archive);
+  seedAccountRegistry("codex", { ...persistedAccountRegistry("codex"), removals: [{ id: fixture.account.id, phase: "retiring", startedAt: Date.now() }] });
+
+  expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  expect(agentRegistry().engineRouting("codex").activeAccountId).toBe(other.id);
+  expect(activeCodexAccountId()).toBe(other.id);
+  expect(listCodexAccounts().map((account) => account.id)).toEqual([other.id]);
+  expect(persistedAccountRegistry("codex").active).not.toBe("default");
+});

@@ -1053,3 +1053,25 @@ test("Main's answer reads as hidden with its folder, and restore posts and recor
   expect(store.removal).toMatchObject({ kind: "removed", summary: { restored: "done" } });
   unsub();
 });
+
+test("a hidden Main reads from the accounts answer, and a failed Show again with no summary open says so in the notice", async () => {
+  let restoreStatus = 500;
+  const { fetcher } = scripted((url, body) => {
+    if (url === "/api/accounts") return claudePayload({ hidden: [{ id: "default", label: "Main" }, { id: 7 }] });
+    if ((body as { action?: string } | undefined)?.action === "restore") return new Response("{}", { status: restoreStatus });
+    return new Response(null, { status: 204 });
+  });
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  expect(store.hidden).toEqual([{ id: "default", label: "Main" }]);
+
+  expect(await store.restore("default")).toBeFalse();
+  expect(store.removal).toBeNull();
+  expect(store.notice).toMatchObject({ kind: "error", operation: "restore", messageKey: "accounts.removed.restoreFailed" });
+
+  restoreStatus = 200;
+  expect(await store.restore("default")).toBeTrue();
+  expect(store.notice).toBeNull();
+  unsub();
+});

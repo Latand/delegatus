@@ -810,6 +810,7 @@ export const en = {
   "accounts.removed.restoreHint": "Removed by mistake?",
   "accounts.removed.restoreDone": "{label} is listed again.",
   "accounts.removed.restoreFailed": "It could not be shown again. Try once more.",
+  "accounts.hidden.note": "{label} is removed from Delegatus. Its folder is untouched.",
   "accounts.size.b": "{n} B",
   "accounts.size.kb": "{n} KB",
   "accounts.size.mb": "{n} MB",

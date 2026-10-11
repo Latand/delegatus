@@ -293,6 +293,20 @@ export function removeCopilotAccount(id: string): CopilotAccountRemoval {
   });
 }
 
+/** True once the operator removed the default home from Delegatus. */
+export function copilotLegacyAccountHidden(): boolean {
+  return readRegistry().legacyHidden === true;
+}
+
+/** Lists the default home again after its removal; nothing in it was touched. */
+export function restoreLegacyCopilotAccount(): void {
+  withAccountMutationLock(() => {
+    const { legacyHidden, ...registry } = readRegistry(true);
+    if (!legacyHidden) throw new UnknownCopilotAccountError(COPILOT_LEGACY_ACCOUNT_ID);
+    writeRegistry(registry);
+  });
+}
+
 export function copilotHomeOwningSessionPath(pathname: string): string | null {
   let real: string;
   try { real = fs.realpathSync(pathname); } catch { return null; }

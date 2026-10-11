@@ -805,3 +805,29 @@ test("accounts GET projects each account's reset credits and tier weeklies from 
   const unread = body.codex.accounts.find((item) => item.id === "default")!;
   expect(unread.resetCredits).toBeNull();
 });
+
+/* Task d7759de2: routing left on a removed account names nothing, so neither
+   the panel nor the launch draft shows it active; a hidden Main is offered
+   back instead of listed. */
+test("GET never reports a removed account as active, and offers a hidden Main back", async () => {
+  const { hideLegacyCodexAccount, removeManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const kept = createManagedCodexAccount("Invented kept");
+  const gone = createManagedCodexAccount("Invented gone");
+  hideLegacyCodexAccount();
+  removeManagedCodexAccount(gone.id);
+
+  for (const routed of ["default", gone.id]) {
+    agentRegistry().setEngineRouting("codex", routed);
+    const body = await (await GET()).json() as { codex: { active: string; accounts: { id: string }[]; hidden: { id: string; label: string }[] } };
+    expect(body.codex.accounts.map((account) => account.id)).toEqual([kept.id]);
+    expect(body.codex.active).toBe(kept.id);
+    expect(body.codex.hidden).toEqual([{ id: "default", label: "Main" }]);
+  }
+
+  // With no account left at all, nothing is active, never the hidden Main.
+  removeManagedCodexAccount(kept.id);
+  agentRegistry().setEngineRouting("codex", "default");
+  const empty = await (await GET()).json() as { codex: { active: string; accounts: unknown[] } };
+  expect(empty.codex.accounts).toEqual([]);
+  expect(empty.codex.active).toBe("");
+});

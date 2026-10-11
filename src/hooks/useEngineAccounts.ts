@@ -270,6 +270,7 @@ export type AccountNoticeKey =
   | "accounts.terminalCopied" | "accounts.terminalFailed"
   | "accounts.limitsRefreshFailed"
   | "accounts.resetUsed" | "accounts.resetNone" | "accounts.resetNothing" | "accounts.resetFailed"
+  | "accounts.removed.restoreFailed"
   | ClaudeLoginErrKey;
 
 export interface AccountNotice {
@@ -458,8 +459,17 @@ export function accountEntryPointVisible(_hasLimits: boolean, _status: AccountLo
   return true;
 }
 
+/** An engine's own default home the operator removed: Delegatus no longer
+    lists it, and account setup offers it back. */
+export interface HiddenAccount {
+  id: string;
+  label: string;
+}
+
 export interface EngineAccountsSnapshot {
   accounts: AccountOption[];
+  /** Removed default homes, offered back beside the add-account form. */
+  hidden: HiddenAccount[];
   active: string;
   /** Changes for each optimistic, confirmed, or reverted account identity. */
   identityVersion: number;
@@ -502,7 +512,8 @@ export interface EngineAccountsState extends EngineAccountsSnapshot {
   retryLogin: (accountId: string) => Promise<boolean>;
   /** Removes one account (Main is only hidden); its answer lands on `removal`. */
   remove: (accountId: string) => Promise<boolean>;
-  /** Lists a hidden Main again; the summary it was hidden from says how it went. */
+  /** Lists a hidden Main again, from the removal summary or from account
+      setup; the summary, when open, says how it went, else the notice line. */
   restore: (accountId: string) => Promise<boolean>;
   /** Cleans up leftovers (failed sign-in folders, retired homes); the report
       lands on `removal`, or, while a summary waits on its sign-in file, marks
@@ -536,6 +547,7 @@ export interface EngineAccountsStore extends EngineAccountsState {
 
 const INITIAL_SNAPSHOT: EngineAccountsSnapshot = {
   accounts: [],
+  hidden: [],
   active: "",
   identityVersion: 0,
   status: "loading",
@@ -553,12 +565,13 @@ const INITIAL_SNAPSHOT: EngineAccountsSnapshot = {
 interface EngineResponse {
   active: string;
   accounts: AccountOption[];
+  hidden: HiddenAccount[];
   migration: EngineMigration | null;
   autoBalance: AutoBalance | null;
 }
 
 function accountResponse(body: unknown, engine: Engine): EngineResponse {
-  const section = (body as Record<string, unknown> | null)?.[engine] as { active?: unknown; accounts?: unknown; migration?: unknown; autoBalance?: unknown } | undefined;
+  const section = (body as Record<string, unknown> | null)?.[engine] as { active?: unknown; accounts?: unknown; hidden?: unknown; migration?: unknown; autoBalance?: unknown } | undefined;
   if (typeof section?.active !== "string" || !Array.isArray(section.accounts)) throw new Error("accounts response invalid");
   const accounts = section.accounts.map((raw): AccountOption => {
     const account = raw as AccountOption & { login?: unknown };
@@ -571,9 +584,19 @@ function accountResponse(body: unknown, engine: Engine): EngineResponse {
   return {
     active: section.active,
     accounts,
+    hidden: hiddenAccountsOf(section.hidden),
     migration: parseEngineMigration(section.migration),
     autoBalance: parseAutoBalance(section.autoBalance),
   };
+}
+
+/** The removed default homes an accounts answer offers back. */
+export function hiddenAccountsOf(value: unknown): HiddenAccount[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw) => {
+    const item = (raw ?? {}) as { id?: unknown; label?: unknown };
+    return typeof item.id === "string" && item.id && typeof item.label === "string" ? [{ id: item.id, label: item.label }] : [];
+  });
 }
 
 function refreshFailure(): AccountNotice {
@@ -703,13 +726,14 @@ export function createEngineAccountsStore(
     try {
       const response = await fetcher("/api/accounts", { signal: controller.signal });
       if (!response.ok) throw new Error("accounts request failed");
-      const { active, accounts, migration, autoBalance } = accountResponse(await response.json(), engine);
+      const { active, accounts, hidden, migration, autoBalance } = accountResponse(await response.json(), engine);
       if (generation !== requestGeneration) return false;
       activeRequest = null;
       setSnapshot({
         ...snapshot,
         active,
         accounts: currentLogins(accounts),
+        hidden,
         migration,
         autoBalance,
         challenge: pendingDeviceAuth(accounts),
@@ -1021,10 +1045,14 @@ export function createEngineAccountsStore(
         if (!response.ok) throw new Error("restore failed");
       } catch {
         settle("failed");
+        /* Offered from account setup, with no summary open, the failure is
+           said in the panel's notice line. */
+        if (!summary) patchSnapshot({ notice: { kind: "error", operation: "restore", messageKey: "accounts.removed.restoreFailed", action: null } });
         await refresh();
         return false;
       }
       settle("done");
+      if (snapshot.notice?.operation === "restore") patchSnapshot({ notice: null });
       patchSnapshot({ identityVersion: snapshot.identityVersion + 1 });
       await refresh();
       return true;
@@ -1201,6 +1229,7 @@ export function createEngineAccountsStore(
     },
     getSnapshot: () => snapshot,
     get accounts() { return snapshot.accounts; },
+    get hidden() { return snapshot.hidden; },
     get active() { return snapshot.active; },
     get identityVersion() { return snapshot.identityVersion; },
     get status() { return snapshot.status; },

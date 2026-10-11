@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { removalRefusalOf, type AccountRemovalRefusal as Refusal } from "@/hooks/useEngineAccounts";
+import { hiddenAccountsOf, removalRefusalOf, type AccountRemovalRefusal as Refusal, type HiddenAccount } from "@/hooks/useEngineAccounts";
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useLocale } from "@/lib/i18n";
 import type { EngineLimits } from "@/lib/types";
 
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
+import { HiddenAccountOffer } from "./AccountRemovalSummary";
 import { engineTintOf } from "./utils";
 import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
 import { LINE_EDGE, ReserveBar, type SidebarFooterDensity } from "./railFooterDensity";
@@ -30,6 +31,8 @@ export interface CopilotAccountsBody {
   cli: { present: boolean; reason: string | null };
   active: string;
   accounts: CopilotAccountRow[];
+  /** The default home the operator removed, offered back in account setup. */
+  hidden?: HiddenAccount[];
   error?: string;
 }
 
@@ -140,6 +143,7 @@ export function copilotSignedIn(body: CopilotAccountsBody | null): CopilotAccoun
 export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) {
   const { t } = useLocale();
   const { body, error, copied, refusal, load, post, copy, remove, dismissRefusal } = accounts;
+  const [restoring, setRestoring] = useState(false);
   const [label, setLabel] = useState("");
   /* Removal arms on the first click and runs on the confirm, as in the
      Claude and Codex lists. */
@@ -217,7 +221,7 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
             </button>
           )}
           {refusal?.accountId === account.id ? (
-            <AccountRemovalRefusal refusal={refusal} phone disabled={false} onDismiss={dismissRefusal} onRetry={() => void remove(account)} onRefresh={() => void load()} />
+            <AccountRemovalRefusal refusal={refusal} inset={false} disabled={false} onDismiss={dismissRefusal} onRetry={() => void remove(account)} onRefresh={() => void load()} />
           ) : null}
         </div>
       ))}
@@ -240,6 +244,17 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
           {t("copilot.accounts.add")}
         </button>
       </form>
+      {hiddenAccountsOf(body.hidden).map((account) => (
+        <HiddenAccountOffer
+          key={account.id}
+          account={account}
+          busy={restoring}
+          onRestore={() => {
+            setRestoring(true);
+            void post({ action: "restore", id: account.id }).finally(() => setRestoring(false));
+          }}
+        />
+      ))}
       {error ? <p role="alert" className="text-danger">{error}</p> : null}
     </>
   );

@@ -602,7 +602,7 @@ function withAccountRetired(registry: Registry, id: string): Registry {
   const label = registry.accounts.find((account) => account.id === id)?.label ?? previous?.label ?? id;
   return {
     ...registry,
-    active: registry.active === id ? DEFAULT_ID : registry.active,
+    active: registry.active === id ? fallbackAccountId(registry, id) ?? DEFAULT_ID : registry.active,
     accounts: registry.accounts.filter((account) => account.id !== id),
     retired: [...registry.retired.filter((account) => account.id !== id), { id, label, retiredAt: previous?.retiredAt ?? Date.now(), archived: true }],
     removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
@@ -624,6 +624,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         entry,
         listed: registry.accounts.some((account) => account.id === entry.id),
         retiredInPlace: registry.retired.some((account) => account.id === entry.id && !account.archived),
+        fallbackAccountId: fallbackAccountId(registry, entry.id),
         commitRetired: () => {
           writeRegistry(withAccountRetired(mutableRegistry(), entry.id));
         },

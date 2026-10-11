@@ -6,8 +6,10 @@ import {
   copilotLoginCommand,
   createManagedCopilotAccount,
   listCopilotAccounts,
+  copilotLegacyAccountHidden,
   copilotSignedInUser,
   removeCopilotAccount,
+  restoreLegacyCopilotAccount,
   setActiveCopilotAccount,
   UnknownCopilotAccountError,
 } from "@/lib/accounts/copilot";
@@ -42,6 +44,8 @@ function copilotAccountsBody() {
       loginCommand: account.kind === "managed" ? copilotLoginCommand(account.home, binary) : null,
       login: copilotLoginSupervisor.forAccount(account.id),
     })),
+    /* The default home the operator removed: offered back in account setup. */
+    hidden: copilotLegacyAccountHidden() ? [{ id: "default", label: "Default" }] : [],
   };
 }
 
@@ -73,6 +77,13 @@ export async function POST(req: NextRequest) {
       if (!copilotLoginSupervisor.has(body.operationId)) return NextResponse.json({ error: "Copilot login operation was not found" }, { status: 404 });
       copilotLoginSupervisor.choosePlaintextStorage(body.operationId, body.acceptPlaintext);
       return NextResponse.json(copilotAccountsBody());
+    }
+    /* The default home comes back after its removal (it was only hidden;
+       nothing in it was touched). */
+    if (body.action === "restore") {
+      if (body.id !== "default") return NextResponse.json({ error: "only Default can be restored", code: "invalid_request" }, { status: 400 });
+      await withAccountMutationLockAsync(() => restoreLegacyCopilotAccount(), { caller: "Copilot Default restore", holder: "Copilot catalog restore" });
+      return NextResponse.json({ ...copilotAccountsBody(), restored: { id: "default" } });
     }
     if (body.action === "select") {
       if (typeof body.id !== "string") return NextResponse.json({ error: "id must be a string" }, { status: 400 });

@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
-import type { AccountRemovalRefusal, AccountRemovalSummary, ClaudeLoginView, EngineAccountsState } from "@/hooks/useEngineAccounts";
+import { createEngineAccountsStore, type AccountRemovalRefusal, type AccountRemovalSummary, type ClaudeLoginView, type EngineAccountsState } from "@/hooks/useEngineAccounts";
 
 import { AccountsPanel } from "./AccountsPanel";
 import { formatQuotaAsOf, formatResetEta } from "./rateLimit";
@@ -32,6 +32,7 @@ const login = (over: Partial<ClaudeLoginView> = {}): ClaudeLoginView => ({
 function state(currentLogin: ClaudeLoginView, over: Partial<EngineAccountsState> = {}): EngineAccountsState {
   return {
     engine: "claude",
+    hidden: [],
     accounts: [{ id: "acc", label: "Acc", kind: "managed", authPresent: false, loginPending: true, loginState: "pending", deviceAuth: null, login: currentLogin }],
     active: "acc",
     identityVersion: 0,
@@ -802,4 +803,62 @@ test("a sign-in refusal ends the open sign-in from the refusal itself", async ()
   const block = view.host.querySelector('[data-account-refusal="acc"]') as HTMLElement;
   flushSync(() => { buttonNamed(block, "Cancel sign-in")!.click(); });
   expect(canceled as unknown as string).toBe("op-open");
+});
+
+/* The summary's Show again lasts only until its ✕, the panel closing or a
+   reload. A hidden Main stays reachable from account setup after that. */
+test("a hidden Main is shown again from account setup after the summary is closed and the page reloaded", async () => {
+  let hidden = false;
+  const calls: string[] = [];
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    calls.push(`${method} ${url}${init?.body ? ` ${String(init.body)}` : ""}`);
+    if (url === "/api/accounts") {
+      return json({ claude: { active: "acc", accounts: [...(hidden ? [] : [mainAcc]), managedAcc], hidden: hidden ? [{ id: "default", label: "Main" }] : [] } });
+    }
+    if (url === "/api/accounts/claude" && method === "DELETE") {
+      hidden = true;
+      return json({ removed: { id: "default" }, hidden: { home: ["", "home", "someone", ".claude"].join("/") }, cleanupPending: false, moved: { archive: null, files: 0, bytes: 0 } });
+    }
+    if (url === "/api/accounts/claude" && method === "POST" && JSON.parse(String(init?.body)).action === "restore") {
+      hidden = false;
+      return json({ restored: { id: "default" } });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const settle = async (store: ReturnType<typeof createEngineAccountsStore>) => {
+    for (let turn = 0; turn < 50 && store.getSnapshot().mutation !== null; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  const first = createEngineAccountsStore("claude", { fetcher });
+  await first.refresh();
+  const view = await mount(first);
+  mounted.push(view);
+  await first.remove("default");
+  await view.rerender(first);
+  // While the summary is up, it is the one place that offers Main back.
+  expect(view.host.querySelector('[data-account-removal-card="removed"]')).not.toBeNull();
+  expect(view.host.querySelector("[data-account-hidden-offer]")).toBeNull();
+  first.dismissRemoval();
+  await view.rerender(first);
+  expect(view.host.querySelector('[data-account-removal-card="removed"]')).toBeNull();
+  expect(view.host.querySelector('[data-account-hidden-offer="default"]')?.textContent).toContain("Main is removed from Delegatus");
+
+  // A reload starts from a fresh store: no summary, Main still offered.
+  const reloaded = createEngineAccountsStore("claude", { fetcher });
+  await reloaded.refresh();
+  await view.rerender(reloaded);
+  expect(view.host.querySelector('[data-account-remove="default"]')).toBeNull();
+  const offer = view.host.querySelector('[data-account-restore="default"]') as HTMLButtonElement;
+  expect(offer.textContent).toBe("Show Main again");
+  flushSync(() => { offer.click(); });
+  await settle(reloaded);
+  await view.rerender(reloaded);
+
+  expect(calls).toContain('POST /api/accounts/claude {"action":"restore","id":"default"}');
+  expect(hidden).toBeFalse();
+  expect(view.host.querySelector('[data-account-remove="default"]')).not.toBeNull();
+  expect(view.host.querySelector("[data-account-hidden-offer]")).toBeNull();
 });

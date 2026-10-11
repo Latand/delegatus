@@ -133,6 +133,16 @@ test("durable account retirement rejects every later spawn admission", () => {
   })).toThrow("claude account is retired");
 });
 
+test("a hidden Main refuses every later spawn admission until it is shown again", () => {
+  mod.createManagedClaudeAccount("Stays listed");
+  mod.hideLegacyClaudeAccount();
+
+  expect(() => beginLegacySpawnFixture(agentRegistry(), { engine: "claude", cwd: "/repo", accountId: "default" })).toThrow("claude account is retired");
+
+  mod.restoreLegacyClaudeAccount();
+  expect(beginLegacySpawnFixture(agentRegistry(), { engine: "claude", cwd: "/repo", accountId: "default" }).kind).toBe("created");
+});
+
 test("sidecar cleanup does not follow a symlink outside the accounts root", () => {
   const account = mod.createManagedClaudeAccount("Linked sidecar");
   const sidecar = `${account.home}.lock`;
@@ -801,6 +811,27 @@ test("removing Main hides it from every list and pick, keeps its home and transc
 
   mod.restoreLegacyClaudeAccount();
   expect(mod.listClaudeAccounts().map((account) => account.id)).toEqual(["default", work.id]);
+});
+
+/* A removal a crash left at `retiring` (home already in the archive, agent
+   registry not yet retired) is finished by recovery. With Main hidden, that
+   retirement must route to a listed account, never back onto Main. */
+test("recovery of a removal interrupted while retiring never routes onto a hidden Main", () => {
+  const fixture = usedClaudeHome("Invented Recovery");
+  const other = mod.createManagedClaudeAccount("Invented Other");
+  fs.writeFileSync(path.join(other.home, ".credentials.json"), "{}", { mode: 0o600 });
+  mod.hideLegacyClaudeAccount();
+  agentRegistry().setEngineRouting("claude", fixture.account.id);
+  fs.mkdirSync(path.dirname(fixture.archive), { recursive: true, mode: 0o700 });
+  fs.renameSync(fixture.account.home, fixture.archive);
+  seedAccountRegistry("claude", { ...persistedAccountRegistry("claude"), removals: [{ id: fixture.account.id, phase: "retiring", startedAt: Date.now() }] });
+
+  expect(mod.recoverInterruptedClaudeAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  expect(agentRegistry().engineRouting("claude").activeAccountId).toBe(other.id);
+  expect(mod.activeClaudeAccountId()).toBe(other.id);
+  expect(mod.listClaudeAccounts().map((account) => account.id)).toEqual([other.id]);
+  expect(persistedAccountRegistry("claude").active).not.toBe("default");
 });
 
 test("Main stays listed while an agent runs on it, and the refusal changes nothing", () => {

@@ -909,6 +909,9 @@ export function recoverManagedAccountRemoval(input: {
   /** An older retired record still names the original home. It participates
       in the same move/commit recovery as a listed account. */
   retiredInPlace?: boolean;
+  /** Where routing goes when it named this account, as on the removal
+      itself; the engine's default home unless that one was removed too. */
+  fallbackAccountId?: string | null;
   /** The accounts-registry commit of a finished removal: the account leaves,
       a retired record points at its archive, the journal moves to `scrubbing`. */
   commitRetired(): void;
@@ -931,7 +934,7 @@ export function recoverManagedAccountRemoval(input: {
     if (!input.listed && !input.retiredInPlace) return scrub();
     try {
       /* Busy, like any refusal here, is retried by the next listing. */
-      agentRegistry().retireAccountNow(input.engine, input.accountId, "default", {}, { rewrite: input.entry.rewrites ?? [] });
+      agentRegistry().retireAccountNow(input.engine, input.accountId, input.fallbackAccountId === undefined ? "default" : input.fallbackAccountId, {}, { rewrite: input.entry.rewrites ?? [] });
     } catch {
       return null;
     }

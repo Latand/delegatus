@@ -43,6 +43,7 @@ afterEach(async () => {
 function accountState(select: EngineAccountsState["select"]): EngineAccountsState {
   return {
     engine: "codex",
+    hidden: [],
     accounts: [
       {
         id: "account-north",

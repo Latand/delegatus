@@ -71,3 +71,16 @@ test("the default Copilot home arms with the hide wording, and a refusal names i
   expect(link.textContent).toBe("Copilot task");
   expect(link.getAttribute("href")).toBe("#c=conversation_copilot");
 });
+
+test("a hidden Copilot Default is offered back in the list and restored through the route's restore", async () => {
+  const posted: Record<string, unknown>[] = [];
+  const host = await render(accounts({
+    body: { cli: { present: true, reason: null }, active: "work", accounts: [row({ id: "work", label: "Work", active: true })], hidden: [{ id: "default", label: "Default" }] },
+    post: async (payload) => { posted.push(payload); },
+  }));
+  expect(host.querySelector('[data-copilot-account="default"]')).toBeNull();
+  const offer = host.querySelector('[data-account-hidden-offer="default"]')!;
+  expect(offer.textContent).toContain("Default is removed from Delegatus. Its folder is untouched.");
+  await click(offer.querySelector('[data-account-restore="default"]'));
+  expect(posted).toEqual([{ action: "restore", id: "default" }]);
+});

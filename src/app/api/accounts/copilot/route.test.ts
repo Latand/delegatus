@@ -199,3 +199,29 @@ test("the default Copilot home is only hidden, and a live agent refuses removal 
   expect(fs.readFileSync(path.join(legacy, "config.json"), "utf8")).toBe("{}");
   closeAgentRegistryForTests();
 });
+
+test("the hidden Copilot Default is offered back and restored, untouched, through the same route", async () => {
+  const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { listCopilotAccounts } = await import("@/lib/accounts/copilot");
+  closeAgentRegistryForTests();
+  const legacy = path.join(sandbox, `run-${run}`, "legacy-present");
+  fs.mkdirSync(path.join(legacy, "session-state"), { recursive: true });
+  fs.writeFileSync(path.join(legacy, "config.json"), "{}");
+  process.env.COPILOT_HOME = legacy;
+  expect((await remove(deleteRequest({ id: "default" }))).status).toBe(200);
+  await expect((await GET()).json()).resolves.toMatchObject({ hidden: [{ id: "default", label: "Default" }] });
+
+  const restored = await POST(post({ action: "restore", id: "default" }));
+
+  expect(restored.status).toBe(200);
+  const body = await restored.json() as { restored: { id: string }; accounts: { id: string }[]; hidden: unknown[] };
+  expect(body.restored).toEqual({ id: "default" });
+  expect(body.accounts.map((item) => item.id)).toEqual(["default", accountId]);
+  expect(body.hidden).toEqual([]);
+  expect(listCopilotAccounts().map((item) => item.id)).toEqual(["default", accountId]);
+  expect(fs.readFileSync(path.join(legacy, "config.json"), "utf8")).toBe("{}");
+  // Only the default home is ever restored; a second restore has nothing to show.
+  expect((await POST(post({ action: "restore", id: accountId }))).status).toBe(400);
+  expect((await POST(post({ action: "restore", id: "default" }))).status).toBe(404);
+  closeAgentRegistryForTests();
+});
