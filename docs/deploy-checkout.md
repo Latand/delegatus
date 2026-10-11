@@ -55,8 +55,15 @@ path instead of the slice the unit configures. Preflight therefore reads the
 service's kernel cgroup subtree last, immediately before publication, and
 classifies each member by walking its parents to the serving launcher, Viewer
 or runtime host, or to a live agent host from the protected-host capture, each
-matched by its start identity. Any other member refuses the switch before
-publication or restart and is named on standard error and in `switch.log`:
+matched by its start identity. It also reads the named service's `MainPID` and
+verifies the parent chain from the identity-matched recorded launcher to that
+PID, with every link inside the actual service cgroup. Those exact ancestors
+pass; their other children still need a serving or agent owner. Missing or
+changing MainPID, identity, ancestry, cgroup or launcher record refuses preflight.
+A serving descendant whose executable, script or working directory names an
+older release is also refused. Agent-owned tools may use other release checkouts.
+Any other member refuses the switch before publication or restart and is named
+on standard error and in `switch.log`, with its refusal reason:
 pid, start identity, start time, parent pid and the base names of its
 executable and script, never its arguments. Nothing is signalled. A subtree
 that cannot be read whole, or a member whose identity changes while it is
@@ -179,9 +186,13 @@ approved action.
 Regression checks run only the named files against private state:
 
 ```sh
-test_state=$(mktemp -d)
-LLV_STATE_DIR="$test_state" bun test ./scripts/deploy-checkout.test.ts
-LLV_STATE_DIR="$test_state" bun test ./src/lib/roles/defaults.test.ts
+test_root=$(mktemp -d /tmp/delegatus-checkout-check.XXXXXX)
+mkdir -p "$test_root"/{home,config,tmp,state}
+export HOME="$test_root/home" XDG_CONFIG_HOME="$test_root/config"
+export TMPDIR="$test_root/tmp" LLV_STATE_DIR="$test_root/state"
+export LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1
+bash scripts/gate-slot.sh bun test ./scripts/deploy-checkout.test.ts
+bash scripts/gate-slot.sh bun test ./src/lib/roles/defaults.test.ts
 ```
 
 The tests inject processes, clock, commands and transports. Their registry and
