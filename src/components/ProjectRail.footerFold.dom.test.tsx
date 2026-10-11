@@ -216,9 +216,10 @@ test("one line per reading, and «All windows» puts every window with its reset
   await waitForText(host, translate("en", "resources.ram"));
   const detail = () => host.querySelector("[data-rail-footer-detail]") as HTMLButtonElement;
 
-  /* One line: what is left of the tightest window, and no reset on the screen. */
+  /* One line: what is left of the weekly window, and no reset on the screen. */
   expect(host.querySelector("[data-rail-footer-body]")?.getAttribute("data-rail-footer-body")).toBe("line");
-  expect(footerIn(host).textContent ?? "").toContain(`${translate("en", "limits.left")} 60%`);
+  expect(footerIn(host).textContent ?? "").toContain(`${translate("en", "limits.left")} 90%`);
+  expect(footerIn(host).textContent ?? "").not.toContain("60%");
   expect(host.querySelectorAll("[data-meter-window]")).toHaveLength(0);
   expect(detail().textContent).toBe(translate("en", "rail.footerDetail"));
   expect(detail().getAttribute("aria-pressed")).toBe("false");

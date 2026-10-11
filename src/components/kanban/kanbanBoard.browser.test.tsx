@@ -28142,3 +28142,106 @@ describe("account chips with the weekly limit left: the launch chooser and the r
     }
   }, 300_000);
 });
+
+describe("the sidebar names each account's weekly limit left, Claude as Codex", () => {
+  /*
+   * The operator's reading (2026-10-11): a Claude account with 77 % of its week and 36 % of its 5-hour window left
+   * read 36 in the sidebar. Over the board fixture with `&accountpicker=1&sidebarweekly=1`: Claude «Main» 77 % week
+   * and 36 % 5h, «Work» a week only (41 %), «Night» a 5-hour window only (70 %); Codex 78 % and 23 %, weekly only.
+   * The desktop sidebar footer at 1440, one line per account, then «All windows»; the phone's accounts screen at
+   * 390, where the phone keeps its account lines. en and uk.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 SIDEBAR_WEEKLY_OUT=<dir> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "weekly limit left, Claude as Codex"
+   *
+   * The frames go to `SIDEBAR_WEEKLY_OUT`, outside the repository; the readings go to evidence/sidebar-weekly.
+   */
+  browserTest("every account line names its week, a 5-hour figure only under its own label, and a missing week says so", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-weekly-"));
+    const out = process.env.SIDEBAR_WEEKLY_OUT ? path.resolve(process.env.SIDEBAR_WEEKLY_OUT) : path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
+        const left = (percent: number) => `${tr("limits.left")} ${percent}%`;
+
+        /* The desktop sidebar: one line per account, then every window behind «All windows». */
+        {
+          const name = `sidebar-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, VIEWPORT, "dark", lang, "reduce");
+          try {
+            await page.locator('[data-engine-limits="claude"] [data-footer-account="night"]').waitFor({ timeout: 40_000 });
+            await page.locator('[data-engine-limits="codex"] [data-footer-account="review"] [data-meter-value]').waitFor({ timeout: 15_000 });
+            await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+            const lines = () => page.locator("[data-engine-limits] [data-footer-account]").evaluateAll((rows) => rows.map((row) => ({
+              engine: row.closest("[data-engine-limits]")?.getAttribute("data-engine-limits"), id: row.getAttribute("data-footer-account"),
+              text: (row as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+              value: (row.querySelector("[data-meter-value]") ?? row.querySelector("[data-limits-reason]"))?.textContent ?? null,
+              bar: row.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar") ?? null,
+              overflow: row.scrollWidth > row.clientWidth + 0.5,
+            })));
+            const compact = await lines();
+            const value = (engine: string, id: string) => compact.find((row) => row.engine === engine && row.id === id)?.value;
+            expect([value("claude", "default"), value("claude", "work"), value("claude", "night")], `${name} Claude lines`).toEqual([left(77), left(41), tr("limits.noWeekly")]);
+            expect([value("codex", "default"), value("codex", "review")], `${name} Codex lines`).toEqual([left(78), left(23)]);
+            expect(compact.map((row) => row.bar), `${name} bars`).toEqual(["77", "41", null, "78", "23"]);
+            expect(compact.filter((row) => row.overflow).map((row) => row.text), `${name} lines hold their contents`).toEqual([]);
+            const footerText = await page.locator("[data-rail-footer]").innerText();
+            expect(footerText, `${name} no 5-hour figure on a line`).not.toMatch(/\b(36|70)%/);
+            await page.mouse.move(0, 0);
+            const footer = (await page.locator("[data-rail-footer]").boundingBox())!;
+            await page.screenshot({ path: path.join(out, `${name}-lines.png`), clip: { x: 0, y: Math.max(0, footer.y - 40), width: Math.ceil(footer.x + footer.width), height: Math.min(VIEWPORT.height, footer.y + footer.height + 4) - Math.max(0, footer.y - 40) } });
+
+            await page.click("[data-rail-footer-detail]");
+            await page.locator('[data-engine-limits="claude"] [data-limits-windows]').waitFor({ timeout: 10_000 });
+            const windows = await page.locator('[data-engine-limits="claude"] [data-limits-windows] [data-meter-window]').evaluateAll((rows) => rows.map((row) => (row as HTMLElement).innerText.replace(/\s+/g, " ").trim()));
+            const detailLine = await page.locator('[data-engine-limits="claude"] [data-footer-account-active="true"] [data-meter-value]').textContent();
+            expect(detailLine, `${name} the line under «All windows»`).toBe(left(77));
+            expect(windows.some((row) => row.startsWith(tr("limits.5h")) && row.includes("36%")), `${name} the 5-hour figure under its label: ${JSON.stringify(windows)}`).toBe(true);
+            expect(windows.some((row) => row.startsWith(tr("limits.week")) && row.includes("77%")), `${name} the week under its label`).toBe(true);
+            const detailBox = (await page.locator("[data-rail-footer]").boundingBox())!;
+            await page.screenshot({ path: path.join(out, `${name}-all-windows.png`), clip: { x: 0, y: Math.max(0, detailBox.y - 40), width: Math.ceil(detailBox.x + detailBox.width), height: Math.min(VIEWPORT.height, detailBox.y + detailBox.height + 4) - Math.max(0, detailBox.y - 40) } });
+            expect(pageErrors, `${name} page errors`).toEqual([]);
+            readings.push({ shot: name, lines: compact, allWindows: { line: detailLine, windows } });
+          } finally { await context.close(); }
+        }
+
+        /* The phone: its account lines are the accounts screen behind the menu; each corner names the week. */
+        {
+          const name = `accounts-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
+          try {
+            await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 40_000 });
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-go="accounts"]');
+            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(4).waitFor({ timeout: 15_000 });
+            await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+            const cards = await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').evaluateAll((elements) => elements.map((card) => {
+              const corner = card.querySelector<HTMLElement>("[data-mobile2-account-corner]");
+              const box = corner?.getBoundingClientRect();
+              return {
+                id: card.getAttribute("data-mobile2-account"), corner: corner?.innerText.replace(/\s+/g, " ").trim() ?? null,
+                inside: box ? box.right <= innerWidth + 0.5 && box.left >= -0.5 : null,
+              };
+            }));
+            const week = (percent: number) => `${tr("mobile2.meter.left", { left: percent })} ${tr("limits.week")}`;
+            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([week(77), week(41), tr("limits.noWeekly"), week(78), week(23)]);
+            expect(cards.every((card) => card.inside !== false), `${name} corners inside the screen`).toBe(true);
+            expect(await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth)), `${name} no sideways scroll`).toBe(0);
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            expect(pageErrors, `${name} page errors`).toEqual([]);
+            readings.push({ shot: name, cards });
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/sidebar-weekly", { recursive: true });
+      fs.writeFileSync("evidence/sidebar-weekly/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 300_000);
+});

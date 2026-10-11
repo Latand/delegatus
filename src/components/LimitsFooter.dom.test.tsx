@@ -71,7 +71,7 @@ function engineBlock(host: HTMLElement, engine: "claude" | "codex" | "copilot"):
   return host.querySelector(`[data-engine-limits="${engine}"]`) as HTMLElement;
 }
 
-/** The line every mode draws: the active account, then what is left of its tightest window. */
+/** The line every mode draws: the active account, then what is left of its weekly window. */
 function meterLine(block: HTMLElement) {
   const line = block.querySelector("[data-meter-line]");
   return {
@@ -215,7 +215,7 @@ test("a genuine 5-hour window keeps the 5h label", async () => {
     staleSince: null,
   };
   const line = meterLine(engineBlock(await render("line"), "codex"));
-  expect(line.value).toBe("left 60%"); // the session is the tighter of the two
+  expect(line.value).toBe("left 90%"); // the line names the week, however tight the 5h window is
   expect(line.windows).toBe("5h left 60% · Week left 90%");
   await act(async () => { root?.unmount(); });
   root = null;
@@ -442,12 +442,12 @@ test("a healthy tier bucket renders as a third row named by the tier, and the ge
   expect(block.textContent?.match(/reset/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
 });
 
-test("a tier bucket tighter than the general week binds the line in both modes", async () => {
+test("a tier bucket tighter than the general week stays in the tooltip; the general week holds the line in both modes", async () => {
   limits = claudePayload([{ tier: "opus", usedPercent: 80 }]);
   for (const density of DENSITIES) {
     const block = claudeBlock(await render(density));
     const line = meterLine(block);
-    expect(line.value).toBe("left 20%");
+    expect(line.value).toBe("left 60%");
     expect(line.windows).toBe("5h left 88% · Week left 60% · Opus · Week left 20%");
     expect(Boolean(block.querySelector("[data-limits-windows]"))).toBe(density === "detail");
     if (density === "detail") expect(block.querySelector("[data-limits-windows]")?.textContent).toContain("Opus · Week");
@@ -462,7 +462,7 @@ test("every tier the provider meters gets its own footer line, Fable included (#
   const block = claudeBlock(await render());
   expect(block.textContent).toContain("Fable · Week");
   expect(block.textContent).toContain("Opus · Week");
-  expect(meterLine(block).value).toBe("left 12%"); // Fable is the tightest, so it binds the line
+  expect(meterLine(block).value).toBe("left 60%"); // the general week holds the line; Fable's 12% is its own row
   expect(block.textContent).toContain("37%");
   expect(meterLine(block).windows).toBe("5h left 88% · Week left 60% · Fable · Week left 12% · Opus · Week left 37%");
 });
@@ -477,16 +477,16 @@ const roster = (id: string, label: string, used: number | null, extra: Record<st
   effective: undefined,
   limits: used === null ? null : {
     state: "fresh",
-    session: { usedPercent: used, resetsAt: NOW + 3_600, windowMinutes: 300 },
-    weekly: null,
+    session: null,
+    weekly: { usedPercent: used, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080 },
     checkedAt: new Date((NOW - 60) * 1000).toISOString(),
   },
   ...extra,
 });
 
 const rosterLimits = (): LimitsPayload => ({
-  claude: { session: { usedPercent: 10, resetsAt: NOW + 3_600, windowMinutes: 300 }, weekly: null, plan: "max", capturedAt: NOW },
-  codex: { session: { usedPercent: 25, resetsAt: NOW + 3_600, windowMinutes: 300 }, weekly: null, plan: "pro", capturedAt: NOW },
+  claude: { session: null, weekly: { usedPercent: 10, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080 }, plan: "max", capturedAt: NOW },
+  codex: { session: null, weekly: { usedPercent: 25, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080 }, plan: "pro", capturedAt: NOW },
   claudeAccountId: "claude-a",
   codexAccountId: "codex-a",
   provenance: {
@@ -539,7 +539,7 @@ test("a non-active account line reads its own windows, never the active account'
   seedRoster();
   const host = await render("line");
   const row = accountRows(engineBlock(host, "codex"))[1]!;
-  expect(row.querySelector("button")?.getAttribute("title")).toContain("5h left 60%");
+  expect(row.querySelector("button")?.getAttribute("title")).toContain("Week left 60%");
   expect(row.textContent).not.toContain("75%");
 });
 
@@ -547,7 +547,7 @@ test("a line with an old reading dims and carries the amber dot", async () => {
   seedRoster();
   accounts.codex.accounts = [
     roster("codex-a", "Codex A", 25),
-    roster("codex-b", "Codex B", 40, { limits: { state: "stale", session: { usedPercent: 40, resetsAt: NOW + 3_600, windowMinutes: 300 }, weekly: null, checkedAt: new Date((NOW - 3 * 3_600) * 1000).toISOString() } }),
+    roster("codex-b", "Codex B", 40, { limits: { state: "stale", session: null, weekly: { usedPercent: 40, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080 }, checkedAt: new Date((NOW - 3 * 3_600) * 1000).toISOString() } }),
   ] as never;
   const rows = accountRows(engineBlock(await render("line"), "codex"));
   expect(rows[0]!.querySelector("[data-limits-stale-dot]")).toBeNull();
@@ -601,4 +601,81 @@ test("All windows stays one account per engine with every window", async () => {
   expect(meterLine(engineBlock(host, "codex"))).toMatchObject({ name: "Codex A", value: "left 75%" });
   expect(host.textContent).not.toContain("Codex B");
   expect(host.textContent).not.toContain("Claude B");
+});
+
+// ── Every footer line names the weekly window, Claude as Codex ──
+
+/** A Claude reading: `week` and `fiveHour` are the percent left, null for a window the reading lacks. */
+const claudeWindows = (week: number | null, fiveHour: number | null) => ({
+  session: fiveHour === null ? null : { usedPercent: 100 - fiveHour, resetsAt: NOW + 3_600, windowMinutes: 300 },
+  weekly: week === null ? null : { usedPercent: 100 - week, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080 },
+});
+
+function seedClaude(active: { week: number | null; fiveHour: number | null }, other: { week: number | null; fiveHour: number | null }) {
+  limits = {
+    ...rosterLimits(),
+    claude: { ...claudeWindows(active.week, active.fiveHour), plan: "max", capturedAt: NOW },
+  };
+  accounts.claude.active = "claude-a";
+  accounts.claude.accounts = [
+    roster("claude-a", "Claude A", null, { limits: { state: "fresh", ...claudeWindows(active.week, active.fiveHour), checkedAt: new Date((NOW - 60) * 1000).toISOString() } }),
+    roster("claude-b", "Claude B", null, { limits: { state: "fresh", ...claudeWindows(other.week, other.fiveHour), checkedAt: new Date((NOW - 60) * 1000).toISOString() } }),
+  ] as never;
+}
+
+const lineText = (row: HTMLElement) => row.textContent ?? "";
+
+for (const density of DENSITIES) test(`a Claude account with both windows names its week, never its tighter 5h window, in the ${density} footer`, async () => {
+  // The operator's reading: 77 % of the week left, 36 % of the 5-hour window.
+  seedClaude({ week: 77, fiveHour: 36 }, { week: 55, fiveHour: 12 });
+  const block = engineBlock(await render(density), "claude");
+  const rows = accountRows(block);
+  expect(rowReading(rows[0]!)).toMatchObject({ id: "claude-a", value: "left 77%", active: true });
+  expect(rows[0]!.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar")).toBe("77");
+  expect(lineText(rows[0]!)).not.toContain("36%");
+  // The 5h figure stays where it is named: the tooltip, and the labelled row behind "All windows".
+  expect(meterLine(block).windows).toBe("5h left 36% · Week left 77%");
+  if (density === "line") {
+    expect(rowReading(rows[1]!)).toMatchObject({ id: "claude-b", value: "left 55%", active: false });
+    expect(lineText(rows[1]!)).not.toContain("12%");
+  } else {
+    expect(block.querySelector("[data-limits-windows]")?.textContent).toContain("5h");
+    expect(block.querySelector("[data-limits-windows]")?.textContent).toContain("36%");
+  }
+});
+
+test("a Claude account with only a weekly reading shows that week", async () => {
+  seedClaude({ week: 77, fiveHour: null }, { week: 40, fiveHour: null });
+  const rows = accountRows(engineBlock(await render("line"), "claude")).map(rowReading);
+  expect(rows).toEqual([
+    { id: "claude-a", name: "Claude A", value: "left 77%", active: true },
+    { id: "claude-b", name: "Claude B", value: "left 40%", active: false },
+  ]);
+});
+
+test("a Claude account with only a 5-hour reading says it has no weekly data, never the 5h number", async () => {
+  seedClaude({ week: null, fiveHour: 36 }, { week: null, fiveHour: 12 });
+  const block = engineBlock(await render("line"), "claude");
+  const rows = accountRows(block);
+  expect(rows.map(rowReading)).toEqual([
+    { id: "claude-a", name: "Claude A", value: "no weekly data", active: true },
+    { id: "claude-b", name: "Claude B", value: "no weekly data", active: false },
+  ]);
+  expect(rows.some((row) => row.querySelector("[data-meter-bar]"))).toBe(false);
+  expect(lineText(rows[0]!)).not.toContain("36%");
+  expect(lineText(rows[1]!)).not.toContain("12%");
+  // The active reading still opens the burndown chart, and its tooltip names the 5h window it has.
+  const chart = rows[0]!.querySelectorAll("button")[1]!;
+  expect(chart.getAttribute("aria-label")).toBe("Open Claude burndown chart");
+  expect(chart.getAttribute("title")).toBe("5h left 36%");
+});
+
+test("Codex lines are unchanged: each account names its weekly window", async () => {
+  seedRoster();
+  const rows = accountRows(engineBlock(await render("line"), "codex")).map(rowReading);
+  expect(rows).toEqual([
+    { id: "codex-a", name: "Codex A", value: "left 75%", active: true },
+    { id: "codex-b", name: "Codex B", value: "left 60%", active: false },
+    { id: "codex-c", name: "Codex C", value: "no data yet", active: false },
+  ]);
 });

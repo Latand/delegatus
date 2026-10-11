@@ -2918,6 +2918,7 @@ export const en = {
   "limits.windowDays": "{n}d",
   "limits.accountsOpenAria": "Codex accounts — switch or add",
   "limits.noDataYet": "no data yet",
+  "limits.noWeekly": "no weekly data",
   "limits.rateLimited": "Provider is rate-limiting requests.",
   "limits.rateLimitedRetry": "Provider is rate-limiting requests. Retry at {time}.",
   "limits.reauthRequired": "Re-login to Claude is required.",

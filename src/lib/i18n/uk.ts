@@ -2868,6 +2868,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "limits.windowDays": "{n} д",
   "limits.accountsOpenAria": "Акаунти Codex — змінити або додати",
   "limits.noDataYet": "поки немає даних",
+  "limits.noWeekly": "немає тижневих даних",
   "limits.rateLimited": "Провайдер обмежує частоту запитів.",
   "limits.rateLimitedRetry": "Провайдер обмежує частоту запитів. Наступна спроба о {time}.",
   "limits.reauthRequired": "Потрібно повторно увійти в Claude.",
