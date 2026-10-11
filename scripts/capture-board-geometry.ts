@@ -7563,19 +7563,26 @@ async function registryHistoryMain(): Promise<void> {
       });
       const page = await context.newPage();
       /* Every board request, read once the board is up: the first load is bounded by readyMs. */
-      const files: { query: string; status: number; ms: number }[] = [];
+      const files: { query: string; status: number; ms: number; timing: string }[] = [];
       const failed: { query: string; error: string }[] = [];
       let measuring = false;
+      /* The scope a request asked for; the pinned path itself stays out of the record. */
+      const scopeOf = (url: URL) => {
+        const scope = new URLSearchParams(url.search);
+        if (scope.has("path")) scope.set("path", "pinned");
+        return `?${scope.toString()}`;
+      };
       page.on("requestfinished", async (request) => {
         const url = new URL(request.url());
         if (!measuring || !url.pathname.startsWith("/api/files")) return;
         const response = await request.response();
         const timing = request.timing();
-        files.push({ query: url.search, status: response?.status() ?? 0, ms: Math.round(timing.responseEnd > 0 ? timing.responseEnd : 0) });
+        files.push({ query: scopeOf(url), status: response?.status() ?? 0, ms: Math.round(timing.responseEnd > 0 ? timing.responseEnd : 0),
+          timing: (await response?.allHeaders())?.["server-timing"] ?? "" });
       });
       page.on("requestfailed", (request) => {
         const url = new URL(request.url());
-        if (measuring && url.pathname.startsWith("/api/files")) failed.push({ query: url.search, error: request.failure()?.errorText ?? "failed" });
+        if (measuring && url.pathname.startsWith("/api/files")) failed.push({ query: scopeOf(url), error: request.failure()?.errorText ?? "failed" });
       });
       const pinned = dataset.conversationPaths[(index * 7) % dataset.conversationPaths.length]!;
       const started = performance.now();
