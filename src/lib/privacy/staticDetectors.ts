@@ -78,27 +78,40 @@ export function staticSensitiveClasses(
     for (let match = splitTokenPrefix.exec(line); match; match = splitTokenPrefix.exec(line)) {
       let bodyEnd = line.length;
       if (match[1]) {
-        // Emphasis can close on a later line. Scan once and retain only widths
-        // used by prefixes, avoiding a map entry per character in long runs.
+        // Pair runs once across lines. Nested emphasis can consume an opening
+        // run in parts; the first partial closure bounds the token's body.
         if (!emphasisClosings) {
-          const widths = new Set<number>();
-          for (const opening of searchableText.matchAll(new RegExp(splitTokenPrefix.source, splitTokenPrefix.flags))) {
-            if (opening[1]) widths.add(opening[1].length);
-          }
           emphasisClosings = new Map<number, number>();
+          const openings: { start: number; remaining: number; firstClosing?: number }[] = [];
           for (const marker of searchableText.matchAll(/_+/g)) {
             const end = marker.index + marker[0].length;
-            if (/^[\p{L}\p{N}_$]/u.test(searchableText.slice(end, end + 2))) continue;
-            for (let length = 1; length <= marker[0].length; length += 1) {
-              if (!widths.has(length)) continue;
-              const start = end - length;
-              if (start > 0 && !/\s/u.test(searchableText[start - 1])) emphasisClosings.set(length, start);
+            const before = searchableText.slice(Math.max(0, marker.index - 2), marker.index);
+            const after = searchableText.slice(end, end + 2);
+            let remaining = marker[0].length;
+            if (before && !/\s$/u.test(before) && !/^[\p{L}\p{N}_$]/u.test(after)) {
+              while (remaining && openings.length) {
+                const opening = openings[openings.length - 1];
+                const consumed = Math.min(remaining, opening.remaining);
+                opening.firstClosing ??= marker.index;
+                opening.remaining -= consumed;
+                remaining -= consumed;
+                if (!opening.remaining) {
+                  emphasisClosings.set(opening.start, opening.firstClosing);
+                  openings.pop();
+                }
+              }
+            }
+            if (remaining && after && !/^\s/u.test(after) && !/[\p{L}\p{N}_$]$/u.test(before)) {
+              openings.push({ start: end - remaining, remaining });
             }
           }
         }
-        const closing = emphasisClosings.get(match[1].length);
-        if (closing === undefined || closing <= lineStart + splitTokenPrefix.lastIndex) continue;
-        bodyEnd = Math.min(line.length, closing - lineStart);
+        const closing = emphasisClosings.get(lineStart + match.index);
+        if (closing === undefined) continue;
+        // Formatting confined to prefix letters leaves the body outside it.
+        if (closing > lineStart + splitTokenPrefix.lastIndex) {
+          bodyEnd = Math.min(line.length, closing - lineStart);
+        }
       }
       // A non-base62 letter or number ends the candidate body. GitHub bodies
       // need their full base62 length after compaction; longer formats also match.

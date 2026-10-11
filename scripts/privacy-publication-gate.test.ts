@@ -1120,6 +1120,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       `_${split}_`,
       `__${split}__`,
       `___${split}___`,
+      `___${split}__ tail_`,
+      `___${split}_ tail__`,
       `____${split}____`,
       `${"_".repeat(32)}${split}${"_".repeat(32)}`,
       `_${split}\ncontinued_`,
@@ -1137,9 +1139,34 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
   test("detects synthetic fine-grained tokens under multiline and nested emphasis", () => {
     const split = [...syntheticFineGrainedPat()].join(" ");
-    for (const text of [`_${split}\ncontinued_`, `____${split}____`]) {
+    for (const text of [`_${split}\ncontinued_`, `____${split}____`, `___${split}__ tail_`, `___${split}_ tail__`]) {
       expect(sensitiveClasses(text).has("credential")).toBe(true);
     }
+  });
+
+  test.each(["__ tail_", "_ tail__"])("the CLI blocks nested split closures %s", async (closing) => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
+    temporaryDirectories.push(directory);
+    const publication = join(directory, "publication.md");
+    const split = [...syntheticShortGithubToken("p", "aZ9".repeat(12))].join(" ");
+    writeFileSync(publication, "___" + split + closing);
+
+    const result = await runGate([publication]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
+    expect(result.stderr.toString()).toBe("");
+  }, 15000);
+
+  test("nested emphasis cannot complete a short token with text outside its inner closure", () => {
+    const split = [...syntheticShortGithubToken("p", "aZ9".repeat(11) + "aZ")].join(" ");
+    for (const closing of ["__ a_", "_ a__"]) {
+      expect(sensitiveClasses("___" + split + closing).has("credential")).toBe(false);
+    }
+  });
+
+  test("emphasis closing inside a split prefix keeps its complete token detectable", () => {
+    const split = [...syntheticShortGithubToken("p")].join(" ");
+    expect(sensitiveClasses("_" + split[0] + "_" + split.slice(1) + "_").has("credential")).toBe(true);
   });
 
   test("unclosed emphasis candidates stay bounded across many marker widths", () => {
