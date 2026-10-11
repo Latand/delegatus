@@ -7963,9 +7963,11 @@ function availableProviderRetryAccount(pipeline: Pipeline, stage: PipelineStage,
   try {
     const recovered = (id: string) => {
       const limit = usageLimitsOn(attempt, engine).find(item => item.accountId === id);
-      return limit
-        ? providerAccountRecovered(pipeline, attempt, id, limit.limitedAt ?? null, limit.resetsAt, ports)
-        : ports.accountRecovered?.(engine, id, wait.turnTs, attempt.effectiveRole.model, condition) === true;
+      // A reset opens one window after this account's latest cut, and cannot
+      // clear a later authentication failure or replay an already spent reset.
+      if (limit && providerAccountHasNewWindow(pipeline, attempt, engine, id, ports)) return true;
+      return ports.accountRecovered?.(engine, id, Math.max(wait.turnTs, limit?.limitedAt ?? 0),
+        attempt.effectiveRole.model, limit ? "usage_limit" : condition) === true;
     };
     const unavailableIds = [...new Set([
       ...usageLimitsOn(attempt, engine).filter(item => !providerAccountRecovered(pipeline, attempt,
