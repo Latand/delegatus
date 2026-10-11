@@ -89,6 +89,24 @@ test("claims serialize projects sharing a machine, with no live rules there is n
   ended(first);
   expect(claimPass({ project: "other", repoDir: dir, now: NOW })).not.toBeNull();
 });
+test.each(["succeeded", "failed"] as const)("a %s pass counts later lessons and rewrites at the same clock instant", state => {
+  const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
+  if (state === "succeeded") applyCuration(p, input({ [scope]: [one] }), at());
+  patchPass(p.id, { state, endedAt: at(1000), ...(state === "failed" ? { failure: "no-account" } : {}) });
+  expect(curationStatus(PROJECT, NOW + 2000).newLessons).toBe(0);
+  for (let n = 0; n < 10; n++) {
+    const source: RuleSource = { project: PROJECT, pipelineId: "clock-boundary", stageId: "build", attempt: n, roleId: "builder", fixRound: false, conversationId: "clock-conversation" };
+    recordLessonRequest({ ...source, at: at() });
+    leaveLessons({ request: source, source, lessons: n % 2 ? [] : [{ scope: "role", rule: `Inspect stored guidance before applying condition ${n}.`, why }],
+      ...(n % 2 ? { rewrite: { id: one, rule: `Inspect the current scope before applying condition ${n}.`, why } } : {}), none: null, now: at() });
+    const status = curationStatus(PROJECT, NOW + 2000);
+    expect(status.newLessons).toBe(n + 1);
+    expect(status.due).toBe(n === 9);
+  }
+  expect(pass(NOW + 2000)).toBeNull();
+  expect(pass(NOW + 31 * 60_000)).not.toBeNull();
+  expect(curationStatus(PROJECT, NOW + 31 * 60_000).newLessons).toBe(0);
+});
 test("scope rereads retain departures from every call of the current pass", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: [two] }, { archive: [{ id: one, reason: "stale", note: "The first old command was replaced." }] }), at(100));

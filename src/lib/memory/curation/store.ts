@@ -20,7 +20,7 @@ export interface CuratorPass extends CuratorPassView {
   launchBody?: Record<string, unknown>;
   finalText?: string;
 }
-type ProjectRow = { kind: "project"; project: string; current: string | null; lastClaimAt: string; lastAt: string | null; passes: string[] };
+type ProjectRow = { kind: "project"; project: string; current: string | null; lastClaimAt: string; claimRevisions?: Record<string, number>; lastAt: string | null; passes: string[] };
 type Row = CuratorPass | ProjectRow | { kind: "machine"; current: string | null } | { kind: "conversation"; conversationId: string; pass: string };
 const key = (row: Row) => row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
 const seed = { collection: "role_memory_curation", schemaVersion: 1, migrationId: "role-memory-curation-v1", key, loadRecords: (): Row[] => [] };
@@ -68,7 +68,11 @@ export function curationStatus(project: string, now = Date.now()) {
   let newLessons = 0;
   for (const row of all) if (row.kind === "scope" && scopes.has(canonicalScope(row.scope))) {
     const since = [row.curatedAt, held?.lastClaimAt].filter((at): at is string => !!at).sort().at(-1) ?? "";
-    for (const change of row.history) if (change.by === "agent" && change.at > since) newLessons += change.added.length + (change.rewritten?.length ?? 0) + change.merged.length;
+    // Revisions retain write order when an agent and a curator share a clock instant.
+    // The timestamp fallback preserves claims recorded before revision tracking.
+    const revision = held?.claimRevisions ? Math.max(held.claimRevisions[canonicalScope(row.scope)] ?? 0,
+      ...row.history.filter(change => change.by === "curator").map(change => change.revision)) : null;
+    for (const change of row.history) if (change.by === "agent" && (revision === null ? change.at > since : change.revision > revision)) newLessons += change.added.length + (change.rewritten?.length ?? 0) + change.merged.length;
   }
   const lastAt = held?.lastAt ?? null;
   const due = active && (!lastAt || newLessons >= CURATION_NEW_LESSONS || now - Date.parse(lastAt) >= CURATION_INTERVAL_MS);
@@ -79,6 +83,11 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   const status = curationStatus(project, input.now);
   if (!status.due) return null;
   const scopes = passScopes(project);
+  const claimRevisions: Record<string, number> = Object.fromEntries(scopes.map(scope => [scope, 0]));
+  for (const row of roleMemoryCollection()?.snapshot() ?? []) if (row.kind === "scope" && scopes.includes(canonicalScope(row.scope))) {
+    const scope = canonicalScope(row.scope);
+    claimRevisions[scope] = Math.max(claimRevisions[scope], row.revision);
+  }
   return collection(true)!.boundedPatch(12, tx => {
     const machine = tx.get("machine");
     if (machine?.kind === "machine" && machine.current) { const pass = tx.get(`r:${machine.current}`); if (pass?.kind === "pass" && passIsLive(pass)) return null; }
@@ -90,7 +99,7 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
     const pass: CuratorPass = { kind: "pass", id, project, repoDir: input.repoDir, scopes, clientAttemptId: id, claimedAt, state: "claimed", endedAt: null, failure: null, conversationId: null, launchId: null, transcriptPath: null, launchedAt: null,
       counts: { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };
     tx.put(pass); tx.put({ kind: "machine", current: id });
-    tx.put({ kind: "project", project, current: id, lastClaimAt: claimedAt, lastAt: held?.kind === "project" ? held.lastAt : null, passes: [...(held?.kind === "project" ? held.passes : []), id] });
+    tx.put({ kind: "project", project, current: id, lastClaimAt: claimedAt, claimRevisions, lastAt: held?.kind === "project" ? held.lastAt : null, passes: [...(held?.kind === "project" ? held.passes : []), id] });
     return pass;
   });
 }
