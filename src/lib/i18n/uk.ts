@@ -1556,7 +1556,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "telegram.report.err.run_in_progress": "Запуск звіту вже триває.",
   "telegram.report.err.account_check_failed": "Не вдалося перевірити підключений акаунт, тому нічого не читалося.",
   "telegram.report.err.connector_unavailable": "Конектор Telegram був недоступний, тому нічого не прочитано.",
-  "telegram.report.err.sources_failed": "Не вдалося отримати список чатів. Можливо, конектор перезапускається.",
+  "telegram.report.err.sources_failed": "Не вдалося прочитати джерела звіту або вони не покривають це вікно.",
   "telegram.report.err.launch_failed": "Не вдалося запустити звіт.",
   "telegram.report.err.run_ended_without_report": "Запуск завершився, не написавши звіт. Спробуйте ще раз.",
   "telegram.report.err.timed_out": "Запуск тривав надто довго й був зупинений.",
