@@ -1423,7 +1423,7 @@ export function defaultPipelinePorts(
       /* The engine's tick is synchronous here: a non-waiting write, and a
          lock held elsewhere answers false, which the next tick asks again
          (docs/design/delivery-progress-and-drain.md, C5). */
-      const failed = registry.failSpawnNow(launchId, reason);
+      const failed = registry.failNeverStartedStageSpawnNow(launchId, conversationId, reason);
       invalidateRegistryProjection();
       return failed;
     },
@@ -7684,13 +7684,21 @@ function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt
     terminalized, with its recovery record; null when it may not. */
 function neverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted: boolean): { recovery: StagedLaunchRecovery | null } | null {
   if (attempt.report || openRuntimeSwitch(attempt)) return null;
-  if (!attempt.launchId || !attempt.conversationId || attempt.agentPath || attempt.sessionId
+  if (!attempt.launchId || !attempt.conversationId
     || attempt.paneId || attempt.verdict || (attempt.completedAt && pipeline.state !== "closed") || attempt.activation
     || pipelineSurvivorRefusal(pipeline)) return null;
   const receipt = ports.spawnReceipt(attempt.launchId);
-  if (!receipt || receipt.conversationId !== attempt.conversationId || receipt.transcript || receipt.sessionId
+  if (!receipt || receipt.conversationId !== attempt.conversationId
     || (attempt.state === "failed" && receipt.state === "failed")) return null;
   const recovery = stagedLaunchRecovery(receipt);
+  // Older controllers copied the reserved path/id into the attempt before
+  // materialization. Only that same, provably absent artifact is recoverable.
+  if (attempt.agentPath || attempt.sessionId || receipt.transcript || receipt.sessionId) {
+    const reservedPath = receipt.stagedTranscript;
+    if (recovery?.phase !== "unpublished" || !reservedPath || ports.transcriptPresent?.(reservedPath) !== false
+      || (attempt.agentPath && attempt.agentPath !== reservedPath)
+      || (receipt.transcript && receipt.transcript !== reservedPath)) return null;
+  }
   const stoppedByController = attempt.error?.startsWith(SPAWN_RECOVERY_PARK_PREFIX) === true;
   if (pipeline.state !== "closed" && !exhausted && !recovery?.stopped && !stoppedByController) return null;
   return { recovery };

@@ -7,6 +7,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
@@ -6762,6 +6763,53 @@ export class AgentRegistry {
     if (!written.acquired) return false;
     if (written.value.receipt) settleFailedLaunch(written.value.receipt);
     return written.value.result;
+  }
+
+  /** Fails an unpublished stage only while no recorded agent can still run.
+      The evidence is checked inside the failure transaction, so a new writer,
+      generation or transcript arriving before the write retains the launch. */
+  failNeverStartedStageSpawnNow(launchId: string, conversationId: string, error: string): boolean {
+    const written = this.deliveryWriteNow({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
+      () => this.failStructuredSpawnInFile(launchId, error, {
+        recoveryFence: (file, receipt) => {
+          if (receipt.conversationId !== conversationId || receipt.transport !== "structured" || receipt.purpose !== "launch"
+            || !["starting", "path-pending"].includes(receipt.state) || receipt.pane || receipt.verifiedHost
+            || (receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner))) return false;
+          const recovery = stagedLaunchRecovery(receipt);
+          if (recovery && recovery.phase !== "unpublished") return false;
+          const conversation = file.conversations[resolveConversationAlias(file, receipt.conversationId)];
+          const absent = (pathname: string | null) => {
+            if (!pathname) return true;
+            try { fs.statSync(pathname); return false; }
+            catch (error) { return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""); }
+          };
+          const paths = [receipt.artifactPath, ...(conversation?.generations.map(generation => generation.path) ?? [])];
+          if (!paths.every(absent)) return false;
+          const keys = new Set(conversation?.generations.map(generation => sessionKeyId({ engine: conversation.engine, sessionId: generation.id })) ?? []);
+          if (receipt.key) keys.add(sessionKeyId(receipt.key));
+          for (const key of keys) {
+            const entry = file.entries[key];
+            if (!entry) return false;
+            if (entry.structuredHostOperationId && entry.structuredHostOperationId !== launchId) return false;
+            if (entry.host || !absent(entry.artifactPath)
+              || entry.structuredTerminationSurvivors?.some(identity => this.ownerAlive(identity))
+              || (entry.structuredHost?.process && this.ownerAlive(entry.structuredHost.process))) return false;
+            // A Viewer can outlive the native process its claim hosted. Proven
+            // native death fences that old claim; a setup claim without a
+            // process still needs its owner to be proven gone.
+            if (entry.claimOwner && !entry.structuredHost?.process) {
+              const owner = structuredClaimIdentity(entry.claimOwner);
+              if (!owner || this.ownerAlive(owner)) return false;
+            }
+            if (!entry.structuredHost?.process && !entry.claimOwner
+              && entry.status !== "dead" && entry.status !== "unhosted") return false;
+          }
+          return true;
+        },
+      }));
+    if (!written.acquired) return false;
+    if (written.value.claimed && written.value.receipt) settleFailedLaunch(written.value.receipt);
+    return written.value.claimed;
   }
 
   private failSpawnInFile(launchId: string, error: string): { result: boolean; receipt: SpawnReceipt | null } {

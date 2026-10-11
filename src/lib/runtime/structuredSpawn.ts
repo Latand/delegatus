@@ -16,7 +16,7 @@ import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchP
 import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { identityMaterializationFence, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
+import { identityMaterializationFence, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import type { SpawnResponse } from "@/lib/agent/spawnResponse";
@@ -2030,11 +2030,20 @@ export async function recoverStagedStructuredLaunch(
     const continuation = stagedContinuations.get(launchId);
     const host = continuation?.host ?? structuredDeliveryHostForConversation(receipt.conversationId);
     const writer = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
-    // Only the registry's current writer may change the recovery boundary.
-    // A second Viewer has no local host; a successor advances the writer epoch.
-    if (!host || !writer?.claimOwner || !receipt.key) return receipt;
-    if (continuation ? !await continuation.owns()
-      : writer.claimOwner !== `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`) return receipt;
+    // A successor with no local host still observes the original operations.
+    // Publication and dispatch continue to require the current writer.
+    const ownsHost = Boolean(host && writer?.claimOwner && receipt.key && (continuation ? await continuation.owns()
+      : writer.claimOwner === `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`));
+    if (!ownsHost && writer?.claimOwner) {
+      const owner = structuredClaimIdentity(writer.claimOwner);
+      const nativeGone = writer.structuredHost?.process && processIdentityStatus(writer.structuredHost.process) === "dead";
+      if (!nativeGone && (!owner || processIdentityStatus(owner) !== "dead")) return receipt;
+    }
+    // Downtime before the first probe is not sixteen failed checks. Start its
+    // bounded observation window once, persisted before the first I/O.
+    if (recovery.checks === 0 && now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
+      recovery = { ...recovery, startedAt: now() };
+    }
     const stop = (reason: string) => {
       writeStagedRecovery(registry, launchId, { ...recovery!, stopped: true, reason });
       return read();
@@ -2049,9 +2058,12 @@ export async function recoverStagedStructuredLaunch(
     writeStagedRecovery(registry, launchId, recovery);
     const current = () => {
       const latest = read();
+      const entry = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
       return latest?.state === "path-pending" && latest.conversationId === receipt.conversationId
-        && latest.key && receipt.key && sessionKeyId(latest.key) === sessionKeyId(receipt.key)
-        && registry.ownsStructuredHostClaim(receipt.key, writer.claimOwner!, writer.claimEpoch)
+        && (latest.key ? receipt.key && sessionKeyId(latest.key) === sessionKeyId(receipt.key) : !receipt.key)
+        && (ownsHost ? registry.ownsStructuredHostClaim(receipt.key!, writer!.claimOwner!, writer!.claimEpoch)
+          : entry?.claimOwner === writer?.claimOwner && entry?.claimEpoch === writer?.claimEpoch
+            && entry?.status === writer?.status)
         && options.eligible?.() !== false;
     };
     try {
@@ -2063,6 +2075,12 @@ export async function recoverStagedStructuredLaunch(
         if (operation && (operation.receipt.operationId !== id || operation.receipt.conversationId !== receipt.conversationId)) {
           return stop("runtime operation identity conflicts with the staged launch");
         }
+      }
+      // A successor can observe a message the old controller never recorded.
+      // Its presence fences replacement even while its receipt is queued.
+      if (message && recovery.phase === "unpublished") {
+        recovery = { ...recovery, phase: "uncertain" };
+        writeStagedRecovery(registry, launchId, recovery);
       }
       if (launch && FAILED_SPAWN_OPERATION_STATUSES.has(launch.receipt.status)) return stop(launch.receipt.reason ?? `original launch ended as ${launch.receipt.status}`);
       const messageFailure = failedOperationReason(message, "original first message");
@@ -2089,7 +2107,7 @@ export async function recoverStagedStructuredLaunch(
         writeStagedRecovery(registry, launchId, { ...recovery, reason: `original first-message lookup: ${message?.receipt.status ?? "absent; publication remains uncertain"}` });
         return read();
       }
-      if (!host || !receipt.key || !receipt.artifactPath) throw new RuntimeHostUnavailableError("staged host is awaiting its original owner", "HOST_BUSY");
+      if (!ownsHost || !host || !receipt.key || !receipt.artifactPath) throw new RuntimeHostUnavailableError("staged host is awaiting its original owner", "HOST_BUSY");
       if (continuation && !await continuation.owns()) return read();
       if (!current()) return read();
       if (continuation) await continuation.publish();
