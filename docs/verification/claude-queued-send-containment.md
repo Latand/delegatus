@@ -37,14 +37,20 @@ credentials, transcript excerpts or agent controls were used.
   permission answer and expiration, explicit interruption, and a subsequent
   interrupt-active image send from idle. Reopened delivery records retain
   each original payload and canonical confirmation under its original ID.
-- The operator-replacement regression admits an agent note with an image
-  before an explicit operator interrupt-active send. It verifies one
-  interruption control, then checks that the first user stdin frame after the
-  incumbent result is the replacement. A fresh live permission request is
-  installed immediately before replacement admission in the permission case.
-  The earlier note retains its receipt and image through the replacement's
-  terminal boundary, then delivers once; replaying its operation remains
-  idempotent across replacement queue executors.
+- The operator-replacement regression covers `queue` and `steer-or-queue`
+  predecessors from agent, operator, and absent-origin legacy operations. The
+  message-origin schema accepts operator and agent origins; absent origin is
+  retained for legacy operations, while `system` is rejected by its parser.
+  Each combination runs with an active incumbent and with a fresh permission
+  request awaiting a response. Claude continues to declare
+  `supportsQueuedSend=false`.
+- Each case queues two original sends (text and image) before an explicit
+  operator `interrupt-active` replacement. It verifies one interruption
+  control, then checks that the first user stdin frame after the incumbent
+  result is the replacement. Both queued receipts and payloads remain intact
+  through the replacement's terminal boundary. The two sends then deliver once
+  each, with their original images, and operation replay remains idempotent
+  across replacement queue executors.
 - Installed Claude CLI 2.1.284, using synthetic authentication and responses
   from a loopback port-0 Messages API: three direct inputs produced a seed
   replay and a combined two-payload replay. Only the seed receipt was

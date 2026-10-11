@@ -1955,8 +1955,8 @@ export class StructuredDeliveryQueue {
           && later.policy === "interrupt-active" && later.origin?.kind === "operator"
           && (status === "queued" || status === "pending");
       });
-      if (effect.kind === "send" && effect.origin?.kind === "agent"
-        && (effect.policy === "queue" || steerOrQueue) && !steersIntoTurn && !queuesDuringTurn
+      if (effect.kind === "send" && (effect.policy === "queue" || steerOrQueue)
+        && !steersIntoTurn && !queuesDuringTurn
         && laterOperatorReplacement) {
         /* Keep this follow-up in its original journal slot until the explicit
            operator replacement has completed. This applies across the
