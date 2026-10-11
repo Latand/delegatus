@@ -17,7 +17,9 @@ import type { DismissalTarget, DismissedBy } from "./dismissalTypes";
 
 export const NEEDS_YOU_ROW_KINDS = ["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"] as const;
 export type NeedsYouRowKind = typeof NEEDS_YOU_ROW_KINDS[number];
-export interface NeedsYouBody { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks }
+export interface NeedsYouBody { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
+  /** The orchestrators' own open questions (docs/design/operator-decision-forms.md §2.2). */
+  seatDecisions?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[] }
 export interface NeedsYouEvidence { code: string; stale: boolean; at: string | null; detail: string; source: string }
 export interface NeedsYouRow {
   id: string; kind: NeedsYouRowKind; title: string; line: string; since: string | null; taskId: string | null;
@@ -44,7 +46,7 @@ export interface NeedsYouReadOptions { kinds?: readonly NeedsYouRowKind[]; full?
 /** One projection shared with both panels; closing is a browser transient. */
 export function needsYouEntries(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string): MobileAttentionEntry[] {
   const key = canonicalOrchestratorProject(project);
-  return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks), key)
+  return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), key)
     .filter(section => canonicalOrchestratorProject(section.project) === key).flatMap(section => section.entries);
 }
 const iso = (seconds: number | null) => seconds !== null && Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null;
@@ -124,7 +126,8 @@ function rowOf(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts, option
     : entry.kind === "pipeline" ? { pipelineId: entry.row.pipeline.id, ...(entry.row.pipeline.cursor?.stageId ? { stageId: entry.row.pipeline.cursor.stageId } : {}) }
     : entry.kind === "prototype" ? { reviewId: entry.notice.reviewId } : { decisionId: entry.decision.id };
   const facts = needsYouEvidence(entry, ports);
-  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
+  /* A seat's own question is answered, never hidden: it has no dismissal. */
+  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? entry.notice.taskId === null ? null : { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
     : needsYouSubject(entry) as DismissalTarget;
   return { id: entry.id, kind: entry.kind === "conversation" ? entry.item.reason.kind : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind,
     title: clip(text.title, 90), line: clip(text.line, 160), since: iso(needsYouEntrySince(entry)), taskId: task?.id ?? null, subject, target,
@@ -179,7 +182,7 @@ export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"
   const answer: NeedsYouAnswer = { project: canonicalOrchestratorProject(project), at: new Date(now * 1000).toISOString(), count: all.length, staleCount: all.filter(r => r.stale).length,
     rows: [], cleared: clearedRows(body, decision, now, project, ports, options), omittedCount: filtered.length - start,
     ...(ports.unavailable.length ? { unavailable: [...new Set(ports.unavailable)] } : {}) };
-  const sections = needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
+  const sections = needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
   if (sections > 1) answer.sections = sections;
   for (const row of filtered.slice(start, start + 40)) {
     const candidate = { ...answer, rows: [...answer.rows, row], omittedCount: filtered.length - start - answer.rows.length - 1, nextCursor: row.id };

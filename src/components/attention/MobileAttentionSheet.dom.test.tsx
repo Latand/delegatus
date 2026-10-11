@@ -358,7 +358,7 @@ test("a waiting prototype review is a row of the sheet's one list: counted, open
     target: { kind: "prototype-review" as const, taskId: "task-layout", reviewId: "pr_1" } };
   const opened: string[] = [];
   const host = mount(<MobileAttentionSheet entries={[...entries(), { kind: "prototype", id: notice.id, notice }]} now={NOW} onOpenConversation={() => {}}
-    onOpenPrototype={(target) => opened.push(target.taskId)} onClose={() => {}} />);
+    onOpenPrototype={(target) => opened.push(target.taskId ?? "")} onClose={() => {}} />);
   expect(q(host, "h2")!.textContent).toBe("Waiting for you · 4");
   const row = q(host, '[data-attention-prototype="task-layout"]')!;
   expect(row.textContent).toContain("Card menu layout");

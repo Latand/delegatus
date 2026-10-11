@@ -25544,26 +25544,21 @@ describe("prototype review on a task: the card's button, the review and the orch
               await shot("notice-folded");
               await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
             }
-            const noticeRow = page.locator('[data-orchestrator-conversation] [data-prototype-notice="t-search"]');
-            await noticeRow.waitFor({ timeout: 15_000 });
+            /* Unfolded, the seat's «Рішення» column lists every waiting round (variant 3 of
+               docs/design/operator-decision-forms.md); the composer carries no notice lines. */
+            if (!await page.locator("[data-orchestrator-panel] [data-decision-column]").count()) await page.locator("[data-decision-strip]").click();
+            await page.locator('[data-decision-tab="decisions"]').click();
+            await page.waitForSelector("[data-decision-list='3']", { timeout: 15_000 });
             if (await chip.count()) failures.push(`${label}: the unfolded seat repeats the notice as a chip`);
-            await noticeRow.scrollIntoViewIfNeeded();
-            const notice = await measure(page, "[data-orchestrator-conversation]", { row: "[data-orchestrator-conversation] [data-prototype-notice]", more: "[data-orchestrator-conversation] [data-prototype-notice-more]", field: "[data-orchestrator-conversation] textarea" });
-            const noticeParts = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notice]")].map((row) => {
-              const box = row.getBoundingClientRect();
-              const action = row.querySelector<HTMLElement>("[data-prototype-notice-open]")!.getBoundingClientRect();
-              const titleBox = row.querySelector<HTMLElement>("span.truncate")!.getBoundingClientRect();
-              return { task: row.dataset.prototypeNotice, text: row.textContent, actionInside: action.right <= box.right + 0.5 && action.left >= box.left, titleClear: titleBox.right <= action.left + 0.5, height: Math.round(box.height) };
-            }));
-            record("notice", { ...notice, rows: noticeParts });
-            /* Three tasks wait; two lines stand and the third folds behind the count. */
-            const more = await page.locator("[data-prototype-notice-more]").getAttribute("data-prototype-notice-more");
-            if (noticeParts.length !== 2 || more !== "1") failures.push(`${label}: ${noticeParts.length} notice lines and «${more}» folded in the orchestrator's pane, expected two lines and one folded for the three waiting tasks`);
-            if (notice.overlaps.length || notice.outside.length) failures.push(`${label}: the notice overlaps ${notice.overlaps.join(", ")} or leaves the pane ${notice.outside.join(", ")}`);
-            if (noticeParts.some((row) => !row.actionInside || !row.titleClear || !row.text?.includes(tr("proto.notice.open")))) failures.push(`${label}: a notice row is broken: ${JSON.stringify(noticeParts)}`);
-            for (const row of noticeParts) if (!row.text?.includes(TASK_TITLES[row.task!]!)) failures.push(`${label}: the composer's notice of ${row.task} does not name its task: «${row.text}»`);
+            if (await page.locator("[data-orchestrator-conversation] [data-prototype-notice]").count()) failures.push(`${label}: the composer still carries notice lines beside the «Рішення» column`);
+            const notice = await measure(page, "[data-decision-list]", { row: "[data-decision-list] [data-decision-row]", card: "[data-decision-list] [data-decision-card]" });
+            const listed = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-decision-list] [data-decision-row], [data-decision-list] [data-decision-card]")].map((row) => row.dataset.decisionRow ?? row.dataset.decisionReview));
+            record("notice", { ...notice, listed });
+            if (listed.length !== 3 || !listed.includes("r-search")) failures.push(`${label}: the «Рішення» column lists ${JSON.stringify(listed)}, expected the three waiting rounds`);
+            if (notice.overlaps.length || notice.outside.length) failures.push(`${label}: the column overlaps ${notice.overlaps.join(", ")} or leaves the pane ${notice.outside.join(", ")}`);
             await shot("notice");
-            await page.locator('[data-prototype-notice-open="t-search"]').click();
+            if (await page.locator('[data-decision-row="r-search"]').count()) await page.locator('[data-decision-row="r-search"]').click();
+            await page.locator('[data-decision-review="r-search"] [data-decision-thumbs] button').first().click();
             await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
             await page.waitForTimeout(600);
             const jump = await page.evaluate(() => {
@@ -25812,7 +25807,7 @@ describe("prototype review on a task: the card's button, the review and the orch
             if (after?.trim() !== tr("proto.button.word")) failures.push(`${label}: the card says ${after} after the choice`);
             await page.locator(card("t-search")).scrollIntoViewIfNeeded();
             await page.locator(card("t-search")).screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
-            if (await page.locator('[data-orchestrator-conversation] [data-prototype-notice="t-search"]').count()) failures.push(`${label}: the notice of a decided review stays in the orchestrator's pane`);
+            if (await page.locator('[data-decision-list] [data-decision-review="r-search"], [data-decision-row="r-search"]').count()) failures.push(`${label}: the decided review stays in the «Рішення» column`);
           } else {
             await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-phone-task-prototype="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
             await shot("task-row-decided");
@@ -27128,19 +27123,18 @@ describe("prototype review: a decided round retires the earlier undecided rounds
             if (plaque.count !== "3" || plaque.label?.includes("Export")) failures.push(`${label}: the seat card's notice reads ${JSON.stringify(plaque)}, expected three waiting tasks and no export`);
           } else {
             if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
-            const list = page.locator("[data-orchestrator-conversation] [data-prototype-notices]");
-            await list.waitFor({ timeout: 15_000 });
-            const more = page.locator("[data-orchestrator-conversation] [data-prototype-notice-more]");
-            if (await more.count()) await more.click();
+            /* The seat's «Рішення» column (docs/design/operator-decision-forms.md, variant 3) lists the waiting rounds. */
+            if (!await page.locator("[data-orchestrator-panel] [data-decision-column]").count()) await page.locator("[data-decision-strip]").click();
+            await page.locator('[data-decision-tab="decisions"]').click();
+            await page.waitForSelector("[data-decision-list='3']", { timeout: 15_000 });
             await page.waitForTimeout(250);
-            await list.scrollIntoViewIfNeeded();
             const plaque = await page.evaluate(() => ({
-              count: document.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notices]")?.dataset.prototypeNotices ?? null,
-              tasks: [...document.querySelectorAll<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notice]")].map((row) => row.dataset.prototypeNotice ?? null).sort(),
+              count: document.querySelector<HTMLElement>('[data-decision-tab="decisions"] [data-decision-tab-count]')?.dataset.decisionTabCount ?? null,
+              rounds: [...document.querySelectorAll<HTMLElement>("[data-decision-list] [data-decision-row], [data-decision-list] [data-decision-card]")].map((row) => row.dataset.decisionRow ?? row.dataset.decisionReview ?? null).sort(),
             }));
             record("plaque", plaque);
             await shot("plaque");
-            if (plaque.count !== "3" || JSON.stringify(plaque.tasks) !== JSON.stringify(WAITING)) failures.push(`${label}: the orchestrator's notice reads ${JSON.stringify(plaque)}, expected ${JSON.stringify(WAITING)}`);
+            if (plaque.count !== "3" || plaque.rounds.length !== 3 || plaque.rounds.some((round) => round?.startsWith("r-export"))) failures.push(`${label}: the «Рішення» column reads ${JSON.stringify(plaque)}, expected the three waiting rounds and no export`);
           }
 
           /* The card: export's review button says decided. */
@@ -27872,6 +27866,185 @@ describe("short questionnaire rendered evidence", () => {
       fs.mkdirSync("evidence/prototype-review", { recursive: true });
       fs.writeFileSync("evidence/prototype-review/questions.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
+  }, 900_000);
+});
+
+describe("operator decision forms: the «Рішення» column beside the seat's conversation", () => {
+  /*
+   * docs/design/operator-decision-forms.md, variant 3, over the board fixture
+   * with `&decisions=1`: the seat asked two questions without a task, one of
+   * them in its feed, and a lane's prototype round waits on the search task.
+   * At 1440 the column beside the chat opens on «Рішення» with the three
+   * forms; the seat's question is answered with one click and «Відповісти»,
+   * leaves the column, and its pointer in the feed becomes the answer's
+   * record. At 1000 the column cannot sit beside the chat: one line under the
+   * seat's header opens it in the transcript's place. On the phone at 390 the
+   * same line opens the sheet with «Рішення» and «Звіти». uk and en, light and
+   * dark. Each frame reads: the Answer button reachable and uncovered, option
+   * rows at least 36 px on a mouse and 44 px on touch, the thumbnails whole and
+   * apart, the title uncut and no sideways scroll.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "operator decision forms"
+   *
+   * Readings go to `evidence/operator-decisions/column.json`; frames to
+   * OPERATOR_DECISIONS_PNG_DIR or `.artifacts/operator-decisions/`, never committed.
+   */
+  const OUT = path.resolve(process.env.OPERATOR_DECISIONS_PNG_DIR ?? ".artifacts/operator-decisions");
+  const SEAT_ASK = `pr_${"d".repeat(32)}`;
+  const LANE_ROUND = `pr_${"c".repeat(32)}`;
+  /* What one frame reads of the open form and the page around it. */
+  const readForm = (page: Page, scope: string) => page.evaluate((root) => {
+    const within = document.querySelector<HTMLElement>(root);
+    const card = within?.querySelector<HTMLElement>('[data-decision-card="open"]') ?? null;
+    const send = card?.querySelector<HTMLElement>("[data-decision-send]") ?? null;
+    send?.scrollIntoView({ block: "nearest" });
+    const box = (element: Element) => { const rect = element.getBoundingClientRect(); return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) }; };
+    const sendBox = send?.getBoundingClientRect();
+    const hit = sendBox ? document.elementFromPoint(sendBox.left + sendBox.width / 2, sendBox.top + sendBox.height / 2) : null;
+    const thumbs = [...card?.querySelectorAll<HTMLElement>("[data-decision-thumbs] figure > :first-child") ?? []].map(box);
+    const title = card?.querySelector<HTMLElement>("[data-decision-title]") ?? null;
+    return {
+      card: card ? box(card) : null,
+      review: card?.dataset.decisionReview ?? null,
+      rows: within?.querySelectorAll("[data-decision-row]").length ?? 0,
+      sendReachable: Boolean(send && sendBox && sendBox.top >= 0 && sendBox.bottom <= innerHeight && sendBox.left >= 0 && sendBox.right <= innerWidth && hit && (hit === send || send.contains(hit))),
+      minOptionHeight: Math.min(...[...card?.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]") ?? []].map((option) => option.getBoundingClientRect().height)),
+      thumbs,
+      thumbsOverlap: thumbs.some((a, i) => thumbs.some((b, j) => j > i && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h)),
+      titleCut: title ? title.scrollWidth > title.clientWidth + 0.5 : null,
+      tabCount: document.querySelector("[data-decision-tab-count]")?.getAttribute("data-decision-tab-count") ?? null,
+      horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+    };
+  }, scope);
+
+  browserTest("the column at 1440 and 1000 and the phone's sheet at 390 hold every open decision; one answer leaves the column and stands in the feed", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string, vars?: Record<string, string | number>) => translate(lang, key as never, vars);
+        /* 1440: the column beside the chat, on «Рішення». */
+        {
+          const label = `1440-${lang}-${scheme}`;
+          const fail = (text: string) => failures.push(`${label}: ${text}`);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=1`, VIEWPORT, scheme, lang, "reduce");
+          try {
+            await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 30_000 });
+            await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(600);
+            const lane = await readForm(page, "[data-decision-column]");
+            readings[`${label}-proto`] = lane;
+            await page.screenshot({ path: path.join(OUT, `${label}-proto.png`) });
+            if (lane.review !== LANE_ROUND || lane.thumbs.length !== 2 || lane.thumbsOverlap || lane.thumbs.some((thumb) => thumb.w !== 150 || thumb.h !== 90)) fail(`the lane's round reads ${JSON.stringify(lane)}`);
+            if (lane.tabCount !== "3" || lane.rows !== 2 || !lane.sendReachable || lane.minOptionHeight < 36 || lane.titleCut || lane.horizontalOverflow) fail(`the column reads ${JSON.stringify(lane)}`);
+            const pointer = await page.locator("[data-decision-pointer-open]").textContent();
+            if (!pointer?.includes(t("decisions.inColumn"))) fail(`the feed's pointer reads «${pointer}»`);
+            /* The seat's own question: open it, choose once, answer. */
+            await page.locator(`[data-decision-row="${SEAT_ASK}"]`).click();
+            await page.waitForSelector(`[data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`);
+            const seat = await readForm(page, "[data-decision-column]");
+            readings[`${label}-open`] = seat;
+            await page.screenshot({ path: path.join(OUT, `${label}-open.png`) });
+            if (!seat.sendReachable || seat.minOptionHeight < 36 || seat.titleCut || seat.horizontalOverflow) fail(`the seat's question reads ${JSON.stringify(seat)}`);
+            const recommended = await page.locator(`[data-decision-review="${SEAT_ASK}"] [aria-checked="true"]`).count();
+            if (recommended !== 2) fail(`${recommended} answers chosen before any click, expected the two recommended`);
+            await page.locator(`[data-decision-review="${SEAT_ASK}"] [data-prototype-option="deploy:1"]`).click();
+            await page.locator(`[data-decision-review="${SEAT_ASK}"] [data-decision-send]`).click();
+            await page.waitForSelector(`[data-decision-list] [data-decision-review="${SEAT_ASK}"], [data-decision-row="${SEAT_ASK}"]`, { state: "detached", timeout: 10_000 });
+            const posted = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+            readings[`${label}-posted`] = posted;
+            if (JSON.stringify(posted) !== JSON.stringify([{ project: "atlas", reviewId: SEAT_ASK, chosen: [], comment: "", answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [1] }] }])) fail(`the answer posted ${JSON.stringify(posted)}`);
+            await page.waitForSelector('[data-decision-pointer] [data-decision-card="answered"]', { timeout: 30_000 });
+            await page.waitForSelector('[data-decision-tab-count="2"]', { timeout: 30_000 });
+            await page.waitForTimeout(400);
+            const record = await page.evaluate(() => {
+              const node = document.querySelector<HTMLElement>('[data-decision-pointer] [data-decision-card="answered"]')!;
+              return { text: node.innerText, delivery: node.querySelector("[data-decision-delivery]")?.getAttribute("data-decision-delivery") ?? null };
+            });
+            readings[`${label}-answered`] = { ...record, left: await readForm(page, "[data-decision-column]") };
+            await page.locator('[data-decision-pointer] [data-decision-card="answered"]').scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(OUT, `${label}-answered.png`) });
+            if (record.delivery !== "sent" || !record.text.includes(lang === "uk" ? "Увечері, одним деплоєм" : "In the evening, in one deploy")) fail(`the answer's record reads ${JSON.stringify(record)}`);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+            await page.screenshot({ path: path.join(OUT, `${label}-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+        /* 1000: no room beside the chat; the line under the header opens the column in the transcript's place. */
+        {
+          const label = `1000-${lang}-${scheme}`;
+          const fail = (text: string) => failures.push(`${label}: ${text}`);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=1`, { width: 1000, height: 900 }, scheme, lang, "reduce");
+          try {
+            await page.waitForSelector('[data-orchestrator-panel] [data-decision-strip="3"]', { timeout: 30_000 });
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(400);
+            const strip = await page.locator("[data-decision-strip]").textContent();
+            readings[`${label}-strip`] = strip;
+            await page.screenshot({ path: path.join(OUT, `${label}-strip.png`) });
+            if (strip?.trim() !== t("decisions.waiting", { count: 3 })) fail(`the line reads «${strip}»`);
+            await page.locator("[data-decision-strip]").click();
+            await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            const column = await readForm(page, "[data-decision-column]");
+            const composer = await page.evaluate(() => Boolean(document.querySelector("[data-orchestrator-panel] textarea")));
+            readings[`${label}-open`] = { ...column, composer };
+            await page.screenshot({ path: path.join(OUT, `${label}-open.png`) });
+            if (!column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+            await page.screenshot({ path: path.join(OUT, `${label}-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+        /* 390: the line under the seat's bar opens the sheet with both tabs. */
+        {
+          const label = `390-${lang}-${scheme}`;
+          const fail = (text: string) => failures.push(`${label}: ${text}`);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=1`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+          try {
+            await page.click("[data-mobile2-seat-open]", { timeout: 30_000 });
+            await page.waitForSelector('[data-decision-strip="3"]', { timeout: 30_000 });
+            await page.waitForTimeout(400);
+            const line = await page.evaluate(() => {
+              const node = document.querySelector<HTMLElement>("[data-decision-strip]")!;
+              const rect = node.getBoundingClientRect();
+              return { text: node.innerText.trim(), height: Math.round(rect.height), top: Math.round(rect.top) };
+            });
+            readings[`${label}-strip`] = line;
+            await page.screenshot({ path: path.join(OUT, `${label}-strip.png`) });
+            if (line.height < 44 || line.text !== t("decisions.waiting", { count: 3 })) fail(`the line reads ${JSON.stringify(line)}`);
+            await page.locator("[data-decision-strip]").click();
+            await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            await page.waitForTimeout(500);
+            const sheet = await readForm(page, '[data-mobile2-sheet="decisions"]');
+            const tabs = await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab]').count();
+            readings[`${label}-sheet`] = { ...sheet, tabs };
+            await page.screenshot({ path: path.join(OUT, `${label}-sheet.png`) });
+            if (tabs !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
+            await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab="reports"]').click();
+            await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-report-log]', { timeout: 10_000 });
+            await page.screenshot({ path: path.join(OUT, `${label}-reports.png`) });
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+            await page.screenshot({ path: path.join(OUT, `${label}-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/operator-decisions", { recursive: true });
+    fs.writeFileSync("evidence/operator-decisions/column.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
 

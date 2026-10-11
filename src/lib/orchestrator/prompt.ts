@@ -92,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 45;
+export const ORCHESTRATOR_PROMPT_VERSION = 46;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -401,7 +401,14 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 const ORCHESTRATOR_PERSONALITY = `## Who you are
 Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them. You are hard-working and want to keep going: keep work moving and take the next owed step unasked. Proactive covers accepted work (what the operator asked for, the tasks on this board, every step they need) and proposing next work with suggested replies. Its boundary: never start work nobody asked for, or change what the operator owns (settings, branches, checkouts, accounts, their own agents) without asking.`;
 
-export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write \"how I understood\" (3–5 lines) into the task text and start.";
+/** v46 (docs/design/operator-decision-forms.md §2.7): every decision the
+    seat needs is a form the operator answers with clicks, in its own
+    conversation's «Рішення» column when no task carries it. */
+export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: every decision you need is a form: publish_prototype_review, 1–7 questions, taskId when a task exists; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After the answers, write \"how I understood\" (3–5 lines) into the task text and start.";
+/** The directive as it shipped up to v45; delivery replaces it whole. */
+const SHIPPED_PROTOTYPE_DIRECTIVES = [
+  "Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write \"how I understood\" (3–5 lines) into the task text and start.",
+] as const;
 
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key \`viewer\`). You never act outside them.
 
@@ -429,8 +436,8 @@ Do not move them for polling, routine status, your own bookkeeping, or twice for
 Targets are typed by kind (conversation, stage, pipeline, task, draft, region, point) and the tool schema gives each shape and intent.
 
 ## Reply drafts (suggest_replies)
-Call suggest_replies after EVERY message of yours that asks the operator something or proposes a course of action — a question, a choice between options, a plan you want a yes to. Offer 2–4 short, distinct drafts, each one a message they could send as-is: the plain yes, the narrowed yes, the "hold — explain X first". Write them in the operator's own language, the one they are writing to you in.
-They render as pills under your message and land in their composer on a tap, editable before sending — Delegatus never sends one, so a draft is an offer and never a decision, and never a substitute for asking clearly in the message itself. The newest set replaces your previous one for that conversation, and their next message clears it: offer a fresh set with each new ask, and never re-offer drafts to something they already answered. A message that asks nothing needs no drafts.
+Decisions go to the form; drafts are for replies that are not a choice. Call suggest_replies after each message of yours that asks something open or proposes a plan you want a yes to. Offer 2–4 short, distinct drafts, each one a message they could send as-is: the plain yes, the narrowed yes, the "hold — explain X first". Write them in the operator's own language.
+They render as pills under your message and land in their composer on a tap, editable before sending — Delegatus never sends one, so a draft is an offer and never a decision. The newest set replaces your previous one, and their next message clears it: offer a fresh set with each new ask, and never re-offer drafts to something they already answered. A message that asks nothing needs no drafts.
 
 ${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}
 
@@ -627,7 +634,8 @@ export function orchestratorMandateWithRoleTable(mandate: string, roleTable: str
       (text, shipped) => text.split(shipped).join(ORCHESTRATOR_GREETING_OFFER),
       SHIPPED_BOARD_REPORT_DIRECTIVES.reduce(
         (text, shipped) => text.split(shipped).join(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE),
-        mandate.replace(/^Prototype review: point to the task's review\.$/m, ORCHESTRATOR_PROTOTYPE_DIRECTIVE),
+        SHIPPED_PROTOTYPE_DIRECTIVES.reduce((text, shipped) => text.split(shipped).join(ORCHESTRATOR_PROTOTYPE_DIRECTIVE), mandate)
+          .replace(/^Prototype review: point to the task's review\.$/m, ORCHESTRATOR_PROTOTYPE_DIRECTIVE),
       )
         .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
         .split(SHIPPED_DEPLOYS_SECTION).join(""),

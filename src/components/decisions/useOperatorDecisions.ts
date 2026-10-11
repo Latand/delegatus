@@ -1,0 +1,77 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { fireTasksChanged } from "@/components/tasks/taskApi";
+import type { DecidePrototypeInput, OperatorDecisionView, OperatorDecisionsRead } from "@/lib/prototypeReview/types";
+
+/** How often an open «Рішення» tab reads its project's decisions. */
+export const DECISIONS_POLL_MS = 3000;
+
+export function decisionsUrl(project: string, review?: string): string {
+  return `/api/projects/decisions?project=${encodeURIComponent(project)}${review ? `&review=${encodeURIComponent(review)}` : ""}`;
+}
+
+export type DecisionAnswer = Omit<DecidePrototypeInput, "reviewId">;
+
+/**
+ * A project's open decisions while the column shows them: read at once, then
+ * every few seconds. An answer leaves the list the moment it is pressed and
+ * comes back, with the server's reason, only if the server refused it
+ * (docs/design/operator-decision-forms.md §2.4).
+ */
+export function useOperatorDecisions(project: string, active: boolean, initial?: OperatorDecisionView[]) {
+  const [state, setState] = useState<{ project: string; decisions: OperatorDecisionView[] | null; failed: boolean }>(
+    () => ({ project, decisions: initial ?? null, failed: false }));
+  const [answering, setAnswering] = useState<ReadonlySet<string>>(() => new Set());
+  const [error, setError] = useState<{ reviewId: string; message: string } | null>(null);
+  const sequence = useRef(0);
+  const current = state.project === project ? state : { project, decisions: null, failed: false };
+
+  const refresh = useCallback(async (signal?: AbortSignal) => {
+    const seq = ++sequence.current;
+    try {
+      const response = await fetch(decisionsUrl(project), { signal, cache: "no-store" });
+      const body = await response.json() as OperatorDecisionsRead & { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "decisions unavailable");
+      if (seq === sequence.current && !signal?.aborted) setState({ project, decisions: body.decisions, failed: false });
+    } catch {
+      if (seq === sequence.current && !signal?.aborted) setState((held) => ({ project, decisions: held.project === project ? held.decisions : null, failed: true }));
+    }
+  }, [project]);
+
+  useEffect(() => {
+    if (!active || initial) return;
+    const controller = new AbortController();
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- the read sets state when its answer arrives */
+    void refresh(controller.signal);
+    const timer = setInterval(() => { void refresh(controller.signal); }, DECISIONS_POLL_MS);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [active, initial, refresh]);
+
+  const answer = useCallback(async (reviewId: string, body: DecisionAnswer): Promise<boolean> => {
+    setError(null);
+    setAnswering((held) => new Set([...held, reviewId]));
+    ++sequence.current;
+    try {
+      const response = await fetch("/api/projects/decisions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ project, reviewId, ...body }),
+      });
+      const result = await response.json() as OperatorDecisionsRead & { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "the answer could not be saved");
+      ++sequence.current;
+      setState({ project, decisions: result.decisions, failed: false });
+      fireTasksChanged();
+      return true;
+    } catch (failure) {
+      setError({ reviewId, message: failure instanceof Error ? failure.message : String(failure) });
+      return false;
+    } finally {
+      setAnswering((held) => { const next = new Set(held); next.delete(reviewId); return next; });
+    }
+  }, [project]);
+
+  const decisions = current.decisions?.filter((decision) => !answering.has(decision.id)) ?? null;
+  return { decisions, loaded: current.decisions !== null, failed: current.failed && current.decisions === null, answer, error, refresh };
+}

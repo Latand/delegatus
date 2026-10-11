@@ -3,8 +3,13 @@ import { attentionDismissalIndex, type AttentionDismissalV1 } from "@/lib/attent
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import type { BoardTask } from "@/lib/tasks/types";
 import { prototypeRoot, storedMediaPath } from "./store";
-import type { PrototypeReviewRead, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundRead, PrototypeRoundView } from "./types";
-import { currentPrototypeSummary, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded } from "./model";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { runsElsewhere } from "@/lib/links/linked";
+import { firstLineTitle } from "@/lib/tasks/helpers";
+import { loadTasks } from "@/lib/tasks/store";
+import { loadSeatRounds } from "./seatRounds";
+import type { OperatorDecisionView, OperatorDecisionsRead, PrototypeReviewNotice, PrototypeReviewRead, PrototypeMediaView, PrototypeReviewRound, PrototypeReviewSummary, PrototypeRoundRead, PrototypeRoundView } from "./types";
+import { currentPrototypeSummary, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded, seatRoundNotice } from "./model";
 export { prototypeReviewSummary, prototypeReviewNotices } from "./model";
 export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[], index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals()): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
   return tasks.map(({ prototypeReviews, prototypeReviewReplica, ...task }) => {
@@ -51,30 +56,78 @@ export function readPrototypeReviews(task: BoardTask): PrototypeReviewRead {
       ...(task.prototypeReviewReplica.historyTruncated ? { historyTruncated: true } : {}),
       waitingReviewId: summary.waitingDismissal ? null : summary.waitingReviewId, unavailable: "another-installation" };
   }
+  const rounds = localRoundViews(task.prototypeReviews ?? [], task.id);
+  const summary = withPrototypeReviewSummaries([task])[0]!.prototypeReview;
+  return { taskId: task.id, rounds: withSuperseded(rounds, task.id), summary, waitingReviewId: summary?.waitingDismissal ? null : summary?.waitingReviewId ?? null };
+}
+
+/** Rounds stored here, with the URLs their copies answer at. A seat's round
+    has no task: its pictures answer by round alone, and its videos are not
+    served (docs/design/operator-decision-forms.md, Deferred). */
+export function localRoundViews(stored: readonly PrototypeReviewRound[], taskId: string | null): PrototypeRoundView[] {
   // The media route's own test: a regular file at its place under the resolved root.
   let realRoot: string | null = null;
   try { realRoot = fs.realpathSync(prototypeRoot()); } catch { /* No copy was ever stored here. */ }
-  const stored = (roundId: string, media: PrototypeMediaView) => {
+  const held = (roundId: string, media: PrototypeMediaView) => {
     if (!realRoot) return false;
     try {
       const place = storedMediaPath(realRoot,roundId,media);
       return fs.realpathSync(place) === place && fs.lstatSync(place).isFile();
     } catch { return false; /* Copy is absent on linked installations and after retention. */ }
   };
-  const rounds = (task.prototypeReviews ?? []).map(round => {
+  return stored.map(round => {
     const publicRound = prototypeRoundMetadata(round);
     const mediaView = (media: PrototypeMediaView) => {
-      const available = !round.mediaRemovedAt && stored(round.id,media);
-      const url = !available ? null : media.mime.startsWith("image/")
-        ? `/api/image?taskId=${encodeURIComponent(task.id)}&prototype=${round.id}&media=${media.id}`
-        : `/api/tasks/${encodeURIComponent(task.id)}/prototypes/${round.id}/video/${media.id}`;
+      const image = media.mime.startsWith("image/");
+      const available = !round.mediaRemovedAt && (image || taskId !== null) && held(round.id,media);
+      const url = !available ? null : image
+        ? `/api/image?${taskId === null ? "" : `taskId=${encodeURIComponent(taskId)}&`}prototype=${round.id}&media=${media.id}`
+        : `/api/tasks/${encodeURIComponent(taskId!)}/prototypes/${round.id}/video/${media.id}`;
       return { ...media, available, url };
     };
     return { ...publicRound, variants: publicRound.variants.map(v => ({ ...v, frames: v.frames.map(({ image,original,...frame }) => ({ ...frame, image: mediaView(image), ...(original ? { original: mediaView(original) } : {}) })),
       videos: v.videos.map(video => ({ ...video, media: mediaView(video.media) })) })) };
   });
-  const summary = withPrototypeReviewSummaries([task])[0]!.prototypeReview;
-  return { taskId: task.id, rounds: withSuperseded(rounds, task.id), summary, waitingReviewId: summary?.waitingDismissal ? null : summary?.waitingReviewId ?? null };
+}
+
+/** The seat's own rounds of a project, read as a task's review is read. Every
+    unanswered one waits: a seat round answers one question of its own and
+    retires no other (docs/design/operator-decision-forms.md §2.2). */
+export function readSeatRounds(project: string): PrototypeReviewRead {
+  const rounds = localRoundViews(loadSeatRounds(project), null);
+  const waiting = rounds.filter(round => !round.decision);
+  return { taskId: null, rounds, waitingReviewId: waiting.at(-1)?.id ?? null };
+}
+
+/** Every open decision of a project, oldest first: each task's waiting round
+    and each unanswered seat round. Rounds another installation owns are
+    answered there, and a round the operator hid waits on nobody. */
+export function operatorDecisions(project: string, tasks: readonly BoardTask[] = loadTasks()): OperatorDecisionsRead {
+  const key = canonicalProject(project);
+  const fromTasks = tasks.filter(task => canonicalProject(task.project) === key && !runsElsewhere(task)
+    && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId).flatMap(task => {
+    const read = readPrototypeReviews(task);
+    const waiting = read.waitingReviewId ? read.rounds.find(round => round.id === read.waitingReviewId) : undefined;
+    return waiting ? [{ ...waiting, taskTitle: firstLineTitle(task.text) }] : [];
+  });
+  const fromSeat = readSeatRounds(key).rounds.filter(round => !round.decision);
+  return { project: key, decisions: [...fromTasks, ...fromSeat].sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
+}
+
+/** One round of a project by its id, open or answered: a seat's own or a task's. */
+export function operatorDecisionRound(project: string, reviewId: string, tasks: readonly BoardTask[] = loadTasks()): OperatorDecisionView | null {
+  const key = canonicalProject(project);
+  const seat = loadSeatRounds(key).find(round => round.id === reviewId);
+  if (seat) return localRoundViews([seat], null)[0]!;
+  const task = tasks.find(t => canonicalProject(t.project) === key && t.prototypeReviews?.some(round => round.id === reviewId));
+  const round = task ? readPrototypeReviews(task).rounds.find(entry => entry.id === reviewId) : undefined;
+  return round && task ? { ...round, taskTitle: firstLineTitle(task.text) } : null;
+}
+
+/** The seat's open questions, as notices: one each, beside the tasks' rounds. */
+export function seatDecisionNotices(project?: string): PrototypeReviewNotice[] {
+  try { return loadSeatRounds(project).filter(round => !round.decision).map(seatRoundNotice); }
+  catch { return []; /* The board read never fails on the seat's questions; the column says so on its own read. */ }
 }
 
 function prototypeDismissals(): ReadonlyMap<string, AttentionDismissalV1> {

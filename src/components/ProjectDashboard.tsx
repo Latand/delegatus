@@ -1204,7 +1204,8 @@ function ProjectDashboardView({
      first; the review itself opens over it from the page's host. A card's own
      button asks for nothing here: the operator is already at the task. */
   usePrototypeReviewJump(useCallback((target: PrototypeReviewTarget) => {
-    if (target.from === "card" || !projectTaskIds.current.has(target.taskId)) return;
+    /* A seat's own question has no task; it opens in the seat's column. */
+    if (target.kind !== "prototype-review" || target.from === "card" || !projectTaskIds.current.has(target.taskId)) return;
     openChipTask.current(target.taskId);
   }, []));
 

@@ -12,10 +12,13 @@ import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 
-/** The persisted delivery text: retries use these exact bytes. */
-export function prototypeDecisionText(task: { id: string; text: string }, round: PrototypeReviewRound,
+/** The persisted delivery text: retries use these exact bytes. A seat's own
+    round has no task: its message opens «Operator decision» and names the
+    question and when it was asked where a task's names the task. */
+export function prototypeDecisionText(task: { id: string; text: string } | null, round: PrototypeReviewRound,
   decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped">): string {
-  const header = `Prototype review decision\nTask: ${task.id} — ${task.text.split("\n")[0]}`;
+  const header = task && round.taskId !== null ? `Prototype review decision\nTask: ${task.id} — ${task.text.split("\n")[0]}`
+    : `Operator decision\nAsked: ${round.title}, ${round.createdAt.slice(11,16)} UTC`;
   const chosen = round.variants.filter(v => decision.chosen.includes(v.number)).map(v => `${v.number} — ${v.name}`).join(", ");
   const footer = `\n\nComment:\n${decision.comment}\n\nEnd of prototype review decision.`;
   if (!round.questions?.length) return `${header}\nChosen: ${chosen}${footer}`;
@@ -82,10 +85,10 @@ export const prototypeDelivery: PrototypeDelivery = {
     }),decision.delivery.operationId!));
   },
 };
-function recordDelivery(taskId: string,reviewId: string,result: PrototypeDeliveryResult) {
+function recordDelivery(taskId: string | null,reviewId: string,result: PrototypeDeliveryResult) {
   return mutatePrototypeRound(taskId,reviewId,round => { Object.assign(round.decision!.delivery,result); return round.decision!; });
 }
-export async function refreshPrototypeDelivery(taskId: string,reviewId: string,delivery = prototypeDelivery): Promise<void> {
+export async function refreshPrototypeDelivery(taskId: string | null,reviewId: string,delivery = prototypeDelivery): Promise<void> {
   const held = findPrototypeRound(taskId,reviewId)?.decision;
   if (!held?.delivery.conversationId || held.delivery.state === "sent") return;
   await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {
@@ -99,7 +102,7 @@ export async function refreshPrototypeDelivery(taskId: string,reviewId: string,d
     if (recovered.state !== decision.delivery.state || recovered.operationId !== decision.delivery.operationId) recordDelivery(taskId,reviewId,recovered);
   });
 }
-export async function decidePrototype(request: NextRequest,taskId: string,input: DecidePrototypeInput | { reviewId: string; retry: true },
+export async function decidePrototype(request: NextRequest,taskId: string | null,input: DecidePrototypeInput | { reviewId: string; retry: true },
   world: PrototypeWorld = prototypeWorld, delivery: PrototypeDelivery = prototypeDelivery): Promise<void> {
   const reviewId = input.reviewId;
   if (!/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid review id");
@@ -123,7 +126,7 @@ export async function decidePrototype(request: NextRequest,taskId: string,input:
           return round.decision;
         }
         const chosen = [...input.chosen].sort((a,b) => a-b);
-        const recipient = world.orchestrator(task.project);
+        const recipient = world.orchestrator(task?.project ?? round.project);
         const text = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped });
         if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
         round.decision = { chosen, ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(), delivery: {

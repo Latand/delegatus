@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 45, and a v44 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(45);
+test("the default mandate is at version 46, and a v45 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(46);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -112,7 +112,8 @@ test("the default mandate is at version 45, and a v44 seat reads as stale", () =
      project's work. v41 points the operator to a task's prototype review
      instead of describing variants in prose. v42 clears waiting rows that ask
      nothing. v43 adds the questionnaire before ambiguous work. v44 combines
-     both with linked-seat coordination. */
+     both with linked-seat coordination. v46 makes every decision a form
+     (docs/design/operator-decision-forms.md §2.7). */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -128,7 +129,8 @@ test("the default mandate is at version 45, and a v44 seat reads as stale", () =
   expect(orchestratorMandateStale(42)).toBe(true);
   expect(orchestratorMandateStale(43)).toBe(true);
   expect(orchestratorMandateStale(44)).toBe(true);
-  expect(orchestratorMandateStale(45)).toBe(false);
+  expect(orchestratorMandateStale(45)).toBe(true);
+  expect(orchestratorMandateStale(46)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -180,6 +182,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
   44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
   45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
+  46: "367a25cb04dc30f0befc8c704f5b58c77d8eb2eedd53f29e86b5d2186a184571",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -944,11 +947,12 @@ test("the versioned mandate asks for a current status note in the operator's lan
 });
 
 
-test("the mandate directs prototype review to the task", () => {
+test("the mandate asks every decision as a form", () => {
   for (const mandate of [ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery("Coordinate the project.")]) {
-    expect(mandate).toContain("Prototype review: point to the task's review.");
+    expect(mandate).toContain("Prototype review: every decision you need is a form: publish_prototype_review, 1–7 questions");
     expect(mandate.split("Prototype review:")).toHaveLength(2);
   }
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Decisions go to the form; drafts are for replies that are not a choice.");
 });
 
 
@@ -957,9 +961,10 @@ test("the mandate names linked seats and requires coordination before a shared r
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("send_message_to_orchestrator with machine named");
 });
 
-test("questionnaire mandate upgrades the shipped pointer once and preserves bespoke wording", () => {
-  const directive = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
-  for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review."]) {
+test("the decision-form mandate upgrades every shipped pointer once and preserves bespoke wording", () => {
+  const directive = `Prototype review: every decision you need is a form: publish_prototype_review, 1–7 questions, taskId when a task exists; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
+  const questionnaire = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
+  for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review.", `Coordinate.\n\n${questionnaire}`]) {
     const delivered = orchestratorMandateForDelivery(input);
     expect(delivered).toContain(directive);
     expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);

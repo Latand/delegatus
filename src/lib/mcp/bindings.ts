@@ -7274,8 +7274,9 @@ async function prototypeReceiptScope(mode: "publish" | "read",args: McpToolArgs,
   if (!capability) throw new Error("prototype reviews require an identified caller");
   const scope = await viewerControlForCall(control,context).post("/api/prototype-reviews/scope",
     { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-  if (typeof scope.conversationId !== "string" || typeof scope.taskId !== "string") throw new Error("the Viewer did not name the caller and task of this prototype call");
-  return `${scope.conversationId}\n${scope.taskId}`;
+  /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
+  if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
+  return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
 }
 
 /**

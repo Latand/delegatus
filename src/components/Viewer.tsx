@@ -254,7 +254,7 @@ function ViewerApp() {
      new object and starts without a pin. */
   const [hashPinFor, setHashPinFor] = useState<ConversationHash | null>(null);
   const wantsHashPin = pendingHash !== null && hashPinFor === pendingHash;
-  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
+  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, seatDecisions, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -994,7 +994,7 @@ function ViewerApp() {
     }
     publishBlockerNames({ projects: projectDisplayNames, conversations });
   }, [updateBlockers, updateDecision, allFiles, projectDisplayNames]);
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks), [files, pipelines, clock, closingPipelines, updateDecision, tasks]);
+  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions), [files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions]);
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
@@ -1848,7 +1848,7 @@ function ViewerApp() {
           nothing at all the rest of the time. */}
       <AttentionHost mobile={isMobile} />
       {/* A task's prototype review, opened from its card or from the orchestrator's notice. */}
-      <PrototypeReviewHost tasks={tasks} />
+      <PrototypeReviewHost tasks={tasks} seatDecisions={seatDecisions} />
       {/* #1054: the global "find my messages" palette. Mounted here so one
           surface serves every board and both form factors; it renders nothing
           until the header button or `/` opens it, and a selected row leaves

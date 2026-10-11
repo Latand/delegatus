@@ -35,6 +35,7 @@ import { ToolCard, mobileClock } from "./cards/ToolCard";
 import { WakeupCard } from "./cards/WakeupCard";
 import { SpeakButton } from "./SpeakButton";
 import { McpCallCard } from "../runtime/McpCallCard";
+import { DecisionPointer, decisionPointerOf } from "../decisions/DecisionPointer";
 import { DeputyMark, useDeputyInk } from "../conversation/deputyInk";
 import { quoteHead } from "../conversation/deputyPlacement";
 
@@ -323,7 +324,11 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
     return <UserMessageRow text={item.text} selectedContext={item.selectedContext ?? null} sender={provenance.senderFor(sourceItem)}
       below={memory && (memory.added.length || memory.none) ? <MemoryOnMessage memory={memory} mobile={isMobile} /> : undefined} />;
   }
-  if (item.kind === "tool" && item.mcp) return <McpCallCard event={item} />;
+  if (item.kind === "tool" && item.mcp) {
+    /* A decision asked of the operator points at the «Рішення» column, and is its answer once answered. */
+    const decision = decisionPointerOf(item);
+    return decision ? <DecisionPointer target={decision} /> : <McpCallCard event={item} />;
+  }
   if (item.kind === "tool" && item.wakeup) return <WakeupCard event={item} wakeup={item.wakeup} />;
   if (item.kind === "tool") return <ToolCard event={item} />;
   if (item.kind === "cmd-group") return <CmdGroupCard item={item} />;

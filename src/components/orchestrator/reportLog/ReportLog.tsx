@@ -81,13 +81,15 @@ const CLASS_TONE: Record<BridgeReportClass, string> = {
   status: "text-muted",
 };
 
-export function ReportLog({ project, active = true, variant, initial, now, dismiss = sendDismissal }: {
+export function ReportLog({ project, active = true, variant, headless = false, initial, now, dismiss = sendDismissal }: {
   project: string;
   /** Loads and follows the log only while it shows. */
   active?: boolean;
   /** `column`: the desktop panel beside the chat, with its own heading.
       `screen`: the phone's screen, whose bar already names it. */
   variant: "column" | "screen";
+  /** Under the «Рішення» column's tabs, which already name it: no heading. */
+  headless?: boolean;
   /** A known page, drawn without a read (the evidence drivers pass one). */
   initial?: ReportLogPage;
   /** The clock entry times read against (the evidence drivers pin it). */
@@ -240,7 +242,7 @@ export function ReportLog({ project, active = true, variant, initial, now, dismi
       data-report-log={project}
       data-report-log-variant={variant}
     >
-      {column ? (
+      {column && !headless ? (
         <h2 className="flex h-9 shrink-0 items-center border-b border-border px-3 text-ui font-semibold text-secondary">{t("reportLog.title")}</h2>
       ) : null}
       {off ? null : questionBar}

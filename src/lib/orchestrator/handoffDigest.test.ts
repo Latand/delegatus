@@ -438,6 +438,7 @@ test("#1279: a refusal from the account resolver stops the digest before any tur
    or a refused designation. */
 test("the delivered default mandate fits the delivery bound with room for a rotation's history and handoff", () => {
   // Merged questionnaire mandate: delivered 29 370 bytes; rotation history margin 24 bytes.
+  // v46 decision forms (docs/design/operator-decision-forms.md §2.7): delivered 29 317 bytes, margin 77.
   const preflight = mandatePreflight(ORCHESTRATOR_SYSTEM_PROMPT, "spawn", { mode: "standard" });
   expect(preflight.ok).toBe(true);
   /* A rotation composes core + history + handoff against the same envelope;
@@ -485,6 +486,7 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    the applyNow pointer on the override-stage line 14 823, inside a 14 900
    byte share that still leaves more than two history budgets. */
 // Questionnaire delivery adds 204 bytes; 16 900 bytes still hold two history budgets.
+// The v46 decision-form directive measures 15 097 bytes appended, inside the same share.
 const DELIVERED_DIRECTIVE_BUDGET_BYTES = 15_100;
 
 test("what delivery appends stays inside its share of the envelope", () => {

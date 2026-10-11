@@ -53,6 +53,9 @@ import { WakeupChip, wakeupChipKey } from "@/components/WakeupChip";
 import { MobileBarTitle, MobileShell, ReachLine, useMobileShellChrome, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { MobileBackgroundSheet, MobilePinnedSheet } from "./MobileChromeSheets";
+import { DecisionStripLine, useOpenDecisionCount } from "@/components/decisions/DecisionColumn";
+import { openOperatorDecisions } from "@/components/decisions/decisionSurface";
+
 import { MobileConversationMenu } from "./MobileConversationMenu";
 import { MobileOrchestratorSheet } from "./MobileOrchestratorSheet";
 import { MobileSwitchSheet, switchList, swipeTarget, type SwitchCandidate, type SwitchEntry } from "./MobileSwitchSheet";
@@ -493,6 +496,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const [seatHandoff, setSeatHandoff] = useState(false);
   const holdsSeat = resolvedKey !== null && seatKey !== null && resolvedKey === seatKey;
   const seatPanel = useSeatPanel({ project, files, seat: seatRead, holdsSeat, open: seatSheetOpen });
+  const openDecisions = useOpenDecisionCount(project);
   /* A rotation confirmed from here lands in the SUCCESSOR: the incumbent stays
      live under the draft for as long as the rotation takes, so the phone waits
      for the seat read to name a conversation other than this one — and for the
@@ -677,8 +681,12 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 
   const leaf = activeNode ? (
     /* One conversation, edge to edge under the bar: no pane header (the bar's
-       title cell IS it), no strip, no docked tray — §3.4 spends 0 px here. */
+       title cell IS it), no strip, no docked tray — §3.4 spends 0 px here.
+       The seat's own conversation keeps one line under the bar while
+       decisions wait (variant 3 of docs/design/operator-decision-forms.md):
+       it opens the sheet with «Рішення» and «Звіти». */
     <div key={activeNode.file.path} data-testid="mobile-focused-pane" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      {holdsSeat ? <DecisionStripLine count={openDecisions} onOpen={() => openOperatorDecisions({ project })} touch /> : null}
       <BranchPane
         file={activeNode.file}
         tasks={activeNode.tasks}
