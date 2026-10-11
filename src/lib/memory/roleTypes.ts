@@ -11,7 +11,7 @@ export const RULE_MAX_CHARS = 300;
 export const WHY_MAX_CHARS = 160;
 /** A rule shorter than this names nothing a later agent can act on. */
 export const RULE_MIN_CHARS = 20;
-export const MAX_LESSONS_PER_ATTEMPT = 3;
+export const MAX_LESSONS_PER_ATTEMPT = 1;
 
 /** A lesson's text as it is stored: trimmed, each run of spacing one space. */
 export function lessonText(value: string): string {
@@ -27,7 +27,22 @@ export function lessonTextLength(value: string): number {
 export type ScopeKind = "role" | "project" | "machine";
 
 export type RuleState = "active" | "merged" | "archived";
-export type RuleLeftReason = "duplicate" | "budget" | "deleted";
+export type RuleLeftReason = "duplicate" | "budget" | "deleted" | "rewritten";
+
+export interface RuleRevision {
+  by: "agent" | "curator" | "operator";
+  at: string;
+  source?: RuleSource;
+  revertedTo?: string;
+}
+
+export type RuleRevisionView = Pick<RuleRevision, "by" | "at" | "revertedTo"> & { roleId?: string | null; fixRound?: boolean };
+
+export interface RewriteInput {
+  id: string;
+  rule: string;
+  why: string;
+}
 
 export interface RuleSource {
   project: string;
@@ -55,6 +70,11 @@ export interface RoleMemoryRule {
   source: RuleSource;
   createdAt: string;
   changedAt: string;
+  versionOf?: string;
+  versions?: string[];
+  revisedBy?: RuleRevision;
+  curatedAt?: string;
+  keptByOperatorAt?: string;
 }
 
 export interface ScopeHistoryEntry {
@@ -67,13 +87,14 @@ export interface ScopeHistoryEntry {
   merged: { from: string; into: string }[];
   archived: string[];
   restored?: string[];
+  rewritten?: { id: string; version: string }[];
 }
 
 export interface RoleMemoryScopeRow {
   kind: "scope";
   scope: string;
   revision: number;
-  /** Active rule ids in injection order, oldest first. */
+  /** Active ids in order of leaving: never-curated, then curated low to high. */
   active: string[];
   history: ScopeHistoryEntry[];
 }
@@ -91,6 +112,7 @@ export interface LessonRequestRow {
   ruleIds: string[];
   /** The one line an agent gave when it left no lesson. */
   none: string | null;
+  rewrote?: string;
 }
 
 export type RoleMemoryRow = RoleMemoryRule | RoleMemoryScopeRow | LessonRequestRow;
@@ -119,6 +141,8 @@ export interface RuleView {
   fresh: boolean;
   createdAt: string;
   changedAt: string;
+  revisedBy?: RuleRevisionView;
+  versions?: { id: string; rule: string; why: string; hints: StaticFindingClass[]; createdAt: string; revisedBy?: RuleRevisionView }[];
 }
 
 export interface ScopeView {

@@ -103,6 +103,19 @@ function valueAtPath(target: Record<string, unknown>, path: readonly string[]): 
   return value;
 }
 
+test("spawn_agent advertises an optional account pin with project binding semantics", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const tool = (await client.listTools()).tools.find((candidate) => candidate.name === "spawn_agent")!;
+    expect(tool.inputSchema.properties).toHaveProperty("account");
+    expect(tool.inputSchema.required ?? []).not.toContain("account");
+    const account = tool.inputSchema.properties!.account as { anyOf: { type: string }[]; description: string };
+    expect(account.anyOf.map((choice) => choice.type)).toEqual(["string", "null"]);
+    expect(account.description).toContain("allowed");
+    expect(account.description).toContain("null");
+    expect(account.description).toContain("role");
+  });
+});
+
 test("agent_activity preserves additive provider throttle fields through the MCP protocol", async () => {
   const retryAt = "2026-08-23T09:12:00.000Z";
   await withProtocolClient(inertBindings({
@@ -1028,9 +1041,9 @@ test("the launch tools publish the task binding fields agents must pass", async 
        call naming no parent gets a placeholder card — a duplicate — and one
        naming a parent joins that parent's card. */
     expect(taskId?.description).toContain("this tool never infers one from the caller");
-    expect(taskId?.description).toContain("it is given a placeholder task of its own, which is a duplicate card");
+    expect(taskId?.description).toContain("it is given a named task of its own, which is a duplicate card");
     expect(taskId?.description).not.toContain("lands on the manager's own seat card");
-    expect(spawn?.description).toContain("it is given a placeholder task of its own — a duplicate card");
+    expect(spawn?.description).toContain("it is given a named task of its own — a duplicate card");
     /* A reviewer that names a parent joins that parent's card beside the
        reviewed work's (membership.test.ts), so it is told to pass taskId too. */
     expect(taskId?.description).toContain("so pass taskId on reviewer spawns too — an explicit id wins over inheritance");

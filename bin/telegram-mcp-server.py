@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Authenticated entrypoint for the packaged Telegram MCP connector."""
 
+import asyncio
 import hashlib
 import hmac
 import os
 import re
 import sys
+import uuid
 
 
 TOKEN = os.environ.get("LLV_TELEGRAM_MCP_TOKEN", "")
+CONNECTOR_GENERATION = uuid.uuid4().hex.encode("ascii")
 VENDOR_DIR = os.environ.get("LLV_TELEGRAM_VENDOR_DIR", "")
 EXCLUDED_TOOLS = [
     name.strip()
@@ -85,6 +88,25 @@ class BearerAuthMiddleware:
                 })
                 await send({"type": "http.response.body", "body": b"Unauthorized"})
                 return
+            session = headers.get(b"mcp-session-id")
+            if session and not hmac.compare_digest(session, CONNECTOR_GENERATION):
+                await send({"type": "http.response.start", "status": 404,
+                            "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body", "body":
+                            b'{"jsonrpc":"2.0","id":null,"error":{"code":-32000,'
+                            b'"message":"Telegram connector restarted; initialize a new MCP session"}}'})
+                return
+
+            async def generation_send(message):
+                if message["type"] == "http.response.start":
+                    message = {**message, "headers": [
+                        *message.get("headers", []),
+                        (b"mcp-session-id", CONNECTOR_GENERATION),
+                    ]}
+                await send(message)
+
+            await self.app(scope, receive, generation_send)
+            return
         await self.app(scope, receive, send)
 
 
@@ -96,6 +118,24 @@ def _authenticated_streamable_http_app(self):
 
 
 FastMCP.streamable_http_app = _authenticated_streamable_http_app
+
+# Every MCP client reaches this dispatch, including agents that fan out reads.
+# Keep one Telegram tool read active across the whole process and queue the
+# rest. Local event waits must leave reads available while awaiting activity.
+# async-with releases admission on errors and cancellation as well.
+_read_admission = asyncio.Semaphore(1)
+_local_event_waits = frozenset({"wait_for_new_message", "wait_for_settled_message"})
+_original_call_tool = FastMCP.call_tool
+
+
+async def _queued_call_tool(self, name, *args, **kwargs):
+    if name in _local_event_waits:
+        return await _original_call_tool(self, name, *args, **kwargs)
+    async with _read_admission:
+        return await _original_call_tool(self, name, *args, **kwargs)
+
+
+FastMCP.call_tool = _queued_call_tool
 
 from telegram_mcp.runtime import mcp  # noqa: E402
 
