@@ -126,6 +126,30 @@ test("curator reads and the window distinguish rewrites across the same clock in
   const reread = readCuration(next, scope);
   expect("rules" in reread && reread.rules.find(item => item.id === one)?.newSincePass).toBe(false);
 });
+test.each([roleScope(PROJECT, "builder"), "role:*:builder"])("pass undo preserves a later agent rewrite at the same clock instant in %s", to => {
+  const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
+  applyCuration(p, input({ [scope]: to === scope ? [one] : [], ...(to === scope ? {} : { [to]: [one] }) }, {
+    rewrite: [{ id: one, rule: "Inspect the scope readers before changing stored guidance.", note: why }], ...(to === scope ? {} : { move: [{ id: one, to }] }),
+  }), at());
+  const source: RuleSource = { project: PROJECT, pipelineId: "clock-undo", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "clock-writer" };
+  recordLessonRequest({ ...source, at: at() });
+  const later = "Inspect current readers and scope ownership before changing stored guidance.";
+  leaveLessons({ request: source, source, lessons: [], rewrite: { id: one, rule: later, why }, none: null, now: at() });
+  ended(p);
+  expect(revertCuratorPass(p.id, at(2000)).skipped).toEqual([one]);
+  expect(row(one).rule).toBe(later);
+  expect(row(one).scope).toBe(to);
+});
+test("pass undo preserves another curator's ranking at the same clock instant", () => {
+  const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), three = fixture(scope), p = pass();
+  applyCuration(p, input({ [scope]: [one, two, three] }), at());
+  ended(p);
+  const next = pass(NOW + CURATION_INTERVAL_MS + 1000);
+  applyCuration(next, input({ [scope]: [two, one, three] }), at());
+  ended(next, CURATION_INTERVAL_MS + 2000);
+  expect(revertCuratorPass(p.id, at(CURATION_INTERVAL_MS + 3000)).skipped.sort()).toEqual([one, two, three].sort());
+  expect(projectView(PROJECT).scopes.find(item => item.scope === scope)!.active.map(item => item.id)).toEqual([three, one, two]);
+});
 test("scope rereads retain departures from every call of the current pass", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: [two] }, { archive: [{ id: one, reason: "stale", note: "The first old command was replaced." }] }), at(100));

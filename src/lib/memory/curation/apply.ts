@@ -221,7 +221,21 @@ export function revertCuratorPass(id: string, now = new Date().toISOString()) {
     };
     const last = new Map<string, string>();
     for (const { history } of histories.slice().reverse()) for (const rule of [...(history.prior ?? []).map(p => p.id), ...(history.created ?? [])]) last.set(rule, history.at);
-    const eligible = new Set([...last].filter(([rule, at]) => { const row = tx.get(`r:${rule}`); return row?.kind === "rule" && row.changedAt === at; }).map(([rule]) => rule));
+    const eligible = new Set([...last].filter(([rule, at]) => {
+      const row = tx.get(`r:${rule}`);
+      if (row?.kind !== "rule" || row.changedAt !== at) return false;
+      const scope = tx.get(`s:${canonicalScope(row.scope)}`);
+      if (scope?.kind !== "scope") return false;
+      const revision = scope.history.find(change => change.pass === id && change.at === at)?.revision;
+      if (revision === undefined) return false;
+      // A later write can share the call's timestamp. Scope history proves its order,
+      // including writes after a move and another curator's complete active partition.
+      return !scope.history.some(change => change.revision > revision && (
+        change.by === "curator" && row.state === "active" || change.prior?.some(prior => prior.id === rule) || change.created?.includes(rule)
+        || change.added.includes(rule) || change.merged.some(merge => merge.from === rule || merge.into === rule) || change.archived.includes(rule)
+        || change.restored?.includes(rule) || change.rewritten?.some(rewrite => rewrite.id === rule)
+        || change.moved?.some(move => move.id === rule) || change.split?.some(split => split.id === rule || split.parts.includes(rule))));
+    }).map(([rule]) => rule));
     const orders = new Map<string, string[]>();
     for (const { scope, history } of histories) {
       for (const prior of history.prior ?? []) if (eligible.has(prior.id)) {
