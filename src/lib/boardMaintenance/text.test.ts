@@ -6,10 +6,18 @@ afterEach(() => held?.restore());
 test("brief reads previous card summary, changes, questions and left-alone evidence", () => {
   held = sandbox(); const run = claim();
   const previous = { ...run, state: "succeeded" as const, log: { ...run.log, changes: [{ at: run.claimedAt, taskId: "aabbccdd", tool: "update_task" as const, fields: ["status"], statusFrom: "assigned" as const, statusTo: "inbox" as const }], attention: [{ taskId: "aabbccdd", text: "Choose", options: ["keep", "split"], nextStep: "start implementation" }], leftAlone: [{ taskId: "ddeeffaa", reason: "open lane" }] } };
-  const params = { run, previous, previousCardText: "Earlier summary", seatTaskIds: [], productionLine: "fixture", evidence: [], openCount: 0, now: NOW };
+  const params = { run, previous, previousCardText: "Earlier summary", seatTaskIds: [], productionLine: "fixture", mergeOnReview: false, evidence: [], openCount: 0, now: NOW };
   const brief = maintenanceBrief(params);
   for (const phrase of ["Earlier summary", "assigned → inbox", "Choose | keep | split", "open lane", "Confirm every decision from current state"]) expect(brief).toContain(phrase);
   expect(maintenanceBrief({ ...params, previous: null })).toContain("No earlier run");
+});
+for (const mergeOnReview of [true, false]) test(`production brief preserves Done with mergeOnReview ${mergeOnReview ? "on" : "off"}`, () => {
+  held = sandbox();
+  const brief = maintenanceBrief({ run: claim(), previous: null, previousCardText: null, seatTaskIds: [], productionLine: "deployment unread", mergeOnReview, evidence: [], openCount: 0, now: NOW });
+  const production = brief.split("\n").find(line => line.startsWith("Production:"))!;
+  expect(production).toContain(`Project mergeOnReview: ${mergeOnReview ? "on" : "off"}`);
+  expect(production).toContain(mergeOnReview ? "all pull requests merged means Done" : "an open task in a project that ships by deploy stays open");
+  for (const phrase of ["confirm the current setting with get_orchestrator", "Never reopen an existing Done task only because deployment is pending or unread", "Змерджено #N. Чекає деплою.", "Розгорнуто <sha>", "successful deploy containing the merge", "reverted PR or a promised part still open"]) expect(production).toContain(phrase);
 });
 test("report parses bounded attention and left lines, rejects malformed ids", () => {
   const parsed = parseMaintenanceReport("attention: aabbccdd | Choose | keep | split | waits: start implementation\nleft: ddeeffaa | open lane\nattention: bad | missing\nVerdict: pass");

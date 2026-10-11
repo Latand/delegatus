@@ -3,7 +3,7 @@ import { credentialMask, maskedSlice } from "./credentialMask";
 
 type Speaker = "operator" | "companion";
 type Snapshot = Extract<Payload, { type: "transcript.snapshot" }>;
-interface Segment { speaker: Speaker; itemId: string; text: string; startMs: number; endMs: number; final: boolean; boundaryMs?: number; turn: number; published?: string; fragments: Array<[number, number]> }
+interface Segment { speaker: Speaker; itemId: string; text: string; startMs: number; endMs: number; final: boolean; boundaryMs?: number; partDone?: boolean; turn: number; published?: string; fragments: Array<[number, number]> }
 export const DISPLAY_PAUSE_MS = 1_500;
 
 /** Fresh Live reducer. Timeline gaps segment the record, never authorize a
@@ -50,7 +50,7 @@ export class LiveTranscript {
     if (!delta || !Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs < startMs) return [];
     const events: Snapshot[] = [];
     let current = this.segments.findLast(row => row.speaker === speaker);
-    const late = this.segments.findLast(row => row.speaker === speaker && startMs >= row.startMs
+    const late = this.segments.findLast(row => row.speaker === speaker && !row.partDone && startMs >= row.startMs
       && (row.final ? endMs <= (row.boundaryMs ?? row.endMs) : startMs <= row.endMs));
     if (late && (!current || startMs < current.startMs || late.final)) current = late;
     const starts = !current || (current.final && !late) || startMs - current.endMs >= DISPLAY_PAUSE_MS || current.text.length + delta.length > 4_000;
@@ -76,8 +76,18 @@ export class LiveTranscript {
    * position. An overlapping operator segment remains open in duplex audio. */
   boundary(offsetMs: number): Snapshot[] {
     this.answered = true;
-    const current = this.segments.findLast(row => row.speaker === "operator" && !row.final);
+    return this.seal("operator", offsetMs, false);
+  }
+  /** A completed provider transcript part seals its own speaker. Completing
+   * operator text alone does not imply the companion answered that turn. */
+  seal(speaker: Speaker, offsetMs: number, partDone = true): Snapshot[] {
+    if (!Number.isFinite(offsetMs) || offsetMs < 0) return [];
+    const current = this.segments.findLast(row => row.speaker === speaker && (partDone || !row.final));
     if (!current || current.endMs > offsetMs) return [];
+    // Receipt timestamps can coincide. A provider's completed part still
+    // separates the next part; audio-timeline boundaries keep late repair.
+    if (partDone) current.partDone = true;
+    if (current.final) return [];
     current.final = true; current.boundaryMs = offsetMs;
     return [this.snapshot(current)];
   }

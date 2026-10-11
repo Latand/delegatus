@@ -339,6 +339,29 @@ enter their own service before test modules load. Portable runs use an independe
 guardian. Fixtures with blocking barriers check their recorded
 parent identity within the barrier; asynchronous fixtures check it on a timer.
 
+Reviewers use the same baseline comparator directly, without invoking a push:
+
+```sh
+bash scripts/gate-slot.sh bun scripts/local-gate-tests.ts --base <captured-base-sha> <explicit-test-paths...>
+```
+
+Use the base commit captured for the review. For a PR without a captured base,
+resolve `git merge-base origin/main HEAD` once and record that SHA. Select the
+test files required by the changed behavior, including the file that failed;
+never pass a directory. The helper runs each file separately on the base and
+the current working tree in isolated environments. Its detached temporary
+clone leaves the review checkout, refs and worktree registration untouched.
+New test files have no base observations and are judged on the head alone.
+
+Retain the command, base/head commit lines and named outcomes as review
+evidence. Record any uncommitted reviewed changes separately: the head commit
+line identifies HEAD, while the head sample executes the working tree.
+`PRE-EXISTING` and `FLAKY` outcomes belong in review notes; a base failure alone
+does not warrant a finding or a failing PR verdict. `NEW` failures still
+block. Missing or incomplete comparison evidence is a check gap to resolve,
+never proof that a failure existed on the base. Other independently evidenced
+defects in the diff retain their findings.
+
 `LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns
 when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to

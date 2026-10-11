@@ -52,10 +52,11 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     // Pinned id of the Sonnet the `sonnet` alias resolves to in Claude Code
     // 2.1.284. The alias moves when the next Sonnet ships; this row does not.
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
-    // The `haiku` alias names the one Haiku shipping today, as the transcript
-    // does once it records the resolved id, so the live chip and the reloaded
-    // card spell the model the same way.
-    { id: "haiku", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
+    // Claude Code 2.1.296 resolves `haiku` to claude-haiku-5-5 on
+    // first-party auth. Pinned rows keep both generations selectable.
+    { id: "haiku", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
+    { id: "claude-haiku-5-5", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
+    { id: "claude-haiku-4-5", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
   ],
   codex: [
     // Catalogue order is independent of the shipped launch fallback below.

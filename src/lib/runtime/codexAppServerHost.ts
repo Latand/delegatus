@@ -26,6 +26,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
+import { codexProcessCleanupArgs, codexProcessCleanupConfig } from "@/lib/agent/processCleanupPolicy";
 import { nativeCodexActivityMethod } from "./codexSubagentDetection";
 import { installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
@@ -1442,7 +1443,11 @@ export class CodexAppServerHost implements EngineHost {
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
     let features: ReturnType<typeof readCodexFeatures>;
-    try { features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env); }
+    let cleanupArgs: string[];
+    try {
+      features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
+      cleanupArgs = codexProcessCleanupArgs(options.codexHome);
+    }
     catch (error) { options.releaseCleanup?.(); throw error; }
     const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
     const granted = grantedPlugins(options.plugins);
@@ -1453,6 +1458,7 @@ export class CodexAppServerHost implements EngineHost {
       "-c", `agents.enabled=${options.allowSubagents === true}`,
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
       ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
+      ...cleanupArgs,
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
         ? [
@@ -1532,6 +1538,9 @@ export class CodexAppServerHost implements EngineHost {
         options.cleanMemory === true,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      const cleanup = codexProcessCleanupConfig(options.codexHome);
+      Object.assign(config.features as Record<string, unknown>, cleanup.features);
+      config.hooks = cleanup.hooks;
       if (memoryHook) {
         const hookSetupDeadline = performance.now() + Math.min(250, provisional.requestTimeoutMs);
         try {
