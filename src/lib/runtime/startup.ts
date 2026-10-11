@@ -2573,7 +2573,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
     const state = await host.health();
     try {
-      if (!await handOverHostForDemotion(registry, key, state, options)) return;
+      if (!await handOverHostForDemotion(registry, key, state, options, () => host.health())) return;
     } catch (error) {
       console.error("[viewer release] interrupted turn could not be recorded; leaving its unpublished host running", {
         hostKey: sessionKeyId(key), error,
