@@ -71,14 +71,38 @@ function applyRecords(state: ObservationState, records: Record<string, unknown>[
   }
 }
 
-function cacheObservation(file: string, state: ObservationState, partial: string, stat: fs.Stats): void {
+function cacheObservation(file: string, state: ObservationState, partial: string, stat: fs.Stats, size = stat.size): void {
   observations.delete(file);
   while (observations.size >= OBSERVATION_CACHE_LIMIT) {
     const oldest = observations.keys().next().value;
     if (oldest === undefined) break;
     observations.delete(oldest);
   }
-  observations.set(file, { ...state, size: stat.size, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino, partial });
+  observations.set(file, { ...state, size, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino, partial });
+}
+
+function unfinishedTail(file: string, stat: fs.Stats): string | null {
+  if (stat.size === 0) return "";
+  const length = Math.min(stat.size, 131_072);
+  const start = stat.size - length;
+  const fd = fs.openSync(file, "r");
+  try {
+    const opened = fs.fstatSync(fd);
+    if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs) return null;
+    const bytes = Buffer.alloc(length);
+    let read = 0;
+    while (read < length) {
+      const count = fs.readSync(fd, bytes, read, length - read, start + read);
+      if (!count) return null;
+      read += count;
+    }
+    const after = fs.fstatSync(fd);
+    if (after.dev !== stat.dev || after.ino !== stat.ino || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return null;
+    if (bytes[length - 1] === 0x0a) return "";
+    const lineStart = bytes.lastIndexOf(0x0a) + 1;
+    if (lineStart === 0 && start > 0) return null;
+    return bytes.subarray(lineStart).toString("utf8");
+  } finally { fs.closeSync(fd); }
 }
 
 /** Only tool identity and final-message boundaries leave the transcript reader. */
@@ -111,10 +135,17 @@ export function readRelayStepObservation(file: string): RelayStepObservation {
         const lines = `${cached.partial}${bytes.toString("utf8")}`.split("\n");
         const partial = lines.pop() ?? "";
         const records: Record<string, unknown>[] = [];
+        let parseFailed = false;
         for (const line of lines) {
           if (!line.trim()) continue;
-          const value: unknown = JSON.parse(line);
+          let value: unknown;
+          try { value = JSON.parse(line); }
+          catch { parseFailed = true; break; }
           if (value && typeof value === "object" && !Array.isArray(value)) records.push(value as Record<string, unknown>);
+        }
+        if (parseFailed) {
+          observations.delete(file);
+          return currentObservation(cached, true);
         }
         applyRecords(state, records);
         cacheObservation(file, state, partial, stat);
@@ -126,8 +157,10 @@ export function readRelayStepObservation(file: string): RelayStepObservation {
     const state = emptyState();
     state.uncertain = tail.prefixTruncated;
     applyRecords(state, tail.records);
-    cacheObservation(file, state, "", stat);
-    return currentObservation(state);
+    const partial = unfinishedTail(file, stat);
+    if (partial === null) return currentObservation(state, true);
+    cacheObservation(file, state, partial, stat, stat.size - Buffer.byteLength(partial));
+    return currentObservation(state, Boolean(partial));
   } catch {
     return {}; // Progress is optional; lifecycle observation still owns failures.
   }

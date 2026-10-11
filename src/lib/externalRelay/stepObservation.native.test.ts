@@ -63,3 +63,30 @@ test("a truncated initial tail cannot claim that no tool is pending", () => {
     + record("function_call_output", { call_id: "older", output: "x".repeat(140_000) }));
   expect(relayStepFor(readRelayStepObservation(file))).toBe("working");
 });
+
+test("a cold poll retains an unfinished row and observes its completion and final answer", () => {
+  const file = path.join(root, "partial-start.jsonl");
+  const call = record("task_started", {})
+    + JSON.stringify({ type: "response_item", payload: { type: "function_call", call_id: "shell", name: "exec_command" } });
+  const split = call.indexOf('"name"') + 3;
+  fs.writeFileSync(file, call.slice(0, split));
+  expect(relayStepFor(readRelayStepObservation(file))).toBe("working");
+
+  fs.appendFileSync(file, call.slice(split) + "\n");
+  expect(relayStepFor(readRelayStepObservation(file))).toBe("working");
+
+  fs.appendFileSync(file, record("function_call_output", { call_id: "shell" })
+    + record("message", { role: "assistant", phase: "final_answer" }));
+  expect(relayStepFor(readRelayStepObservation(file))).toBe("writing_answer");
+});
+
+test("a malformed incremental row does not poison observations of later valid rows", () => {
+  const file = path.join(root, "malformed-increment.jsonl");
+  fs.writeFileSync(file, record("task_started", {}));
+  expect(relayStepFor(readRelayStepObservation(file))).toBe("thinking");
+
+  fs.appendFileSync(file, "{broken}\n");
+  readRelayStepObservation(file);
+  fs.appendFileSync(file, record("function_call", { name: "exec_command", call_id: "shell" }));
+  expect(relayStepFor(readRelayStepObservation(file))).toBe("working");
+});
