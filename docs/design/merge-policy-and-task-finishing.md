@@ -339,25 +339,28 @@ So the runner merges a head only when its checks are **settled and green**:
      --jq .protection.required_status_checks.contexts`, which works with read
      access (checked 2026-09-25: `privacy-publication`,
      `privacy-tracker-audit`). An unprotected branch has none;
-   - every check name the runner recorded on an **earlier head of this PR**
-     (`merge.seenChecks`, a union of names, written at each read) is present.
+   - every required check name the runner recorded on an **earlier head of this
+     PR** (`merge.seenChecks`, a union of names, written at each read) is present.
      That covers the partial rollup right after `update-branch`: the update
      commit merges the base into the branch, the PR diff against the base is
-     unchanged, and the same workflows run again;
+     unchanged, and the required workflows run again. Optional names recorded
+     on an earlier head do not hold the merge;
    - at least **3 minutes** have passed since the runner first saw this head
      (`merge.headSeenAt`);
    - the set of names did not grow between the last two reads (60 s apart).
      A workflow that registers late shows up as growth and restarts the wait;
-   - every check has finished (`status: COMPLETED`, or a status context not
-     `PENDING`).
+   - every required check has finished (`status: COMPLETED`, or a status
+     context not `PENDING`). Pending optional checks can continue.
 2. **Green.** No check concluded `FAILURE`, `CANCELLED`, `TIMED_OUT`,
    `ACTION_REQUIRED`, `STARTUP_FAILURE` or (status context) `ERROR`.
    `SUCCESS`, `NEUTRAL` and `SKIPPED` pass. A red check that branch protection
    does not require still blocks.
 
-A head that still has **no check at all** once the 3 minutes have passed is
-blocked: "no checks reported on this head". A repository without CI therefore
-never merges automatically (§9). A main-wide red check stops merges until
+A head that still has **no check at all** once the 3 minutes have passed, on a
+base with no required contexts, is blocked: "no checks reported on this head".
+Missing required contexts wait within the 90-minute bound, even with an empty
+rollup. A repository without CI therefore never merges automatically (§9).
+A main-wide red check stops merges until
 someone fixes main, as the expired audit allowlist did on 2026-09-25 (#2188).
 That stop shows in Needs you and is never silent.
 

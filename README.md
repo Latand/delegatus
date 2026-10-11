@@ -306,10 +306,12 @@ review to ask for.
 board's ⋯ menu, is off by default.
 While it is off, a pipeline ends with its pull request open and the
 orchestrator tells you it is ready. Turn it on and Delegatus merges each
-pipeline whose reviews passed, one at a time per repository, once every
-check on the head has finished green. It updates a branch that fell behind
-and leaves conflicts to you. The pipeline shows "waiting for checks", "merge
-stopped" or "merged". A stopped merge appears under **Needs you** with **Try
+pipeline whose reviews passed, one at a time per repository, once the base
+branch's required checks on the head have settled green. Pending optional
+checks can continue; any reported check failure stops the merge. It updates a
+branch that fell behind and leaves conflicts to you. The pipeline shows
+"waiting for checks", "merge stopped" or "merged". A stopped merge appears
+under **Needs you** with **Try
 the merge again**. The orchestrator can also hand several reviewed pull
 requests to one **merger** stage, which lands them as a single batch pull
 request with one commit per original;
