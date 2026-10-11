@@ -27,6 +27,11 @@ export function useMemoryProfile(project: string, locale: Locale, rulesRevision:
   const [view, setView] = useState<MemoryProfileView | null>(null);
   const [error, setError] = useState<ProfileError | null>(null);
   const [sending, setSending] = useState(false);
+  const [context, setContext] = useState({ project, locale });
+  if (context.project !== project || context.locale !== locale) {
+    setContext({ project, locale });
+    setView(null); setError(null); setSending(false);
+  }
   const sequence = useRef(0);
   const streamActive = useRef(false);
   const controller = useRef<AbortController | null>(null);
@@ -51,7 +56,7 @@ export function useMemoryProfile(project: string, locale: Locale, rulesRevision:
     const timer = setInterval(() => {
       if (currentView.current?.run?.state === "running" || ++ticks % 7 === 0) void read();
     }, 2_000);
-    return () => { sequence.current++; abort.abort(); clearInterval(timer); };
+    return () => { abort.abort(); clearInterval(timer); };
   }, [read]);
   useEffect(() => { void read(); }, [rulesRevision, read]);
   const summarize = useCallback(async () => {
@@ -77,5 +82,5 @@ export function useMemoryProfile(project: string, locale: Locale, rulesRevision:
       if (!signal.aborted && revision === sequence.current) { streamActive.current = false; setSending(false); }
     }
   }, [project, locale]);
-  return { view, error, running: sending || view?.run?.state === "running", summarize };
+  return { view: view?.locale === locale ? view : null, error, running: sending || view?.run?.state === "running", summarize };
 }

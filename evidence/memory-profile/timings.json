@@ -30,5 +30,37 @@
     "ruleCount": 106,
     "firstMs": 19,
     "totalMs": 44
+  },
+  {
+    "lang": "uk",
+    "mode": "cold",
+    "model": "claude-haiku-5-5",
+    "ruleCount": 116,
+    "firstMs": 1608,
+    "totalMs": 3992
+  },
+  {
+    "lang": "uk",
+    "mode": "cached",
+    "model": "claude-haiku-5-5",
+    "ruleCount": 116,
+    "firstMs": 61,
+    "totalMs": 67
+  },
+  {
+    "lang": "en",
+    "mode": "cold",
+    "model": "claude-haiku-5-5",
+    "ruleCount": 116,
+    "firstMs": 2003,
+    "totalMs": 5843
+  },
+  {
+    "lang": "en",
+    "mode": "cached",
+    "model": "claude-haiku-5-5",
+    "ruleCount": 116,
+    "firstMs": 39,
+    "totalMs": 45
   }
 ]

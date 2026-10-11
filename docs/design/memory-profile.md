@@ -35,14 +35,17 @@ content and short why lines, plus model, prompt version and locale. Unchanged
 slices return immediately on Refresh; only changed slices and the overall
 regenerate. A failed part retains its previous summary and can be retried.
 
-One model constant selects the catalogue’s Claude Haiku 5.5 entry, now available
-on main; before that entry it selects `haiku`. The Messages API rejected the bare `haiku` alias,
-so that alias maps to the verified Haiku 4.5 API target. A project Claude account
+One model constant pins the catalogue’s Claude Haiku 5.5 entry. There is no
+automatic fallback to an older model. A project Claude account
 is selected through the existing account admission policy. Its current OAuth
 credential stays inside the direct caller. Provider accounts and expired
 credentials are excluded. Unavailable capacity or no eligible credential
 produces the account error. No API-key fallback.
-Each call has a 30-second deadline and a small maximum output token budget.
+Subscription requests include the static Claude Code client identity in a
+system text block, independently of the memory data in the user message.
+Each call has a 30-second deadline and a maximum token budget of 2,048 for a
+slice and 4,096 for the overall summary, including thinking. The prose limits
+below still bound the displayed answer.
 Haiku 5.5 uses low effort. The caller reads text blocks and discards thinking
 and redacted-thinking blocks; tool calls and incomplete responses still fail.
 This follows the [Haiku 5.5 migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide).
@@ -141,15 +144,63 @@ passed 27 tests across seven explicit paths, including pinned model selection
 and responses containing thinking blocks. Full TypeScript checking passed
 with the repository's standard invocation under isolated state.
 
-**Haiku 5.5 timing verification is blocked.** Direct requests returned HTTP 429
+The initial Haiku 5.5 timing attempt was blocked. Direct requests returned HTTP 429
 (`rate_limit_error`) on both eligible project accounts with current credentials,
 including a minimal request without rules or a schema. An older-target
 comparison request returned HTTP 200. A delayed retry through the final
 adapter still returned 429. The provider supplied no retry time.
-The Haiku 5.5 browser benchmark timed out waiting for a generated headline;
-its first-result and completion targets remain unverified. The table above
-records the predecessor's Haiku 4.5 observations and establishes no Haiku 5.5
-timing claim. See `evidence/memory-profile/haiku-verification.json`.
+That browser benchmark timed out waiting for a generated headline. The table
+above records the predecessor's Haiku 4.5 observations.
+
+The continuation compared a captured request from installed Claude Code
+2.1.296 with the direct request, using the same current OAuth credential.
+Both selected `claude-haiku-5-5`, Bearer subscription auth and the same
+Messages endpoint. Claude Code adds `?beta=true`, a client beta and other
+feature betas, client headers, billing attribution, a client identity system
+block, account metadata, adaptive thinking and streaming. The direct caller
+uses low effort and JSON output with no tools, attribution or account metadata.
+Only the static identity block was required in the controlled minimal probes:
+
+| Minimal request variation | HTTP status |
+| --- | ---: |
+| Original OAuth request | 429 |
+| Additional Claude Code beta | 429 |
+| Client identity system block, original headers | 200 |
+| Client identity plus client beta | 200 |
+| Client identity plus client beta and client headers | 200 |
+
+The caller now carries that identity block. No credential change, model
+fallback or endpoint change was needed. These observations identify the
+missing request field; the provider's internal admission policy is not exposed.
+See `evidence/memory-profile/haiku-verification.json`.
+
+The first complete-profile attempt after fixing admission exposed a second
+limit: Haiku 5.5's thinking consumed the old Haiku 4.5 output budget. A direct
+control returned `max_tokens` with 1,100 output tokens and incomplete JSON.
+The raised ceilings leave room for thinking at low effort, as described in
+the migration guide. A regression retains rejection of truncated responses.
+
+The final browser measurement used 116 current rules across six slices and
+seven parallel jobs per cold locale. Both profiles completed without errors:
+
+| Locale | Application cache | First visible | Complete |
+| --- | --- | ---: | ---: |
+| Ukrainian | Cold | 1.608 s | 3.992 s |
+| English | Cold | 2.003 s | 5.843 s |
+| Ukrainian | Cached | 0.061 s | 0.067 s |
+| English | Cached | 0.039 s | 0.045 s |
+
+These are Haiku 5.5 observations from the same button-to-visible-headline and
+button-to-terminal-state driver. The application cache was empty for each
+cold locale; provider schema caching may have been warm. The benchmark keeps
+the direct credential and in-memory storage harness described above. It does
+not time production account selection or SQLite writes. Every browser closed.
+`evidence/memory-profile/timings.json` retains both model measurements.
+
+A focused client regression also covers switching locale during an active
+stream: the old browser request is cancelled, the new locale's cache is read,
+and the generation button becomes available. The server's existing run keeps
+its independent lifetime.
 
 Focused tests cover scope slicing, number binding, locale retry, cache/stale
 behavior, persistence isolation, structured requests, route authority and stream
