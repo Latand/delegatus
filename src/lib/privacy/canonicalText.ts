@@ -25,11 +25,14 @@ function decodeHtmlEntities(text: string, preserveLiteralUnderscores = false): s
   if (!preserveLiteralUnderscores) return decodeHTMLStrict(text);
   let decoded = "";
   let cursor = 0;
-  for (const match of text.matchAll(/&[^&;\s]*;/g)) {
+  // The compact detector normalizes compatibility glyphs to underscores;
+  // preserve their literal Markdown role while doing so in this token view.
+  for (const match of text.matchAll(/&[^&;\s]*;|[\uFE33\uFE34\uFE4D-\uFE4F\uFF3F]/gu)) {
     decoded += text.slice(cursor, match.index);
-    const literal = decodeHTMLStrict(match[0]);
+    let literal = decodeHTMLStrict(match[0]);
     // Entity references produce literal text, including inside emphasis.
-    if (literal === "_") {
+    if (literal.normalize("NFKC") === "_") {
+      literal = "_";
       let backslashes = 0;
       for (let index = decoded.length - 1; decoded[index] === "\\"; index -= 1) backslashes += 1;
       if (backslashes % 2 === 0) decoded += "\\";
@@ -114,7 +117,7 @@ export function decodeSensitiveText(
   return { error: true, text: decoded };
 }
 
-/** Token emphasis pairing retains backslash escapes and literal entity underscores. */
+/** Token emphasis pairing retains escapes and underscores from literal text. */
 export function canonicalSensitiveText(text: string, jsonEscapes = false, preserveCommonMarkEscapes = false): { error: boolean; text: string } {
   return decodeSensitiveText(text, false, undefined, jsonEscapes, preserveCommonMarkEscapes);
 }

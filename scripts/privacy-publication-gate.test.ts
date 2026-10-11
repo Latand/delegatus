@@ -1197,8 +1197,10 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   test("escaped delimiters survive encoding without completing short bodies across emphasis", () => {
     const prefix = String.fromCharCode(103, 32, 104, 32, 112, 32);
     const literal = String.fromCharCode(92, 95);
-    const encode = (text: string) => [...text].map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`).join("");
-    for (const delimiter of [literal, "&#95;", "&#x5f;", "&lowbar;", "&UnderBar;", "&#92;&#95;", "&#92;&#92;&#95;"]) {
+    const encode = (text: string) => Array.from(new TextEncoder().encode(text), (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("");
+    const compatibilityUnderscores = [0xfe33, 0xfe34, 0xfe4d, 0xfe4e, 0xfe4f, 0xff3f];
+    const literals = compatibilityUnderscores.flatMap((code) => [String.fromCharCode(code), `&#${code};`]);
+    for (const delimiter of [literal, "&#95;", "&#x5f;", "&lowbar;", "&UnderBar;", "&#92;&#95;", "&#92;&#92;&#95;", ...literals]) {
       for (const width of [1, 2, 3]) {
         const marker = "_".repeat(width);
         const full = marker + prefix + delimiter + "aZ9".repeat(12) + marker;
