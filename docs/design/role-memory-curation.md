@@ -122,7 +122,7 @@ The lane's pinned specification was written before the form was answered.
 | Task narration is archived with the reason «about one task» | 4: nowhere; the stage report only | `leave_lesson` refuses it and stores nothing (3.3). A stored rule that turns out to be about one task is archived by the curator, reversibly (3.6). |
 | New lessons are candidates, injected only after a curator pass | 5: at once, in the general list | A lesson is active at once. The curator reviews it afterwards. There is no candidate state. |
 | Candidates visible in the window and in search | follows from 4 and 5 | Nothing new needs search (Deferred). |
-| Curator at 10 candidates or 6 hours | 3: the same | At 10 new lessons or rewrites, or 6 hours after the last pass with at least one (3.6). |
+| Curator at 10 candidates or 6 hours | 3: the same | At 10 new lessons or rewrites since the last pass, or 6 hours after the project's last pass while its scopes hold active rules, new lessons or none (3.6). |
 | First curator pass over the existing rules | 2: the same | 3.9 |
 | Rewrite by id with a kept version; «nothing new» by default; at most one new lesson that passes the cross-task test; no «Why» lines at start | not asked | Kept (3.3 to 3.5). |
 
@@ -588,10 +588,14 @@ maintenance. A pass launches when all of these hold:
    (its role scopes, its project scope, the scopes of every role on every
    project, the machine scope) hold active rules (the first pass, 3.9); or
    at least 10 lessons and stage rewrites joined those scopes since their
-   last passes; or at least one did and 6 hours have passed since the
-   project's last pass. With no candidate state (answer 5), the
-   «candidates» of answer 3 are exactly these: lessons and rewrites the
-   curator has not yet seen, already active;
+   last passes (the early trigger); or 6 hours have passed since the
+   project's last pass and those scopes hold active rules, whether or not
+   any lesson joined since. With no candidate state (answer 5), the
+   «candidates» of answer 3 are the lessons and rewrites the curator has
+   not yet seen, already active. The 6-hour branch needs none of them:
+   stages answer «nothing new» by default, and a rule goes stale against
+   the code with no lesson written, so only a timed pass keeps checklist
+   question 2 (Current) running on a quiet project;
 5. the claim admits it: one `boundedPatch` over the machine row and the
    project row refuses while a pass is live or within 30 minutes of the
    project's last claim. A failed pass counts as a pass, so a broken setup
@@ -976,7 +980,9 @@ for due, claim, launch, observe and settle, `brief.ts`, `guard.ts`,
 `src/lib/i18n/en.ts`, `uk.ts` (the role's name).
 
 Tests: due conditions, including the first pass over rules that never had a
-pass; one live pass per machine; a repeated or concurrent claim; the
+pass; a pass due 6 hours after the last one with zero new lessons or
+rewrites; no pass due before 6 hours with fewer than 10; a pass due before
+6 hours at 10; no pass due when the pass's scopes hold no active rule; one live pass per machine; a repeated or concurrent claim; the
 health check launches nothing; the guard admits only the live pass's
 conversation; every check of the apply list, each with a refusing case;
 `CURATE_STALE` after a stage's lesson lands mid-pass; a merge and a move
@@ -1036,7 +1042,7 @@ written.
 | Quote | Where it is answered |
 | --- | --- |
 | «перезаписывать уже созданные фрагменты» | A stage rewrites a rule by id (3.3, 3.4); the curator rewrites and merges (3.6); every earlier text is kept and revertible. |
-| «абстрактные правила … группироваться, объединяться, консолидироваться» | The curator merges rules of one class, generalizes and moves them to their level (3.6), and runs on the seat tick at 10 new lessons or 6 hours (answer 3). |
+| «абстрактные правила … группироваться, объединяться, консолидироваться» | The curator merges rules of one class, generalizes and moves them to their level (3.6), and runs on the seat tick at 10 new lessons or rewrites, or 6 hours after the project's last pass with no new-lesson condition, so a quiet project's rules are still checked for currency (answer 3). |
 | «универсальны … для любой задачи, просто зависят от разных уровней» | The cross-task test and the level test in the request (3.3); the curator's level moves and `no-reader` archives (3.6). |
 | «он говорит про конкретные задачи» | Task lessons go into the stage report: the request says so and `leave_lesson` refuses the unmistakable ones (3.3, answer 4); the curator archives the rest (3.6); Why leaves the startup block (3.5). |
 | «память уже забита, и слишком много. Пишется» | «Nothing new» by default and one answer per stage (3.3); merges shrink the scopes (3.6). |
