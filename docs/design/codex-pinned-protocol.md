@@ -43,11 +43,13 @@ and digest, experimental declaration, per-model input modalities and the
 provider's `webSearch` / `imageGeneration` receipt. Provider faults leave that
 receipt unknown. The receipt is bounded to 4 KiB, and `modelsTruncated` records
 omitted or shortened catalogue rows. The journal preserves this receipt across
-runtime-host restarts. Image input is gated against the model selected for the
-submission, including a per-turn model change. Steering inherits the running
-turn's model; provider reroutes refresh that model's image capability before
-another input is admitted. Native queue support is confirmed by its existing
-read-only list request; method refusals downgrade it.
+runtime-host restarts. Image input is gated against the selected-model receipt
+from thread start/resume and accepted model overrides. The protocol makes an
+override apply to the current and subsequent turns. Steering inherits the
+running turn's model; provider reroutes are scoped to their turn ID, including
+those arriving before the turn-start reply. A completed turn's late reroute
+cannot change a newer turn's image admission. Native queue support is confirmed
+by its existing read-only list request; method refusals downgrade it.
 After a queue method refusal, the host probes stable history separately with a
 read-only `thread/turns/list`. An explicit method-not-found selects the legacy
 reader; transport or permission faults keep canonical history fail-closed.

@@ -1353,6 +1353,7 @@ export class CodexAppServerHost implements EngineHost {
       the next image send. */
   private imageInputSupport: "supported" | "unsupported" | "unknown" = "unknown";
   private requestedModel: string | undefined;
+  private readonly reroutedModels = new Map<string, string>();
   private realtimeDeliveryEpoch = 0;
   private readonly memoryCell: AgentMemoryCell | null;
   private releasing = false;
@@ -1609,6 +1610,7 @@ export class CodexAppServerHost implements EngineHost {
       }
       provisional.identity.threadId = identity.threadId;
       provisional.identity.path = identity.path;
+      provisional.requestedModel = stringField(result, "model") ?? provisional.requestedModel;
       if (granted.length > 0) await provisional.verifyPluginGrant(granted, config);
       provisional.rememberConfirmedDeliveries(result);
       provisional.restoreEvents();
@@ -1624,6 +1626,7 @@ export class CodexAppServerHost implements EngineHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
+      provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
       await provisional.negotiateHistoryCapability();
       /* Before the queue's head can start a turn, so the first turn of this
@@ -1708,7 +1711,7 @@ export class CodexAppServerHost implements EngineHost {
   private async refreshImageInputSupport(): Promise<void> {
     try {
       this.modelCatalog = await this.rpc("model/list", {});
-      this.imageInputSupport = modelSupportsImageInput(this.modelCatalog, this.requestedModel)
+      this.imageInputSupport = modelSupportsImageInput(this.modelCatalog, this.currentImageModel())
         ? "supported"
         : "unsupported";
     } catch {
@@ -2050,8 +2053,9 @@ export class CodexAppServerHost implements EngineHost {
       clientUserMessageId: entry.id,
     });
     const turnId = turnIdFromResult(result, "turn/start");
-    if (typeof profile.model === "string") this.selectModel(profile.model);
+    if (typeof profile.model === "string") this.requestedModel = profile.model;
     this.activeTurnId = turnId;
+    this.selectModel(this.currentImageModel());
     this.notifyStateListeners();
     return this.awaitDeliveryConfirmation(entry, { outcome: "turn-started", turnId });
   }
@@ -3204,7 +3208,10 @@ export class CodexAppServerHost implements EngineHost {
        turn — a terminal notification, a resume that finds it already over, an
        error that terminalizes it — leaves the same evidence for the voice
        ledger. Bounded, because a long-lived host ends a great many turns. */
-    if (event.kind === "turn-ended") this.recordTerminatedTurn(event.turnId);
+    if (event.kind === "turn-ended") {
+      this.recordTerminatedTurn(event.turnId);
+      if (!this.activeTurnId) this.selectModel(this.requestedModel);
+    }
     if (!this.eventLedgerRestored) {
       if (this.preRestoreEvents.length + this.preRestoreMessages.length >= MAX_PRE_RESTORE_FRAMES) {
         this.ledgerFailed = true;
@@ -3246,6 +3253,7 @@ export class CodexAppServerHost implements EngineHost {
       record instead of retiring work on missing evidence. */
   private recordTerminatedTurn(turnId: string): void {
     if (!turnId) return;
+    this.reroutedModels.delete(turnId);
     this.terminatedTurnIds.delete(turnId);
     this.terminatedTurnIds.add(turnId);
     while (this.terminatedTurnIds.size > MAX_TERMINATED_TURN_MEMORY) {
@@ -3671,9 +3679,12 @@ export class CodexAppServerHost implements EngineHost {
     });
   }
 
-  private selectModel(model: string): void {
+  private currentImageModel(): string | undefined {
+    return this.activeTurnId ? this.reroutedModels.get(this.activeTurnId) ?? this.requestedModel : this.requestedModel;
+  }
+
+  private selectModel(model: string | undefined): void {
     const previous = this.imageInputSupport;
-    this.requestedModel = model;
     this.imageInputSupport = this.modelCatalog === null ? "unknown"
       : modelSupportsImageInput(this.modelCatalog, model) ? "supported" : "unsupported";
     if (previous !== this.imageInputSupport) this.setSessionStatus(this.engineStatus, this.activeFlags);
@@ -4062,9 +4073,21 @@ export class CodexAppServerHost implements EngineHost {
        it — or refusing only its `serverRequest/resolved` and stranding the
        attention it opened — would strand work the parent delegated. */
     if (this.foreignThreadNotification(params)) return;
-    if (method === "model/rerouted" && typeof params.toModel === "string") {
-      this.selectModel(params.toModel);
-      this.notifyStateListeners();
+    if (method === "model/rerouted") {
+      const model = stringField(params, "toModel");
+      if (!turnId || !model) { this.protocolAnomalies += 1; return; }
+      if (this.terminatedTurnIds.has(turnId)) return;
+      // A reroute may precede the start reply/notification. Keep it by turn ID
+      // without changing the configured model for subsequent turns.
+      this.reroutedModels.set(turnId, model);
+      if (this.reroutedModels.size > 64) {
+        const oldest = this.reroutedModels.keys().next().value;
+        if (oldest !== undefined) this.reroutedModels.delete(oldest);
+      }
+      if (this.activeTurnId === turnId) {
+        this.selectModel(model);
+        this.notifyStateListeners();
+      }
       return;
     }
     if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
@@ -4085,6 +4108,7 @@ export class CodexAppServerHost implements EngineHost {
       this.cancelledVoiceTurns.delete(turnId);
       if (reconcileBufferedLifecycle) this.bufferedActiveTurnId = turnId;
       this.activeTurnId = turnId;
+      this.selectModel(this.currentImageModel());
       this.emit({ kind: "turn-started", turnId });
       return;
     }

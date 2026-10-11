@@ -112,7 +112,7 @@ test("negotiates provider and per-model capabilities independently of userAgent"
     await expect(host.send({ id: "text-image", text: "inspect", images: [image], runtime: { model: "text-model" } })).rejects.toThrow("does not advertise image input");
     expect(await host.send({ id: "switched-image", text: "inspect", images: [image], runtime: { model: "image-model" } })).toMatchObject({ outcome: "turn-started" });
     expect(await host.send({ id: "inherited-image", text: "inspect again", images: [image], expectedTurnId: "turn-1" })).toMatchObject({ outcome: "steered" });
-    server.notify("model/rerouted", { threadId: "capability-receipt", turnId: "turn-1", fromModel: "image-model", toModel: "text-model", reason: "provider selection" });
+    server.notify("model/rerouted", { threadId: "capability-receipt", turnId: "turn-1", fromModel: "image-model", toModel: "text-model", reason: "highRiskCyberActivity" });
     await expect(host.send({ id: "steer-cannot-switch-model", text: "inspect", images: [image], expectedTurnId: "turn-1", runtime: { model: "image-model" } })).rejects.toThrow("does not advertise image input");
   } finally { await host.release(); }
 });
@@ -129,6 +129,60 @@ test("quarantines unknown notifications and late responses without killing a hea
     server.request("future-request", "future/requestApproval", {});
     const attention = (await host.health()).pendingAttention[0]!;
     await expect(host.answer(attention, {})).rejects.toThrow("raw answers are disabled");
+  } finally { await host.release(); }
+});
+
+function modelNegotiationServer(threadId: string, defaultModel = "text-model") {
+  const server = new FakeAppServer(threadId);
+  server.modelList = ["text-model", "image-model"].map(id => ({ id, model: id, isDefault: id === defaultModel, inputModalities: id === "image-model" ? ["text", "image"] : ["text"] }));
+  return server;
+}
+const MODEL_NEGOTIATION_IMAGE = { sha256: "a".repeat(64), mime: "image/png" as const, bytes: 67 };
+
+test("model negotiation preserves a reroute received before the turn-start reply", async () => {
+  const threadId = "early-model-route";
+  const server = modelNegotiationServer(threadId);
+  server.beforeTurnStartReply = turnId => server.notify("model/rerouted", { threadId, turnId, fromModel: "image-model", toModel: "text-model", reason: "highRiskCyberActivity" });
+  const host = await CodexAppServerHost.start({ cwd: "/repo", model: "text-model", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server), resolveImagePath: () => "/runtime-images/image.png" });
+  try {
+    await host.send({ id: "first", text: "inspect", images: [MODEL_NEGOTIATION_IMAGE], runtime: { model: "image-model" } });
+    await expect(host.send({ id: "second", text: "inspect again", images: [MODEL_NEGOTIATION_IMAGE], expectedTurnId: "turn-1" })).rejects.toThrow("does not advertise image input");
+  } finally { await host.release(); }
+});
+
+test("model negotiation retains the protocol's model override for subsequent turns", async () => {
+  const threadId = "default-model-route";
+  const server = modelNegotiationServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", model: "text-model", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server), resolveImagePath: () => "/runtime-images/image.png" });
+  try {
+    await host.send({ id: "first", text: "inspect", runtime: { model: "image-model" } });
+    server.notify("turn/completed", { threadId, turn: { id: "turn-1", status: "completed" } });
+    await expect(host.send({ id: "default-image", text: "inspect again", images: [MODEL_NEGOTIATION_IMAGE] })).resolves.toMatchObject({ outcome: "turn-started" });
+  } finally { await host.release(); }
+});
+
+for (const resumed of [false, true]) test(`model negotiation uses the ${resumed ? "resumed" : "new"} thread's selected-model receipt`, async () => {
+  const threadId = "thread-model-receipt";
+  const server = modelNegotiationServer(threadId, "image-model");
+  server.threadModel = "text-model";
+  const options = { cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server), resolveImagePath: () => "/runtime-images/image.png" };
+  const host = resumed ? await CodexAppServerHost.adopt(threadId, options) : await CodexAppServerHost.start(options);
+  try {
+    expect((await host.health()).activeFlags).not.toContain("structured-image-v1");
+    await expect(host.send({ id: "image", text: "inspect", images: [MODEL_NEGOTIATION_IMAGE] })).rejects.toThrow("does not advertise image input");
+  } finally { await host.release(); }
+});
+
+test("model negotiation ignores a completed turn's late reroute during a newer turn", async () => {
+  const threadId = "late-model-route";
+  const server = modelNegotiationServer(threadId, "image-model");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", model: "image-model", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server), resolveImagePath: () => "/runtime-images/image.png" });
+  try {
+    await host.send({ id: "first", text: "inspect" });
+    server.notify("turn/completed", { threadId, turn: { id: "turn-1", status: "completed" } });
+    await host.send({ id: "second", text: "inspect again" });
+    server.notify("model/rerouted", { threadId, turnId: "turn-1", fromModel: "image-model", toModel: "text-model", reason: "highRiskCyberActivity" });
+    await expect(host.send({ id: "current-image", text: "inspect", images: [MODEL_NEGOTIATION_IMAGE], expectedTurnId: "turn-2" })).resolves.toMatchObject({ outcome: "steered" });
   } finally { await host.release(); }
 });
 
@@ -405,6 +459,8 @@ class FakeAppServer extends EventEmitter {
   };
   modelList: unknown[] = [{ id: "gpt-5.3-codex-spark", isDefault: true, inputModalities: ["text"] }];
   modelListFailuresRemaining = 0;
+  threadModel: string | null = null;
+  beforeTurnStartReply: ((turnId: string) => void) | null = null;
   realtimeStartError: string | null = null;
   realtimeStartDelayMs: number | null = null;
   suppressRealtimeStartNotifications = false;
@@ -534,6 +590,7 @@ class FakeAppServer extends EventEmitter {
         }
       }
       return this.respond(message.id, {
+        ...(this.threadModel ? { model: this.threadModel } : {}),
         thread: {
           id,
           ...(!this.omitThreadPath ? { path: this.threadPath ?? `/sessions/${id}.jsonl` } : {}),
@@ -588,6 +645,7 @@ class FakeAppServer extends EventEmitter {
     }
     if (method === "turn/start") {
       const turnId = `turn-${++this.turn}`;
+      this.beforeTurnStartReply?.(turnId);
       if (this.oversizedTurnStartResult) {
         return this.respond(message.id, { turn: { id: turnId }, padding: "p".repeat(26 * 1024 * 1024) });
       }

@@ -13,6 +13,16 @@ describe.each(["0.154.0", "0.159.0", "0.162.1"])("pinned Codex %s", version => {
     const manifest = JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8"));
     for (const name of ["stable", "experimental"]) expect(createHash("sha256").update(fs.readFileSync(path.join(directory, `${name}.json`))).digest("hex")).toBe(manifest.sha256[name]);
   });
+  test("model selection receipts and reroutes expose the fields the host consumes", () => {
+    const schema = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "protocol", version, "experimental.json"), "utf8"));
+    for (const [name, fields] of [
+      ["ThreadStartResponse", ["model"]],
+      ["ThreadResumeResponse", ["model"]],
+      ["ModelReroutedNotification", ["threadId", "turnId", "toModel"]],
+    ] as const) {
+      for (const field of fields) expect(schema.definitions.v2[name].properties, `${name}.${field}`).toHaveProperty(field);
+    }
+  });
   test("missing methods and fields fail with method, path and version", () => {
     expect(() => protocol.assertRequest("thread/invented", {})).toThrow(`CLI ${version} thread/invented method`);
     expect(() => protocol.assertRequest("turn/interrupt", { threadId: "thread", turnId: "turn", inventedField: true })).toThrow(`CLI ${version} turn/interrupt params.inventedField`);
