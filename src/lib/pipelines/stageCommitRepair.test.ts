@@ -10,7 +10,7 @@ import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
 /* Isolated state only: this suite drives the production pipeline controller
    over a store of its own and must never read or write the operator's. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-commit-repair-"));
-const { createPipelineFromRequest, defaultPipelinePorts, tickPipelines } = await import("./engine");
+const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");
 const { commitPipelineStage } = await import("./git");
 const { findPipelineRecord, loadPipelines, pipelineArtifactsDir, savePipelines } = await import("./store");
 const { pipelineCorpus } = await import("./fixtures/corpus");
@@ -100,6 +100,64 @@ function writeOutput(repo: string, relative: string, content: string) {
   fs.mkdirSync(path.dirname(path.join(repo, relative)), { recursive: true });
   fs.writeFileSync(path.join(repo, relative), content);
 }
+
+test.each(["installed", "fixed-on-retry"] as const)("settlement finds the %s parent toolchain for a read-only TypeScript output in a worktree without node_modules", async (toolchain) => {
+  const box = hookedRepo();
+  try {
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), "node_modules\n");
+    fs.mkdirSync(path.join(box.repo, "scripts"));
+    fs.writeFileSync(path.join(box.repo, "scripts/lint.ts"), 'import { ESLint } from "eslint";\nconst results = await new ESLint().lintFiles(["evidence/draft/output.ts"]);\nif (results.some(result => result.errorCount)) process.exit(1);\n');
+    fs.copyFileSync(path.resolve("eslint.config.mjs"), path.join(box.repo, "eslint.config.mjs"));
+    box.run("add", ".");
+    box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "toolchain configuration");
+    if (toolchain === "installed") fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
+    const worktree = path.join(box.root, "lane");
+    box.run("worktree", "add", "-b", "lane", worktree);
+    box.subject.worktreeDir = worktree;
+    box.subject.lastPassedCommit = box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, ".git/hooks/pre-commit"), `#!/bin/sh\necho 'pre-commit: eslint' >&2\n'${process.execPath}' --no-install scripts/lint.ts || exit $?\necho checked >> '${path.join(box.repo, ".git/hook-checks")}'\n`, { mode: 0o755 });
+    writeOutput(worktree, "evidence/draft/output.ts", "export const value = 1;\n");
+    expect(fs.existsSync(path.join(worktree, "node_modules"))).toBe(false);
+    if (toolchain === "fixed-on-retry") {
+      const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
+      expect(refused).toMatchObject({ ok: false, error: expect.stringContaining("pre-commit: eslint"), commitRefusal: { paths: ["evidence/draft/output.ts"] } });
+      if (refused.ok) throw new Error("unreachable");
+      expect(fs.readFileSync(path.join(worktree, "evidence/draft/output.ts"), "utf8")).toBe("export const value = 1;\n");
+      fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
+    }
+    const committed = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
+    expect(committed.ok).toBe(true);
+    const head = await box.exec("git", ["show", "--format=", "--name-only", "HEAD"], worktree);
+    expect(head.stdout.trim()).toBe("evidence/draft/output.ts");
+    expect(fs.readFileSync(path.join(box.repo, ".git/hook-checks"), "utf8")).toBe("checked\n");
+    expect(box.calls.join("\n")).not.toContain("--no-verify");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["local", "dangling", "unignored", "directory-ignore"] as const)("settlement preserves %s dependency paths and commits only declared outputs", async (mode) => {
+  const box = hookedRepo();
+  try {
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), mode === "unignored" ? "" : mode === "directory-ignore" ? "node_modules/\n" : "node_modules\n");
+    box.run("add", ".gitignore");
+    box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "dependency ignore");
+    fs.mkdirSync(path.join(box.repo, "node_modules"));
+    const worktree = path.join(box.root, "lane");
+    box.run("worktree", "add", "-b", "lane", worktree);
+    box.subject.worktreeDir = worktree;
+    box.subject.lastPassedCommit = box.run("rev-parse", "HEAD");
+    const local = path.join(worktree, "node_modules");
+    if (mode === "local") {
+      fs.mkdirSync(local);
+      fs.writeFileSync(path.join(local, "owned.txt"), "local install\n");
+    } else if (mode === "dangling") fs.symlinkSync("missing-install", local, "dir");
+    writeOutput(worktree, "evidence/draft/output.ts", "export const value = 1;\n");
+    expect((await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit)).ok).toBe(true);
+    expect((await box.exec("git", ["show", "--format=", "--name-only", "HEAD"], worktree)).stdout.trim()).toBe("evidence/draft/output.ts");
+    if (mode === "local") expect(fs.readFileSync(path.join(local, "owned.txt"), "utf8")).toBe("local install\n");
+    else if (mode === "dangling") expect(fs.readlinkSync(local)).toBe("missing-install");
+    else expect(fs.existsSync(local)).toBe(false);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 test("a hook that refuses a read-only stage's declared output hands back its files, and the repaired output commits through the same hook", async () => {
   const box = hookedRepo();
@@ -353,6 +411,92 @@ const refusal = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr }
 const BLOCKED_REASON = "the hook's own tooling failed; no edit to my files answers it";
 const BLOCKED = `My files cannot answer this refusal.\n\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: BLOCKED_REASON })}\n\`\`\``;
 const study = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
+
+test.each(["read-only", "read-write"] as const)("retry-stage retries a refused %s settlement after tooling is fixed without rerunning the passed agent", async (access) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  h.hookAnswers(refusal("pre-commit: eslint\neslint: Cannot find module 'eslint/package.json'"));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(TICK_MS);
+  h.endTurn(BLOCKED);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.stateDetail).toContain("pre-commit: eslint");
+  expect(parked.stateDetail).toContain("retry-stage");
+  expect(study().error).toBe(parked.stateDetail);
+  const launches = h.spawnCount();
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(study().state).toBe("passed");
+  expect(study().verdict?.status).toBe("pass");
+  expect(loadPipelines()[0]!.lastPassedCommit).toBe(STAGE_HEAD);
+  expect(h.spawnCount()).toBe(launches);
+  expect(h.requests).toHaveLength(1);
+  expect(h.calls.filter(call => call.startsWith("git commit"))).toHaveLength(2);
+});
+
+test("retry-stage refuses a settlement retry while the repair turn is still busy or queued", async () => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.hookAnswers(refusal("pre-commit: eslint\nmissing toolchain"));
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(REPAIR_WAIT_MS); h.keepWorking();
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  const result = await patchPipeline(parked.id, { action: "retry-stage" }, h.ports);
+  expect(result.error).toContain("repair turn may still be running");
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(h.calls.filter(call => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+  h.endTurn(BLOCKED);
+  h.ports.conversationDeliveryOutstanding = () => true;
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toContain("repair turn may still be running");
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+});
+
+test("a stage without automatic repair retries its refused commit with the same outputs", async () => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.ports.resumeSeveredTurn = undefined;
+  h.hookAnswers(refusal("pre-commit: eslint\nmissing toolchain"));
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(study().commitRepair).toBeUndefined();
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(study().state).toBe("passed");
+  expect(h.requests).toHaveLength(0);
+  expect(h.spawnCount()).toBe(1);
+});
+
+test("a commit retry holds uncertain repair delivery until a later terminal turn proves it finished", async () => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.breakRequest();
+  h.hookAnswers(refusal("pre-commit: eslint\nmissing toolchain"));
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(REPAIR_WAIT_MS);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(study().commitRepair?.sendUncertain).toBe(true);
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toContain("repair turn may still be running");
+  h.advance(TICK_MS); h.endTurn("The repair turn finished.");
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(study().state).toBe("passed");
+  expect(h.spawnCount()).toBe(1);
+});
 
 test.each(["blocked", "deadline"] as const)("a rejected %s repair replays as parked after a crash at its settled checkpoint", async (kind) => {
   const h = harness();

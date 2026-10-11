@@ -612,6 +612,25 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
+/** Settlement runs after the agent's turn, including read-only turns which
+    never installed dependencies. Share the parent checkout's installed tools
+    only through an absent, ignored node_modules; preserve any local install
+    or existing link, including a dangling one. */
+async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<void> {
+  if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
+  const local = path.join(pipeline.worktreeDir, "node_modules");
+  try { fs.lstatSync(local); return; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const parent = path.join(pipeline.repoDir, "node_modules");
+  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) return;
+  // A repository that tracks dependencies must never gain a staged symlink.
+  const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules"], pipeline.worktreeDir);
+  if (ignored.code === 1) return;
+  if (ignored.code !== 0) throw new Error(`checking ignored settlement dependencies: ${(ignored.stderr || ignored.stdout).trim()}`);
+  try { fs.symlinkSync(path.resolve(parent), local, "dir"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+}
+
 export async function commitPipelineStage(
   pipeline: Pipeline,
   stageId: string,
@@ -622,6 +641,10 @@ export async function commitPipelineStage(
   receiptFile?: string,
   control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
+  try { await prepareStageToolchain(pipeline, exec); }
+  catch (error) {
+    return { ok: false, error: `committing the passed stage: preparing repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
+  }
   const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const initialHead = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
