@@ -34,9 +34,11 @@ export function cpuWaitElapsed(dir: string, now = Date.now()): number {
   for (const [start, stop] of intervals) { total += Math.max(0, stop - Math.max(start, end)); end = Math.max(end, stop); }
   return total;
 }
+/** The nearest plan owns this deadline; older sibling waits are not credited
+ * to a fresh invocation. Every ancestor receives its own interval markers. */
 export function cpuInheritedWaitMs(env = process.env): number {
   const directories = roots(env);
-  return directories.length ? cpuWaitElapsed(directories[0]!) : 0;
+  return directories.length ? cpuWaitElapsed(directories.at(-1)!) : 0;
 }
 /** Heartbeats end stale intervals even if a waiting process is hard-killed. */
 export function reportCpuWait(env = process.env) {

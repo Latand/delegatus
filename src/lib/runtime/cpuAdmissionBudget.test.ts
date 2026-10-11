@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
-import { cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
+import { cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
 import { realExec } from "../workflows/provision";
 
 test("parallel waits count their union; ended waits still extend the next check", () => {
@@ -11,6 +11,10 @@ test("parallel waits count their union; ended waits still extend the next check"
     fs.writeFileSync(`${dir}/two.json`, JSON.stringify({ start: 200, end: 400 }));
     fs.writeFileSync(`${dir}/three.json`, JSON.stringify({ start: 450, end: 500 }));
     expect(cpuWaitElapsed(dir, 500)).toBe(350);
+    const nested = cpuWaitBudget(budget.env);
+    try { expect(cpuInheritedWaitMs(nested.env)).toBe(0); }
+    finally { nested.close(); }
+    expect(cpuInheritedWaitMs(budget.env)).toBe(350);
   } finally { budget.close(); }
 });
 

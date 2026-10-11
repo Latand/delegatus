@@ -39,14 +39,15 @@ test("persistent high pressure admits the ten-minute head, then one at a time in
 test("a restarted Viewer preserves timestamps and order alongside command tickets", () => {
   const f = fixture(), q = f.open();
   q.check("stage:one", false);
-  f.at(10_000); q.check("stage:two", false);
+  f.at(10_000); q.check("command:two", false, captureProcessIdentity(process.pid));
+  q.close(); queues.splice(queues.indexOf(q), 1);
   const restarted = f.open();
   f.at(CPU_QUEUE_MAX_WAIT_MS);
-  expect(restarted.check("stage:two", false)).toMatchObject({ since: 10_000, position: 2 });
+  expect(restarted.check("command:two", false)).toMatchObject({ since: 10_000, position: 2 });
   expect(restarted.check("stage:one", false)).toBeNull();
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
-  expect(restarted.check("stage:two", true)).toBeNull();
-  expect(q.check("stage:three", true)).not.toBeNull(); // spacing survives reopening too
+  expect(restarted.check("command:two", true)).toBeNull();
+  expect(f.open().check("stage:three", true)).not.toBeNull(); // spacing survives reopening too
 });
 
 test("a stage and a heavy check share FIFO, even when pressure is low or sampling failed", () => {

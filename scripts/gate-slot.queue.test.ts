@@ -73,5 +73,5 @@ test("the owned runner keeps a nested queue wait outside its execution deadline"
     const result = await pending;
     expect(result.code, result.stderr).toBe(0);
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("nested\n");
-  } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await pending?.catch(() => {}); f.close(); }
+  } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await Promise.resolve(pending).catch(() => {}); f.close(); }
 }, 20_000);

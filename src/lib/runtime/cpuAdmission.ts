@@ -25,7 +25,8 @@ export class CpuAdmissionQueue {
   private readonly db: Database;
   constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+    const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+    if (!sqlite?.Database) throw new Error("CPU admission requires the supported Bun runtime");
     this.db = new sqlite.Database(file, { create: true });
     fs.chmodSync(file, 0o600);
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");

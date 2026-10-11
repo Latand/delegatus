@@ -261,9 +261,12 @@ export async function codexFixture(root: string, cache: string, version: string,
 /** Brings origin/main up to date unless the deadline comes first; planning
     then uses the origin/main already present. */
 export async function fetchMain(root: string, until: number): Promise<"fetched" | "failed" | "stopped"> {
-  const outcome = await execute(["git", "fetch", "origin", "main", "--quiet"], root, process.env, until, null);
-  if (outcome.leaked) throw new ContainmentFailed("fetching origin/main", outcome.leaked);
-  return outcome.stopped ? "stopped" : outcome.code === 0 ? "fetched" : "failed";
+  const budget = cpuWaitBudget(process.env);
+  try {
+    const outcome = await execute(["git", "fetch", "origin", "main", "--quiet"], root, budget.env, until, null);
+    if (outcome.leaked) throw new ContainmentFailed("fetching origin/main", outcome.leaked);
+    return outcome.stopped ? "stopped" : outcome.code === 0 ? "fetched" : "failed";
+  } finally { budget.close(); }
 }
 
 export interface PushDeadline { at: number; startedAt: number }
