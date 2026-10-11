@@ -278,10 +278,10 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
 }
 
 /** The card's agent-facing details, or undefined for a kind that keeps its
-    `monitor-ref:` line in the text. An automatic rotation's card is read by the
-    operator as a title and one sentence; its ids, figures and marker go here. */
+    `monitor-ref:` line in the text. Rotation and host-recovery cards are read by
+    the operator as a title and one sentence; their records and markers go here. */
 function cardDetails(card: SeatTickCard): string | undefined {
-  if (card.kind !== "auto-rotation") return undefined;
+  if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return undefined;
   const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
   return card.record ? `${redactBounded(card.record, CARD_TEXT_LIMIT)}\n\n${marker}` : marker;
 }

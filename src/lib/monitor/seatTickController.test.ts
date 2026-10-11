@@ -870,6 +870,62 @@ test("a failed revival notice stays owed across controller restart until the boa
   expect(rotations).toBe(1);
 });
 
+test("a pending recovery after restart updates one production card before recording the failure as told", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "recovery-board-"));
+  try {
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { seatHostRecoveryKey } = await import("./seatHostRecovery");
+    const stateFile = statePath("seat-tick.json");
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, accounting: undefined,
+      hostRecovery: { id: seatHostRecoveryKey(PROJECT, 7, CONVERSATION), conversationId: CONVERSATION,
+        seatEpoch: 7, at: new Date(NOW - MINUTE).toISOString(), state: "pending", detail: "resume did not publish", told: false },
+    }, stateFile);
+    const cards = () => loadTasks(statePath("tasks.json")).filter(task =>
+      task.project === PROJECT && task.text.startsWith("Відновлення оркестратора"));
+    let rotations = 0;
+    let pendingCards: ReturnType<typeof cards> = [];
+    const toldCards: ReturnType<typeof cards>[] = [];
+    const check = async () => {
+      const rig = harness({ pipelines: OPEN_LANE, stateFile,
+        seatActivity: { conversationId: CONVERSATION, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled" },
+        delivery: { ok: false, outcome: "failed", status: 503, error: "resume did not publish", code: "structured_revival_impossible" },
+      });
+      const writeState = rig.deps.writeState!;
+      await runSeatTickCheck(PROJECT, { ...rig.deps, ensureCard: undefined,
+        mcpHealth: () => ({ status: "dead", detail: "old MCP absent" }),
+        writeState: (project, row) => {
+          if (row.hostRecovery?.state === "failed" && row.hostRecovery.told) toldCards.push(cards());
+          writeState(project, row);
+        },
+        seatRecovery: { rotate: async () => {
+          rotations += 1;
+          pendingCards = cards();
+          return { status: 503, body: { error: "replacement unavailable" } };
+        } },
+      });
+    };
+    await check();
+    expect(pendingCards).toHaveLength(1);
+    expect(pendingCards[0]!.text).toContain("Ротацію розпочато");
+    const terminal = cards();
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]!.id).toBe(pendingCards[0]!.id);
+    expect(terminal[0]!.text).toContain("Відновлення та ротація не вдалися");
+    expect(terminal[0]!.details).toContain(`${new Date(NOW).toISOString()}: failed; replacement unavailable`);
+    expect(terminal[0]!.details).toContain("monitor-ref: seat-host-recovery-");
+    expect(toldCards.length).toBeGreaterThan(0);
+    for (const snapshot of toldCards) expect(snapshot).toEqual(terminal);
+    expect(readSeatTickState(PROJECT, stateFile).hostRecovery).toMatchObject({ state: "failed", told: true });
+    await check();
+    expect(rotations).toBe(1);
+    expect(cards()).toEqual(terminal);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 test("a composer host appearing during fallback fences rotation even with healthy MCP", async () => {
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
     seatActivity: { conversationId: CONVERSATION, lifecycle: "gone", reason: "host_gone_turn_settled", host: { state: "gone", kind: "structured", pid: null } },
