@@ -431,6 +431,16 @@ test("phone access remembered by the setup guide starts the real CLI in tailnet 
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
 });
 
+async function blockingForegroundServe(fixture: { env: NodeJS.ProcessEnv }, stub: ReturnType<typeof createTailscaleStub>) {
+  const script = await readFile(path.join(stub.dir, "tailscale"), "utf8");
+  const serve = `await import(${JSON.stringify(pathToFileURL(path.resolve("src/lib/testing/fixtureLifetime.ts")).href)}); require("node:fs").writeFileSync(${JSON.stringify(path.join(fixture.env.LLV_STATE_DIR!, "serve.pid"))}, String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`;
+  await writeFile(path.join(stub.dir, "tailscale"), `#!/bin/sh
+if [ "$1" = "serve" ] && [ "$2" != "status" ]; then
+  exec '${process.execPath.replaceAll("'", "'\\''")}' --eval '${serve.replaceAll("'", "'\\''")}'
+fi
+${script.slice(script.indexOf("\n") + 1)}`, { mode: 0o755 });
+}
+
 test.each(["remembered", "foreground"] as const)("a tailnet banner failure ends the CLI's own processes: %s", async (mode) => {
   const fixture = await checkoutFixture({ failQr: true });
   await mkdir(fixture.env.TMPDIR!, { recursive: true });
@@ -441,13 +451,7 @@ test.each(["remembered", "foreground"] as const)("a tailnet banner failure ends 
     await mkdir(config, { recursive: true });
     await writeFile(path.join(config, "phone-access"), "tailscale\n");
   } else {
-    const script = await readFile(path.join(stub.dir, "tailscale"), "utf8");
-    const serve = `await import(${JSON.stringify(pathToFileURL(path.resolve("src/lib/testing/fixtureLifetime.ts")).href)}); require("node:fs").writeFileSync(${JSON.stringify(path.join(state, "serve.pid"))}, String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`;
-    await writeFile(path.join(stub.dir, "tailscale"), `#!/bin/sh
-if [ "$1" = "serve" ] && [ "$2" != "status" ]; then
-  exec '${process.execPath.replaceAll("'", "'\\''")}' --eval '${serve.replaceAll("'", "'\\''")}'
-fi
-${script.slice(script.indexOf("\n") + 1)}`, { mode: 0o755 });
+    await blockingForegroundServe(fixture, stub);
   }
   const port = await availablePort();
   const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port), ...(mode === "foreground" ? ["--tailscale"] : [])], {
@@ -483,6 +487,74 @@ ${script.slice(script.indexOf("\n") + 1)}`, { mode: 0o755 });
     expect(await probe("127.0.0.1", port)).toBe(0);
   } finally {
     // The red run must reap only the PIDs this fixture recorded before failing.
+    await stopFixtureProcess(child);
+    await Promise.all(owned.map(identity => stopFixtureIdentity(identity)));
+  }
+}, 30_000);
+
+test("a Viewer exit during the startup bind check awaits all owned processes and preserves its status", async () => {
+  const fixture = await checkoutFixture();
+  const root = path.dirname(path.dirname(fixture.cli));
+  const state = fixture.env.LLV_STATE_DIR!;
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  await blockingForegroundServe(fixture, stub);
+  const realRuntime = JSON.stringify(pathToFileURL(path.resolve("bin/server-runtime.mjs")).href);
+  const identityModule = JSON.stringify(pathToFileURL(path.resolve("src/lib/processIdentity.ts")).href);
+  await writeFile(path.join(root, "bin", "server-runtime.mjs"), `
+export * from ${realRuntime};
+import { readNonLoopbackBindState as read } from ${realRuntime};
+import { captureProcessIdentity, processIdentityStatus } from ${identityModule};
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const state = process.env.LLV_STATE_DIR;
+let calls = 0;
+export async function readNonLoopbackBindState(port) {
+  if (++calls === 2) {
+    const web = captureProcessIdentity(Number(readFileSync(join(state, "web.pid"), "utf8")));
+    writeFileSync(join(state, "bind-ready"), "ready");
+    while (processIdentityStatus(web) === "alive") await new Promise(resolve => setTimeout(resolve, 10));
+    // Give the launcher's exit event time to start its slow serve cleanup.
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return read(port);
+}
+`);
+  await writeFile(path.join(root, "node_modules", ".bin", "next"), `${await readFile(path.join(root, "node_modules", ".bin", "next"), "utf8")}
+import { existsSync } from "node:fs";
+setInterval(() => { if (existsSync(join(process.env.LLV_STATE_DIR, "bind-exit"))) process.exit(7); }, 10);
+`);
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port), "--tailscale"], {
+    cwd: root,
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  const owned: ProcessIdentity[] = [];
+  try {
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      try {
+        await readFile(path.join(state, "bind-ready"));
+        const pids = await Promise.all(["web", "runtime", "serve"].map(async name => Number(await readFile(path.join(state, `${name}.pid`), "utf8"))));
+        for (const pid of pids) {
+          expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+          owned.push(captureProcessIdentity(pid));
+        }
+        break;
+      } catch (error) {
+        if (Date.now() >= deadline) throw new Error(`fixture did not reach its bind barrier: ${String(error)}\n${output.text()}`);
+        await Bun.sleep(25);
+      }
+    }
+    expect(owned.every(identity => processIdentityStatus(identity) === "alive")).toBe(true);
+    await writeFile(path.join(state, "bind-exit"), "exit");
+    expect(await waitForExit(child, 10_000)).toBe(7);
+    expect(owned.map(identity => processIdentityStatus(identity))).toEqual(["dead", "dead", "dead"]);
+    expect(await probe("127.0.0.1", port)).toBe(0);
+  } finally {
     await stopFixtureProcess(child);
     await Promise.all(owned.map(identity => stopFixtureIdentity(identity)));
   }

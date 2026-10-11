@@ -1274,6 +1274,7 @@ async function main() {
     serverProcess.child.signalCode !== null
   ) {
     if (relaunch.hasTrial()) throw new Error("The replacement Viewer exited as it became ready.");
+    await stopStartedProcesses();
     process.exit(serverProcess.state.sawAddressInUse ? 1 : (serverProcess.child.exitCode ?? 1));
   }
   record.set("web", { state: "healthy", error: null });
