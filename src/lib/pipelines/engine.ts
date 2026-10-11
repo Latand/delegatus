@@ -6,6 +6,8 @@ import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { machineCpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
+import { stateDir } from "@/lib/configDir";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -280,8 +282,9 @@ export interface PipelinePorts {
       receipt. An unavailable read never proves that a prompt was absent. */
   unpublishedLaunchRetrySafe?(launchId: string): Promise<boolean>;
   drainHold?(): DrainLease | null;
-  /** A held stage start waits for CPU pressure to fall; null admits. */
-  cpuPressureHold?(): CpuPressureHold | null;
+  /** A held stage start waits in the shared bounded CPU queue; null admits. */
+  cpuPressureHold?(key?: string): CpuPressureHold | null;
+  cpuAdmissionReconcile?(): void;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -1387,7 +1390,17 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
-    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
+    cpuPressureHold: (key) => {
+      const gate = machineCpuPressureGate();
+      if (!gate) return null;
+      return gate.check(key);
+    },
+    cpuAdmissionReconcile: () => {
+      const waiting = machineCpuPressureGate()
+        ? loadPipelines().filter(p => p.state === "running" && p.cursor && ["pending", "spawning"].includes(p.cursor.state)).map(cpuStageKey)
+        : [];
+      machineCpuAdmissionQueue().reconcile(cpuStagePrefix(), new Set(waiting));
+    },
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
@@ -6053,7 +6066,7 @@ function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () =
   if (pipeline.stateDetail?.startsWith("held for the automatic update to ")) { pipeline.stateDetail = null; persist(); }
   // Heavy work yields to production under CPU pressure. Only a fresh stage
   // start asks; recovery and reconciliation of launched work never do.
-  const pressure = ports.cpuPressureHold?.();
+  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline));
   if (pressure) {
     const detail = cpuPressureHoldDetail(pressure);
     if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
@@ -6062,6 +6075,13 @@ function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () =
   }
   if (heldForCpuPressure(pipeline)) { pipeline.stateDetail = null; persist(); }
   return false;
+}
+
+function cpuStagePrefix(): string {
+  return `stage:${crypto.createHash("sha256").update(stateDir()).digest("hex")}:`;
+}
+function cpuStageKey(pipeline: Pipeline): string {
+  return `${cpuStagePrefix()}${pipeline.id}:${pipeline.cursor?.stageId ?? "start"}:${pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.n ?? 1 : 1}`;
 }
 
 function heldForCpuPressure(pipeline: Pipeline): boolean {
@@ -9398,6 +9418,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   let followUp = false;
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
+    ports.cpuAdmissionReconcile?.();
     const requested = loadPipelines().filter((pipeline) => !pipeline.delivery && pipeline.publicationAdmission?.state === "pending");
     const legacy = [...new Map([...requested, ...unclaimedPipelinePublications()].map((pipeline) => [pipeline.id, pipeline])).values()].slice(0, 16);
     for (const pipeline of legacy) await admitExistingPipelineDelivery(pipeline, ports);

@@ -3,6 +3,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, 
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
+import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -229,8 +230,8 @@ export function pinnedBunVersion(dockerfile: string): string {
   if (pins.size !== 1) throw new Error("Dockerfile must carry exactly one Bun pin");
   return [...pins][0]!;
 }
-/** A cold cache installs under machine admission, which can hold it for as
-    long as the machine is busy: the install ends by the push deadline too. */
+/** A cold cache installs under machine admission; its queue wait extends
+    the execution deadline, while cancellation still stops the installer. */
 async function install(command: string[], root: string, env: NodeJS.ProcessEnv, until: number, cancel?: AbortSignal): Promise<void> {
   const outcome = await execute(command, root, env, until, undefined, cancel);
   if (outcome.leaked) throw new ContainmentFailed(`installing ${command.at(-1)}`, outcome.leaked, outcome.cancelled);
@@ -436,14 +437,15 @@ interface Outcome { code: number | null; stopped: boolean; ranMs: number | null;
     it. `cancel` stops the step at once, as the deadline would. */
 async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, until: number, log?: string | null, cancel?: AbortSignal): Promise<Outcome> {
   if (cancel?.aborted) return { code: null, stopped: true, ranMs: null, cancelled: true };
-  if (until <= Date.now()) return { code: null, stopped: true, ranMs: null };
+  if (until + cpuInheritedWaitMs(env) <= Date.now()) return { code: null, stopped: true, ranMs: null };
   const started = Date.now();
   const fd = log ? openSync(log, "w") : undefined;
   const token = `${process.pid}-${started}-${Math.random().toString(36).slice(2)}`;
-  let stopping = false, cancelled = false, timer: ReturnType<typeof setTimeout> | undefined, onCancel: (() => void) | undefined;
+  let stopping = false, cancelled = false, stopTimer: (() => void) | undefined, onCancel: (() => void) | undefined;
+  const budget = cpuWaitBudget(env);
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
-    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...env, [STEP_TOKEN]: token }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
     let stopped!: (leaked: string | null) => void;
     const stop = new Promise<string | null>(resolve => { stopped = resolve; });
     // A child that already exited keeps nothing to stop, and its PID may be reused.
@@ -452,7 +454,10 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
       stopping = true; cancelled = byCancel;
       void stopStep(child.pid, token).then(stopped);
     };
-    if (Number.isFinite(until)) timer = setTimeout(() => halt(false), Math.max(0, until - Date.now()));
+    if (Number.isFinite(until)) {
+      const initialWait = cpuInheritedWaitMs(env);
+      stopTimer = cpuBudgetTimer(Math.max(0, until + initialWait - Date.now()), () => Math.max(budget.elapsed(), cpuInheritedWaitMs(env) - initialWait), () => halt(false));
+    }
     if (cancel) cancel.addEventListener("abort", onCancel = () => halt(true), { once: true });
     // The stop's own answer is bounded; the child's exit is not when it refuses
     // the signal, so whichever comes first ends the wait.
@@ -464,7 +469,7 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
     else await child.exited;
     return { code: null, stopped: true, ranMs: Date.now() - started, ...(leaked ? { leaked } : {}), ...(cancelled ? { cancelled } : {}) };
   } finally {
-    if (timer) clearTimeout(timer);
+    stopTimer?.(); budget.close();
     if (onCancel) cancel!.removeEventListener("abort", onCancel);
     if (fd !== undefined) closeSync(fd);
   }
@@ -473,10 +478,10 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
 export interface Prepared { command: string[]; env: NodeJS.ProcessEnv }
 /** Prepares a step without running it past `until`; an installation the
     deadline stops is reported as a step that was being prepared. */
-async function prepared(prepare: RunOptions["prepare"], step: Step, until: number, cancel?: AbortSignal): Promise<Prepared | Outcome> {
+async function prepared(prepare: RunOptions["prepare"], step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env): Promise<Prepared | Outcome> {
   if (cancel?.aborted) return { code: null, stopped: true, ranMs: null, cancelled: true };
-  if (until <= Date.now()) return { code: null, stopped: true, ranMs: null };
-  try { return await prepare(step, until, cancel); }
+  if (until + cpuInheritedWaitMs(waitEnv) <= Date.now()) return { code: null, stopped: true, ranMs: null };
+  try { return await prepare(step, until, cancel, waitEnv); }
   catch (error) {
     if (error instanceof StoppedPreparing) return { code: null, stopped: true, ranMs: error.ranMs, preparing: true, ...(cancel?.aborted ? { cancelled: true } : {}) };
     throw error;
@@ -487,7 +492,7 @@ interface RunOptions {
   root: string; deadline: PushDeadline | null; logDir: string; say?: (line: string) => void; ref?: string;
   /** Anything it waits on ends by `until`, or at once on `cancel`, through the
       installers above. */
-  prepare: (step: Step, until: number, cancel?: AbortSignal) => Prepared | Promise<Prepared>;
+  prepare: (step: Step, until: number, cancel?: AbortSignal, waitEnv?: NodeJS.ProcessEnv) => Prepared | Promise<Prepared>;
 }
 /** Runs the plan in order. A group runs at once and is reported once all of
     it has settled. Resolves with the checks left to the hosted job. A member's
@@ -497,77 +502,81 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
   const { root, deadline, logDir, prepare } = options;
   const say = options.say ?? ((line: string) => console.error(line));
   const deferred: string[] = [];
-  // A stopped step is deferred when the hosted job also runs it, and is a
-  // missing verdict otherwise.
-  const until = deadline?.at ?? Infinity;
-  const settle = (step: Step, outcome: Outcome) => {
-    if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked);
-    if (!outcome.stopped || !deadline) return outcome.code === 0;
-    if (!step.deferrable) throw new NoVerdict(step, deadline, outcome);
-    say(deferredLine(mode, step, deadline, outcome, options.ref));
-    deferred.push(step.name);
-    return true;
-  };
-  for (let index = 0; index < steps.length;) {
-    const step = steps[index]!;
-    let end = index + 1;
-    if (step.group) while (end < steps.length && steps[end]!.group === step.group) end++;
-    const group = steps.slice(index, end);
-    index = end;
-    say(`${mode}: ${step.group ?? step.name}`);
-    if (!step.group) {
-      const ready = await prepared(prepare, step, until);
-      const outcome = isOutcome(ready) ? ready : await execute(ready.command, root, ready.env, until);
-      if (!settle(step, outcome)) throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
-      continue;
-    }
-    // Grouped steps take their machine admission together and wait for none
-    // of each other; each writes its own log, shown when it failed.
-    const members = group.map(member => ({ member, log: path.join(logDir, `${member.name.replace(/[^\w.-]+/g, "-")}.log`) }));
-    // A member that cannot be prepared or started stops the rest of its group,
-    // and the group is reported once every member has settled: nothing a
-    // member started may outlive the hook unreported.
-    const cancel = new AbortController(), errors = new Map<number, unknown>();
-    const outcomes = await Promise.all(members.map(async ({ member, log }, at) => {
-      try {
-        const ready = await prepared(prepare, member, until, cancel.signal);
-        return isOutcome(ready) ? ready : await execute(ready.command, root, ready.env, until, log, cancel.signal);
-      } catch (error) { errors.set(at, error); cancel.abort(); return null; }
-    }));
-    if (errors.size) {
-      const [first, error] = [...errors][0]!, culprit = members[first]!.member.name;
-      const reason = error instanceof Error ? error.message : String(error);
-      say(`${mode}: ${culprit}: failed (${reason})`);
-      let leak: ContainmentFailed | undefined;
-      members.forEach(({ member }, at) => {
-        const outcome = outcomes[at], other = errors.get(at);
-        if (at !== first && other instanceof ContainmentFailed) leak ??= other;
-        if (outcome?.leaked) leak ??= new ContainmentFailed(`"${member.name}"`, outcome.leaked, outcome.cancelled);
-        if (outcome?.cancelled) say(`${mode}: ${member.name}: stopped when "${culprit}" failed; nothing was judged`);
+  const budget = cpuWaitBudget(process.env);
+  const withBudget = (env: NodeJS.ProcessEnv) => ({ ...env, LLV_CPU_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS });
+  try {
+    // A stopped step is deferred when the hosted job also runs it, and is a
+    // missing verdict otherwise.
+    const until = deadline?.at ?? Infinity;
+    const settle = (step: Step, outcome: Outcome) => {
+      if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked);
+      if (!outcome.stopped || !deadline) return outcome.code === 0;
+      if (!step.deferrable) throw new NoVerdict(step, deadline, outcome);
+      say(deferredLine(mode, step, deadline, outcome, options.ref));
+      deferred.push(step.name);
+      return true;
+    };
+    for (let index = 0; index < steps.length;) {
+      const step = steps[index]!;
+      let end = index + 1;
+      if (step.group) while (end < steps.length && steps[end]!.group === step.group) end++;
+      const group = steps.slice(index, end);
+      index = end;
+      say(`${mode}: ${step.group ?? step.name}`);
+      if (!step.group) {
+        const ready = await prepared(prepare, step, until, undefined, budget.env);
+        const outcome = isOutcome(ready) ? ready : await execute(ready.command, root, withBudget(ready.env), until);
+        if (!settle(step, outcome)) throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
+        continue;
+      }
+      // Grouped steps take their machine admission together and wait for none
+      // of each other; each writes its own log, shown when it failed.
+      const members = group.map(member => ({ member, log: path.join(logDir, `${member.name.replace(/[^\w.-]+/g, "-")}.log`) }));
+      // A member that cannot be prepared or started stops the rest of its group,
+      // and the group is reported once every member has settled: nothing a
+      // member started may outlive the hook unreported.
+      const cancel = new AbortController(), errors = new Map<number, unknown>();
+      const outcomes = await Promise.all(members.map(async ({ member, log }, at) => {
+        try {
+          const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
+          return isOutcome(ready) ? ready : await execute(ready.command, root, withBudget(ready.env), until, log, cancel.signal);
+        } catch (error) { errors.set(at, error); cancel.abort(); return null; }
+      }));
+      if (errors.size) {
+        const [first, error] = [...errors][0]!, culprit = members[first]!.member.name;
+        const reason = error instanceof Error ? error.message : String(error);
+        say(`${mode}: ${culprit}: failed (${reason})`);
+        let leak: ContainmentFailed | undefined;
+        members.forEach(({ member }, at) => {
+          const outcome = outcomes[at], other = errors.get(at);
+          if (at !== first && other instanceof ContainmentFailed) leak ??= other;
+          if (outcome?.leaked) leak ??= new ContainmentFailed(`"${member.name}"`, outcome.leaked, outcome.cancelled);
+          if (outcome?.cancelled) say(`${mode}: ${member.name}: stopped when "${culprit}" failed; nothing was judged`);
+        });
+        if (leak) throw leak;
+        if (error instanceof ContainmentFailed) throw error;
+        throw new Error(`"${culprit}" failed: ${reason}`);
+      }
+      const failed: string[] = [];
+      let missing: NoVerdict | undefined;
+      members.forEach(({ member, log }, at) => {
+        const outcome = outcomes[at]!;
+        try {
+          if (settle(member, outcome)) {
+            if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(outcome.ranMs ?? 0)}`);
+            return;
+          }
+        } catch (error) { if (error instanceof NoVerdict) { missing ??= error; return; } throw error; }
+        failed.push(member.name);
+        if (existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
+        say(`${mode}: ${member.name}: failed (${outcome.code}) after ${seconds(outcome.ranMs ?? 0)}`);
       });
-      if (leak) throw leak;
-      if (error instanceof ContainmentFailed) throw error;
-      throw new Error(`"${culprit}" failed: ${reason}`);
+      if (failed.length) throw new Error(`${failed.join(", ")} failed`);
+      if (missing) throw missing;
     }
-    const failed: string[] = [];
-    let missing: NoVerdict | undefined;
-    members.forEach(({ member, log }, at) => {
-      const outcome = outcomes[at]!;
-      try {
-        if (settle(member, outcome)) {
-          if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(outcome.ranMs ?? 0)}`);
-          return;
-        }
-      } catch (error) { if (error instanceof NoVerdict) { missing ??= error; return; } throw error; }
-      failed.push(member.name);
-      if (existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
-      say(`${mode}: ${member.name}: failed (${outcome.code}) after ${seconds(outcome.ranMs ?? 0)}`);
-    });
-    if (failed.length) throw new Error(`${failed.join(", ")} failed`);
-    if (missing) throw missing;
-  }
-  if (deferred.length) say(`${mode}: passed; left to the hosted job: ${deferred.join(", ")}`);
-  return deferred;
+    if (deferred.length) say(`${mode}: passed; left to the hosted job: ${deferred.join(", ")}`);
+    return deferred;
+  } finally { budget.close(); }
 }
 
 /** The hook's last line and exit code for what stopped it: a missing verdict
@@ -625,19 +634,19 @@ async function main(mode: Mode): Promise<void> {
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
       LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
     };
-    const prepare = async (step: Step, until: number, cancel?: AbortSignal) => {
+    const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
-      const env = { ...(step.isolated ? isolated : process.env) };
+      const env: NodeJS.ProcessEnv = { ...(step.isolated ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
       if (step.name === "privacy") Object.assign(env, privacyEnv);
       if (step.pinned) {
-        runtime ??= pinnedRuntime(root, cache, until, cancel);
+        runtime ??= pinnedRuntime(root, cache, until, cancel, env);
         command[0] = await runtime;
         env.PATH = `${path.dirname(command[0])}${path.delimiter}${env.PATH ?? ""}`;
       }
       if (step.name === "runtime host") command.push("--runtime", command[0]!);
       if (step.codex) {
         // Members of one group share a version's install instead of racing on its prefix.
-        if (!fixtures.has(step.codex)) fixtures.set(step.codex, codexFixture(root, cache, step.codex, until, process.env, cancel));
+        if (!fixtures.has(step.codex)) fixtures.set(step.codex, codexFixture(root, cache, step.codex, until, env, cancel));
         command.push(await fixtures.get(step.codex)!);
       }
       if (step.selection) command.push(step.selection);

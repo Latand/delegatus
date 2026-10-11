@@ -61,6 +61,37 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("CPU admission queue", () => {
+  browserTest("the waiting card shows queue position and remaining minutes in en and uk", async () => {
+    const out = path.resolve(".artifacts/cpu-queue");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue`, { width, height: 900 }, "dark", lang, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
+          const target = page.locator(selector);
+          const line = target.locator("[data-cpu-queue]");
+          await line.waitFor(); await target.scrollIntoViewIfNeeded();
+          const text = lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
+          expect(await line.textContent()).toBe(text);
+          expect(await target.locator('[data-motion="working"]').count()).toBe(0);
+          const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
+          expect(geometry.clipped).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await target.screenshot({ path: path.join(out, `variant-1-${width}-${lang}.png`) });
+          readings.push({ lang, viewport: width, ...geometry });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+});
+
 describe("finding recurrence (#2648)", () => {
   browserTest("quiet and held state lines keep the full recurrence visible at 1440, 1000 and 390 in en and uk", async () => {
     const out = path.resolve(".artifacts/finding-recurrence");

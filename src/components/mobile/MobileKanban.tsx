@@ -24,7 +24,7 @@ import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAg
 import { useManagedOnText } from "@/components/kanban/RemoteLanes";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
-import { pipelineTitle } from "@/components/kanban/PipelineSection";
+import { cardWaitsForCpu, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { PhoneCardPrototypeButton, usePrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
@@ -549,7 +549,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         ) : null}
         <NeedBadge item={item} />
       </span>
-      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />
+      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />
       <TaskStepsLine summary={card.stepSummary} />
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}

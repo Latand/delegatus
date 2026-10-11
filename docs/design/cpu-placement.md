@@ -133,43 +133,42 @@ gate does.
 
 ## CPU-pressure admission
 
-Heavy work starts only when the machine's CPU pressure allows it
-(`src/lib/runtime/cpuPressure.ts`, `scripts/gate-slot.sh`):
+Pipeline stage starts and heavy commands share one durable FIFO queue
+(`src/lib/runtime/cpuAdmission.ts`, `scripts/cpu-admission.ts`). The head starts
+when pressure allows it, or once its own queue wait reaches ten minutes.
+Admissions are separated by two seconds, including when pressure never drops.
+The pressure sensor holds at `some avg10` of 20% and releases after ten seconds
+below 10%; a failed sample permits the head. CPU quotas still bound admitted work.
 
-- held once `/proc/pressure/cpu` `some avg10` reaches 20%;
-- released after it has stayed below 10% for ten seconds;
-- after 120 s of holding, the reason changes to "deferred" and stays visible;
-- a failed sample admits: the scope quotas still bound the work.
+SQLite writer transactions preserve queue order, original wait timestamps and
+the last admission across Viewer restarts and across processes. Stage tickets
+use the pipeline, stage and attempt; controller ticks remove tickets for stages
+that paused, closed or moved on. Command tickets carry the waiting shell's
+kernel start identity; dead callers lose their tickets. The queue lives under
+the operating-system user's `$HOME/.cache/delegatus-cpu`, shared with the
+Viewer container even when a child sandboxes HOME. `LLV_GATE_LOCK_DIR` puts a
+private queue alongside private slot locks for tests.
 
-A pipeline stage start is held before its spawn reservation, so a stage starts
-exactly once after admission and a stage that already launched is never held.
-The pipeline shows the reason in its detail line, for example
-`stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)`,
-and wakes itself every five seconds to check again.
+A stage waits before its spawn reservation and wakes every five seconds. Its
+state detail and board card name the queue position and remaining whole minutes:
+`Waiting for the CPU queue · 2nd · up to 7 min`, or
+`Чекає черги CPU · 2-й · до 7 хв`. A waiting card suppresses the generic working
+caption. A launched stage continues reconciliation without asking for admission.
 
-A workflow's setup and each of its stage agents are held the same way before
-their first launch, with `setup held for CPU pressure since …` or
-`stage start held for CPU pressure since …` in the workflow's detail line. A
-held stage stamps no start, so it launches exactly once after admission; a
-setup or stage that already started is observed and recovered whatever the
-pressure reads.
+Heavy checks retain their ticket until a slot is locked and their admission is
+committed, so a younger check cannot overtake one waiting for a slot. Waiting
+uses no heavy slot. The owned runner's execution deadline starts after admission.
+Nested waits report heartbeat intervals to private ledgers owned by bounded
+callers; concurrent intervals count once. The Git executor, hook plan and owned
+runner exclude those intervals from their finite execution budgets. Cancellation
+still stops waiting immediately. The Linux service uses a kernel watchdog to
+bound an unresponsive supervisor while its execution timer excludes queue time.
+The stage-output commit retry policy belongs to the separate settlement change.
 
-A pipeline publication's `bun install --frozen-lockfile` waits before its child
-is created, inside the publication fence. The lane's detail line shows
-`publication install held for CPU pressure since …` while it waits and gets its
-previous detail back once the install starts. Closing the lane or taking over
-its delivery aborts the wait, and no install starts. The push that follows is
-not held: its gates take slots through `gate-slot.sh`, which applies its own
-admission. Remote observation and reconciliation never ask. A release install
-or build waits before its child is created and writes
-`update-build held for CPU pressure since …` (then `… deferred by CPU pressure …`)
-into the update step's visible tail and log. The wait counts against the step's
-time limit, and stopping the update ends it.
-
-A gate samples pressure in the same pass that takes a slot: a gate that waited
-behind busy slots starts on a fresh sample, and a held gate occupies no slot.
-It prints `gate-slot: held for CPU pressure: …` when the hold begins and
-`gate-slot: deferred by CPU pressure for 120s …` once the budget is spent.
+Publication installs and release steps using `waitForCpuPressure` also take
+command tickets and show the same queue reason. Closing their operation aborts
+the wait. Their own operation-level limits remain in effect; gate-slot command
+and hook budgets exclude admission waits.
 
 Operator sends, receipt reconciliation, staged-launch recovery, the delivery
 queue, publication reconciliation, update observation and setup and stage

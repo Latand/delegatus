@@ -1,0 +1,79 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { Database } from "bun:sqlite";
+
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../processIdentity";
+import { procBackend } from "../proc";
+
+export const CPU_QUEUE_MAX_WAIT_MS = 10 * 60_000;
+export const CPU_QUEUE_SPACING_MS = 2_000;
+export type CpuQueueWait = { since: number; position: number; remainingMs: number };
+type Ticket = { seq: number; key: string; since: number; owner: string | null };
+
+/** Shared by the Viewer and gate-slot, including children with sandboxed HOME. */
+export function cpuAdmissionFile(): string {
+  // The passwd home is stable when agent/test commands sandbox HOME. It is
+  // mounted writable into the Viewer image; /var/tmp there is read-only.
+  return path.join(process.env.LLV_GATE_LOCK_DIR || path.join(os.userInfo().homedir, ".cache", "delegatus-cpu"), "admission.sqlite");
+}
+
+/** Admission is committed under SQLite's writer lock, before a caller starts.
+ * Stage keys outlive the Viewer; command keys carry a kernel start identity.
+ * Sequence numbers break equal-clock ties and never depend on tick order. */
+export class CpuAdmissionQueue {
+  private readonly db: Database;
+  constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS) {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+    this.db = new sqlite.Database(file, { create: true });
+    fs.chmodSync(file, 0o600);
+    this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
+    this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
+  }
+  close(): void { this.db.close(); }
+  cancel(key: string): void { this.db.query("DELETE FROM tickets WHERE key = ?").run(key); }
+  /** Only the release owning this pipeline namespace reconciles stage tickets. */
+  reconcile(prefix: string, active: ReadonlySet<string>): void {
+    this.db.transaction(() => {
+      for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NULL").all()) {
+        if (row.key.startsWith(prefix) && !active.has(row.key)) this.cancel(row.key);
+      }
+    }).immediate();
+  }
+  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true): CpuQueueWait | null {
+    return this.db.transaction(() => {
+      const now = this.now();
+      for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
+        const identity = JSON.parse(row.owner!) as ProcessIdentity;
+        if (processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)) this.cancel(row.key);
+      }
+      this.db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, now, owner ? JSON.stringify(owner) : null);
+      const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
+      const position = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM tickets WHERE seq <= ?").get(ticket.seq)!.n;
+      const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
+      const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
+      const budget = pressureAllows ? 0 : Math.max(0, this.maxWaitMs - (now - ticket.since));
+      if (position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
+        if (consume) {
+          this.cancel(key);
+          this.db.query("UPDATE admission SET last = ? WHERE id = 1").run(now);
+        }
+        return null;
+      }
+      return { since: ticket.since, position, remainingMs: Math.max(budget, spacing) + (position - 1) * this.spacingMs };
+    }).immediate();
+  }
+}
+
+const queueSymbol = Symbol.for("delegatus.cpuAdmission");
+const globals = globalThis as typeof globalThis & { [queueSymbol]?: { file: string; queue: CpuAdmissionQueue } };
+export function machineCpuAdmissionQueue(): CpuAdmissionQueue {
+  const file = cpuAdmissionFile();
+  if (globals[queueSymbol]?.file !== file) {
+    globals[queueSymbol]?.queue.close();
+    globals[queueSymbol] = { file, queue: new CpuAdmissionQueue(file) };
+  }
+  return globals[queueSymbol]!.queue;
+}
+export function cpuCommandOwner(): ProcessIdentity { return captureProcessIdentity(process.pid); }

@@ -74,58 +74,22 @@ run() {
   exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
 }
 
-# CPU-pressure admission with hysteresis, as in src/lib/runtime/cpuPressure.ts:
-# hold at avg10 >= hold, release after release_after seconds below release. A
-# failed sample admits; the scope quotas still bound the work.
-psi_file=${LLV_GATE_PSI_FILE:-/proc/pressure/cpu}
-hold=${DELEGATUS_CPU_PRESSURE_HOLD:-${LLV_CPU_PRESSURE_HOLD:-20}}
-release=${DELEGATUS_CPU_PRESSURE_RELEASE:-${LLV_CPU_PRESSURE_RELEASE:-10}}
-release_after=${LLV_GATE_PSI_RELEASE_SECONDS:-10}
-defer_after=${LLV_GATE_PSI_DEFER_SECONDS:-120}
-held=0 held_since=0 below_since=-1 deferred=0
-avg10() { awk '/^some /{for(i=2;i<=NF;i++) if($i ~ /^avg10=/){sub(/^avg10=/,"",$i); print $i; exit}}' "$psi_file" 2>/dev/null; }
-at_least() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a+0 >= b+0)}'; }
-pressure_admits() {
-  [[ ${DELEGATUS_CPU_PRESSURE:-${LLV_CPU_PRESSURE:-on}} == off ]] && return 0
-  local value now=$SECONDS
-  value=$(avg10) || value=""
-  if [[ ! "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then held=0; return 0; fi
-  if (( ! held )); then
-    at_least "$value" "$hold" || return 0
-    held=1 held_since=$now below_since=-1
-    echo "gate-slot: held for CPU pressure: avg10 ${value}% >= ${hold}%; starts once it stays below ${release}% for ${release_after}s" >&2
-    return 1
-  fi
-  if at_least "$value" "$release"; then below_since=-1
-  else
-    (( below_since >= 0 )) || below_since=$now
-    if (( now - below_since >= release_after )); then
-      held=0
-      echo "gate-slot: admitted after $(( now - held_since ))s of CPU pressure" >&2
-      return 0
-    fi
-  fi
-  if (( ! deferred && now - held_since >= defer_after )); then
-    deferred=1
-    echo "gate-slot: deferred by CPU pressure for ${defer_after}s (avg10 ${value}%); still waiting" >&2
-  fi
-  return 1
-}
-
-# macOS has neither flock nor a systemd user manager.
-if ! command -v flock >/dev/null; then
-  until pressure_admits; do sleep "$poll"; done
-  run "$@"
-fi
+# Keep the ticket until a slot is locked and its admission is committed.
+# CPU waits precede the owned runner's execution deadline.
 lock_dir=${LLV_GATE_LOCK_DIR:-/var/tmp}
 mkdir -p "$lock_dir"
-# Pressure is sampled in the pass that takes the slot, so a gate that waited
-# behind busy slots starts on a fresh sample, and a held gate occupies no slot.
+admission="$(dirname "${BASH_SOURCE[0]}")/cpu-admission.ts"
+queue_key="command:$$:$RANDOM:$RANDOM"
 while :; do
-  if pressure_admits; then
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$$"
+  if ! command -v flock >/dev/null; then
+    if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$$"; then run "$@"; fi
+  else
     for ((i=1; i<=slots; i++)); do
       exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
-      if flock -n 9; then run "$@"; fi
+      if flock -n 9; then
+        if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$$"; then run "$@"; fi
+      fi
       exec 9>&-
     done
   fi

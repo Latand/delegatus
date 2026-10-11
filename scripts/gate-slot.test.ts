@@ -127,9 +127,7 @@ test.skipIf(process.platform !== "linux")("CPU pressure holds a gate visibly, th
   writeFileSync(join(f.root, "pressure"), "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
   expect(await child.exited).toBe(0);
   const stderr = await new Response(child.stderr).text();
-  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 55.00% >= 20%; starts once it stays below 10% for 1s");
-  expect(stderr).toContain("gate-slot: deferred by CPU pressure for 1s");
-  expect(stderr).toMatch(/gate-slot: admitted after \d+s of CPU pressure/);
+  expect(stderr).toContain("gate-slot: Waiting for the CPU queue · 1st · up to 10 min");
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 }, 20_000);
 test.skipIf(process.platform !== "linux")("a failed pressure sample admits; the quotas still bound the gate", () => {
@@ -187,8 +185,7 @@ test.skipIf(process.platform !== "linux")("pressure that rises while a gate wait
   writeFileSync(pressure, "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
   expect(await child.exited).toBe(0);
   const stderr = await new Response(child.stderr).text();
-  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 80.00% >= 20%");
-  expect(stderr).toMatch(/gate-slot: admitted after \d+s of CPU pressure/);
+  expect(stderr).toContain("gate-slot: Waiting for the CPU queue · 1st · up to 10 min");
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 }, 20_000);
 // The work slice's ceiling is one machine-wide value: a caller pinned to fewer

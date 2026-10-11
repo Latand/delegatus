@@ -4,6 +4,7 @@ import { Flag, Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
 import { pipelineTaskFinishState } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
@@ -566,6 +567,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const selected = props.selected ?? NO_STAGES;
   const title = pipelineTitle(t, pipeline);
   const progress = pipelineProgress(t, summary, nameOf);
+  const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   const answers = props.managedOn ? null : pipelineAnswers(pipeline, nameOf);
   const root = {
     "data-pipeline": pipeline.id,
@@ -600,7 +602,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
     const aside = props.aside ? <span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span> : null;
     return (
       <span className="pblock" {...root} data-managed={props.managedOn ? "" : undefined}>
-        <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />
+        {cpuWaiting ? <span className="pb-line sub" data-cpu-queue>{progress}</span> : <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />}
         {aside ? (
           <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
         ) : reasonLine}
@@ -706,7 +708,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
         </>
       ) : (
         <div className={!managed && finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
-          <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
+          {cpuWaiting ? <span className="pb-line sub" data-cpu-queue>{progress}</span> : <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />}
           {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
           {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
           {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}

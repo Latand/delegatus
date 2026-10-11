@@ -40,7 +40,7 @@ import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
 import { CheckGlyph, ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, KanbanUnstartedLaunch } from "./kanbanModel";
-import { PastAttempts, stageNames } from "./PipelineSection";
+import { cardWaitsForCpu, PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { StageDraftPanel } from "./StageDraft";
@@ -631,7 +631,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           ) : null}
         </div>
       </div>
-      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs}
+      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
         taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
         onOpenTask={card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined}
         referenceUrl={card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind)

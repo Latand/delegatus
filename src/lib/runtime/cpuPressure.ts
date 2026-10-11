@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import { machineCpuAdmissionQueue, cpuCommandOwner, type CpuQueueWait } from "./cpuAdmission";
+import { CPU_QUEUE_DETAIL_PREFIX, cpuQueueDetail } from "./cpuQueueText";
 
 import { delegatusSetting } from "./cpuPlacement";
 
@@ -9,7 +12,9 @@ import { delegatusSetting } from "./cpuPlacement";
  * publication's dependency install and a release install or build wait while
  * the machine's CPU pressure is high: each is held once `some avg10` reaches
  * the hold threshold and released only after the value has stayed below the
- * release threshold for the release window. Operator sends, receipt reconciliation and recovery never ask.
+ * release threshold for the release window. A persistent FIFO queue admits
+ * the head after ten minutes even when pressure stays high, with short spacing
+ * between admissions. Operator sends, receipt reconciliation and recovery never ask.
  * A failed sample admits: the work scopes' CPU quotas still bound the work.
  * `scripts/gate-slot.sh` applies the same policy to gates.
  */
@@ -17,7 +22,8 @@ import { delegatusSetting } from "./cpuPlacement";
 export interface CpuPressurePolicy { holdAt: number; releaseBelow: number; releaseAfterMs: number; deferAfterMs: number }
 export const DEFAULT_CPU_PRESSURE_POLICY: CpuPressurePolicy = { holdAt: 20, releaseBelow: 10, releaseAfterMs: 10_000, deferAfterMs: 120_000 };
 
-export type CpuPressureHold = { since: number; avg10: number; deferred: boolean; policy: CpuPressurePolicy };
+export type CpuPressureHold = { since: number; avg10: number; deferred: boolean; policy: CpuPressurePolicy; queue?: CpuQueueWait };
+export type CpuStartGate = { check(key?: string): CpuPressureHold | null; cancel?(key: string): void };
 
 /** `some avg10` from /proc/pressure/cpu, or null when the text has none. */
 export function parseCpuPressure(text: string): number | null {
@@ -64,17 +70,18 @@ export class CpuPressureGate {
   }
 }
 
-/** The visible reason for one held start; stable while one hold lasts, so it is not rewritten each tick. */
+/** Queue position and whole minutes change only as the wait progresses. */
 export function cpuPressureHoldDetail(hold: CpuPressureHold, subject = "stage start"): string {
+  if (hold.queue) return cpuQueueDetail(hold.queue.position, hold.queue.remainingMs);
   const since = new Date(hold.since).toISOString();
   return hold.deferred
     ? `${subject} deferred by CPU pressure: held since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%); it starts once pressure stays below ${hold.policy.releaseBelow}% for ${hold.policy.releaseAfterMs / 1000} s`
     : `${subject} held for CPU pressure since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%)`;
 }
-export const CPU_PRESSURE_DETAIL_PREFIXES = ["stage start held for CPU pressure", "stage start deferred by CPU pressure"] as const;
+export const CPU_PRESSURE_DETAIL_PREFIXES = ["stage start held for CPU pressure", "stage start deferred by CPU pressure", CPU_QUEUE_DETAIL_PREFIX] as const;
 /** Whether `detail` is a reason cpuPressureHoldDetail wrote for `subject`. */
 export function isCpuPressureDetail(detail: string | null | undefined, subject: string): boolean {
-  return !!detail && (detail.startsWith(`${subject} held for CPU pressure`) || detail.startsWith(`${subject} deferred by CPU pressure`));
+  return !!detail && (detail.startsWith(CPU_QUEUE_DETAIL_PREFIX) || detail.startsWith(`${subject} held for CPU pressure`) || detail.startsWith(`${subject} deferred by CPU pressure`));
 }
 
 /**
@@ -82,38 +89,50 @@ export function isCpuPressureDetail(detail: string | null | undefined, subject: 
  * of the visible reason is reported once. Answers false when `signal` aborts
  * the wait; the caller then starts nothing.
  */
-export async function waitForCpuPressure(gate: Pick<CpuPressureGate, "check"> | null, options: {
+export async function waitForCpuPressure(gate: CpuStartGate | null, options: {
   subject: string; onReason: (reason: string) => void; signal?: AbortSignal; pollMs?: number;
 }): Promise<boolean> {
   let shown: string | null = null;
-  for (;;) {
-    if (options.signal?.aborted) return false;
-    const hold = gate?.check() ?? null;
-    if (!hold) return true;
-    const reason = cpuPressureHoldDetail(hold, options.subject);
-    if (reason !== shown) { shown = reason; options.onReason(reason); }
-    await new Promise<void>((resolve) => {
-      const done = () => { clearTimeout(timer); options.signal?.removeEventListener("abort", done); resolve(); };
-      const timer = setTimeout(done, options.pollMs ?? 2_000);
-      options.signal?.addEventListener("abort", done, { once: true });
-    });
-  }
+  const key = `command:${randomUUID()}`;
+  try {
+    for (;;) {
+      if (options.signal?.aborted) return false;
+      const hold = gate?.check(key) ?? null;
+      if (!hold) return true;
+      const reason = cpuPressureHoldDetail(hold, options.subject);
+      if (reason !== shown) { shown = reason; options.onReason(reason); }
+      await new Promise<void>((resolve) => {
+        const done = () => { clearTimeout(timer); options.signal?.removeEventListener("abort", done); resolve(); };
+        const timer = setTimeout(done, options.pollMs ?? 2_000);
+        options.signal?.addEventListener("abort", done, { once: true });
+      });
+    }
+  } finally { gate?.cancel?.(key); }
 }
 
-const globalGate = globalThis as unknown as { __llvCpuPressureGate?: Pick<CpuPressureGate, "check"> | null; __llvCpuPressurePollMs?: number };
+const globalGate = globalThis as unknown as { __llvCpuPressureGate?: CpuStartGate | null; __llvCpuPressurePollMs?: number };
 /** The process-wide gate over /proc/pressure/cpu; null when turned off. */
-export function machineCpuPressureGate(): Pick<CpuPressureGate, "check"> | null {
+export function machineCpuPressureGate(): CpuStartGate | null {
   if (globalGate.__llvCpuPressureGate !== undefined) return globalGate.__llvCpuPressureGate;
   const policy = cpuPressurePolicy();
-  return globalGate.__llvCpuPressureGate = policy && new CpuPressureGate(policy, {
+  if (!policy) return globalGate.__llvCpuPressureGate = null;
+  const pressure = new CpuPressureGate(policy, {
     sample: () => { try { return parseCpuPressure(fs.readFileSync("/proc/pressure/cpu", "utf8")); } catch { return null; } },
     now: Date.now,
   });
+  return globalGate.__llvCpuPressureGate = {
+    check: (key = `command:${process.pid}`) => {
+      const held = pressure.check();
+      const queue = machineCpuAdmissionQueue().check(key, !held, key.startsWith("stage:") ? undefined : cpuCommandOwner());
+      return queue ? { since: queue.since, avg10: held?.avg10 ?? 0, deferred: false, policy, queue } : null;
+    },
+    cancel: (key) => machineCpuAdmissionQueue().cancel(key),
+  };
 }
 /** How often a waiting start samples the machine gate. */
 export function machineCpuPressurePollMs(): number { return globalGate.__llvCpuPressurePollMs ?? 2_000; }
 /** Replaces the machine gate and its poll interval; undefined restores the default. */
-export function setMachineCpuPressureForTests(gate: Pick<CpuPressureGate, "check"> | null | undefined, pollMs?: number): void {
+export function setMachineCpuPressureForTests(gate: CpuStartGate | null | undefined, pollMs?: number): void {
   globalGate.__llvCpuPressureGate = gate;
   globalGate.__llvCpuPressurePollMs = pollMs;
 }
