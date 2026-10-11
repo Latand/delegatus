@@ -228,8 +228,20 @@ systemctl --user daemon-reload
 # finish. A restart is not enough: while any process the stop spared stays in the old
 # cgroup, systemd reuses that path and the service never moves (2026-10-10, 2026-10-11).
 # A checkout installation runs scripts/deploy-checkout.py (docs/deploy-checkout.md),
-# which also retires proven leftovers. By hand, as one line, so the start always runs:
-systemctl --user stop delegatus.service; for _ in $(seq 60); do [ -z "$(systemctl --user show delegatus.service -p ControlGroup --value)" ] && break; sleep 1; done; systemctl --user start delegatus.service
+# which also retires proven leftovers. By hand, exit cleanup submits start on
+# success, stop/wait errors (including under errexit), and HUP/INT/TERM:
+(
+  trap 'status=$?; trap - EXIT HUP INT TERM; systemctl --user start "delegatus.service" || exit $?; exit "$status"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  systemctl --user stop delegatus.service || exit $?
+  for _ in $(seq 60); do
+    group=$(systemctl --user show delegatus.service -p ControlGroup --value) || exit $?
+    [ -z "$group" ] && break
+    sleep 1 || exit $?
+  done
+)
 # ControlGroup must end in delegatus.slice/delegatus.service. Slice alone reads the
 # configuration.
 systemctl --user show delegatus.service -p Slice -p ControlGroup -p CPUWeight

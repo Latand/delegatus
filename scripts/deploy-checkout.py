@@ -59,6 +59,25 @@ def ready(serving, target, placement=True):
 
 
 def run_switch(adapter, target, samples=21, interval=15, timeout=180):
+    # Keep termination deferred through recovery and the final cleanup, too.
+    with deferred_termination():
+        result = None
+        try:
+            result = observe_switch(adapter, target, samples, interval, timeout)
+        finally:
+            relocation = getattr(adapter, "relocation", None)
+            if relocation and relocation["stopSubmitted"]:
+                attempts = relocation["startAttempts"]
+                adapter.recover_start(attempts=START_ATTEMPTS)
+                if result is not None and relocation["startAttempts"] != attempts:
+                    # The last health sample predates this recovery operation.
+                    result["verdict"] = "fail"
+                    result["diagnostics"].append("exit-recovery:health-unverified")
+        adapter.emit(result)
+        return result
+
+
+def observe_switch(adapter, target, samples, interval, timeout):
     old, hosts = adapter.preflight()
     started = utc()
     diagnostics = []
@@ -100,6 +119,8 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
             serving = {}
             def read_serving():
                 nonlocal serving
+                if relocation and relocation["stopSubmitted"]:
+                    adapter.recover_start()
                 serving = adapter.serving()
                 if not ready(serving, target):
                     raise RuntimeError("replacement not ready")
@@ -130,7 +151,6 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
               "protected": protected, "interrupted": interrupted,
               "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
     adapter.last_result = result
-    adapter.emit(result)
     return result
 
 
@@ -391,7 +411,7 @@ def pidfd_signal(entry, signum, group, read=proc_field):
 
 @contextlib.contextmanager
 def deferred_termination():
-    """Holds SIGTERM and SIGHUP while the service may be stopped, so stopping
+    """Holds SIGTERM, SIGHUP and SIGINT while the service may be stopped, so stopping
     the worker's own unit cannot cut between the stop and the start. A held
     signal is delivered once the start has run. SIGKILL cannot be held."""
     if threading.current_thread() is not threading.main_thread():
@@ -399,7 +419,7 @@ def deferred_termination():
         return
     held = []
     previous = {signum: signal.signal(signum, lambda number, frame: held.append(number))
-                for signum in [signal.SIGTERM, signal.SIGHUP]}
+                for signum in [signal.SIGTERM, signal.SIGHUP, signal.SIGINT]}
     try:
         yield
     finally:
@@ -447,6 +467,10 @@ def systemd_properties(output):
 
 def parent_pid(stat):
     return int(stat[stat.rfind(")") + 2:].split()[1])
+
+
+def process_group(stat):
+    return int(stat[stat.rfind(")") + 2:].split()[2])
 
 
 def kernel_cgroup(text):
@@ -650,6 +674,8 @@ class Checkout:
         self.relocation = None
         self.cgroup_root = pathlib.Path(cgroup_root)
         self.agents = {}
+        self.retirement_roots = {}
+        self.viewer_group = None
         self.leftovers_found = []
         self.process_read, self.http, self.runtime, self.command = process_read, http, runtime, execute
         self.config_file = pathlib.Path(config).resolve()
@@ -912,11 +938,19 @@ class Checkout:
     def generation(self, group):
         """The serving generation's members of the service cgroup, read
         immediately before the stop: the recorded launcher, Viewer and runtime
-        host, the launcher's verified ancestors up to MainPID, and every member
-        whose parents reach one of them. Agent-owned members are left out.
+        host, the launcher's verified ancestors up to MainPID, and helpers
+        in the Viewer's process group. Detached descendants are never admitted
+        by ancestry alone: a runtime host may have just started an agent.
         Each is held as PID and start identity; only these, and processes
         whose parents still reach them, can later be proven leftovers."""
         record = json.loads(self.record_file.read_text())
+        rows = complete_activity(self.mcp.call("agent_activity", {"liveOnly": True, "compact": False, "limit": 200}))
+        for row in rows:
+            host = row.get("host") or {}
+            if host.get("state") == "alive" and isinstance(host.get("pid"), int):
+                proc = self.process({"pid": host["pid"]})
+                if proc:
+                    self.agents[host["pid"]] = proc["startIdentity"]
         owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
         for key in ["launcher", "web", "runtimeHost"]:
             owners[record[key]["pid"]] = ("current", record[key].get("startIdentity"))
@@ -924,12 +958,23 @@ class Checkout:
             ancestors = self.launcher_ancestors(record, group)
         except Exception:
             ancestors = {}
+        self.retirement_roots = {record[key]["pid"]: record[key].get("startIdentity")
+                                 for key in ["launcher", "web", "runtimeHost"]}
+        self.retirement_roots.update({pid: link[0] for pid, link in ancestors.items()})
+        viewer = record["web"]
+        viewer_stat = self.process_read(viewer["pid"], "stat")
+        self.viewer_group = viewer["pid"] if (start_identity(viewer_stat) == viewer.get("startIdentity")
+                                               and process_group(viewer_stat) == viewer["pid"]) else None
         captured = {}
         for pid in self.members(group):
             try:
                 stat = self.process_read(pid, "stat")
                 identity = start_identity(stat)
-                if ancestors.get(pid, (None,))[0] == identity or self.owner(pid, owners) == "current":
+                if self.agents.get(pid) == identity:
+                    continue
+                if (self.retirement_roots.get(pid) == identity
+                        or (self.viewer_group is not None and process_group(stat) == self.viewer_group
+                            and self.owner(pid, owners) == "current")):
                     captured[pid] = identity
             except (FileNotFoundError, ProcessLookupError):
                 continue
@@ -948,6 +993,8 @@ class Checkout:
                 raise
             return {"empty": True, "released": True}
         named = systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "ControlGroup"])).get("ControlGroup")
+        if named is None:
+            raise RuntimeError("old cgroup release unreadable")
         return {"empty": empty, "released": not root.is_dir() or named != group}
 
     def await_release(self, group, bound):
@@ -996,6 +1043,13 @@ class Checkout:
         return found
 
     def proof(self, pid, stat, captured):
+        # Helpers stay in the Viewer's group; agents and their children lead
+        # detached groups. This remains evidence after a parent exits, and
+        # excludes agents admitted after the activity read.
+        if (self.retirement_roots.get(pid) != start_identity(stat)
+                and process_group(stat) != self.viewer_group):
+            owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
+            return False, "agent host or its descendant" if self.owner(pid, owners) == "agent" else "no captured owner"
         current, seen = pid, set()
         while current > 1 and current not in seen and len(seen) < 64:
             seen.add(current)
@@ -1020,6 +1074,10 @@ class Checkout:
     def retire(self, proven, group):
         """Terminates, then kills, the proven survivors, each by PID through a
         descriptor validated against its start identity and cgroup."""
+        # Keep each survivor's proof after its parent is retired. The final
+        # pidfd read still requires its identity and Viewer process group.
+        captured = {**self.retirement_capture,
+                    **{entry["pid"]: entry["startIdentity"] for entry in proven}}
         signalled = []
         for signum in [signal.SIGTERM, signal.SIGKILL]:
             alive = [survivor for survivor in proven if self.lingering(survivor, group)]
@@ -1027,7 +1085,12 @@ class Checkout:
                 break
             for survivor in alive:
                 with contextlib.suppress(Exception):
-                    if self.signal_process(survivor, signum, group, self.process_read):
+                    def verified_read(pid, field):
+                        value = self.process_read(pid, field)
+                        if field == "stat" and pid == survivor["pid"] and not self.proof(pid, value, captured)[0]:
+                            raise RuntimeError("retirement ownership changed")
+                        return value
+                    if self.signal_process(survivor, signum, group, verified_read):
                         signalled.append({"pid": survivor["pid"], "startIdentity": survivor["startIdentity"],
                                           "signal": signal.Signals(signum).name})
             deadline = self.clock.now() + SIGNAL_WAIT
@@ -1035,27 +1098,43 @@ class Checkout:
                 self.clock.sleep(min(0.2, deadline - self.clock.now()))
         return signalled
 
-    def start(self, relocation):
+    def start(self, relocation, attempts=START_ATTEMPTS):
         """Starts the unit, retrying a refused or failed start. Whatever the
         relocation found, this always runs once a stop was submitted."""
-        for attempt in range(START_ATTEMPTS):
+        for attempt in range(attempts):
             if attempt:
                 self.clock.sleep(5)
             try:
+                relocation["startAttempts"] += 1
                 self.command(["systemctl", "--user", "--no-block", "start", self.unit])
                 def settled():
                     if self.jobs():
                         raise RuntimeError("named start pending")
                 retry(settled, self.clock, STOP_SETTLE)
                 state = self.active_state()
-                relocation["startAttempts"] = attempt + 1
                 if state in ["active", "activating", "reloading"]:
                     relocation["started"] = True
+                    relocation["outcome"] = relocation["stopOutcome"]
                     return
             except Exception as error:
-                relocation["startAttempts"] = attempt + 1
                 relocation["diagnostics"].append("start:" + type(error).__name__)
+        relocation["started"] = False
         relocation["outcome"] = "start-failed"
+
+    def recover_start(self, attempts=1):
+        relocation = self.relocation
+        try:
+            if self.active_state() in ["active", "activating", "reloading"]:
+                relocation["started"] = True
+                relocation["outcome"] = relocation["stopOutcome"]
+                return
+        except Exception:
+            pass
+        self.start(relocation, attempts)
+        with contextlib.suppress(Exception):
+            observed = self.placement()
+            relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
+            relocation["to"] = observed["actual"]
 
     def restart(self):
         """Stop, wait for the old cgroup to empty and be released, then start.
@@ -1082,6 +1161,7 @@ class Checkout:
                 captured = {}
                 relocation["diagnostics"].append("generation:" + type(error).__name__)
             relocation["captured"] = len(captured)
+            self.retirement_capture = captured
             # Marked before submission: a submission that times out may still stop.
             relocation["stopSubmitted"] = True
             self.command(["systemctl", "--user", "--no-block", "stop", self.unit])
@@ -1111,6 +1191,7 @@ class Checkout:
             relocation["outcome"] = relocation["outcome"] or "stop-incomplete"
         finally:
             if relocation["stopSubmitted"]:
+                relocation["stopOutcome"] = relocation["outcome"]
                 self.start(relocation)
             with contextlib.suppress(Exception):
                 observed = self.placement()

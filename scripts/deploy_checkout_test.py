@@ -259,13 +259,16 @@ class AdapterContracts(unittest.TestCase):
 
     def test_termination_is_held_until_the_start_has_run(self):
         received = []
-        previous = deploy.signal.signal(deploy.signal.SIGTERM, lambda number, frame: received.append(number))
-        self.addCleanup(deploy.signal.signal, deploy.signal.SIGTERM, previous)
+        signals = [deploy.signal.SIGTERM, deploy.signal.SIGHUP, deploy.signal.SIGINT]
+        for signum in signals:
+            previous = deploy.signal.signal(signum, lambda number, frame: received.append(number))
+            self.addCleanup(deploy.signal.signal, signum, previous)
         with deploy.deferred_termination():
-            os.kill(os.getpid(), deploy.signal.SIGTERM)
-            os.kill(os.getpid(), deploy.signal.SIGTERM)
+            for signum in signals:
+                os.kill(os.getpid(), signum)
+                os.kill(os.getpid(), signum)
             self.assertEqual(received, [])
-        self.assertEqual(received, [deploy.signal.SIGTERM])
+        self.assertEqual(received, signals)
 
     def test_import_and_cli_help_require_no_state_or_service(self):
         import subprocess
@@ -508,6 +511,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.slice_group = "/user.slice/synthetic.slice"
         self.service_group = self.slice_group + "/synthetic-viewer.service"
         self.parents = {}
+        self.pgroups = {}
         self.cmdlines = {}
         self.groups = {}
         self.moving = set()
@@ -641,7 +645,7 @@ class CheckoutIntegration(unittest.TestCase):
             identity += "-" + str(self.stat_reads)
         self.reads = getattr(self, "reads", 0) + 1
         # CPU time changes on every read of a live process; the start identity does not.
-        return {"stat": str(pid) + " (synthetic process) " + " ".join(["S", str(self.parents.get(pid, 1))] + ["0"] * 10 + [str(self.reads)] + ["0"] * 6 + [identity]),
+        return {"stat": str(pid) + " (synthetic process) " + " ".join(["S", str(self.parents.get(pid, 1)), str(self.pgroups.get(pid, pid))] + ["0"] * 9 + [str(self.reads)] + ["0"] * 6 + [identity]),
                 "cmdline": self.cmdlines.get(pid, "bun\0" + str(root / "bin/cli.mjs") + "\0").encode(), "cwd": str(root),
                 "cgroup": "0::" + self.groups.get(pid, self.service_group) + "\n"}[field]
 
@@ -987,6 +991,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.weight = weight
         # A Viewer child present at capture: the serving generation.
         self.parents.update({150: 102, 151: 150})
+        self.pgroups.update({150: 102, 151: 102, 161: 104})
         self.cmdlines.update({150: "bun\0worker.js\0--secret-flag\0", 151: "sleep\0" + "60\0", 153: "tail\0-F\0log\0"})
         self.members = [101, 102, 103] + [pid for pid in survivors if pid == 150]
         self.surviving = set(survivors)
@@ -1083,16 +1088,158 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual(result["relocation"]["startAttempts"], 3)
         self.assertEqual(result["relocation"]["placement"], "placed")
 
-    def test_a_start_that_keeps_failing_is_reported_and_fails_the_switch(self):
+    def test_start_recovers_after_the_initial_three_refusals(self):
         self.relocating()
         self.start_refusals = deploy.START_ATTEMPTS
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
-        self.assertEqual(self.service_commands(), ["stop"] + ["start"] * deploy.START_ATTEMPTS)
+        self.assert_back_in_service(result)
+        self.assertEqual(self.service_commands(), ["stop"] + ["start"] * (deploy.START_ATTEMPTS + 1))
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["relocation"]["placement"], "placed")
+
+    def test_a_start_that_keeps_failing_retries_during_health_and_on_exit(self):
+        self.relocating()
+        self.start_refusals = 1000
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertGreater(result["relocation"]["startAttempts"], deploy.START_ATTEMPTS * 2)
         relocation = result["relocation"]
         self.assertEqual((relocation["started"], relocation["outcome"]), (False, "start-failed"))
         self.assertIn("RuntimeError", result["diagnostics"])
         self.assertEqual(result["verdict"], "fail")
         self.assertFalse(result["serving"]["checks"]["service"])
+
+    def test_final_cleanup_recovers_and_the_verdict_records_its_attempts(self):
+        self.relocating()
+        self.start_refusals = deploy.START_ATTEMPTS + 1
+        self.adapter.run_dir = self.state / "deploy-verdicts/synthetic-cleanup"
+        self.adapter.run_dir.mkdir(parents=True, mode=0o700)
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=2, timeout=0)
+        self.assert_back_in_service(result)
+        # No healthy sample followed this last start, so the verdict stays fail.
+        self.assertEqual(result["verdict"], "fail")
+        saved = json.loads((self.adapter.run_dir / "verdict.json").read_text())
+        self.assertEqual(saved["relocation"], result["relocation"])
+        self.assertEqual(saved["relocation"]["startAttempts"], deploy.START_ATTEMPTS + 2)
+
+    def test_unreadable_control_group_cannot_prove_release(self):
+        self.relocating()
+        self.never_released = True
+        execute = self.adapter.command
+        def unreadable(args, cwd=None):
+            if not self.active and "show" in args and args[-2:] == ["-p", "ControlGroup"]:
+                return ""
+            return execute(args, cwd)
+        self.adapter.command = unreadable
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=2, timeout=0)
+        self.assert_back_in_service(result)
+        self.assertFalse(result["relocation"]["released"])
+        self.assertEqual(result["relocation"]["outcome"], "not-released")
+        self.assertEqual(result["verdict"], "fail")
+
+    def test_unit_failure_after_last_health_sample_cannot_keep_a_pass(self):
+        self.relocating()
+        interrupted = self.adapter.interrupted
+        def failed(since, hosts):
+            answer = interrupted(since, hosts)
+            self.active = False
+            self.start_refusals = 1000
+            return answer
+        self.adapter.interrupted = failed
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=2, timeout=5)
+        self.assertTrue(result["serving"]["checks"]["service"])
+        self.assertFalse(result["relocation"]["started"])
+        self.assertEqual(result["relocation"]["outcome"], "start-failed")
+        self.assertEqual(result["verdict"], "fail")
+        self.assertIn("exit-recovery:health-unverified", result["diagnostics"])
+
+    def test_an_exception_during_observation_still_retries_start_on_exit(self):
+        self.relocating()
+        self.start_refusals = deploy.START_ATTEMPTS
+        # Even an abrupt observation failure retains the recovery obligation.
+        original_process = self.adapter.process
+        def process(entry):
+            if self.old_gone and not self.active and self.start_refusals == 0:
+                raise KeyboardInterrupt()
+            return original_process(entry)
+        self.adapter.process = process
+        with self.assertRaises(KeyboardInterrupt):
+            deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertTrue(self.active)
+        self.assertEqual(self.service_commands()[-1], "start")
+
+    def test_new_agent_and_child_after_preflight_are_never_signalled(self):
+        for parent in [102, 103]:
+            for registered in [True, False]:
+                with self.subTest(parent=parent, registered=registered):
+                    self.setUp()
+                    self.relocating()
+                    publish = self.adapter.publish
+                    def admit():
+                        publish()
+                        self.parents.update({160: parent, 161: 160})
+                        self.pgroups.update({160: 160, 161: 160})
+                        self.members = self.members + [160, 161]
+                        self.surviving = {160, 161}
+                        if registered:
+                            self.inventory_overrides = {"conversations": [{"host": {"state": "alive", "pid": 160}}]}
+                    self.adapter.publish = admit
+                    result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+                    self.assert_back_in_service(result)
+                    self.assertEqual(self.signals, [])
+                    self.assertEqual(self.surviving, {160, 161})
+                    self.assertTrue(all(not row["proven"] for row in result["relocation"]["survivors"]))
+                    self.assertEqual(result["relocation"]["outcome"], "unproven-survivors")
+                    self.assertEqual(result["verdict"], "fail")
+
+    def test_agent_admitted_after_inventory_refresh_is_never_signalled(self):
+        self.relocating()
+        read = self.adapter.mcp.call
+        def activity(tool, args):
+            answer = read(tool, args)
+            if tool == "agent_activity" and args.get("limit") == 200 and self.inventory_reads == 2:
+                self.parents.update({160: 103, 161: 160})
+                self.pgroups.update({160: 160, 161: 160})
+                self.members = self.members + [160, 161]
+                self.surviving = {160, 161}
+            return answer
+        self.adapter.mcp.call = activity
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assert_back_in_service(result)
+        self.assertEqual(self.signals, [])
+        self.assertEqual(self.surviving, {160, 161})
+        self.assertEqual(result["relocation"]["outcome"], "unproven-survivors")
+        self.assertEqual(result["verdict"], "fail")
+
+    def test_agent_admitted_between_capture_and_stop_is_never_signalled(self):
+        self.relocating()
+        execute = self.adapter.command
+        def admit(args, cwd=None):
+            if args[:4] == ["systemctl", "--user", "--no-block", "stop"]:
+                self.parents.update({160: 103, 161: 160})
+                self.pgroups.update({160: 160, 161: 160})
+                self.members = self.members + [160, 161]
+                self.surviving = {160, 161}
+            return execute(args, cwd)
+        self.adapter.command = admit
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assert_back_in_service(result)
+        self.assertEqual(self.signals, [])
+        self.assertEqual(self.surviving, {160, 161})
+        self.assertEqual(result["relocation"]["outcome"], "unproven-survivors")
+        self.assertEqual(result["verdict"], "fail")
+
+    def test_helper_that_leaves_viewer_group_before_pidfd_validation_is_not_signalled(self):
+        self.relocating(survivors=[150])
+        signal_process = self.adapter.signal_process
+        def moved(entry, signum, group, read):
+            self.pgroups[entry["pid"]] = entry["pid"]
+            return signal_process(entry, signum, group, read)
+        self.adapter.signal_process = moved
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assert_back_in_service(result)
+        self.assertEqual(self.signals, [])
+        self.assertEqual(self.surviving, {150})
+        self.assertEqual(result["verdict"], "fail")
 
     def test_a_refused_stop_still_ends_with_a_start(self):
         self.relocating()
@@ -1211,7 +1358,7 @@ class CheckoutIntegration(unittest.TestCase):
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
         self.assertEqual(result["protected"][0]["outcome"], "recovered")
-        self.assertEqual(self.inventory_reads, 3)
+        self.assertEqual(self.inventory_reads, 4)  # Three preflight reads, then retirement refresh.
         self.assertEqual(self.service_commands(), ["stop", "start"])
 
     def test_preflight_failure_never_publishes_or_restarts(self):

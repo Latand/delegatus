@@ -188,8 +188,10 @@ and `CPUWeight=1000` and still ran in `app.slice/delegatus.service`, with no
 1. Immediately before the stop, it captures the serving generation's members
    of the service cgroup by PID and start identity. These are the recorded
    launcher, Viewer and runtime host, the verified launcher ancestors up to
-   `MainPID`, and every member whose parents reach them. Agent-owned members are
-   not captured.
+   `MainPID`, and helpers in the process group led by that Viewer. It refreshes
+   the complete agent-host inventory before capture. Detached descendants of
+   serving processes need separate ownership evidence and remain unproven;
+   this also protects agents admitted after the inventory read.
 2. It submits `systemctl --user --no-block stop` and waits until no job is
    pending and the unit is inactive or failed.
 3. For up to 30 seconds it waits for the old cgroup to be empty and released.
@@ -198,16 +200,25 @@ and `CPUWeight=1000` and still ran in `app.slice/delegatus.service`, with no
 4. If the bound passes first, it lists every survivor with its PID, start
    identity, parent PID and arguments. A survivor is proven when it, or a
    parent its chain still reaches, is a captured member with the same start
-   identity. A chain that reaches an agent host, the user manager, a reused PID
-   or an exited process proves nothing. If every survivor is proven, each one
+   identity. That proven identity is retained while other survivors are retired.
+   Helpers must still belong to the captured Viewer's process group, including
+   at the pidfd validation before each signal. A chain that reaches an agent
+   host, the user manager, a reused PID or an exited process proves nothing.
+   If every survivor is proven, each one
    gets SIGTERM and, after five seconds, SIGKILL. The signal goes through a
    pidfd opened before the start identity and cgroup are rechecked. The
    switch then waits up to 30 seconds more. If any survivor is unproven, no
    process is signalled: signalling the proven ones could not release the path.
 5. It always submits `systemctl --user --no-block start` once a stop was
    submitted, whatever steps 2 to 4 found. A refused or failed start is retried
-   up to three times. SIGTERM and SIGHUP to the worker are held from the stop
-   until the start has run, and are delivered afterwards.
+   up to three times initially. If those attempts fail, each bounded health
+   retry checks the unit and resubmits start while it remains inactive or
+   failed. Exit cleanup checks again and makes up to three final attempts,
+   even when observation raises. A persistent refusal is reported as
+   `start-failed`. The verdict records the final cleanup's attempts; a start
+   after the last health sample cannot establish a healthy switch by itself.
+   SIGTERM, SIGHUP and SIGINT to the worker are held through recovery and exit
+   cleanup, and are delivered afterwards.
 6. It reads the placement right after the start. The health samples then
    verify the cgroup, `cpu.weight`, the serving release and protected stages as
    described above.
