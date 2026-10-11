@@ -1,6 +1,24 @@
 import { expect, test } from "bun:test";
 import { ROLE_DEFAULTS } from "./defaults";
 
+test("maintainer preserves Done while deployment is pending and follows the project merge setting", () => {
+  const scaffold = ROLE_DEFAULTS.find(role => role.id === "maintainer")!.promptScaffold;
+  for (const phrase of [
+    "Never reopen a Done task only because its merge is not deployed",
+    "Done tasks with a pending-deploy note, including older ones",
+    "list_tasks with status done without updatedSince and follow nextCursor",
+    "mergeOnReview in get_orchestrator",
+    "When it is on, a task whose pull requests are all merged is Done",
+    "When it is off, an open task in a project that ships by deploy stays open",
+    "nothing it promised is still open",
+    "Змерджено #N. Чекає деплою.",
+    "Розгорнуто <sha>",
+    "successful deployment contains the merge",
+    "Reopen only for new evidence of a real problem, such as a reverted PR or a promised part still open",
+  ]) expect(scaffold).toContain(phrase);
+  expect(scaffold).not.toContain("A task that is merged and not deployed stays open");
+});
+
 test("deployer uses the committed checkout switch procedure and reads its durable verdict", () => {
   const scaffold = ROLE_DEFAULTS.find(role => role.id === "deployer")!.promptScaffold;
   expect(scaffold).toContain("scripts/deploy-checkout.py");

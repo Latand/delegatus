@@ -19,7 +19,7 @@ describe("normalizeModelKey", () => {
 
 describe("registryWindow", () => {
   test("contains the frozen documented registry seed", () => {
-    expect(MODEL_REGISTRY_VERSION).toBe("2026-09-28");
+    expect(MODEL_REGISTRY_VERSION).toBe("2026-10-11");
     expect(registryWindow("fable-5", "standard")).toBe(1_000_000);
     expect(registryWindow("opus-4-8", "standard")).toBe(1_000_000);
     expect(registryWindow("sonnet-4-5", "standard")).toBe(200_000);
@@ -57,5 +57,16 @@ describe("registryWindow", () => {
     expect(registryWindow("sonnet-5-5", "standard")).toBe(1_000_000);
     expect(resolveRegistryKey("sonnet")).toBe("sonnet-5-5");
     expect(registryWindow("sonnet-5", "standard")).toBe(1_000_000);
+  });
+
+  test("Haiku 5.5 has native 1M context, the alias follows it, and Haiku 4.5 retains 200k", () => {
+    for (const model of ["claude-haiku-5-5", "us.anthropic.claude-haiku-5-5", "claude-haiku-5-5[1m]"]) {
+      const normalized = normalizeModelKey(model)!;
+      expect(normalized.key).toBe("haiku-5-5");
+      expect(registryWindow(normalized.key, normalized.mode)).toBe(1_000_000);
+    }
+    expect(resolveRegistryKey("haiku")).toBe("haiku-5-5");
+    expect(registryWindow("haiku-4-5", "standard")).toBe(200_000);
+    expect(registryWindow("haiku-5-6", "standard")).toBeNull();
   });
 });
