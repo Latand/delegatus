@@ -6,7 +6,7 @@ import type { RelayTargetSettings } from "./store";
  * restricted profile: the engine's native web search. Owner host access is
  * selected separately by ownerTierFor, after strict wire parsing.
  */
-export type RelayAnswerProfile = { webSearch: boolean; owner?: true };
+export type RelayAnswerProfile = { webSearch: boolean; owner?: true; prototype?: string };
 
 export type OwnerInstruction = { messageId: string; text: string; requestText: string | null };
 /** Only the triggering message authored by the service-identified owner grants host access. */

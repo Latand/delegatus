@@ -11,6 +11,14 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { loadTasks } from "@/lib/tasks/store";
+import { runsElsewhere } from "@/lib/links/linked";
+import { prototypeReviewSummary } from "./model";
+
+export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; authorize?: () => void };
+const inProcess = (context: PrototypeDeliveryContext): context is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in context && context.kind === "operator-in-process";
 
 /** The persisted delivery text: retries use these exact bytes. */
 export function prototypeDecisionText(task: { id: string; text: string }, round: PrototypeReviewRound,
@@ -32,7 +40,7 @@ export interface PrototypeDeliveryResult { state: PrototypeDeliveryState; operat
 /** Seam at the existing send/receipt boundary, never at a text-only fake queue. */
 export interface PrototypeDelivery {
   recover(decision: PrototypeDecision): Promise<PrototypeDeliveryResult | null>;
-  send(request: NextRequest, decision: PrototypeDecision): Promise<PrototypeDeliveryResult>;
+  send(request: PrototypeDeliveryContext, decision: PrototypeDecision): Promise<PrototypeDeliveryResult>;
   retry(request: NextRequest, decision: PrototypeDecision): Promise<PrototypeDeliveryResult>;
 }
 export async function prototypeDeliveryResponse(response: Response): Promise<PrototypeDeliveryResult> {
@@ -71,6 +79,18 @@ export const prototypeDelivery: PrototypeDelivery = {
     return { state: receipt?.state === "in-flight" ? "pending" : receipt && !receipt.duplicateRisk ? "failed" : "uncertain",operationId };
   },
   async send(request,decision) {
+    if (inProcess(request)) {
+      request.authorize?.();
+      const task = loadTasks().find(t => t.prototypeReviews?.some(r => r.decision?.delivery.clientMessageId === decision.delivery.clientMessageId));
+      const seat = task ? orchestratorSeatFor(task.project).active : null;
+      const result = await enqueueStructuredMessage({ conversationId: decision.delivery.conversationId,
+        path: seat?.conversationId === decision.delivery.conversationId ? seat.path ?? "" : "", clientMessageId: decision.delivery.clientMessageId, text: decision.delivery.text,
+        origin: { kind: "operator" }, policy: "steer-or-queue", images: [], admissionGuard: request.authorize,
+        recoveryAuthorityGuard: request.authorize }, { authorizeDispatch: request.authorize });
+      return { state: result?.ok ? result.outcome === "delivered" ? "sent" : "pending"
+        : result?.admission === "refused" || !result ? "failed" : "uncertain",
+        ...(result?.operationId ? { operationId: result.operationId } : {}) };
+    }
     return prototypeDeliveryResponse(await conversationHostPOST(new NextRequest(new URL("/api/conversation-host",request.url), {
       method: "POST", headers: request.headers, body: JSON.stringify({ conversationId: decision.delivery.conversationId,
         clientMessageId: decision.delivery.clientMessageId, text: decision.delivery.text, policy: "steer-or-queue", images: [] }),
@@ -99,13 +119,17 @@ export async function refreshPrototypeDelivery(taskId: string,reviewId: string,d
     if (recovered.state !== decision.delivery.state || recovered.operationId !== decision.delivery.operationId) recordDelivery(taskId,reviewId,recovered);
   });
 }
-export async function decidePrototype(request: NextRequest,taskId: string,input: DecidePrototypeInput | { reviewId: string; retry: true },
+export async function decidePrototype(request: PrototypeDeliveryContext,taskId: string,input: DecidePrototypeInput | { reviewId: string; retry: true },
   world: PrototypeWorld = prototypeWorld, delivery: PrototypeDelivery = prototypeDelivery): Promise<void> {
   const reviewId = input.reviewId;
   if (!/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid review id");
   await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {
+    if (inProcess(request)) request.authorize?.();
     let decision = mutatePrototypeRound(taskId,reviewId,(round,task) => {
       if (!("retry" in input)) {
+        if (inProcess(request) && (runsElsewhere(task) || (!round.decision && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id))) {
+          throw new PrototypeError("this round is no longer waiting here",409);
+        }
         if (!Array.isArray(input.chosen) || (!input.chosen.length && !round.questions?.length) || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length
           || input.chosen.some(n => !round.variants.some(v => v.number === n))) throw new PrototypeError("choose one or more declared variants");
         if (typeof input.comment !== "string" || input.comment.length > PROTOTYPE_LIMITS.comment) throw new PrototypeError("comment exceeds 20000 characters");
@@ -147,6 +171,7 @@ export async function decidePrototype(request: NextRequest,taskId: string,input:
         recordDelivery(taskId,reviewId,recovered);
         if (!("retry" in input) || recovered.state !== "failed" || !recovered.operationId) return;
         decision.delivery.operationId = recovered.operationId;
+        if (inProcess(request)) throw new PrototypeError("retry the delivery from Delegatus",409);
         recordDelivery(taskId,reviewId,await delivery.retry(request,decision));
         return;
       }

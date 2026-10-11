@@ -73,6 +73,12 @@ export class TelegramBotError extends Error {
   }
 }
 
+/** Internal, already-admitted prototype copies; never an agent-supplied file path. */
+export interface TelegramRichMessage {
+  markdown: string;
+  images: Array<{ id: string; blob: Blob }>;
+}
+
 export interface TelegramBotDependencies {
   transportFor(token: string): BotTransport;
   openStore(): TelegramBotStore;
@@ -909,6 +915,73 @@ export class TelegramBotService {
       parts: sent.length,
       alreadySent: false,
     };
+  }
+
+  /** One prototype message under a durable claim; ambiguous sends retain it. */
+  async sendRichMessage(input: {
+    clientRequestId: string; chat: string; topicId?: number;
+    message: TelegramRichMessage; fallbackMarkdown?: string;
+  }): Promise<TelegramBotSendAnswer> {
+    const store = this.connectedStore();
+    const chat = this.resolveChat(store, input.chat);
+    const refusal = postRefusal(chat);
+    if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
+    if (!input.clientRequestId.trim() || !input.message.markdown || input.message.markdown.length > 32768
+      || input.message.images.length > 50 || input.message.images.some(i => !/^[A-Za-z0-9_-]{1,64}$/.test(i.id)
+        || !(i.blob instanceof Blob) || i.blob.size > 10 * 1024 * 1024)
+      || new Set(input.message.images.map(i => i.id)).size !== input.message.images.length
+      || (input.fallbackMarkdown !== undefined && (!input.fallbackMarkdown || input.fallbackMarkdown.length > 32768))) {
+      throw new TelegramBotError("bad_request", "invalid rich message");
+    }
+    const transport = this.transport();
+    if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
+    const callerKey = "prototype-review";
+    const key = input.clientRequestId.trim();
+    const attributedTo: TelegramBotAttribution = { unidentified: true };
+    const claim = store.claimSend(callerKey, key, chat.chatId, this.deps.now());
+    if (!claim.claimed) {
+      if (claim.row.state !== "sent") throw new TelegramBotError("send_uncertain", "an earlier rich send may already be posted");
+      return { chat: store.chat(claim.row.chatId)?.alias ?? claim.row.chatId, chatId: claim.row.chatId,
+        messageIds: claim.row.messageIds, sentAt: claim.row.sentAt!, attributedTo, parts: claim.row.parts, alreadySent: true };
+    }
+    const topicId = Number.isSafeInteger(input.topicId) && input.topicId! > 0 ? input.topicId! : null;
+    let chatId = chat.chatId;
+    let markdown = input.message.markdown;
+    const params: Record<string, unknown> = { chat_id: Number(chatId),
+      ...(topicId === null ? {} : { message_thread_id: topicId }),
+      rich_message: { markdown, ...(input.message.images.length ? { media: input.message.images.map(i => ({ id: i.id, media: { type: "photo", media: `attach://${i.id}` } })) } : {}) },
+      ...Object.fromEntries(input.message.images.map(i => [i.id, i.blob])),
+    };
+    const call = async (body: Record<string, unknown>) => {
+      let result = await transport.call<TgSent>("sendRichMessage", { ...body, chat_id: Number(chatId) });
+      if (!result.ok && result.migrateToChatId) {
+        store.migrateChat(chatId, result.migrateToChatId);
+        chatId = result.migrateToChatId;
+        result = await transport.call<TgSent>("sendRichMessage", { ...body, chat_id: Number(chatId) });
+      }
+      return result;
+    };
+    let result = await call(params);
+    // Only a definitive media refusal permits the text-only retry under this claim.
+    if (!result.ok && result.kind === "http" && result.status === 400 && input.message.images.length && input.fallbackMarkdown
+      && /photo|image|media|file|upload|dimension/i.test(result.description ?? "")) {
+      markdown = input.fallbackMarkdown;
+      result = await call({ chat_id: Number(chatId), ...(topicId === null ? {} : { message_thread_id: topicId }), rich_message: { markdown } });
+    }
+    if (!result.ok) {
+      if (result.kind === "timed_out" || result.kind === "network_failed") throw new TelegramBotError("send_uncertain", "Telegram did not confirm the rich send");
+      const error = sendFailure(result, chat);
+      store.failSend(callerKey, key, error.code, []);
+      throw error;
+    }
+    const sent = result.result;
+    if (!sent || !Number.isSafeInteger(sent.message_id) || sent.message_id <= 0 || !Number.isSafeInteger(sent.date)) {
+      throw new TelegramBotError("send_uncertain", "Telegram returned an incomplete rich receipt");
+    }
+    const now = this.deps.now();
+    store.completeSend({ callerKey, clientRequestId: key, chatId, conversationId: null, now,
+      sent: [{ messageId: sent.message_id, date: sent.date, text: markdown, replyToMessageId: null, topicId, kind: "text" }] });
+    return { chat: store.chat(chatId)?.alias ?? chatId, chatId, messageIds: [sent.message_id], sentAt: now.toISOString(), attributedTo, parts: 1, alreadySent: false };
   }
 
   /** One photo or one atomic Telegram album, using the text send's claim and

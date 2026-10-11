@@ -23,6 +23,10 @@ import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
 import { startTestRelay } from "./testRelay";
+import { saveTasks, loadTasks } from "@/lib/tasks/store";
+import { telegramRound, telegramTask } from "@/lib/prototypeReview/telegram.fixture";
+import { prototypeCopyLine } from "@/lib/prototypeReview/telegramAnswer";
+import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -93,6 +97,96 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
+test("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing", async () => {
+  const round = telegramRound(); saveTasks([telegramTask([round])]);
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let selections = 0, launches = 0;
+  const previous = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
+  const text = `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
+  const request = { ...contextRequest, request_id: "prototype-owner", answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
+    ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+    conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
+  try {
+    const ports = { command: "/missing-prototype-cli", ownerPorts: { launch: async () => { launches++; throw new Error("must not spawn"); },
+      observe: async () => ({ state: "failed" as const }), stop: async () => {} } };
+    const [result, duplicate] = await Promise.all([runClaimedRequest(paired, request, undefined, ports), runClaimedRequest(paired, request, undefined, ports)]);
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "m1" } });
+    if (result?.outcome === "answered") expect(result.answer.text).toContain("✅ Записав рішення");
+    expect(duplicate).toBeNull(); expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
+    const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
+    expect(decision).toMatchObject({ chosen: [2], comment: "Keep these controls.", answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
+    expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
+    expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
+    expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.profile).toMatchObject({ owner: true, prototype: round.id });
+    expect(readRunLedger().runs).toEqual([]);
+    const persisted = JSON.stringify(loadTasks());
+    const replay = await runClaimedRequest(paired, { ...request, lease_id: "repeat-".repeat(4) }, undefined, ports);
+    expect(replay).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "m1" } });
+    expect(JSON.stringify(loadTasks())).toBe(persisted);
+    expect(selections).toBe(0); expect(launches).toBe(0);
+  } finally { accountManager.resolveHeadlessSpawn = previous; await server.close(); }
+});
+
+for (const scenario of ["invalid", "lease-lost", "revoked"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
+  const round = telegramRound(); saveTasks([telegramTask([round])]);
+  const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = true;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      if (scenario === "lease-lost") return { status: 409, body: { error: { code: "lease_lost", message: "gone" } } };
+      if (scenario === "revoked") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
+    }
+    return { body: { status: "ok" } };
+  });
+  paired.api_base = `${server.origin}/v1`; paired.origin = server.origin;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const text = prototypeCopyLine(round, 2).replace("1a 2a 3a", scenario === "invalid" ? "1f 2a 3a" : "1a 2a 3a");
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: `prototype-${scenario}`, answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true }, conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } },
+      undefined, { command: "/missing-prototype-cli" });
+    if (scenario === "invalid") {
+      expect(result).toMatchObject({ outcome: "answered" });
+      if (result?.outcome === "answered") expect(result.answer.text).toContain("Не записав:");
+    } else if (scenario === "lease-lost") expect(result).toBeNull();
+    else expect(result).toMatchObject({ outcome: "failed" });
+    expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toBeUndefined();
+  } finally { await server.close(); }
+});
+
+for (const scenario of ["member", "owner-off", "unknown", "decided", "superseded"] as const) test(`prototype ${scenario} text follows the ordinary relay path`, async () => {
+  const round = telegramRound();
+  const held = telegramTask([round]);
+  if (scenario === "decided") round.decision = { chosen: [1], comment: "Earlier", at: round.createdAt,
+    delivery: { state: "no-orchestrator", conversationId: null, clientMessageId: "decision", text: "decision" } };
+  if (scenario === "superseded") held.prototypeReviews!.push(telegramRound("next"));
+  saveTasks(scenario === "unknown" ? [] : [held]);
+  const before = JSON.stringify(loadTasks());
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = scenario !== "owner-off";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let launches = 0;
+  const text = prototypeCopyLine(round, 2);
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: `ordinary-${scenario}`, answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: scenario !== "member" },
+        tools: [], conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } }, undefined, {
+      command: stub("const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Normal',reply_to:'m1'}));"),
+      ownerPorts: { launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_ordinary" } }; },
+        observe: async () => ({ state: "ended", finalText: "Normal" }), stop: async () => {}, pollMs: 5 },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Normal" } });
+    expect(launches).toBe(scenario === "member" || scenario === "owner-off" ? 0 : 1);
+    expect(JSON.stringify(loadTasks())).toBe(before);
+  } finally { await server.close(); }
+});
+
 test("an unsafe provider home declines as a profile error before launch", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {

@@ -1,4 +1,6 @@
 import { ownerRelayAuthorized } from "./ownerAuthority";
+import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
+import { runPrototypeAnswer } from "./prototypeAnswer";
 import { runOwnerAgent, type OwnerRunPorts } from "./ownerRun";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
@@ -33,7 +35,7 @@ import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "
 import { answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { noteRelayProgress } from "./activity";
-import { answerRecorder, countMemberAnswers, type RelayAnswerDelivery } from "./answers";
+import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerDelivery } from "./answers";
 import {
   answerProfileFor,
   ownerTierFor,
@@ -279,6 +281,10 @@ export async function runClaimedRequest(
   }
   const profile = answerProfileFor(requester);
   const owner = ownerTierFor(target, request);
+  const previousAnswer = owner ? readAnswerRecord(relay.id, target.id, requestId) : null;
+  const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
+    && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
+  const prototype = owner ? matchPrototypeAnswer(owner.text, undefined, replayReviewId) : null;
   if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
   if (activeDrain()) return finish(declined(leaseId, "busy"));
   let conversation: RelayConversation | null = null;
@@ -323,14 +329,14 @@ export async function runClaimedRequest(
       if (!reserved) return await finish(declined(leaseId, "busy", null, "chat busy"));
       conversation = reserved[0]!;
     }
-    const selection = accountManager.resolveHeadlessSpawn(
+    const selection = prototype ? null : accountManager.resolveHeadlessSpawn(
       target.engine,
       conversation?.accountId ?? null,
       [],
       target.project,
       target.model,
     );
-    if (selection.kind !== "available")
+    if (selection && selection.kind !== "available")
       return await finish(
         declined(
           leaseId,
@@ -340,7 +346,7 @@ export async function runClaimedRequest(
             : null,
         ),
       );
-    if (conversation) { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
+    if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
     let newestProgress: ExternalRelayProgress | null = null;
     let leaseUnavailable = false;
     let beatBusy = false;
@@ -420,10 +426,17 @@ export async function runClaimedRequest(
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
-        run = owner ? runOwnerAgent({
+        if (prototype && rounds === 1) {
+          pendingBeat = beat();
+          await pendingBeat;
+          if (leaseUnavailable) return null;
+        }
+        run = prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
+          if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked");
+        }) : owner ? runOwnerAgent({
           authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
-          request, owner, target, accountId: selection.account.accountId,
+          request, owner, target, accountId: selection!.account.accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: (conversationId) => {
             changeRun(requestId, current => ({ ...current, conversationId }));
@@ -435,7 +448,7 @@ export async function runClaimedRequest(
           engine: target.engine,
           model: target.model,
           effort: target.effort,
-          account: selection.account,
+          account: selection!.account,
           ["prompt"]: conversation ? persistentPrompt : roundPrompt,
           schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
@@ -450,7 +463,7 @@ export async function runClaimedRequest(
             }
           },
         });
-        void run.done.then(() => { runFinished = true; });
+        void run.done.then(() => { runFinished = true; }, () => { runFinished = true; });
       } catch (error) {
         if (error instanceof EphemeralProfileError)
           return await finish(declined(leaseId, "profile_error"));
@@ -458,9 +471,9 @@ export async function runClaimedRequest(
       }
       const launchedRun = run;
       if (!launchedRun) throw new Error("external relay launch unavailable");
-      // Capacity, drain and profile declines never ran an agent. Count only
-      // a launched child, including one still running or destined to fail.
-      if ((launchedRun.pid || owner) && !recorder?.begun) recorder?.begin(target.engine, target.model, owner ? { ...profile, owner: true } : profile);
+      // Record launched children and authenticated owner controls. The profile
+      // identifies prototype decisions that used no agent or account capacity.
+      if ((launchedRun.pid || owner) && !recorder?.begun) recorder?.begin(target.engine, target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
       changeRun(requestId, (current) => ({
         ...current,
         childPid: launchedRun.pid,
