@@ -165,6 +165,14 @@ test("merge and move across scopes widens, saves versions and keeps the source r
   expect(row(one).rule).toBe(text); expect(row(two).state).toBe("active");
   expect(storedLessonTexts()).toContain(merged);
 });
+test("a merge target must survive every merge in the same call", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const one = fixture(scope), two = fixture(scope), three = fixture(scope), p = pass();
+  refusal(p, input({ [scope]: [three] }, { merge: [
+    { into: two, from: [one], rule: text, note: "Combine the first two conditions." },
+    { into: three, from: [two], rule: text, note: "Combine the remaining conditions." },
+  ] }), "CURATE_PARTITION");
+});
 test.each([roleScope(PROJECT, "visual-critic"), projectScope(PROJECT)])("split under %s can be undone as one pass", to => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
   const changed = "Inspect role-specific guidance before changing its stored scope.";

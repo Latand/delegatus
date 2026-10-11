@@ -127,6 +127,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (mergedTargets.has(item.into) || dispositions.has(item.into) || (input.rewrite ?? []).some(edit => edit.id === item.into) || !item.from.length || item.from.includes(item.into)) refuse("CURATE_PARTITION", "merge needs a distinct surviving target and sources");
       target(into.scope); mergedTargets.add(item.into);
       for (const id of item.from) {
+        if (mergedTargets.has(id)) refuse("CURATE_PARTITION", "every merge target must remain active after this call");
         const from = dispose(id, true);
         if (!reaches(into.scope, from.scope)) refuse("CURATE_NARROWS", "merge must preserve the reach of every source");
         if (scopeKind(from.scope) === "role" && scopeKind(into.scope) !== "role") note(item.note);
