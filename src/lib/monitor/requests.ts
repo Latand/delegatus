@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { taskTextFromPrompt } from "@/lib/tasks/inboxScanner";
+import { taskTextFromPrompt } from "@/lib/taskTextFromPrompt";
 
 import { redactBounded } from "./redact";
 import type { OperatorRequest } from "./types";
