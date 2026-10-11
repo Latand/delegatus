@@ -19,8 +19,16 @@ class FastMCP:
         self.peak = 0
         self.entered = []
         self.release = asyncio.Event()
+        self.wait_started = asyncio.Event()
+        self.wait_release = asyncio.Event()
 
     async def call_tool(self, name, arguments):
+        if name in {"wait_for_new_message", "wait_for_settled_message"}:
+            self.wait_started.set()
+            await asyncio.wait_for(self.wait_release.wait(), arguments["timeout"])
+            return {"event": True}
+        if name in {"get_me", "incoming_feed_status"}:
+            return {"ready": True}
         self.active += 1
         self.peak = max(self.peak, self.active)
         self.entered.append(arguments["page"])
@@ -106,6 +114,43 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
             first.cancel()
             queued.cancel()
             await asyncio.gather(first, queued, return_exceptions=True)
+
+    async def test_local_event_waits_do_not_hold_read_admission(self):
+        for name in ("wait_for_new_message", "wait_for_settled_message"):
+            with self.subTest(tool=name):
+                await self.asyncSetUp()
+                # The SDK supplies tool names and arguments by keyword.
+                waiting = asyncio.create_task(self.mcp.dispatch(
+                    name=name, arguments={"timeout": 3600},
+                ))
+                calls = []
+                try:
+                    await asyncio.wait_for(self.mcp.wait_started.wait(), 1)
+                    calls = [asyncio.create_task(self.mcp.dispatch("get_messages", {
+                        "page": page, "page_size": 120,
+                    })) for page in (2, 3, 4)]
+                    await asyncio.sleep(0.02)
+                    self.assertEqual(self.mcp.entered, [2])
+                    self.assertEqual(self.mcp.peak, 1)
+                    self.mcp.release.set()
+                    results = await asyncio.wait_for(asyncio.gather(*calls), 1)
+                    self.assertEqual([row["page"] for row in results], [2, 3, 4])
+                    self.assertEqual(self.mcp.entered, [2, 3, 4])
+                    self.assertEqual(self.mcp.peak, 1)
+                    for read in ("get_me", "incoming_feed_status"):
+                        self.assertEqual(await asyncio.wait_for(
+                            self.mcp.dispatch(read, {}), 1,
+                        ), {"ready": True})
+                    self.assertFalse(waiting.done())
+                finally:
+                    waiting.cancel()
+                    for call in calls:
+                        call.cancel()
+                    await asyncio.gather(waiting, *calls, return_exceptions=True)
+                result = await asyncio.wait_for(self.mcp.dispatch("get_messages", {
+                    "page": 5, "page_size": 120,
+                }), 1)
+                self.assertEqual(result["page"], 5)
 
     async def request(self, session=None, authorized=True):
         headers = [(b"authorization", b"Bearer " + b"T" * 43)] if authorized else []

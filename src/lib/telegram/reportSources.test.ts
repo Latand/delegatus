@@ -106,6 +106,23 @@ class FakeTelegram implements TelegramReadPort {
 
 const WINDOW = { windowStart: "2026-08-20T07:00:00.000Z", windowEnd: "2026-08-21T07:00:00.000Z" };
 
+test("a feed starting after the entire owed window refuses planning before dialog reads", async () => {
+  const port = new FakeTelegram([dialog("801", "Dialog A")], { "801": "2026-08-22T06:00:00.000Z" });
+  port.feedCoveredSinceMs = Date.parse("2026-08-22T06:00:00.000Z");
+  await expect(planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" }))
+    .rejects.toThrow("Telegram report feed coverage starts after this window");
+  expect(port.calls).toEqual([`feedDialogs:${Date.parse(WINDOW.windowStart)}`]);
+});
+
+test("an accepted plan starts at or after coverage when the feed begins at the window end", async () => {
+  const port = new FakeTelegram([], {});
+  port.feedCoveredSinceMs = Date.parse(WINDOW.windowEnd);
+  const plan = await planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" });
+  expect(Date.parse(plan.windowStart)).toBeGreaterThanOrEqual(port.feedCoveredSinceMs);
+  expect(plan.windowStart).toBe(WINDOW.windowEnd);
+  expect(plan.windowEnd).toBe(WINDOW.windowEnd);
+});
+
 test("a young feed caps the report window and reaches dialogs past the old probe budget", async () => {
   const chats = Array.from({ length: MAX_PROBES + 20 }, (_, index) => dialog(String(8000 + index), `Dialog ${index}`));
   const port = new FakeTelegram(chats, { [chats.at(-1)!.id]: "2026-08-21T06:00:00.000Z" });

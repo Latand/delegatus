@@ -121,14 +121,18 @@ FastMCP.streamable_http_app = _authenticated_streamable_http_app
 
 # Every MCP client reaches this dispatch, including agents that fan out reads.
 # Keep one Telegram tool read active across the whole process and queue the
-# rest. async-with releases admission on errors and cancellation as well.
+# rest. Local event waits must leave reads available while awaiting activity.
+# async-with releases admission on errors and cancellation as well.
 _read_admission = asyncio.Semaphore(1)
+_local_event_waits = frozenset({"wait_for_new_message", "wait_for_settled_message"})
 _original_call_tool = FastMCP.call_tool
 
 
-async def _queued_call_tool(self, *args, **kwargs):
+async def _queued_call_tool(self, name, *args, **kwargs):
+    if name in _local_event_waits:
+        return await _original_call_tool(self, name, *args, **kwargs)
     async with _read_admission:
-        return await _original_call_tool(self, *args, **kwargs)
+        return await _original_call_tool(self, name, *args, **kwargs)
 
 
 FastMCP.call_tool = _queued_call_tool

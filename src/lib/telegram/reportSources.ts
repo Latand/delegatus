@@ -181,7 +181,10 @@ export async function planReportSources(
   if (fromFeed.coveredSinceMs === null || !Number.isFinite(fromFeed.coveredSinceMs)) {
     throw new Error("Telegram report sources cannot cover this window");
   }
-  const windowStart = Math.min(windowEnd, Math.max(requestedStart, fromFeed.coveredSinceMs));
+  if (fromFeed.coveredSinceMs > windowEnd) {
+    throw new Error("Telegram report feed coverage starts after this window");
+  }
+  const windowStart = Math.max(requestedStart, fromFeed.coveredSinceMs);
   const active: ReportSourceDialog[] = [];
   const carried = new Set<string>();
   for (const dialog of fromFeed.dialogs) {

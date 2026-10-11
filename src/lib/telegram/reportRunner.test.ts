@@ -618,6 +618,42 @@ test("a failed window remains stable even after a week offline", async () => {
   expect(Date.parse(retry.windowEnd)).toBe(NOW);
 });
 
+test("a replacement feed after the failed window refuses retries and preserves both owed bounds", async () => {
+  const ports = new FakePorts();
+  enableReports();
+  const first = new TelegramReportRunner(ports);
+  await first.tick();
+  await first.settled();
+  ports.live = false;
+  ports.clock = NOW + 60_000;
+  await first.tick();
+  const owed = readTelegramReports().cursor;
+  expect(owed.unreportedSinceAt).toBe(new Date(NOW - 24 * 3_600_000).toISOString());
+  expect(owed.unreportedUntilAt).toBe(new Date(NOW).toISOString());
+
+  ports.live = true;
+  ports.feedCoveredSinceMs = Date.parse("2026-08-22T06:00:00.000Z");
+  for (const days of [1, 7]) {
+    ports.clock = NOW + days * 24 * 3_600_000;
+    ports.reads = [];
+    const restarted = new TelegramReportRunner(ports);
+    await restarted.runNow();
+    await restarted.settled();
+    const file = readTelegramReports();
+    expect(file.active).toBeNull();
+    expect(file.history[0]).toMatchObject({
+      status: "failed", errorCode: "sources_failed", hasReport: false,
+      windowStart: owed.unreportedSinceAt, windowEnd: owed.unreportedUntilAt,
+    });
+    expect(file.cursor).toEqual(owed);
+    expect(file.cursor.lastSuccessfulWindowEndAt).toBeNull();
+    expect(ports.spawns).toHaveLength(1);
+    expect(ports.reads).toEqual(["getMe", "feedDialogs"]);
+    expect(ports.readPhaseActive).toBe(false);
+    expect(fs.existsSync(reportSourcesPath(file.history[0].id))).toBe(false);
+  }
+});
+
 test("the history row, source plan and analyst brief use the feed's capped window", async () => {
   const ports = new FakePorts();
   ports.feedCoveredSinceMs = NOW - 2 * 3_600_000;

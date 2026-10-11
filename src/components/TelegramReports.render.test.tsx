@@ -210,7 +210,7 @@ test("the source picker lists groups with a light and a full pass", () => {
 test("an action failure is announced instead of leaving the panel silent", () => {
   const html = render(stateFor({ settings: { enabled: true, time: "10:00", groups: [], promptIsDefault: true } }, { failure: { code: "sources_failed" } }));
   expect(html).toContain("role=\"alert\"");
-  expect(html).toContain("The chats to read could not be listed.");
+  expect(html).toContain("The report sources could not be read or do not cover this window.");
 });
 
 test("state that has not loaded yet says so instead of rendering an empty schedule", () => {
