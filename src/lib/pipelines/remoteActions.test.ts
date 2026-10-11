@@ -96,8 +96,9 @@ test.each(["before-write", "after-write"] as const)("a deferred skip preserves o
   let entered!: () => void, release!: () => void;
   const checking = new Promise<void>((resolve) => { entered = resolve; });
   const held = new Promise<void>((resolve) => { release = resolve; });
+  let commitSignal: AbortSignal | undefined;
   const heldPorts = { ...ports, exec: async (...args: Parameters<typeof realExec>) => {
-    if (args[1][0] === "commit" && boundary === "before-write") { entered(); await held; }
+    if (args[1][0] === "commit" && boundary === "before-write") { commitSignal = args[4]?.signal; entered(); await held; }
     const result = await realExec(...args);
     if (args[1][0] === "commit" && boundary === "after-write") { entered(); await held; }
     return result;
@@ -111,6 +112,19 @@ test.each(["before-write", "after-write"] as const)("a deferred skip preserves o
     expect(await Promise.race([checking.then(() => true), work.then(() => false), Bun.sleep(1000).then(() => false)])).toBe(true);
     const pause = patchPipeline(lane.id, { action: "pause" }, ports);
     expect(await Promise.race([pause, Bun.sleep(150).then(() => null)])).not.toBeNull();
+    if (boundary === "before-write") {
+      // Pause invalidates the durable action immediately; the watcher delivers
+      // cancellation on its next turn. Keep Git at the pre-write boundary until
+      // that cancellation arrives, so this test never kills a ref write midway.
+      expect(commitSignal).toBeDefined();
+      await Promise.race([
+        new Promise<void>(resolve => {
+          if (commitSignal!.aborted) resolve();
+          else commitSignal!.addEventListener("abort", () => resolve(), { once: true });
+        }),
+        Bun.sleep(1_000).then(() => { throw new Error("paused commit was not cancelled"); }),
+      ]);
+    }
     release(); await work;
     expect(findPipelineRecord(lane.id)).toMatchObject({ state: "paused", lastPassedCommit: base });
     await patchPipeline(lane.id, { action: "resume" }, ports);

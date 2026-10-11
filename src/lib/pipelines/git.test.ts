@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -57,9 +58,17 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
 });
 
 let previousState: string | undefined;
+let previousGitConfig: Record<string, string> = {};
 let publicationState: string;
 beforeEach(() => {
   closeAgentRegistryForTests();
+  previousGitConfig = {};
+  for (const key of Object.keys(process.env)) {
+    if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/.test(key)) {
+      previousGitConfig[key] = process.env[key]!;
+      delete process.env[key];
+    }
+  }
   previousState = process.env.LLV_STATE_DIR;
   publicationState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-git-state-"));
   process.env.LLV_STATE_DIR = publicationState;
@@ -68,6 +77,7 @@ afterEach(() => {
   closeAgentRegistryForTests();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
+  Object.assign(process.env, previousGitConfig);
   fs.rmSync(publicationState, { recursive: true, force: true });
 });
 
@@ -106,8 +116,8 @@ async function isolatedIdentityRepo() {
     if (/^GIT_(?:AUTHOR_|COMMITTER_|CONFIG_|ALTERNATE_OBJECT_DIRECTORIES$|OBJECT_DIRECTORY$|DIR$|WORK_TREE$|IMPLICIT_WORK_TREE$|GRAFT_FILE$|INDEX_FILE$|NO_REPLACE_OBJECTS$|REPLACE_REF_BASE$|PREFIX$|SHALLOW_FILE$|COMMON_DIR$)/.test(key)) delete env[key];
   }
   Object.assign(env, { HOME: home, XDG_CONFIG_HOME: xdg, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig") });
-  const exec: ExecPort = (command, args, cwd, overrides) => {
-    const result = spawnSync(command, args, { cwd, env: { ...env, ...overrides }, encoding: "utf8" });
+  const exec: ExecPort = (command, args, cwd, overrides, options) => {
+    const result = spawnSync(command, args, { cwd, env: { ...env, ...overrides }, encoding: options?.stdoutEncoding ?? "utf8" });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr || result.error?.message || "" };
   };
   const run = async (...args: string[]) => {
@@ -1190,6 +1200,43 @@ test("declared output custody refuses an undeclared path staged after its initia
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test("controller death during a commit hook leaves no stale index claim", async () => {
+  const box = await isolatedIdentityRepo();
+  let child: ReturnType<typeof spawn> | undefined;
+  const released = path.join(box.repo, ".git", "released");
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
+    const hooks = path.join(box.repo, ".git", "hooks");
+    await box.run("config", "core.hooksPath", hooks);
+    const entered = path.join(box.repo, ".git", "entered");
+    const finished = path.join(box.repo, ".git", "finished");
+    fs.writeFileSync(path.join(hooks, "pre-commit"), '#!/bin/sh\nexport GIT_DIR="$(git rev-parse --absolute-git-dir)"\ntouch "$GIT_DIR/entered"\ni=0\nwhile [ ! -f "$GIT_DIR/released" ] && [ "$i" -lt 200 ]; do sleep 0.01; i=$((i+1)); done\ntouch "$GIT_DIR/finished"\nexit 1\n', { mode: 0o755 });
+    const script = `import { commitPipelineStage } from ${JSON.stringify(path.resolve("src/lib/pipelines/git.ts"))};
+      import { realExec } from ${JSON.stringify(path.resolve("src/lib/workflows/provision.ts"))};
+      await commitPipelineStage(${JSON.stringify(subject)}, "build", true, realExec);`;
+    child = spawn(process.execPath, ["--eval", script], { cwd: process.cwd(), env: box.env, stdio: "ignore" });
+    const exited = new Promise<void>((resolve) => child!.once("exit", () => resolve()));
+    const deadline = Date.now() + 3_000;
+    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(10);
+    expect(fs.existsSync(entered)).toBe(true);
+    child.kill("SIGKILL");
+    await Promise.race([exited, Bun.sleep(2_000).then(() => { throw new Error("fixture controller did not exit"); })]);
+    fs.writeFileSync(released, "");
+    while (!fs.existsSync(finished) && Date.now() < deadline) await Bun.sleep(10);
+    expect(fs.existsSync(finished)).toBe(true);
+    expect(fs.existsSync(path.join(box.repo, ".git", "index.lock"))).toBe(false);
+    fs.writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    expect(await commitPipelineStage(subject, "later", true, box.exec)).toMatchObject({ ok: true });
+    expect(await box.run("show", "HEAD:report.md")).toBe("stage output");
+  } finally {
+    fs.writeFileSync(released, "");
+    if (child) await stopFixtureProcess(child);
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
 test.each([true, false])("controller commit retains foreign index custody acquired after validation (read-write: %s)", async (allowCommit) => {
   const box = await isolatedIdentityRepo();
   try {
@@ -1239,10 +1286,10 @@ test.each([true, false])("controller commit fences hook tree changes and runs ev
       .toMatchObject({ ok: false, deferred: true });
     expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
     expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 2;");
-    expect(await box.run("show", ":source.ts")).toBe("export const value = 2;");
-    expect(fs.readFileSync(marker, "utf8")).toBe("pre-commit\nprepare-commit-msg\ncommit-msg\n");
+    expect(await box.run("show", ":source.ts")).toBe("export const value = 1;");
+    expect(fs.readFileSync(marker, "utf8")).toBe("pre-commit\nprepare-commit-msg\ncommit-msg\npost-commit\n");
     expect(fs.existsSync(path.join(box.repo, ".git", "index.lock"))).toBe(false);
-    await box.run("restore", "--source=HEAD", "--worktree", "--", "source.ts");
+    await box.run("restore", "--source=HEAD", "--staged", "--worktree", "--", "source.ts");
     fs.unlinkSync(marker);
     fs.writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\necho pre-commit >> hook-order\n", { mode: 0o755 });
     // The markers are hook evidence, rather than declared stage output.
@@ -1272,6 +1319,24 @@ test("controller commit refuses a branch movement while its immutable commit obj
     expect(await box.run("rev-parse", "HEAD")).toBe(moved);
     expect(await box.run("show", ":report.md")).toBe("stage output");
     expect(fs.readFileSync(path.join(box.repo, "report.md"), "utf8")).toBe("stage output\n");
+    expect(fs.existsSync(path.join(box.repo, ".git", "index.lock"))).toBe(false);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("controller settlement refuses a branch switch inside a commit hook", async () => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    await box.run("branch", "other");
+    fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
+    const hooks = path.join(box.repo, ".git", "hooks");
+    await box.run("config", "core.hooksPath", hooks);
+    fs.writeFileSync(path.join(hooks, "pre-commit"), '#!/bin/sh\nexport GIT_DIR="$(git rev-parse --absolute-git-dir)"\ngit symbolic-ref HEAD refs/heads/other\n', { mode: 0o755 });
+    expect(await commitPipelineStage(subject, "build", true, box.exec)).toMatchObject({ ok: false, deferred: true });
+    expect(await box.run("rev-parse", "refs/heads/main")).toBe(subject.lastPassedCommit);
+    expect(await box.run("rev-parse", "refs/heads/other")).toBe(subject.lastPassedCommit);
+    expect(await box.run("show", ":report.md")).toBe("stage output");
     expect(fs.existsSync(path.join(box.repo, ".git", "index.lock"))).toBe(false);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
@@ -2332,6 +2397,111 @@ test.each([
     expect(await box.run("rev-parse", "HEAD")).toBe(head);
     expect(await box.run("rev-parse", "HEAD^{tree}")).toBe(tree);
     expect((await box.exec("git", ["--no-replace-objects", "merge-base", "--is-ancestor", subject.lastPassedCommit, "HEAD"], box.repo)).code).toBe(1);
+    expect((await publication()).code).toBe(0);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each([{ machine: false, ancestor: false }, { machine: true, ancestor: false },
+  { machine: false, ancestor: true }, { machine: true, ancestor: true }])(
+  "stage reconciliation checks restored attribution trailers (machine: $machine, ancestor: $ancestor)", async ({ machine, ancestor }) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.branch = "main";
+    const base = await box.run("rev-parse", "HEAD");
+    const email = [machine ? "noreply" : "rejected", "example.invalid"].join("@");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    expect((await box.exec("git", ["commit", "-m", "accepted work", "-m", `Co-Authored-By: Fixture <${email}>`],
+      box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const attributed = await box.run("rev-parse", "HEAD");
+    if (ancestor) expect((await box.exec("git", ["commit", "--allow-empty", "-m", "canonical accepted tip"],
+      box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const publication = () => box.exec(process.execPath, [path.resolve("scripts/privacy-publication-gate.ts"),
+      "--repository", box.repo, "--base", base, "--check-commits"], box.repo, {
+      LLV_PRIVACY_KNOWN_VALUES: machine ? undefined : email, LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain",
+      LLV_PRIVACY_KNOWN_VALUES_FILE: undefined, LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: undefined,
+    });
+    expect((await publication()).code).toBe(machine ? 0 : 1);
+    if (ancestor) await box.run("reset", "--soft", attributed);
+    expect((await box.exec("git", ["commit", "--amend", "-m", "accepted work"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const head = await box.run("rev-parse", "HEAD"), tree = await box.run("rev-parse", "HEAD^{tree}");
+    expect((await publication()).code).toBe(0);
+    if (ancestor) await box.run("replace", attributed, head);
+    const result = await reconcilePipelineStageHead(subject, head, box.exec);
+    expect(result.ok).toBe(machine);
+    if (!machine) {
+      if (result.ok) throw new Error("reconciliation restored rejected trailer");
+      expect(result.error).toContain("message");
+      expect(result.error).toContain("values withheld");
+      expect(result.error).not.toContain(email);
+      expect(await box.run("rev-parse", "HEAD")).toBe(head);
+    }
+    expect(await box.run("rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect((await publication()).code).toBe(0);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["home", "credential"] as const)("stage reconciliation refuses restored commit message %s findings", async (kind) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.branch = "main";
+    const base = await box.run("rev-parse", "HEAD");
+    const message = kind === "home" ? ["/", "home/", "fixture-person/", "work"].join("")
+      : String.fromCharCode(115, 107, 45) + "syntheticcredentialfixture";
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    expect((await box.exec("git", ["commit", "-m", "accepted work", "-m", message], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const publication = () => box.exec(process.execPath, [path.resolve("scripts/privacy-publication-gate.ts"),
+      "--repository", box.repo, "--base", base, "--check-commits"], box.repo);
+    expect((await publication()).code).toBe(1);
+    expect((await box.exec("git", ["commit", "--amend", "-m", "accepted work"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const head = await box.run("rev-parse", "HEAD"), tree = await box.run("rev-parse", "HEAD^{tree}");
+    expect((await publication()).code).toBe(0);
+    const result = await reconcilePipelineStageHead(subject, head, box.exec);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("reconciliation restored rejected message");
+    expect(result.error).toContain("values withheld");
+    expect(result.error).not.toContain(message);
+    expect(await box.run("rev-parse", "HEAD")).toBe(head);
+    expect(await box.run("rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect((await publication()).code).toBe(0);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["nul", "legacy-encoding"] as const)("stage reconciliation reads literal restored commit messages (%s)", async (shape) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.branch = "main";
+    const base = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    const email = ["rejected", "example.invalid"].join("@");
+    const role = ["noreply", "example.invalid"].join("@");
+    const object = spawnSync("git", ["hash-object", "--literally", "-t", "commit", "-w", "--stdin"], {
+      cwd: box.repo, env: box.env, encoding: "utf8",
+      input: `tree ${await box.run("write-tree")}\nparent ${base}\nauthor Fixture <${role}> 1700000000 +0000\n`
+        + `committer Fixture <${role}> 1700000000 +0000\n`
+        + (shape === "legacy-encoding" ? "encoding ISO-8859-1\n" : "")
+        + "\naccepted work\n\n" + (shape === "nul" ? `\0Co-Authored-By: Fixture <${email}>\n` : ""),
+    });
+    expect(object.status).toBe(0);
+    subject.lastPassedCommit = object.stdout.trim();
+    await box.run("update-ref", "HEAD", subject.lastPassedCommit, base);
+    const publication = () => box.exec(process.execPath, [path.resolve("scripts/privacy-publication-gate.ts"),
+      "--repository", box.repo, "--base", base, "--check-commits"], box.repo, {
+      LLV_PRIVACY_KNOWN_VALUES: email, LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain",
+      LLV_PRIVACY_KNOWN_VALUES_FILE: undefined, LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: undefined,
+    });
+    expect((await publication()).code).toBe(1);
+    await box.run("reset", "--soft", base);
+    expect((await box.exec("git", ["commit", "-m", "accepted work"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const head = await box.run("rev-parse", "HEAD"), tree = await box.run("rev-parse", "HEAD^{tree}");
+    expect((await publication()).code).toBe(0);
+    expect(await reconcilePipelineStageHead(subject, head, box.exec)).toMatchObject({ ok: false });
+    expect(await box.run("rev-parse", "HEAD")).toBe(head);
+    expect(await box.run("rev-parse", "HEAD^{tree}")).toBe(tree);
     expect((await publication()).code).toBe(0);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });

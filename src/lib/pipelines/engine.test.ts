@@ -527,6 +527,7 @@ function harness() {
   let worktreePresent = true;
   let residentHosts = false;
   let monotonic: () => number = () => Date.now();
+  const stageCommitMessages = new Map<string, string>();
   const ports: PipelinePorts = {
     exec: (rawCommand, rawArgs, cwd, env, options) => {
       // Artifact safety reads inspect the actual fixture index, including
@@ -534,6 +535,14 @@ function harness() {
       if (options?.stdoutEncoding === "latin1") return realExec(rawCommand, rawArgs, cwd, env, options);
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      if (args[0] === "write-tree") return { code: 0, stdout: `${"8".repeat(40)}\n`, stderr: "" };
+      if (args[0] === "symbolic-ref") return { code: 0, stdout: `refs/heads/${loadPipelines()[0]?.branch ?? "pipeline/test"}\n`, stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--git-path")) return { code: 0, stdout: `${path.join(cwd, ".git", "index")}\n`, stderr: "" };
+      if (args[0] === "commit") {
+        stageCommitMessages.set(cwd, args.filter((_, index) => args[index - 1] === "-m").join("\n\n"));
+      }
+      if (args[0] === "show" && args.includes("--format=%P%x00%T%x00%B")) return {
+        code: 0, stdout: `${ORIGIN_MAIN_SHA}\0${"8".repeat(40)}\0${stageCommitMessages.get(cwd) ?? ""}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--verify") return { code: 0, stdout: `${ORIGIN_MAIN_SHA}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
@@ -13538,6 +13547,8 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
   let pushFails = false;
   let remoteReadFails = options.remoteReadFails ?? false;
   let remoteReadAttempts = 0;
+  let commitParent = localHead;
+  let commitMessage = "";
   const baseExec = h.ports.exec;
   h.ports.exec = (rawCommand, rawArgs, cwd) => {
     const command = rawCommand === "timeout" ? "git" : rawCommand;
@@ -13546,7 +13557,11 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
     const branch = loadPipelines()[0]?.branch ?? "pipeline/test";
     if (args[0] === "status") return { code: 0, stdout: dirty ? " M src/lib/thing.ts\n" : "", stderr: "" };
     if (args[0] === "add") return { code: 0, stdout: "", stderr: "" };
+    if (args[0] === "show" && args.includes("--format=%P%x00%T%x00%B")) return {
+      code: 0, stdout: `${commitParent}\0${"8".repeat(40)}\0${commitMessage}\n`, stderr: "" };
     if (args[0] === "commit") {
+      commitParent = localHead;
+      commitMessage = args.filter((_, index) => args[index - 1] === "-m").join("\n\n");
       dirty = false;
       localHead = passedSha;
       order.push("commit");
