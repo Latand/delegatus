@@ -46,7 +46,7 @@ function request(suffix = "", headers: Record<string, string> = {}) {
 }
 const context = (id = "review-a") => ({ params: Promise.resolve({ id }) });
 beforeEach(() => {
-  directory = fs.mkdtempSync("/var/tmp/review-history-test-");
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-review-history-test-"));
   prior = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = directory;
   db = new Database(path.join(directory, "state.sqlite"));
@@ -266,7 +266,7 @@ test.each(["message", "array", "recursive"].flatMap(shape => [
   expect(body.relayOccurrences).toEqual(occurrences);
 });
 
-test.each(["findings", "output", "stdout", "stderr"] as const)("HTTP export refuses truncated quoted credentials in %s without changing provenance", async kind => {
+test.each(["findings", "output", "stdout", "stderr"] as const)("HTTP export drops uncertain tails of truncated quoted credentials in %s without changing provenance", async kind => {
   const truncated = '{"password":"invented ordinary credential';
   for (const value of [truncated, `${truncated}\\`, `${truncated}\\"`, `${truncated}\\u00`, truncated.replace('"password"', '"pass\\u0077ord"')]) {
     for (const text of [value, `{"retained":"ordinary history"}\n${value}`, `Diagnostic context\n\`\`\`json\n${value}`, JSON.stringify({ message: value })]) {
@@ -275,8 +275,8 @@ test.each(["findings", "output", "stdout", "stderr"] as const)("HTTP export refu
       const bytes = await response.text();
       await unchanged();
       expect(bytes).not.toContain("invented ordinary credential");
-      expect(response.status).toBe(503);
-      expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(bytes).redacted).toBe(true);
     }
   }
 });
@@ -297,7 +297,41 @@ async function exportArtifact(kind: typeof artifactKinds[number], text: string, 
   return { response, bytes, occurrences };
 }
 
-test.each([...artifactKinds])("HTTP export refuses malformed encoded strings in %s without changing source or provenance", async kind => {
+test("seeded HTTP exports remove credential values across key spellings and line truncations", async () => {
+  let seed = 0x1980;
+  const pick = <T,>(values: readonly T[]): T => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return values[(seed >>> 8) % values.length]!;
+  };
+  const keys = ["apiKey", "APIToken", "DBPassword", "api_key", "api-key", "auth.password", "PRIVATE KEY", "clientSecret"];
+  const marker = "ordinaryProbeMarker";
+  for (const key of keys) for (const separator of [":", "=", " : ", " = "]) for (const keyQuote of ['"', "'", ""]) for (const levels of [0, 1, 2, 3]) for (const shape of [0, 1, 2, 3]) {
+    const quote = pick(['"', "'", ""]);
+    const value = [`${quote}${marker} tail ${marker}${quote}`, `{\"nested\":[\"${marker}\"]}`, `[\"${marker}\", {\"nested\":\"${marker}\"}]`, `42 ${marker}`][shape]!;
+    const credential = `${keyQuote}${key}${keyQuote}${separator}${value}`;
+    const cut = pick([credential.length, credential.indexOf(marker) + marker.length, credential.length - 1]);
+    const truncated = credential.slice(0, cut);
+    const original = encodeMessage(`Diagnostic ${truncated}\nordinary history`, levels);
+    const { response, bytes, occurrences } = await exportArtifact(pick(artifactKinds), original, { tokenCount: 42, passwordChanged: true });
+    expect(response.status).toBe(200);
+    expect(bytes).not.toContain(marker);
+    const body = JSON.parse(bytes);
+    expect(body.row.extension.tokenCount).toBe(42);
+    expect(body.row.extension.passwordChanged).toBeTrue();
+    expect(body.relayOccurrences).toEqual(occurrences);
+  }
+}, 60_000);
+
+test.each(['"apiKey"', "api_key"])("HTTP export recognizes multiline credential separators after %s", async key => {
+  const marker = "ordinaryProbeMarker";
+  for (const separator of ["\n:\n", "\r\n=\r\n"]) for (const levels of [0, 1, 2, 3]) {
+    const { response, bytes } = await exportArtifact("findings", encodeMessage(`{${key}${separator}"${marker}"}`, levels));
+    expect(response.status).toBe(200);
+    expect(bytes).not.toContain(marker);
+  }
+});
+
+test.each([...artifactKinds])("HTTP export drops uncertain tails of malformed encoded strings in %s without changing source or provenance", async kind => {
   const marker = "invented ordinary malformed value";
   const complete = JSON.stringify({ message: JSON.stringify({ password: marker, retained: "history" }) });
   const malformed = [
@@ -308,8 +342,8 @@ test.each([...artifactKinds])("HTTP export refuses malformed encoded strings in 
   for (const value of malformed) for (const levels of [0, 1, 2]) for (const format of artifactFormats) {
     const { response, bytes } = await exportArtifact(kind, format(encodeMessage(value, levels)));
     expect(bytes).not.toContain(marker);
-    expect(response.status).toBe(503);
-    expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+    expect(response.status).toBe(200);
+    expect(JSON.parse(bytes).redacted).toBe(true);
   }
 });
 
@@ -444,14 +478,14 @@ test.each([...artifactKinds])("HTTP export redacts complete single-quoted creden
   }
 });
 
-test.each([...artifactKinds])("HTTP export refuses unterminated single-quoted credentials in %s", async kind => {
+test.each([...artifactKinds])("HTTP export drops uncertain tails of unterminated single-quoted credentials in %s", async kind => {
   const marker = "ordinaryProbeMarker";
   for (const prefix of ["password=", "{'password':", "{'credentials': {'nested':"]) for (const tail of ["", "\\", "\\'", "\\\\"]) {
     for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
       const { response, bytes } = await exportArtifact(kind, format(encodeMessage(`${prefix}'${marker} tail ${marker}${tail}`, levels)));
       expect(bytes).not.toContain(marker);
-      expect(response.status).toBe(503);
-      expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(bytes).redacted).toBe(true);
     }
   }
 });
@@ -469,29 +503,50 @@ test.each([...artifactKinds])("HTTP export preserves harmless quoted backslashes
   }
 });
 
-test.each([...artifactKinds])("HTTP export refuses malformed quoted text carrying credential assignments in %s", async kind => {
+test.each([...artifactKinds])("HTTP export drops uncertain tails of malformed quoted text carrying credential assignments in %s", async kind => {
   const marker = "ordinaryProbeMarker";
   const key = "password";
-  const values = [`"Use \\q ${key}='${marker} tail ${marker}'"`, `"Use \\q {'PRIVATE KEY':'${marker}'}"`];
+  const values = [`"Use \\q ${key}='${marker} tail ${marker}'"`, `"Use \\q {'PRIVATE KEY':'${marker}'}"`, `"Use \\q PRIVATE KEY VALUE='${marker}'"`];
   for (const value of values) for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
     const { response, bytes } = await exportArtifact(kind, format(encodeMessage(value, levels)));
     expect(bytes).not.toContain(marker);
-    expect(response.status).toBe(503);
-    expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+    expect(response.status).toBe(200);
+    expect(JSON.parse(bytes).redacted).toBe(true);
+  }
+});
+
+test.each([...artifactKinds])("HTTP export drops uncertain credential tails across malformed token boundaries in %s", async kind => {
+  const marker = "ordinaryBoundaryProbeMarker";
+  const malformed = `"Use \\q password="${marker}"`;
+  for (const suffix of ["", "\nKEEP_NEXT_LINE", "\r\nKEEP_NEXT_LINE"]) {
+    let serialized = malformed + suffix;
+    for (const levels of [0, 1, 2, 3]) {
+      for (const original of new Set([serialized, encodeMessage(malformed + suffix, levels)])) {
+        const { response, bytes, occurrences } = await exportArtifact(kind, original);
+        expect(response.status).toBe(200);
+        expect(bytes).not.toContain(marker);
+        const body = JSON.parse(bytes);
+        expect(body.redacted).toBe(true);
+        expect(body.row.extension.receiptId).toBe("archive-receipt");
+        expect(body.relayOccurrences).toEqual(occurrences);
+        if (suffix) expect(body.artifacts[0].artifacts[kind].text).toContain("KEEP_NEXT_LINE");
+      }
+      serialized = JSON.stringify(serialized);
+    }
   }
 });
 
 test.each([
   '{"credentials":{"value":"synthetic ordinary secret"',
   '{"password":["synthetic ordinary secret"}',
-])("HTTP export refuses incomplete sensitive compound values: %s", async text => {
+])("HTTP export drops uncertain tails of incomplete sensitive compound values: %s", async text => {
   const artifactPath = row().rounds[0]!.findingsPath;
   fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
   fs.writeFileSync(artifactPath, text);
   const before = snapshot();
   const response = await exported(request(), context());
-  expect(response.status).toBe(503);
-  expect(await response.json()).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+  expect(response.status).toBe(200);
+  expect(JSON.stringify(await response.json())).not.toContain("synthetic ordinary secret");
   expect(fs.readFileSync(artifactPath, "utf8")).toBe(text);
   expect(snapshot()).toBe(before);
 });
@@ -559,6 +614,7 @@ test("fresh unowned production process imports GETs without claiming ownership o
       for (const route of modules) results.push((await route.GET(request, {params: Promise.resolve({id: "review-a"})})).status);
       console.log(JSON.stringify({ refusal, results, owner: process.env.LLV_STATE_OWNER ?? null }));
     `], cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    if (probe.exitCode !== 0) throw new Error(probe.stderr.toString());
     expect(probe.exitCode).toBe(0);
     expect(JSON.parse(probe.stdout.toString())).toEqual({ refusal: true, results: [503, 503, 503], owner: null });
     expect(fs.existsSync(config)).toBe(false);

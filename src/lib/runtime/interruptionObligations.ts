@@ -6,6 +6,7 @@ import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migratio
 import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry";
 import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 
 import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
 
@@ -274,6 +275,8 @@ export function interruptionObligationStore(
   const fileFor = (id: string) => path.join(directory, `${id}.json`);
   const pendingFile = `${directory}.pending.jsonl`;
   const claimPrefix = `${path.basename(pendingFile)}.claim-`;
+  const transaction = <T>(operation: () => T): T =>
+    withFileTransactionSync(pendingFile, "interruption obligation import is busy", operation);
   const readJournal = (filename: string): InterruptionObligation[] => {
     let text: string;
     try {
@@ -307,53 +310,62 @@ export function interruptionObligationStore(
       return null;
     }
   };
-  const abandonedClaims = (): string[] => {
+  const activeClaims = (): string[] => {
     let names: string[];
     try {
       names = fs.readdirSync(path.dirname(pendingFile));
     } catch {
       return [];
     }
+    return names.filter((name) => name.startsWith(claimPrefix) && !name.endsWith(".lock")).map((name) =>
+      path.join(path.dirname(pendingFile), name));
+  };
+  const abandonedClaims = (): string[] => {
     const now = Date.now();
-    return names.filter((name) => name.startsWith(claimPrefix)).flatMap((name) => {
-      const filename = path.join(path.dirname(pendingFile), name);
+    return activeClaims().filter((filename) => {
       try {
         /* A rename stamps ctime, so this is the age of the claim itself. */
-        return now - fs.statSync(filename).ctimeMs > ABANDONED_CLAIM_MS ? [filename] : [];
+        return now - fs.statSync(filename).ctimeMs > ABANDONED_CLAIM_MS;
       } catch {
-        return [];
+        return false;
       }
     });
   };
-  /* Moves pending records into the directory. Returns the records still
-     waiting, which are back in the live journal. */
-  const importPending = (): InterruptionObligation[] => {
-    const claims = [pendingFile, ...abandonedClaims()].flatMap((source) => claim(source) ?? []);
-    if (claims.length === 0) return [];
-    const pending = claims.flatMap(readJournal);
+  /* Moves pending records into the directory. Records still waiting remain
+     in a claim or go back to the live journal. */
+  const importPending = (): void => {
+    const claims = transaction(() => [pendingFile, ...abandonedClaims()].flatMap((source) => claim(source) ?? []));
+    if (claims.length === 0) return;
+    claims.forEach(readJournal);
     hooks.afterPendingRead?.();
-    const stranded: InterruptionObligation[] = [];
-    for (const obligation of pending) {
-      if (fs.existsSync(fileFor(obligation.id))) continue;
-      if (stranded.some((waiting) => waiting.id === obligation.id)) continue;
-      try {
-        writeJsonDurably(fileFor(obligation.id), obligation);
-      } catch (error) {
-        console.error("[interruption recovery] pending obligation is not importable yet", { obligation: obligation.id, error });
-        stranded.push(obligation);
+    /* Claim takeover, publication and withdrawal use one fence whose name
+       survives every rename. No hook or awaited read holds it. */
+    transaction(() => {
+      for (const claimed of claims) {
+        try {
+          /* A withdrawal may have consumed this claim while the import was
+             reading. Only the records still on disk can be published. */
+          const waiting: InterruptionObligation[] = [];
+          for (const obligation of readJournal(claimed)) {
+            if (fs.existsSync(fileFor(obligation.id))) continue;
+            if (waiting.some((record) => record.id === obligation.id)) continue;
+            try {
+              writeJsonDurably(fileFor(obligation.id), obligation);
+            } catch (error) {
+              console.error("[interruption recovery] pending obligation is not importable yet", { obligation: obligation.id, error });
+              waiting.push(obligation);
+            }
+          }
+          if (waiting.length > 0) {
+            appendDurably(pendingFile, waiting.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
+          }
+          fs.rmSync(claimed, { force: true });
+        } catch (error) {
+          /* The claim stays on disk; a later read takes it over. */
+          console.error("[interruption recovery] pending obligations could not finish importing", { claimed, error });
+        }
       }
-    }
-    try {
-      if (stranded.length > 0) {
-        appendDurably(pendingFile, stranded.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
-      }
-    } catch (error) {
-      /* The claims stay on disk; a later read takes them over. */
-      console.error("[interruption recovery] stranded obligations could not return to the pending journal", { claims, error });
-      return stranded;
-    }
-    for (const claimed of claims) fs.rmSync(claimed, { force: true });
-    return stranded;
+    });
   };
   const read = (filename: string): InterruptionObligation | null => {
     try {
@@ -366,31 +378,35 @@ export function interruptionObligationStore(
     }
   };
   const list = (): InterruptionObligation[] => {
-    const stranded = importPending();
-    let names: string[];
-    try {
-      names = fs.readdirSync(directory);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      names = [];
-    }
-    const now = Date.now();
-    const obligations: InterruptionObligation[] = [];
-    for (const name of names.sort()) {
-      if (!name.startsWith(OBLIGATION_PREFIX) || !name.endsWith(".json")) continue;
-      const obligation = read(path.join(directory, name));
-      if (!obligation) continue;
-      const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
-      if (!interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS) {
-        fs.rmSync(path.join(directory, name), { force: true });
-        continue;
+    importPending();
+    return transaction(() => {
+      let names: string[];
+      try {
+        names = fs.readdirSync(directory);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        names = [];
       }
-      obligations.push(obligation);
-    }
-    for (const obligation of stranded) {
-      if (!obligations.some((existing) => existing.id === obligation.id)) obligations.push(obligation);
-    }
-    return obligations.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+      const now = Date.now();
+      const obligations: InterruptionObligation[] = [];
+      for (const name of names.sort()) {
+        if (!name.startsWith(OBLIGATION_PREFIX) || !name.endsWith(".json")) continue;
+        const obligation = read(path.join(directory, name));
+        if (!obligation) continue;
+        const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
+        if (!interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS) {
+          fs.rmSync(path.join(directory, name), { force: true });
+          continue;
+        }
+        obligations.push(obligation);
+      }
+      /* A fresh claim is still part of the inventory. Reading it does not
+         steal its import, and lets startup withdraw a disproved proposal. */
+      for (const obligation of [...readPending(), ...activeClaims().flatMap(readJournal)]) {
+        if (!obligations.some((existing) => existing.id === obligation.id)) obligations.push(obligation);
+      }
+      return obligations.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+    });
   };
   return {
     list,
@@ -453,41 +469,38 @@ export function interruptionObligationStore(
       return { obligation, created: true };
     },
     withdraw(id) {
-      let removed = false;
       try {
-        if (fs.existsSync(fileFor(id))) {
-          fs.rmSync(fileFor(id), { force: true });
-          removed = true;
-        }
+        return transaction(() => {
+          /* Withdrawal consumes fresh claims too, so an importer paused
+             before publication cannot restore this record. Other records
+             go back to the live journal before any claim is removed. */
+          const pendingClaim = claim(pendingFile);
+          const claims = [...new Set([...(pendingClaim ? [pendingClaim] : []), ...activeClaims()])];
+          const pending = claims.flatMap(readJournal);
+          const kept = pending.filter((obligation) => obligation.id !== id);
+          if (kept.length > 0) appendDurably(pendingFile, kept.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
+          for (const claimed of claims) fs.rmSync(claimed, { force: true });
+          let removed = kept.length < pending.length;
+          if (fs.existsSync(fileFor(id))) {
+            fs.rmSync(fileFor(id), { force: true });
+            removed = true;
+          }
+          return removed;
+        });
       } catch (error) {
         console.error("[interruption recovery] a withdrawn obligation could not be removed", { obligation: id, error });
         return false;
       }
-      /* A record the directory refused waits in the pending journal, and the
-         first read that the directory accepts would import it again. The
-         journal is taken as an import takes it, and every other record goes
-         back to the live journal. */
-      const claims = [pendingFile, ...abandonedClaims()].flatMap((source) => claim(source) ?? []);
-      if (claims.length === 0) return removed;
-      const pending = claims.flatMap(readJournal);
-      const kept = pending.filter((obligation) => obligation.id !== id);
-      try {
-        if (kept.length > 0) appendDurably(pendingFile, kept.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
-      } catch (error) {
-        /* The claims stay on disk with the record in them; a later read takes
-           them over, and the caller finds the record still listed. */
-        console.error("[interruption recovery] a withdrawn obligation's pending journal could not be rewritten", { obligation: id, claims, error });
-        return false;
-      }
-      for (const claimed of claims) fs.rmSync(claimed, { force: true });
-      return removed || kept.length < pending.length;
     },
     update(id, patch) {
-      const current = read(fileFor(id)) ?? readPending().find((pending) => pending.id === id) ?? null;
-      if (!current) return null;
-      const next = { ...current, ...patch };
-      writeJsonDurably(fileFor(id), next);
-      return next;
+      return transaction(() => {
+        const current = read(fileFor(id))
+          ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find((pending) => pending.id === id) ?? null;
+        if (!current) return null;
+        const next = { ...current, ...patch };
+        writeJsonDurably(fileFor(id), next);
+        return next;
+      });
     },
   };
 }

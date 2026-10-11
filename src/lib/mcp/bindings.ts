@@ -2444,7 +2444,7 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lessons: args.lessons, none: args.none });
+    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none });
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {

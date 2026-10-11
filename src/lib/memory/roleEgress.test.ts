@@ -12,7 +12,7 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-egress-")
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-const { leaveLessons, lessonPublicationEnv, projectView, recordLessonRequest, storedLessonTexts, withoutStoredLessons, WITHHELD_LESSON: WITHHELD_LESSON_TEXT } = await import("./roleStore");
+const { leaveLessons, lessonPublicationEnv, projectView, recordLessonRequest, revertRule, storedLessonTexts, withoutStoredLessons, WITHHELD_LESSON: WITHHELD_LESSON_TEXT } = await import("./roleStore");
 const { outboundTask } = await import("@/lib/links/taskFeed");
 const { renderReport, renderPlain } = await import("@/lib/bridge/reportRender");
 const { scrubIssueReport } = await import("@/lib/issueReports/scrub");
@@ -82,6 +82,27 @@ test("the publication privacy gate refuses a change that carries a stored lesson
 }, 30_000);
 
 const { parseLessons } = await import("./roleStage");
+test("rewritten and reverted text is withheld at every existing egress and in publication known values", () => {
+  const before = "Before replaying a durable write, prove the operation still owns its acknowledgement.";
+  const after = "Before replaying durable writes, prove both operation and current owner match their acknowledgement.";
+  const why = "A receipt from an earlier owner reached the replay path.";
+  const source = { project: "version-egress", pipelineId: "version-egress", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_version_egress" };
+  recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
+  const first = leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: before, why }], none: null }).left[0]!;
+  const next = { ...source, attempt: 2 };
+  recordLessonRequest({ ...next, at: "2026-10-11T00:01:00.000Z" });
+  const rewritten = leaveLessons({ request: next, source: next, lessons: [], none: null, rewrite: { id: first.id, rule: after, why } });
+  revertRule(rewritten.left[0]!.version!);
+  const deny = { ...EMPTY_DENY_LIST, lessons: storedLessonTexts() };
+  for (const text of [before, after]) {
+    expect(withoutStoredLessons(text)).not.toContain(text);
+    expect(outboundTask({ id: "task-version", project: PROJECT, text, status: "inbox" } as unknown as BoardTask).text).not.toContain(text);
+    expect(scrubIssueReport({ title: "Receipt replay", body: text }, deny).map(finding => finding.class)).toContain("lesson");
+    const report = renderReport({ class: "status", name: "Delegatus", at: new Date(), locale: "en", timeZone: "Europe/Kyiv", summary: text, sections: {}, deny });
+    expect(renderPlain(report.cut)).not.toContain(text);
+    expect(fs.readFileSync(lessonPublicationEnv().LLV_PRIVACY_KNOWN_VALUES_FILE!, "utf8")).toContain(text);
+  }
+});
 const { encodeTask } = await import("@/lib/links/taskWire");
 const { prototypeReviewReplica } = await import("@/lib/prototypeReview/model");
 const { AgentFeed } = await import("@/lib/links/agentFeed");
@@ -99,10 +120,12 @@ const gateAt = (repository: string, args: string[], env: Record<string, string |
 });
 let attempts = 1;
 function store(lessons: { scope: "role" | "project" | "machine"; rule: string; why: string }[]) {
-  attempts += 1;
-  const request = { pipelineId: "p-egress", stageId: "fix", attempt: attempts };
-  recordLessonRequest({ ...request, project: PROJECT, roleId: "builder", conversationId: `conversation_egress_${attempts}`, at: "2026-10-07T12:00:00.000Z" });
-  return leaveLessons({ request, source: { ...request, project: PROJECT, roleId: "builder", fixRound: true, conversationId: `conversation_egress_${attempts}` }, lessons, none: null }).left;
+  return lessons.flatMap(lesson => {
+    attempts += 1;
+    const request = { pipelineId: "p-egress", stageId: "fix", attempt: attempts };
+    recordLessonRequest({ ...request, project: PROJECT, roleId: "builder", conversationId: `conversation_egress_${attempts}`, at: "2026-10-07T12:00:00.000Z" });
+    return leaveLessons({ request, source: { ...request, project: PROJECT, roleId: "builder", fixRound: true, conversationId: `conversation_egress_${attempts}` }, lessons: [lesson], none: null }).left;
+  });
 }
 
 test("every text of a task the linked board receives withholds a stored lesson: prototype titles, variants and decisions, original and replica", () => {
@@ -145,9 +168,9 @@ test("short reasons and symbol-heavy rules are refused at leave_lesson; one stor
   const SHORT_RULE = "Guard each concurrent write to the shared store with the lock.";
   const SYMBOLS = "Use `a<b` && `c>d` || `e==f` -> `g!=h`;";
   const why = "Two writers raced on the shared store and one write was lost.";
-  expect(() => parseLessons({ lessons: [{ scope: "role", rule: SHORT_RULE, why: "Writes raced." }] }, "builder")).toThrow(/letters or digits/);
-  expect(() => parseLessons({ lessons: [{ scope: "role", rule: SYMBOLS, why }] }, "builder")).toThrow(/letters or digits/);
-  expect(parseLessons({ lessons: [{ scope: "role", rule: SHORT_RULE, why }] }, "builder").lessons).toHaveLength(1);
+  expect(() => parseLessons({ lesson: { scope: "role", rule: SHORT_RULE, why: "Writes raced." } }, "builder")).toThrow(/letters or digits/);
+  expect(() => parseLessons({ lesson: { scope: "role", rule: SYMBOLS, why } }, "builder")).toThrow(/letters or digits/);
+  expect(parseLessons({ lesson: { scope: "role", rule: SHORT_RULE, why } }, "builder").lessons).toHaveLength(1);
 
   /* Records kept from before the minimum. */
   store([{ scope: "role", rule: SHORT_RULE, why: "Writes raced." }, { scope: "project", rule: SYMBOLS, why }]);

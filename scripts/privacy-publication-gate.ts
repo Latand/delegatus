@@ -1193,16 +1193,23 @@ function sensitiveTextViews(text: string, publicMarker?: string): { error: boole
   // decoded view catches escaped strings without dropping that original input.
   const canonical = canonicalSensitiveText(text);
   const json = canonicalSensitiveText(text, true);
+  const tokenCanonical = canonicalSensitiveText(text, false, true);
+  const tokenJson = canonicalSensitiveText(text, true, true);
   const sourceViews = [...new Set([canonical.text, json.text])].map((view) => view.replaceAll("\0", "\n"));
   let boundaryError = false;
-  const views = sourceViews.flatMap((decoded) => {
+  // Keep escaped literals distinct from emphasis in the token-preserving view.
+  const tokenSourceViews = [tokenCanonical.text, tokenJson.text].map((view) => view.replaceAll("\0", "\n"));
+  const views = [...new Set([...sourceViews, ...tokenSourceViews])].flatMap((decoded) => {
     // Preserve candidate context before HTML stripping can erase a marker.
     const boundary = publicMarker ? approvedPublicBoundaryView(decoded, publicMarker) : { error: false, text: decoded };
     boundaryError ||= boundary.error;
-    return [boundary.text,
-      visibleMarkdownText(boundary.text).replaceAll(/<[^>]*>/g, "").replaceAll(/[\[\]*_`~]/g, "")];
+    const visible = visibleMarkdownText(boundary.text).replaceAll(/<[^>]*>/g, "");
+    const unformatted = visible.replaceAll(/[\[\]*_`~]/g, "");
+    // Token prefixes need their delimiter after markup is removed.
+    const tokenVisible = visible.replaceAll(/[\[\]*`~]/g, "");
+    return [boundary.text, unformatted, ...(tokenVisible === unformatted ? [] : [tokenVisible])];
   });
-  return { error: canonical.error || json.error || boundaryError, views, sourceViews };
+  return { error: canonical.error || json.error || tokenCanonical.error || tokenJson.error || boundaryError, views, sourceViews };
 }
 
 function normalizedSensitiveText(text: string): { compact: string; error: boolean; exactSearchable: string; searchable: string } {

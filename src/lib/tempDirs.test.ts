@@ -87,10 +87,17 @@ test("a test run through the preload leaves nothing in the temp dir it started w
      and state directory, and the child must build its own. */
   const result = spawnSync(process.execPath, ["test", "--preload", path.join(repoRoot, "test-preload.ts"), "./leak.test.ts"], {
     cwd: directory,
-    env: { NODE_ENV: "test", PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: temp, LEAK_REPORT: report },
+    env: {
+      NODE_ENV: "test", PATH: process.env.PATH, HOME: process.env.HOME,
+      // The nested test runner still enters its own kernel-owned service.
+      XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+      DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
+      TMPDIR: temp, LEAK_REPORT: report,
+    },
     encoding: "utf8",
     timeout: 60_000,
   });
+  if (result.status !== 0) throw new Error(result.stderr);
   expect(result.status).toBe(0);
 
   const leaked = JSON.parse(fs.readFileSync(report, "utf8")) as string[];

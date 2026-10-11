@@ -227,6 +227,8 @@ export interface FileEntry {
   derivationComplete?: boolean;
   /** Complete provider-authoritative turn evidence retained independently from activity projection. */
   authoritativeTurn?: TurnState;
+  /** Whether that turn closed on Claude recovery bookkeeping. Missing in older snapshots. */
+  recoveryReleased?: boolean;
   /** Real OS process state when the entry maps to a process, else null. */
   proc: "running" | "done" | "killed" | null;
   pid: number | null;
