@@ -297,6 +297,9 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
   const git = (...args: string[]) => command(["git", ...args], root, env);
   try {
     const base = git("rev-parse", "--verify", `${baseRef}^{commit}`).trim();
+    const headCommit = git("rev-parse", "--verify", "HEAD^{commit}").trim();
+    log(`touched-tests: base commit ${base}`);
+    log(`touched-tests: reviewed head commit ${headCommit} (head sample runs the working tree)`);
     const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))].sort();
     if (!files.length) throw new Error("refusing an empty test list");
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
