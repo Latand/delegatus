@@ -15,7 +15,7 @@ process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 const { DELETE: remove, POST } = await import("./route");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
-const { seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
+const { persistedAccountRegistry, seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
 const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
 const { CodexAppServerClient } = await import("@/lib/accounts/codexAppServer");
 const { ManagedCodexRuntime, setManagedCodexRuntimeForTests } = await import("@/lib/accounts/codexRuntime");
@@ -27,6 +27,21 @@ function deleteRequest(body: unknown) {
     method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
   });
 }
+
+test.skipIf(process.platform !== "linux")("cleanup reports an archived Codex home retired in place", async () => {
+  const account = createManagedCodexAccount("Retired report");
+  const transcript = path.join(account.home, "sessions", "history.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(transcript, "{}\n", { mode: 0o600 });
+  const registry = persistedAccountRegistry("codex");
+  seedAccountRegistry("codex", { ...registry, accounts: registry.accounts.filter((item) => item.id !== account.id), retired: [...registry.retired, { id: account.id, label: account.label, retiredAt: 1234 }] });
+
+  const response = await remove(deleteRequest({ cleanupOrphans: true }));
+
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toMatchObject({ unresolved: [], archived: [{ id: account.id, files: 1, bytes: 3 }] });
+  expect(fs.readFileSync(path.join(retiredAccountArchive("codex", account.id), "sessions", "history.jsonl"), "utf8")).toBe("{}\n");
+});
 
 class FakeChild extends EventEmitter {
   readonly stdin = { write: (line: string) => { this.onWrite(JSON.parse(line) as Record<string, unknown>); return true; }, end: () => undefined };
