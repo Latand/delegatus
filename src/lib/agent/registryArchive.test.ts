@@ -462,3 +462,205 @@ test("terminal migration history goes cold while draining and referenced intents
   } finally { db.close(); }
   expect(open().read(file => file.migrationIntents["migration-stopped"])).toEqual(initial.migrationIntents["migration-stopped"]);
 });
+
+test("external refresh leaves unrelated cold root grants warm", () => {
+  const { open, initial, conversationId, filename } = fixture();
+  initial.lineageEdges = {};
+  const parent = initial.conversations[conversationId(0)]!;
+  parent.delegationDepth = 0;
+  parent.generations[0]!.launchProfile.mcpServers = ["viewer", "telegram"];
+  for (let index = 0; index < 160; index++) {
+    const launchId = `root-history-${index}`;
+    initial.receipts[launchId] = { ...structuredClone(initial.receipts["archive-launch-0"]!), launchId, key: null,
+      conversationId: parent.id, delegationDepth: 0,
+      launchProfile: { ...structuredClone(initial.receipts["archive-launch-0"]!.launchProfile), mcpServers: ["viewer", "telegram"] } };
+  }
+  const metrics = { reads: 0, loads: 0 };
+  const reader = open(metrics);
+  archiveAll(reader);
+  const held = reader.readOnlySnapshot().file;
+  expect(held.receipts["root-history-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+  const writer = new Database(filename);
+  try {
+    writer.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.error','one hot update') WHERE collection='receipts' AND row_key='archive-launch-2'");
+  } finally { writer.close(); }
+  metrics.reads = metrics.loads = 0;
+  const refreshStart = performance.now();
+  const fresh = reader.readOnlySnapshot().file;
+  expect(fresh.receipts["archive-launch-2"]!.error).toBe("one hot update");
+  expect(metrics.reads).toBe(1);
+  expect(fresh.receipts["root-history-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+  console.info({ reads: metrics.reads, loads: metrics.loads, refreshMs: performance.now() - refreshStart });
+  expect(metrics.loads).toBe(0);
+  expect(metrics.reads).toBe(2);
+});
+
+
+function independentColdGrants(count: number) {
+  const result = fixture();
+  const { initial, conversationId } = result;
+  initial.lineageEdges = {};
+  for (let index = 0; index < count; index++) {
+    const key = conversationId(index + 10);
+    const root = structuredClone(initial.conversations[conversationId(0)]!);
+    root.id = key;
+    root.delegationDepth = 0;
+    root.generations[0]!.id = id(index + 10);
+    root.generations[0]!.path = `/sessions/${id(index + 10)}.jsonl`;
+    root.generations[0]!.launchProfile.mcpServers = ["viewer", "telegram"];
+    initial.conversations[key] = root;
+    const launchId = `independent-root-${index}`;
+    initial.receipts[launchId] = { ...structuredClone(initial.receipts["archive-launch-0"]!), launchId,
+      conversationId: key, key: null, artifactPath: root.generations[0]!.path, delegationDepth: 0,
+      launchProfile: structuredClone(root.generations[0]!.launchProfile) };
+  }
+  return result;
+}
+
+test("cold grant refresh reads only the changed root's authority dependencies", () => {
+  const { open, filename, conversationId } = independentColdGrants(160);
+  const metrics = { reads: 0, loads: 0 };
+  const reader = open(metrics);
+  archiveAll(reader);
+  const held = reader.readOnlySnapshot().file;
+  const db = new Database(filename);
+  try {
+    db.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.delegationDepth',1) WHERE collection='conversations' AND row_key=?", [conversationId(10)]);
+    metrics.reads = metrics.loads = 0;
+    const fresh = reader.readOnlySnapshot().file;
+    expect(metrics.loads).toBe(0);
+    expect(metrics.reads).toBeLessThanOrEqual(6);
+    expect(fresh.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer"]);
+    expect(fresh.receipts["independent-root-1"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+    expect(held.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+    db.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.delegationDepth',0) WHERE collection='conversations' AND row_key=?", [conversationId(10)]);
+    metrics.reads = 0;
+    const restored = reader.readOnlySnapshot().file;
+    expect(metrics.reads).toBeLessThanOrEqual(6);
+    expect(restored.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+    expect(fresh.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer"]);
+    for (let index = 0; index < 160; index++) expect(restored.receipts[`independent-root-${index}`]).toBeDefined();
+    expect(held.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+    expect(fresh.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer"]);
+    const cache = reader as unknown as { coldReaderRows: Map<unknown, unknown> };
+    expect(cache.coldReaderRows.size).toBeLessThanOrEqual(128);
+  } finally { db.close(); }
+});
+
+for (const source of ["conversation identity", "independent lineage", "missing named edge"] as const) {
+  test(`new ${source} revokes a warmed cold grant and deletion restores it`, () => {
+    const { open, filename, initial, conversationId } = independentColdGrants(1);
+    if (source === "conversation identity") initial.receipts["independent-root-0"]!.key = { engine: "codex", sessionId: id(10) };
+    const reader = open();
+    archiveAll(reader);
+    const held = reader.readOnlySnapshot().file;
+    const db = new Database(filename);
+    const collection = source === "conversation identity" ? "conversations" : "lineageEdges";
+    const key = source === "missing named edge" ? conversationId(10) : conversationId(1000);
+    const value = source === "conversation identity"
+      ? { ...structuredClone(initial.conversations[conversationId(10)]!), id: key, delegationDepth: 1 }
+      : { ...structuredClone(fixtureEdge(initial)), childConversationId: key, parentConversationId: conversationId(2),
+          evidence: { launchId: "independent-root-0" } };
+    try {
+      db.run("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES (?,?,?,?)", [collection,key,JSON.stringify(value),1000]);
+      const revoked = reader.readOnlySnapshot().file;
+      expect(revoked.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer"]);
+      expect(held.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+      db.run("DELETE FROM registry_rows WHERE collection=? AND row_key=?", [collection,key]);
+      expect(reader.readOnlySnapshot().file.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+      expect(revoked.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer"]);
+    } finally { db.close(); }
+  });
+}
+
+function fixtureEdge(initial: ReturnType<typeof fixture>["initial"]) {
+  return { childConversationId: Object.keys(initial.conversations)[0]!, parentConversationId: null,
+    childSessionKey: null, parentSessionKey: null, childArtifactPath: null, parentArtifactPath: null,
+    kind: "spawn" as const, role: null, reviewsConversationId: null, source: "viewer-spawn" as const,
+    evidence: {}, createdAt: Object.values(initial.conversations)[0]!.createdAt };
+}
+
+test("trimmed journals revoke and restore warmed cold grants on consecutive fallbacks", () => {
+  const { open, filename, conversationId } = independentColdGrants(1);
+  const reader = open();
+  archiveAll(reader);
+  const held = reader.readOnlySnapshot().file;
+  const db = new Database(filename);
+  try {
+    for (const depth of [1, 0]) {
+      db.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.delegationDepth',?) WHERE collection='conversations' AND row_key=?", [depth,conversationId(10)]);
+      db.run("DELETE FROM registry_changes");
+      db.run("DELETE FROM registry_grant_changes");
+      expect(reader.readOnlySnapshot().file.receipts["independent-root-0"]!.launchProfile.mcpServers)
+        .toEqual(depth ? ["viewer"] : ["viewer", "telegram"]);
+    }
+    expect(held.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+  } finally { db.close(); }
+});
+
+
+for (const source of ["parent seat", "admitting receipt"] as const) {
+  test(`cold delegated grants track changes to their ${source}`, () => {
+    const { open, filename, initial, conversationId } = fixture();
+    const parent = initial.conversations[conversationId(2)]!;
+    parent.agentRole = "orchestrator";
+    parent.delegationDepth = 0;
+    parent.generations[0]!.launchProfile.mcpServers = ["viewer", "telegram"];
+    const child = initial.conversations[conversationId(0)]!;
+    child.agentRole = "builder";
+    child.delegationDepth = 1;
+    child.generations[0]!.launchProfile.parentConversationId = parent.id;
+    child.generations[0]!.launchProfile.mcpServers = ["viewer", "telegram"];
+    const receipt = initial.receipts["archive-launch-0"]!;
+    receipt.agentRole = "builder";
+    receipt.delegationDepth = 1;
+    receipt.parentConversationId = parent.id;
+    receipt.telegramSeatGrant = true;
+    receipt.launchProfile = structuredClone(child.generations[0]!.launchProfile);
+    initial.lineageEdges[child.id]!.evidence.telegramSeatGrant = true;
+    const reader = open();
+    archiveAll(reader);
+    const held = reader.readOnlySnapshot().file;
+    expect(held.conversations[child.id]!.generations[0]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+    const db = new Database(filename);
+    try {
+      for (const allowed of [false, true]) {
+        if (source === "parent seat") {
+          db.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.agentRole',?) WHERE collection='conversations' AND row_key=?", [allowed ? "orchestrator" : "builder",parent.id]);
+        } else {
+          db.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.telegramSeatGrant',json(?)) WHERE collection='receipts' AND row_key=?", [JSON.stringify(allowed),receipt.launchId]);
+        }
+        const fresh = reader.readOnlySnapshot().file;
+        expect(fresh.conversations[child.id]!.generations[0]!.launchProfile.mcpServers).toEqual(allowed ? ["viewer", "telegram"] : ["viewer"]);
+        expect(held.conversations[child.id]!.generations[0]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+      }
+    } finally { db.close(); }
+  });
+}
+
+test("promoted and deleted cold versions release their grant dependency metadata", () => {
+  const { open, filename } = independentColdGrants(3);
+  const reader = open();
+  archiveAll(reader);
+  const held = reader.readOnlySnapshot().file;
+  const caches = reader as unknown as { coldGrantDecisions: Map<number, unknown>; coldGrantTargets: Map<string, Set<number>> };
+  const db = new Database(filename);
+  try {
+    const oldVersion = db.query<{ archive_id: number }, []>("SELECT archive_id FROM registry_cold WHERE collection='receipts' AND row_key='independent-root-0'").get()!.archive_id;
+    expect(caches.coldGrantDecisions.has(oldVersion)).toBe(true);
+    db.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.error','promoted') WHERE collection='receipts' AND row_key='independent-root-0'");
+    expect(reader.readOnlySnapshot().file.receipts["independent-root-0"]!.error).toBe("promoted");
+    expect(caches.coldGrantDecisions.has(oldVersion)).toBe(false);
+    expect([...caches.coldGrantTargets.values()].some(targets => targets.has(oldVersion))).toBe(false);
+    archiveAll(reader);
+    reader.readOnlySnapshot();
+    const nextVersion = db.query<{ archive_id: number }, []>("SELECT archive_id FROM registry_cold WHERE collection='receipts' AND row_key='independent-root-0'").get()!.archive_id;
+    expect(caches.coldGrantDecisions.has(nextVersion)).toBe(true);
+    db.run("DELETE FROM registry_rows WHERE collection='receipts' AND row_key='independent-root-0'");
+    expect(reader.readOnlySnapshot().file.receipts["independent-root-0"]).toBeUndefined();
+    expect(caches.coldGrantDecisions.has(nextVersion)).toBe(false);
+    expect([...caches.coldGrantTargets.values()].some(targets => targets.has(nextVersion))).toBe(false);
+    expect(held.receipts["independent-root-0"]!.error).toBeNull();
+    expect(held.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+  } finally { db.close(); }
+});

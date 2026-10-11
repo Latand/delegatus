@@ -201,6 +201,9 @@ type GrantDecisions = {
   childGrantSources: Map<string, { parentId: string; launchId: string }>;
 };
 type GrantProfileRow = { launchProfile?: { mcpServers?: string[] } | null; generations?: { launchProfile?: { mcpServers?: string[] } }[] };
+type ColdGrantDecision = { lists: (string[] | undefined)[]; dependencies: Set<string> };
+
+const authorityDependency = (kind: string, key: string) => `${kind}\u0000${key}`;
 
 const grantDecisionKey = (collection: string, key: string) => `${collection}\u0000${key}`;
 
@@ -529,6 +532,11 @@ export class SqliteAgentRegistryStore {
   /** Immutable grant/operation projections only, never archived payloads.
       Current cold versions bound this map; held views pin their own decisions. */
   private readonly coldRowProjections = new Map<number, { claimsGrant: boolean; operationId: string | null }>();
+  /** Only effective lists and authority keys survive a refresh, never payloads.
+      Reverse dependencies also track absent attestors and identity selectors. */
+  private readonly coldGrantDecisions = new Map<number, ColdGrantDecision>();
+  private readonly coldGrantTargets = new Map<string, Set<number>>();
+  private coldGrantCursor: { changeId: number; stamp: string } | null = null;
   private coldKeys = new Set<string>();
   private coldKeysStamp = "";
   private changesReady = false;
@@ -753,6 +761,9 @@ export class SqliteAgentRegistryStore {
     this.readOnlyHotFile = null;
     this.coldReaderRows.clear();
     this.coldRowProjections.clear();
+    this.coldGrantDecisions.clear();
+    this.coldGrantTargets.clear();
+    this.coldGrantCursor = null;
     this.coldKeys.clear();
     this.coldKeysStamp = "";
     this.grantDecisions = null;
@@ -1005,11 +1016,13 @@ export class SqliteAgentRegistryStore {
   /** Assemble every possible attestor of one grant through indexed identity
       reads, including cold contradictions. A receipt cannot pick its attestor
       by editing its own conversation id or embedded session key. */
-  private decideStoredRow(collection: RowCollection, key: string, row: unknown): unknown {
+  private decideStoredRow(collection: RowCollection, key: string, row: unknown, dependencies?: Set<string>): unknown {
     const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {}, conversations: {}, lineageEdges: {} };
     const records = (kind: RowCollection) => input[kind] as Record<string, unknown>;
     records(collection)[key] = structuredClone(row);
+    dependencies?.add(authorityDependency("row",grantDecisionKey(collection,key)));
     const read = (kind: RowCollection, id: string) => {
+      dependencies?.add(authorityDependency("row",grantDecisionKey(kind,id)));
       if (Object.hasOwn(records(kind),id)) return;
       const raw = this.db.query<{ value_json: string }, [string,string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`).get(kind,id);
       this.onRowPayloadRead?.(kind,raw ? 1 : 0);
@@ -1018,6 +1031,8 @@ export class SqliteAgentRegistryStore {
     const subject = row as { artifactPath?: string; key?: { engine: string; sessionId: string }; conversationId?: string };
     const entryKey = collection === "entries" ? key : subject.key ? `${subject.key.engine}:${subject.key.sessionId}` : null;
     if (entryKey || subject.artifactPath) {
+      if (entryKey) dependencies?.add(authorityDependency("entry",entryKey));
+      if (subject.artifactPath) dependencies?.add(authorityDependency("path",subject.artifactPath));
       const owners = this.db.query<{ row_key: string }, [string|null,string|null]>(`SELECT DISTINCT r.row_key FROM ${this.recordsSource} r,json_each(r.value_json,'$.generations') g
         WHERE r.collection='conversations' AND (json_extract(r.value_json,'$.engine')||':'||json_extract(g.value,'$.id')=? OR json_extract(g.value,'$.path')=?)`)
         .all(entryKey,subject.artifactPath ?? null);
@@ -1025,6 +1040,7 @@ export class SqliteAgentRegistryStore {
     }
     if (subject.conversationId) read("conversations",subject.conversationId);
     if (collection === "receipts") {
+      dependencies?.add(authorityDependency("launch",key));
       const edges = this.db.query<{ row_key: string }, [string]>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='lineageEdges' AND json_extract(value_json,'$.evidence.launchId')=?`).all(key);
       for (const edge of edges) read("lineageEdges",edge.row_key);
     }
@@ -1072,6 +1088,7 @@ export class SqliteAgentRegistryStore {
   private rememberColdProjections(headers: readonly { collection: RowCollection; archive_id: number }[]): void {
     const active = new Set(headers.filter(header => READER_GRANT_COLLECTIONS.has(header.collection) || header.collection === "heldDeliveries").map(header => header.archive_id));
     for (const id of this.coldRowProjections.keys()) if (!active.has(id)) this.coldRowProjections.delete(id);
+    for (const id of this.coldGrantDecisions.keys()) if (!active.has(id)) this.forgetColdGrant(id);
     const missing = [...active].filter(id => !this.coldRowProjections.has(id));
     for (let offset = 0; offset < missing.length; offset += 500) {
       const ids = missing.slice(offset,offset+500);
@@ -1086,6 +1103,55 @@ export class SqliteAgentRegistryStore {
     }
   }
 
+  private forgetColdGrant(id: number): void {
+    const previous = this.coldGrantDecisions.get(id);
+    if (!previous) return;
+    for (const dependency of previous.dependencies) {
+      const targets = this.coldGrantTargets.get(dependency)!;
+      targets.delete(id);
+      if (!targets.size) this.coldGrantTargets.delete(dependency);
+    }
+    this.coldGrantDecisions.delete(id);
+  }
+
+  /** A new owner can contradict an identity lookup that previously found no
+      such row. Read only its identity projection to invalidate those selectors.
+      Lost journals invalidate everything, including consecutive empty trims. */
+  private refreshColdGrantDecisions(stamp: string): number {
+    const changeId = this.changeId();
+    const previous = this.coldGrantCursor;
+    if (!previous || previous.stamp === stamp) return changeId;
+    const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
+    if (changeId < previous.changeId || first > previous.changeId + 1 || first === 0) {
+      this.coldGrantDecisions.clear();
+      this.coldGrantTargets.clear();
+      return changeId;
+    }
+    const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
+      "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>?").all(previous.changeId);
+    const invalidate = (dependency: string) => {
+      for (const id of [...this.coldGrantTargets.get(dependency) ?? []]) this.forgetColdGrant(id);
+    };
+    for (const { collection,row_key: key } of changes) {
+      invalidate(authorityDependency("row",grantDecisionKey(collection,key)));
+      if (collection === "conversations") {
+        const identities = this.db.query<{ entry_key: string; artifact_path: string | null }, [string]>(
+          `SELECT json_extract(r.value_json,'$.engine')||':'||json_extract(g.value,'$.id') AS entry_key,
+            json_extract(g.value,'$.path') AS artifact_path FROM ${this.recordsSource} r,json_each(r.value_json,'$.generations') g
+            WHERE r.collection='conversations' AND r.row_key=?`).all(key);
+        for (const identity of identities) {
+          invalidate(authorityDependency("entry",identity.entry_key));
+          if (identity.artifact_path) invalidate(authorityDependency("path",identity.artifact_path));
+        }
+      } else if (collection === "lineageEdges") {
+        const edge = this.db.query<{ launch_id: string | null }, [string]>(
+          `SELECT json_extract(value_json,'$.evidence.launchId') AS launch_id FROM ${this.recordsSource} WHERE collection='lineageEdges' AND row_key=?`).get(key);
+        if (edge?.launch_id) invalidate(authorityDependency("launch",edge.launch_id));
+      }
+    }
+    return changeId;
+  }
+
   /** Every snapshot the shared cache holds is the frozen reader view of it.
       `complete` says the file is a complete load through the parse cache. */
   private rememberReadOnly(snapshot: StampedSnapshot, complete: boolean): StampedSnapshot {
@@ -1093,6 +1159,7 @@ export class SqliteAgentRegistryStore {
     const headers = this.changesReady ? this.db.query<{ collection: RowCollection; row_key: string; archive_id: number }, []>(
       "SELECT c.collection,c.row_key,c.archive_id FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id ORDER BY a.row_order").all() : [];
     this.rememberColdProjections(headers);
+    const coldGrantChangeId = this.refreshColdGrantDecisions(snapshot.stamp);
     const syntheticOwners = new Map<string,string>();
     if (headers.some(header => header.collection === "heldDeliveries")) {
       const storedOwners = new Set(this.db.query<{ row_key: string }, []>(
@@ -1137,11 +1204,22 @@ export class SqliteAgentRegistryStore {
       // Only the effective lists escape; the row payload remains evictable.
       let pinnedGrants: (string[] | undefined)[] | undefined;
       if (this.coldRowProjections.get(id)?.claimsGrant) {
-        const raw = this.db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id)!;
-        this.onRowPayloadRead?.(collection,1);
-        this.onRowPayloadParse?.(collection,1);
-        const decided = this.decideStoredRow(collection,key,JSON.parse(raw.value_json)) as GrantProfileRow;
-        pinnedGrants = grantLists(collection,decided).map(list => list && [...list]);
+        let decision = this.coldGrantDecisions.get(id);
+        if (!decision) {
+          const raw = this.db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id)!;
+          this.onRowPayloadRead?.(collection,1);
+          this.onRowPayloadParse?.(collection,1);
+          const dependencies = new Set<string>();
+          const decided = this.decideStoredRow(collection,key,JSON.parse(raw.value_json),dependencies) as GrantProfileRow;
+          decision = { lists: grantLists(collection,decided).map(list => list && [...list]),dependencies };
+          this.coldGrantDecisions.set(id,decision);
+          for (const dependency of dependencies) {
+            const targets = this.coldGrantTargets.get(dependency) ?? new Set<number>();
+            targets.add(id);
+            this.coldGrantTargets.set(dependency,targets);
+          }
+        }
+        pinnedGrants = decision.lists;
       }
       Object.defineProperty(rows,key,{ enumerable: true, configurable: false, get: () => {
         // The immutable version id pins payload truth for an already-held view.
@@ -1199,6 +1277,7 @@ export class SqliteAgentRegistryStore {
       }
       (file as unknown as Record<string, unknown>)[collection] = Object.freeze(ordered);
     }
+    this.coldGrantCursor = { changeId: coldGrantChangeId,stamp: snapshot.stamp };
     keyedReaders.set(file,(collection,field,value) => {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
