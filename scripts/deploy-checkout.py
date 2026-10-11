@@ -374,7 +374,9 @@ class LeftoverProcesses(RuntimeError):
 
 def leftover_lines(members):
     return ["Leftover in service cgroup: pid=" + str(member["pid"]) + " name=" + member["name"]
-            + " since=" + str(member["since"]) + " parent=" + str(member["parentPid"]) for member in members]
+            + " identity=" + str(member["startIdentity"]) + " since=" + str(member["since"])
+            + " parent=" + str(member["parentPid"])
+            + " reason=" + member["reason"] for member in members]
 
 
 def systemd_properties(output):
@@ -732,20 +734,83 @@ class Checkout:
             pid = parent_pid(stat)
         return None
 
+    def launcher_ancestors(self, record, group):
+        """Exact identities on the recorded launcher's path up to MainPID.
+        These are exemptions for those processes only: making the bootstrap
+        an ownership root would also admit its surviving older children."""
+        def unit_process():
+            values = systemd_properties(self.command([
+                "systemctl", "--user", "show", self.unit, "-p", "MainPID", "-p", "ControlGroup"]))
+            main = values.get("MainPID", "")
+            if not re.fullmatch(r"[1-9][0-9]*", main) or int(main) <= 1 or values.get("ControlGroup") != group:
+                raise RuntimeError("service MainPID or cgroup unreadable or changed")
+            return int(main)
+        main = unit_process()
+        launcher = record["launcher"]
+        pid = launcher["pid"]
+        chain = {}
+        while pid > 1 and pid not in chain and len(chain) < 64:
+            stat = self.process_read(pid, "stat")
+            identity, parent = start_identity(stat), parent_pid(stat)
+            if pid == launcher["pid"] and identity != launcher.get("startIdentity"):
+                raise RuntimeError("recorded launcher identity changed")
+            if not within(kernel_cgroup(self.process_read(pid, "cgroup")), group):
+                raise RuntimeError("launcher ancestor outside the service cgroup")
+            chain[pid] = (identity, parent)
+            if pid == main:
+                break
+            pid = parent
+        if pid != main:
+            raise RuntimeError("recorded launcher does not reach the service MainPID")
+        for pid, expected in chain.items():
+            stat = self.process_read(pid, "stat")
+            if ((start_identity(stat), parent_pid(stat)) != expected
+                    or not within(kernel_cgroup(self.process_read(pid, "cgroup")), group)):
+                raise RuntimeError("launcher ancestor changed while it was read")
+        if unit_process() != main:
+            raise RuntimeError("service MainPID changed while it was read")
+        return chain
+
+    def older_release(self, record, args, cwd):
+        """A serving descendant executing from a different release directory.
+        Agent-owned tools may intentionally use other release checkouts."""
+        releases = pathlib.Path(record["releasesDir"]).resolve()
+        for value in [*args[:2], cwd]:
+            path = pathlib.Path(value)
+            if not path.is_absolute():
+                path = pathlib.Path(cwd) / path
+            try:
+                relative = path.resolve().relative_to(releases)
+            except ValueError:
+                continue
+            if (relative.parts and re.fullmatch(r"[0-9a-f]{12}", relative.parts[0])
+                    and not relative.parts[0].startswith(record["launcher"]["revision"][:12])):
+                return True
+        return False
+
     def leftovers(self, group):
         record = json.loads(self.record_file.read_text())
         owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
         for key in ["launcher", "web", "runtimeHost"]:
             owners[record[key]["pid"]] = ("current", record[key].get("startIdentity"))
+        ancestors = self.launcher_ancestors(record, group)
         found = []
         for pid in self.members(group):
             try:
                 stat = self.process_read(pid, "stat")
-                if self.owner(pid, owners) is not None:
-                    continue
+                ancestor = ancestors.get(pid)
+                owned = self.owner(pid, owners) if ancestor is None else None
                 args = self.process_read(pid, "cmdline").decode().split("\0")
+                older = owned == "current" and pid not in owners and self.older_release(
+                    record, args, self.process_read(pid, "cwd"))
                 if start_identity(self.process_read(pid, "stat")) != start_identity(stat):
                     raise RuntimeError("service cgroup member changed while it was read")
+                if ancestor is not None:
+                    if (start_identity(stat), parent_pid(stat)) != ancestor:
+                        raise RuntimeError("launcher ancestor changed during cgroup inventory")
+                    continue
+                if owned is not None and not older:
+                    continue
             except FileNotFoundError:
                 # Exited since the cgroup was listed, or a parent left mid-walk:
                 # a recheck must classify it again.
@@ -754,7 +819,10 @@ class Checkout:
                 raise RuntimeError("service cgroup member moved while it was read")
             identity = start_identity(stat)
             found.append({"pid": pid, "startIdentity": identity, "name": process_name(args),
-                          "parentPid": parent_pid(stat), "since": self.clock.process_since(identity)})
+                          "parentPid": parent_pid(stat), "since": self.clock.process_since(identity),
+                          "reason": "older release in service cgroup" if older else "no current serving or agent owner"})
+        if self.launcher_ancestors(record, group) != ancestors or json.loads(self.record_file.read_text()) != record:
+            raise RuntimeError("launcher ownership changed during cgroup inventory")
         return found
 
     def fence(self):
