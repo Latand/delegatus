@@ -2036,8 +2036,10 @@ export async function recoverStagedStructuredLaunch(
       : writer.claimOwner === `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`));
     if (!ownsHost && writer?.claimOwner) {
       const owner = structuredClaimIdentity(writer.claimOwner);
-      const nativeGone = writer.structuredHost?.process && processIdentityStatus(writer.structuredHost.process) === "dead";
-      if (!nativeGone && (!owner || processIdentityStatus(owner) !== "dead")) return receipt;
+      // A replacement writer can be starting its host while the row retains
+      // the previous native process. Its live or unverified claim still owns
+      // setup, regardless of that old process's death.
+      if (!owner || processIdentityStatus(owner) !== "dead") return receipt;
     }
     // Downtime before the first probe is not sixteen failed checks. Start its
     // bounded observation window once, persisted before the first I/O.

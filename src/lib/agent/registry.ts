@@ -6779,6 +6779,25 @@ export class AgentRegistry {
             || (receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner))) return false;
           const recovery = stagedLaunchRecovery(receipt);
           if (recovery && recovery.phase !== "unpublished") return false;
+          // The unpublished envelope predates an independent first-message
+          // attempt. Only a reservation that has never dispatched can end in
+          // this transaction; retained operation evidence survives compaction.
+          const messageOperation = `spawn_message_${launchId}`;
+          const messageId = `spawn_${launchId}`;
+          const canonicalId = resolveConversationAlias(file, receipt.conversationId);
+          const isFirstMessage = (row: { conversationId: ViewerConversationId; clientMessageId: string | null }) =>
+            row.clientMessageId === messageId && resolveConversationAlias(file, row.conversationId) === canonicalId;
+          const deliveries = Object.values(file.heldDeliveries).filter(delivery =>
+            delivery.command.operationId === messageOperation || isFirstMessage(delivery));
+          if (deliveries.some(delivery => initialSpawnReceiptOf(file, delivery)?.launchId !== launchId || delivery.attempts !== 0
+            || (delivery.state !== "held" && delivery.state !== "assigned"))) return false;
+          for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+            if (operationId !== messageOperation && !isFirstMessage(owner)) continue;
+            const delivery = deliveries.find(delivery => delivery.id === owner.deliveryId
+              && delivery.command.operationId === operationId && delivery.requestDigest === owner.requestDigest);
+            if (!delivery || operationId !== messageOperation || owner.command.operationId !== messageOperation
+              || !isFirstMessage(owner) || owner.terminalState !== null || owner.terminalDisposition !== null) return false;
+          }
           const conversation = file.conversations[resolveConversationAlias(file, receipt.conversationId)];
           const absent = (pathname: string | null) => {
             if (!pathname) return true;
@@ -6806,10 +6825,10 @@ export class AgentRegistry {
             if (entry.host || !absent(entry.artifactPath)
               || entry.structuredTerminationSurvivors?.some(identity => this.ownerAlive(identity))
               || (entry.structuredHost?.process && this.ownerAlive(entry.structuredHost.process))) return false;
-            // A Viewer can outlive the native process its claim hosted. Proven
-            // native death fences that old claim; a setup claim without a
-            // process still needs its owner to be proven gone.
-            if (entry.claimOwner && !entry.structuredHost?.process) {
+            // Adoption advances the claim before binding its new process and
+            // can still retain the old native identity. Prove the writer gone
+            // independently of that old incarnation before revoking its claim.
+            if (entry.claimOwner) {
               const owner = structuredClaimIdentity(entry.claimOwner);
               if (!owner || this.ownerAlive(owner)) return false;
             }

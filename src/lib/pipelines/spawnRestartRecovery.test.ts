@@ -9,6 +9,7 @@ const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/re
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { captureProcessIdentity } = await import("@/lib/processIdentity");
+const { adoptCodexRegistryHosts } = await import("@/lib/runtime/registry");
 const { RuntimeHostUnavailableError } = await import("@/lib/runtime/client");
 const { recoverStagedStructuredLaunch, spawnStructuredConversation, stagedLaunchRecovery, STAGED_RECOVERY_BUDGET_MS } = await import("@/lib/runtime/structuredSpawn");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");
@@ -23,10 +24,10 @@ afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: t
 
 const HEAD = "a".repeat(40);
 
-async function fixture(unstaged = false, admissionRestarts = 0) {
+async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off" | "sqlite" = "off") {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "launch-"));
-  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode });
   setAgentRegistryForTests(registry);
   let clock = Date.now();
   let unavailable = true;
@@ -241,6 +242,146 @@ test("retry-stage keeps a launch with a live host fenced even when its reserved 
     expect(result.error).toContain("path-pending");
     expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]?.state).toBe("path-pending");
     expect(f.starts()).toBe(1);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+function retainDeadNative(f: Awaited<ReturnType<typeof fixture>>) {
+  const entry = f.registry.readOnlySnapshot().entries[`codex:${f.original.key!.sessionId}`]!;
+  // A different start token proves this recorded incarnation is gone.
+  const dead = { ...captureProcessIdentity(process.pid), startIdentity: "previous-incarnation" };
+  f.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: dead } });
+  return dead;
+}
+
+test.each(["live", "unverified", "unreadable"] as const)("retry retains a %s setup claim beside a dead native identity", async kind => {
+  const f = await fixture();
+  try {
+    f.loseHost(); f.park(); retainDeadNative(f);
+    const claimed = f.registry.claimStructuredHost(f.original.key!, captureProcessIdentity(process.pid), { allowUnhosted: true })!;
+    expect(claimed).not.toBeNull();
+    if (kind !== "live") f.registry.upsert({ ...claimed, claimOwner: kind === "unreadable" ? "legacy-claim"
+      : `structured-host:${JSON.stringify({ ...captureProcessIdentity(process.pid), startIdentity: null })}` });
+    const before = f.registry.readOnlySnapshot();
+    f.advance(STAGED_RECOVERY_BUDGET_MS + 1_000);
+    await recoverStagedStructuredLaunch(f.original.launchId, f.registry, f.client, { now: () => Date.now() + STAGED_RECOVERY_BUDGET_MS + 1_000, eligible: () => true });
+    expect(f.probes()).toBe(0);
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, f.ports)).error).toContain("path-pending");
+    const after = f.registry.readOnlySnapshot();
+    expect(after.receipts[f.original.launchId]).toEqual(before.receipts[f.original.launchId]);
+    expect(after.entries[`codex:${f.original.key!.sessionId}`]).toEqual(before.entries[`codex:${f.original.key!.sessionId}`]);
+    expect(f.starts()).toBe(1);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("retry remains fenced while real boot adoption awaits its replacement host", async () => {
+  const f = await fixture();
+  let entered!: () => void;
+  let release!: () => void;
+  const atAdoption = new Promise<void>(resolve => { entered = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  let adoption: ReturnType<typeof adoptCodexRegistryHosts> | undefined;
+  try {
+    f.loseHost(); f.park(); retainDeadNative(f);
+    adoption = adoptCodexRegistryHosts(f.registry, () => ({ command: "codex", cwd: path.dirname(f.original.artifactPath!) }),
+      { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true, undefined, {
+        admit: () => null,
+        adoptHost: async () => { entered(); await barrier; throw new Error("fixture adoption ended"); },
+      });
+    await atAdoption;
+    const before = f.registry.readOnlySnapshot();
+    expect(before.entries[`codex:${f.original.key!.sessionId}`]?.claimOwner).toBeTruthy();
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, f.ports)).error).toContain("path-pending");
+    const after = f.registry.readOnlySnapshot();
+    expect(after.receipts[f.original.launchId]).toEqual(before.receipts[f.original.launchId]);
+    expect(after.entries[`codex:${f.original.key!.sessionId}`]).toEqual(before.entries[`codex:${f.original.key!.sessionId}`]);
+  } finally { release(); await adoption; setAgentRegistryForTests(null); }
+});
+
+test("a proven dead native and dead setup owner still permit retry", async () => {
+  const f = await fixture();
+  try {
+    f.loseHost(); f.park();
+    const dead = retainDeadNative(f);
+    const entry = f.registry.readOnlySnapshot().entries[`codex:${f.original.key!.sessionId}`]!;
+    f.registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify(dead)}` });
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, f.ports)).error).toBeUndefined();
+    expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]?.state).toBe("failed");
+  } finally { setAgentRegistryForTests(null); }
+});
+
+function holdFirstMessage(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.registry.holdDelivery(f.original.conversationId, "Build", `spawn_${f.original.launchId}`, "text", [], null,
+    { kind: "send", operationId: `spawn_message_${f.original.launchId}` });
+}
+
+test.each([false, true])("retry preserves a first-message attempt independently of unpublished recovery (at failure boundary: %s)", async atBoundary => {
+  const f = await fixture(false, 0, atBoundary ? "sqlite" : "off");
+  let seam: ReturnType<typeof spyOn> | undefined;
+  try {
+    f.loseHost(); f.park();
+    const delivery = holdFirstMessage(f);
+    expect(delivery.state).toBe("assigned");
+    const attempt = () => expect(f.registry.beginDeliveryAttempt(delivery.id, delivery.generationId!)?.state).toBe("delivery-uncertain");
+    if (atBoundary) {
+      const fail = f.registry.failNeverStartedStageSpawnNow.bind(f.registry);
+      let attempted = false;
+      seam = spyOn(f.registry, "failNeverStartedStageSpawnNow").mockImplementation((...args) => {
+        if (!attempted) { attempt(); attempted = true; }
+        return fail(...args);
+      });
+    } else attempt();
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, f.ports)).error).toContain("path-pending");
+    expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]?.state).toBe("path-pending");
+    expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]?.retryClaim).toBeUndefined();
+    expect(f.registry.readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("delivery-uncertain");
+    await tickPipelines([], f.ports);
+    expect(f.starts()).toBe(1);
+  } finally { seam?.mockRestore(); setAgentRegistryForTests(null); f.registry.close(); }
+});
+
+test.each(["reservation", "owner"] as const)("retry retains unverified first-message %s ownership", async mismatch => {
+  const f = await fixture();
+  try {
+    f.loseHost(); f.park();
+    const delivery = holdFirstMessage(f);
+    const file = f.registry.snapshot();
+    if (mismatch === "reservation") file.heldDeliveries[delivery.id]!.command.operationId = "other-message";
+    else file.deliveryOperationOwners[delivery.command.operationId]!.clientMessageId = "other-message";
+    fs.writeFileSync(f.registry.filename, JSON.stringify(file));
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, f.ports)).error).toContain("path-pending");
+    expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]?.retryClaim).toBeUndefined();
+    expect(f.registry.readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("assigned");
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test.each(["pending", "delivered", "unverified"] as const)("retry preserves retained %s first-message operation evidence without its reservation", async outcome => {
+  const f = await fixture();
+  try {
+    f.loseHost(); f.park();
+    const delivery = holdFirstMessage(f);
+    const file = f.registry.snapshot();
+    delete file.heldDeliveries[delivery.id];
+    const owner = file.deliveryOperationOwners[delivery.command.operationId]!;
+    owner.terminalState = outcome === "pending" ? null : outcome === "delivered" ? "delivered" : "failed";
+    owner.terminalDisposition = outcome === "pending" ? null : outcome;
+    fs.writeFileSync(f.registry.filename, JSON.stringify(file));
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, f.ports)).error).toContain("path-pending");
+    expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]?.retryClaim).toBeUndefined();
+    expect(f.registry.readOnlySnapshot().deliveryOperationOwners[delivery.command.operationId]).toEqual(owner);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("retry atomically terminalizes an unattempted first message", async () => {
+  const f = await fixture();
+  try {
+    f.loseHost(); f.park();
+    const delivery = holdFirstMessage(f);
+    expect(delivery.state).toBe("assigned");
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, f.ports)).error).toBeUndefined();
+    expect(f.registry.readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("failed");
+    expect(f.registry.beginDeliveryAttempt(delivery.id, delivery.generationId ?? "absent")).toBeNull();
+    await tickPipelines([], f.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.n).toBe(2);
   } finally { setAgentRegistryForTests(null); }
 });
 
