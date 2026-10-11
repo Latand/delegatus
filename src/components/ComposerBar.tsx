@@ -679,7 +679,7 @@ export function ComposerBar({
               region: a run of failed or uncertain deliveries wraps into rows of
               chips, and each chip carries the controls that settle it. */}
           {receipts ? (
-            <div data-testid="composer-receipts" hidden={receiptsHidden} className="flex flex-wrap gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
+            <div data-testid="composer-receipts" hidden={receiptsHidden} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
           ) : null}
         </div>
       ) : null}

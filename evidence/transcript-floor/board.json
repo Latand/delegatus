@@ -15,6 +15,7 @@
         "text": "Не доставлено: 3"
       },
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -35,6 +36,11 @@
         "text": "Не доставлено: 3"
       },
       "list": true,
+      "firstFailed": {
+        "found": true,
+        "whole": true,
+        "header": "Повторити невдалі (2)"
+      },
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -55,6 +61,7 @@
         "text": "Не доставлено: 3"
       },
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -72,6 +79,7 @@
       },
       "chip": null,
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -89,6 +97,7 @@
       },
       "chip": null,
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -109,6 +118,7 @@
         "text": "Не доставлено: 3"
       },
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -129,6 +139,11 @@
         "text": "Не доставлено: 3"
       },
       "list": true,
+      "firstFailed": {
+        "found": true,
+        "whole": true,
+        "header": "Повторити невдалі (2)"
+      },
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -149,6 +164,7 @@
         "text": "Не доставлено: 3"
       },
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -166,6 +182,7 @@
       },
       "chip": null,
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -183,6 +200,7 @@
       },
       "chip": null,
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -203,6 +221,7 @@
         "text": "Not delivered: 3"
       },
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -223,6 +242,11 @@
         "text": "Not delivered: 3"
       },
       "list": true,
+      "firstFailed": {
+        "found": true,
+        "whole": true,
+        "header": "Retry failed (2)"
+      },
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -243,6 +267,7 @@
         "text": "Not delivered: 3"
       },
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -260,6 +285,7 @@
       },
       "chip": null,
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -277,6 +303,7 @@
       },
       "chip": null,
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -297,6 +324,7 @@
         "text": "Not delivered: 3"
       },
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -317,6 +345,11 @@
         "text": "Not delivered: 3"
       },
       "list": true,
+      "firstFailed": {
+        "found": true,
+        "whole": true,
+        "header": "Retry failed (2)"
+      },
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -337,6 +370,7 @@
         "text": "Not delivered: 3"
       },
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -354,6 +388,7 @@
       },
       "chip": null,
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,
@@ -371,6 +406,7 @@
       },
       "chip": null,
       "list": false,
+      "firstFailed": null,
       "more": true,
       "eyeChip": false,
       "strayStrip": false,

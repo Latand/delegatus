@@ -2602,6 +2602,8 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
   const LANGS = ["uk", "en"] as const;
   const FLOOR = 0.6;
   const DRAFT = "one\ntwo\nthree\nfour\nfive\nsix";
+  /** `LLV_FLOOR_ONLY=seat-1000-uk,phone-390-en` narrows a run to those surfaces and languages. */
+  const ONLY = process.env.LLV_FLOOR_ONLY?.split(",");
 
   type Box = [x: number, y: number, width: number, height: number];
   interface Reading {
@@ -2613,7 +2615,19 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
     aboveField: string[];
     region: boolean;
     chip: { text: string; box: Box; place: string } | null;
-    list: { box: Box; retryAll: string | null; aboveField: boolean } | null;
+    list: {
+      box: Box; retryAll: string | null; aboveField: boolean;
+      /** The header's own text: the chip already names the state and the count. */
+      header: string;
+      /** The first settled failure row and its Retry: whole inside the list's visible part, nothing sliced through. */
+      firstFailed: { whole: boolean; retryWhole: boolean } | null;
+      /** A control of the list cut through by its edge or by the field. */
+      sliced: string[];
+      /** The fade that says rows lie below, when the list scrolls. */
+      moreBelow: boolean;
+      scrolls: boolean;
+      retryAllBox: Box | null;
+    } | null;
     more: { box: Box; place: string } | null;
     steps: { text: string; place: string } | null;
     stop: { box: Box; beside: boolean; gap: number; label: string | null } | null;
@@ -2695,12 +2709,46 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
       aboveField,
       region: shown(form.querySelector('[data-testid="composer-accessories"]')),
       chip: shown(chip) ? { text: chip.innerText.replace(/\s+/g, " ").trim(), box: box(chip), place: place(chip) } : null,
-      list: shown(list) ? {
-        box: box(list),
-        retryAll: list.querySelector("[data-receipts-retry-failed]")?.textContent ?? null,
-        /* Its visible part: the region it scrolls inside ends above the field. */
-        aboveField: Math.min(list.getBoundingClientRect().bottom, (list.closest('[data-testid="composer-accessories"]') ?? list).getBoundingClientRect().bottom) <= fieldTop + 0.5,
-      } : null,
+      list: shown(list) ? (() => {
+        /* Its visible part: the list's own frame, inside the region that ends above the field. */
+        const frame = list.getBoundingClientRect();
+        const region = (list.closest('[data-testid="composer-accessories"]') ?? list).getBoundingClientRect();
+        const visibleTop = Math.max(frame.top, region.top);
+        const visibleBottom = Math.min(frame.bottom, region.bottom, fieldTop);
+        const inside = (element: Element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.top >= visibleTop - 0.5 && rect.bottom <= visibleBottom + 0.5;
+        };
+        const isRetry = (button: Element) => /^(Повторити|Retry)$/.test(button.textContent?.trim() ?? "");
+        const header = list.querySelector("summary");
+        const headerBottom = header ? header.getBoundingClientRect().bottom : visibleTop;
+        const retryAllButton = list.querySelector("[data-receipts-retry-failed]");
+        const failedRow = [...list.querySelectorAll<HTMLElement>("[data-runtime-receipt-details] > div")]
+          .find((row) => row.querySelector('[data-receipt-status="failed"]') && [...row.querySelectorAll("button")].some((button) => isRetry(button)));
+        const failedRetry = failedRow ? [...failedRow.querySelectorAll("button")].find((button) => isRetry(button)) : null;
+        /* The first failed row is the one the operator acts on: none of its controls is cut by the list's
+           edge or hidden under the sticky header. Rows below it may run into the fade that says the list scrolls. */
+        const sliced = [...(failedRow ?? list).querySelectorAll<HTMLElement>("button")].filter((button) => {
+          if (button.closest("summary")) return false;
+          const rect = button.getBoundingClientRect();
+          if (rect.height === 0) return false;
+          const straddlesBottom = rect.top < visibleBottom - 0.5 && rect.bottom > visibleBottom + 0.5;
+          const straddlesHeader = rect.top < headerBottom - 0.5 && rect.bottom > headerBottom + 0.5;
+          return straddlesBottom || straddlesHeader;
+        }).map((button) => button.textContent?.trim() || button.getAttribute("aria-label") || "button");
+        return {
+          box: box(list),
+          retryAll: retryAllButton?.textContent ?? null,
+          aboveField: visibleBottom <= fieldTop + 0.5,
+          header: header ? [...header.children].filter((child) => !child.matches(".sr-only, [hidden]") && child.getBoundingClientRect().width > 0)
+          .map((child) => (child as HTMLElement).innerText ?? "").join(" ").replace(/\s+/g, " ").trim() : "",
+          firstFailed: failedRow ? { whole: inside(failedRow), retryWhole: failedRetry ? inside(failedRetry) : false } : null,
+          sliced,
+          moreBelow: Boolean(list.querySelector("[data-receipt-more-below]")),
+          scrolls: list.scrollHeight > list.clientHeight + 1,
+          retryAllBox: retryAllButton ? box(retryAllButton) : null,
+        };
+      })() : null,
       more: shown(more) ? { box: box(more), place: place(more) } : null,
       steps: shown(steps) ? { text: steps.innerText.replace(/\s+/g, " ").trim(), place: steps.getAttribute("data-own-steps") === "composer" ? place(steps) : "row-above-composer" } : null,
       stop: shown(stop) ? (() => {
@@ -2733,6 +2781,7 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
     try {
       for (const surface of SURFACES) for (const lang of LANGS) {
         const where = `${surface.name}-${lang}`;
+        if (ONLY && !ONLY.includes(where)) continue;
         const query = `case=own-message-steps&lang=${lang}${surface.pane ? `&pane=${surface.pane}` : ""}&surface=${surface.surface}`;
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width: surface.width, height: surface.height }, "dark", lang, "reduce", surface.phone);
         const fail = (moment: string, what: string) => failures.push(`${where} ${moment}: ${what}`);
@@ -2772,6 +2821,14 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
           const open = await record("list-open");
           if (!open.list?.aboveField) fail("list-open", "the list is not open above the field");
           if (!open.list?.retryAll?.includes("2")) fail("list-open", `«Retry failed» reads ${JSON.stringify(open.list?.retryAll)}`);
+          /* The chip names the state and the count, so the header does not say it again. */
+          if (open.list && !/^(Повторити невдалі|Retry failed)( \(\d+\))?$/.test(open.list.header)) fail("list-open", `the list's header reads ${JSON.stringify(open.list.header)}`);
+          if (open.list?.firstFailed && !(open.list.firstFailed.whole && open.list.firstFailed.retryWhole)) fail("list-open", "the first failed row or its Retry is cut off");
+          if (open.list && !open.list.firstFailed) fail("list-open", "no failed row with its Retry is in the list");
+          if (open.list?.sliced.length) fail("list-open", `cut through mid-control: ${open.list.sliced.join(", ")}`);
+          if (open.list?.scrolls && !open.list.moreBelow) fail("list-open", "the list scrolls with no fade at its foot");
+          /* The bulk button is a pill inset from the header, like the row buttons: clear of the frame's top edge. */
+          if (open.list?.retryAllBox && open.list.retryAllBox[1] - open.list.box[1] < (surface.phone ? 4 : 2)) fail("list-open", "«Retry failed» touches the list's top edge");
           /* The phone's list takes its row's place; the desktop's chip closes it again. */
           /* Its chevron, at the header's start: the header's other end is «Retry failed». */
           if (surface.phone) await page.locator("[data-runtime-receipt-stack] > summary").click({ position: { x: 10, y: 22 } });
@@ -2816,7 +2873,7 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
       served.stop();
     }
     const shares = Object.values(readings).flatMap((moments) => Object.values(moments).map((reading) => reading.feedShare));
-    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({
+    if (!ONLY) fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({
       floor: FLOOR,
       surfaces: SURFACES,
       lowestShare: Math.min(...shares),

@@ -394,8 +394,13 @@ test("multiple delivery attempts collapse into one bounded accessible receipt st
   expect(status?.textContent).toContain("2 проблеми");
 
   const details = stack.querySelector("[data-runtime-receipt-details]") as HTMLElement;
-  expect(details.className).toContain("max-h-");
-  expect(details.className).toContain("overflow-y-auto");
+  /* The frame is the list's scroller once it is open; the rows only lay out. */
+  expect(stack.className).not.toContain("overflow-y-auto");
+  flushSync(() => summary.click());
+  expect(stack.open).toBe(true);
+  expect(stack.className).toContain("max-h-");
+  expect(stack.className).toContain("overflow-y-auto");
+  expect(details.className).not.toContain("overflow-y-auto");
   // Identical attempts share one grouped row: the queued current attempt owns
   // it (optimistic marker, no duplicate actions) and the stale-turn rejections
   // stay visible as counted history.

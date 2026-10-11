@@ -304,6 +304,47 @@ test("three failed sends are one chip in the bottom row; the list waits behind i
   }
 });
 
+test("the open list leads with the settled failures, its header carries only what acts on the list, and the bulk button is a pill", async () => {
+  const mountNode = document.createElement("span");
+  document.body.append(mountNode);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(
+    <RuntimeComposerReceipts
+      receipts={THREE_UNDELIVERED}
+      onRetry={() => {}}
+      onEdit={() => {}}
+      onDiscard={() => {}}
+      chipMount={mountNode}
+    />,
+  ));
+  try {
+    await settle(() => mountNode.querySelector<HTMLButtonElement>("[data-receipts-chip]")!.click());
+    const stack = host.querySelector<HTMLElement>("[data-runtime-receipt-stack]")!;
+    /* The unconfirmed send is the newest, and still comes last. */
+    const rows = [...stack.querySelectorAll("[data-runtime-receipt-details] [data-operation]")].map((node) => node.getAttribute("data-operation"));
+    expect(rows.indexOf("unconfirmed")).toBe(rows.length - 1);
+    expect(rows).toContain("failed-one");
+    expect(rows).toContain("failed-two");
+    /* The chip names the state and the count: the header repeats neither. */
+    const header = stack.querySelector("summary")!;
+    const drawn = [...header.children].filter((child) => !child.matches(".sr-only, [hidden]"));
+    expect(drawn.map((child) => child.textContent).join(" ").trim()).toBe(translate("en", "bulk.retryFailed", { count: 2 }));
+    expect(header.querySelector("[data-delivery-notice-count]")).toBeNull();
+    expect(isHidden(header.querySelector("[data-receipt-counts]"))).toBe(true);
+    /* The bulk button has the shape of the row buttons: a pill, not a square box. */
+    const bulk = header.querySelector<HTMLElement>("[data-receipts-retry-failed]")!;
+    const rowRetry = stack.querySelector<HTMLElement>('[data-operation="failed-one"] button')!;
+    expect(bulk.className).toContain("rounded-full");
+    expect(rowRetry.className).toContain("rounded-full");
+    /* The frame is the list's scroller, with the fade as its own element when rows lie below. */
+    expect(stack.className).toContain("overflow-y-auto");
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
+
 test("«Retry failed» sends the settled failures again and skips the send whose delivery is unconfirmed", async () => {
   const retried: string[] = [];
   const mountNode = document.createElement("span");

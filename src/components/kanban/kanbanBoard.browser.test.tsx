@@ -28216,6 +28216,28 @@ describe("the seat column and the agent window keep 60% of the conversation", ()
       stop: shown(stop) ? { beside } : null,
       chip: shown(column.querySelector("[data-receipts-chip]")) ? { inRow: inRow(column.querySelector("[data-receipts-chip]")), text: column.querySelector<HTMLElement>("[data-receipts-chip]")!.innerText.trim() } : null,
       list: shown(column.querySelector("[data-runtime-receipt-stack]")),
+      /* The first settled failure with its Retry, whole inside the list's visible part: the frame's own edge,
+         the region that ends above the field. */
+      firstFailed: (() => {
+        const list = column.querySelector("[data-runtime-receipt-stack]");
+        if (!shown(list)) return null;
+        const field = (column.querySelector('[data-testid="composer-input-unit"]') as HTMLElement).getBoundingClientRect().top;
+        const frame = list.getBoundingClientRect();
+        const bottom = Math.min(frame.bottom, field);
+        const headerBottom = list.querySelector("summary")!.getBoundingClientRect().bottom;
+        const row = [...list.querySelectorAll<HTMLElement>("[data-runtime-receipt-details] > div")].find((candidate) => candidate.querySelector('[data-receipt-status="failed"]'));
+        if (!row) return { found: false, whole: false, header: "" };
+        const rect = row.getBoundingClientRect();
+        const retry = [...row.querySelectorAll("button")].find((button) => /^(Повторити|Retry)$/.test(button.textContent?.trim() ?? ""));
+        const retryRect = retry?.getBoundingClientRect();
+        const header = [...list.querySelector("summary")!.children].filter((child) => !child.matches(".sr-only, [hidden]") && child.getBoundingClientRect().width > 0)
+          .map((child) => (child as HTMLElement).innerText ?? "").join(" ").replace(/\s+/g, " ").trim();
+        return {
+          found: true,
+          whole: rect.top >= headerBottom - 0.5 && rect.bottom <= bottom + 0.5 && Boolean(retryRect) && retryRect!.top >= headerBottom - 0.5 && retryRect!.bottom <= bottom + 0.5,
+          header,
+        };
+      })(),
       more: inRow(column.querySelector("[data-composer-more-actions]")),
       eyeChip: Boolean(column.querySelector("[data-selected-context]")),
       strayStrip: [...column.querySelectorAll("[data-agent-control-strip]")].some((element) => element.getAttribute("data-strip-layout") !== "composer" && shown(element)),
@@ -28265,6 +28287,9 @@ describe("the seat column and the agent window keep 60% of the conversation", ()
           await page.locator(`${SEAT} [data-receipts-chip]`).click();
           const open = await record("seat", "list-open");
           if (open && !open.list) failures.push(`seat-list-open-${where}: the list did not open`);
+          if (open?.firstFailed && !open.firstFailed.found) failures.push(`seat-list-open-${where}: no failed row with its Retry is in the list`);
+          if (open?.firstFailed?.found && !open.firstFailed.whole) failures.push(`seat-list-open-${where}: the first failed row or its Retry is cut off`);
+          if (open?.firstFailed && !/^(Повторити невдалі|Retry failed)( \(\d+\))?$/.test(open.firstFailed.header)) failures.push(`seat-list-open-${where}: the list's header reads ${JSON.stringify(open.firstFailed.header)}`);
           await page.locator(`${SEAT} [data-receipts-chip]`).click();
 
           await page.locator(`${SEAT} textarea`).fill(DRAFT);

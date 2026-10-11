@@ -159,9 +159,9 @@
       },
       "list-open": {
         "column": 809,
-        "transcript": 488,
-        "share": 0.604,
-        "feedShare": 0.604,
+        "transcript": 528,
+        "share": 0.653,
+        "feedShare": 0.653,
         "aboveField": [
           "composer-receipts",
           "details",
@@ -171,12 +171,12 @@
           "Прибрати",
           "button",
           "button",
+          "Прибрати",
           "button",
           "button",
           "Прибрати",
           "button",
-          "button",
-          "Прибрати"
+          "button"
         ],
         "region": true,
         "chip": {
@@ -192,12 +192,26 @@
         "list": {
           "box": [
             23,
-            575.5,
+            615.5,
             1394,
-            215.5
+            175.5
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            1227.9,
+            618.5,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -436,9 +450,16 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
           "Прибрати"
         ],
         "region": true,
@@ -457,10 +478,24 @@
             23,
             601,
             1394,
-            215.5
+            106
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            1227.9,
+            604,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -615,9 +650,9 @@
       },
       "list-open": {
         "column": 809,
-        "transcript": 488,
-        "share": 0.604,
-        "feedShare": 0.604,
+        "transcript": 528,
+        "share": 0.653,
+        "feedShare": 0.653,
         "aboveField": [
           "composer-receipts",
           "details",
@@ -627,12 +662,12 @@
           "Dismiss",
           "button",
           "button",
+          "Dismiss",
           "button",
           "button",
           "Dismiss",
           "button",
-          "button",
-          "Dismiss"
+          "button"
         ],
         "region": true,
         "chip": {
@@ -648,12 +683,26 @@
         "list": {
           "box": [
             23,
-            575.5,
+            615.5,
             1394,
-            215.5
+            175.5
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            1268.5,
+            618.5,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -892,9 +941,16 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
           "Dismiss"
         ],
         "region": true,
@@ -913,10 +969,24 @@
             23,
             601,
             1394,
-            215.5
+            106
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            1268.5,
+            604,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -1071,23 +1141,24 @@
       },
       "list-open": {
         "column": 809,
-        "transcript": 487,
-        "share": 0.602,
-        "feedShare": 0.602,
+        "transcript": 528,
+        "share": 0.653,
+        "feedShare": 0.653,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
           "Прибрати",
           "button",
           "button",
+          "Прибрати",
           "button",
           "button",
           "Прибрати",
           "button",
-          "button",
-          "Прибрати"
+          "button"
         ],
         "region": true,
         "chip": {
@@ -1103,12 +1174,26 @@
         "list": {
           "box": [
             451,
-            574,
+            615.5,
             538,
-            230.5
+            175.5
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            799.9,
+            618.5,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -1347,9 +1432,16 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
           "Прибрати"
         ],
         "region": true,
@@ -1368,10 +1460,24 @@
             451,
             601,
             538,
-            230.5
+            106
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            799.9,
+            604,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -1526,23 +1632,24 @@
       },
       "list-open": {
         "column": 809,
-        "transcript": 487,
-        "share": 0.602,
-        "feedShare": 0.602,
+        "transcript": 528,
+        "share": 0.653,
+        "feedShare": 0.653,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
           "Dismiss",
           "button",
           "button",
+          "Dismiss",
           "button",
           "button",
           "Dismiss",
           "button",
-          "button",
-          "Dismiss"
+          "button"
         ],
         "region": true,
         "chip": {
@@ -1558,12 +1665,26 @@
         "list": {
           "box": [
             451,
-            574,
+            615.5,
             538,
-            230.5
+            175.5
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            840.5,
+            618.5,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -1802,9 +1923,16 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
           "Dismiss"
         ],
         "region": true,
@@ -1823,10 +1951,24 @@
             451,
             601,
             538,
-            230.5
+            106
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            840.5,
+            604,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -1981,9 +2123,9 @@
       },
       "list-open": {
         "column": 874,
-        "transcript": 546,
-        "share": 0.625,
-        "feedShare": 0.625,
+        "transcript": 594,
+        "share": 0.679,
+        "feedShare": 0.679,
         "aboveField": [
           "composer-receipts",
           "details",
@@ -1993,12 +2135,12 @@
           "Прибрати",
           "button",
           "button",
+          "Прибрати",
           "button",
           "button",
           "Прибрати",
           "button",
-          "button",
-          "Прибрати"
+          "button"
         ],
         "region": true,
         "chip": {
@@ -2014,12 +2156,26 @@
         "list": {
           "box": [
             401,
-            568,
+            615.5,
             638,
-            223
+            175.5
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            849.9,
+            618.5,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -2258,12 +2414,17 @@
         "feedShare": 0.601,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
           "Прибрати",
           "button",
-          "button"
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
         ],
         "region": true,
         "chip": {
@@ -2281,10 +2442,24 @@
             401,
             574,
             638,
-            223
+            133
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            849.9,
+            577,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -2439,9 +2614,9 @@
       },
       "list-open": {
         "column": 874,
-        "transcript": 554,
-        "share": 0.633,
-        "feedShare": 0.633,
+        "transcript": 594,
+        "share": 0.679,
+        "feedShare": 0.679,
         "aboveField": [
           "composer-receipts",
           "details",
@@ -2451,12 +2626,12 @@
           "Dismiss",
           "button",
           "button",
+          "Dismiss",
           "button",
           "button",
           "Dismiss",
           "button",
-          "button",
-          "Dismiss"
+          "button"
         ],
         "region": true,
         "chip": {
@@ -2472,12 +2647,26 @@
         "list": {
           "box": [
             401,
-            575.5,
+            615.5,
             638,
-            215.5
+            175.5
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            890.5,
+            618.5,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -2716,12 +2905,17 @@
         "feedShare": 0.601,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
           "Dismiss",
           "button",
-          "button"
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
         ],
         "region": true,
         "chip": {
@@ -2739,10 +2933,24 @@
             401,
             574,
             638,
-            215.5
+            133
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            890.5,
+            577,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -2902,12 +3110,17 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
           "Прибрати",
           "button",
-          "button"
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
         ],
         "region": true,
         "chip": {
@@ -2925,10 +3138,24 @@
             23,
             454,
             954,
-            215.5
+            137
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            787.9,
+            457,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -3167,9 +3394,16 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
           "Прибрати"
         ],
         "region": true,
@@ -3188,10 +3422,24 @@
             23,
             481,
             954,
-            215.5
+            90
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            787.9,
+            484,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -3351,12 +3599,17 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
           "Dismiss",
           "button",
-          "button"
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
         ],
         "region": true,
         "chip": {
@@ -3374,10 +3627,24 @@
             23,
             454,
             954,
-            215.5
+            137
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            828.5,
+            457,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -3616,9 +3883,16 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
           "Dismiss"
         ],
         "region": true,
@@ -3637,10 +3911,24 @@
             23,
             481,
             954,
-            215.5
+            90
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            828.5,
+            484,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -3800,12 +4088,17 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
           "Прибрати",
           "button",
-          "button"
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
         ],
         "region": true,
         "chip": {
@@ -3823,10 +4116,24 @@
             291,
             454,
             418,
-            257.5
+            137
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            519.9,
+            457,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -4065,9 +4372,16 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
           "Прибрати"
         ],
         "region": true,
@@ -4086,10 +4400,24 @@
             291,
             481,
             418,
-            257.5
+            90
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            519.9,
+            484,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -4249,12 +4577,17 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
           "Dismiss",
           "button",
-          "button"
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
         ],
         "region": true,
         "chip": {
@@ -4272,10 +4605,24 @@
             291,
             454,
             418,
-            257.5
+            137
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            560.5,
+            457,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -4514,9 +4861,16 @@
         "feedShare": 0.602,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
           "Dismiss"
         ],
         "region": true,
@@ -4535,10 +4889,24 @@
             291,
             481,
             418,
-            257.5
+            90
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            560.5,
+            484,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -4698,9 +5066,16 @@
         "feedShare": 0.601,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
           "Прибрати",
           "button",
           "button"
@@ -4721,10 +5096,24 @@
             291,
             427,
             418,
-            257.5
+            164
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            519.9,
+            430,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -4963,9 +5352,16 @@
         "feedShare": 0.601,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
           "Прибрати"
         ],
         "region": true,
@@ -4984,10 +5380,24 @@
             291,
             454,
             418,
-            257.5
+            90
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            519.9,
+            457,
+            128.1,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -5147,9 +5557,16 @@
         "feedShare": 0.601,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
           "Dismiss",
           "button",
           "button"
@@ -5170,10 +5587,24 @@
             291,
             427,
             418,
-            257.5
+            164
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            560.5,
+            430,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -5412,9 +5843,16 @@
         "feedShare": 0.601,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
           "Dismiss"
         ],
         "region": true,
@@ -5433,10 +5871,24 @@
             291,
             454,
             418,
-            257.5
+            90
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            560.5,
+            457,
+            87.5,
+            20
+          ]
         },
         "more": {
           "box": [
@@ -5580,12 +6032,14 @@
         "feedShare": 0.601,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
           "button",
           "Повторити",
           "Прибрати",
           "button",
           "button",
+          "Прибрати",
           "button"
         ],
         "region": true,
@@ -5595,10 +6049,24 @@
             11,
             536,
             368,
-            286
+            211
           ],
           "retryAll": "Повторити невдалі (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            171.9,
+            543,
+            136.1,
+            32
+          ]
         },
         "more": null,
         "steps": null,
@@ -5927,12 +6395,14 @@
         "feedShare": 0.601,
         "aboveField": [
           "composer-receipts",
+          "details",
           "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
           "button",
           "Retry",
           "Dismiss",
           "button",
           "button",
+          "Dismiss",
           "button"
         ],
         "region": true,
@@ -5942,10 +6412,24 @@
             11,
             536,
             368,
-            286
+            211
           ],
           "retryAll": "Retry failed (2)",
-          "aboveField": true
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            212.5,
+            543,
+            95.5,
+            32
+          ]
         },
         "more": null,
         "steps": null,

@@ -729,6 +729,222 @@ export function RuntimeComposerReceipts({
     </span>
   );
 
+  const groupRow = (group: (typeof attemptGroups)[number]) => {
+    const receipt = group.current;
+    const history = supersededStatusLabels(group.attempts);
+    const failed = receipt.status === "failed";
+    const pending = !receiptIsTerminal(receipt.status);
+    const wait = waitFor(group);
+    const unknownFate = receiptHasUnknownFate(receipt);
+    const uncertain = unknownFate || wait?.phase === "uncertain";
+    const serverBacked = !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX);
+    const exitable = uncertain && serverBacked;
+    /* #1560: Discard ends the ORIGINAL operation, and the route
+       refuses that for an injection exactly as it refuses Retry —
+       so the control is gated on the same question. Without this an
+       injection parked `queued` behind a dead host crosses the
+       uncertain wait threshold, renders Discard, and answers 409. */
+    const discardable = serverBacked
+      && isRetryableReceipt(receipt)
+      && receipt.reason !== "delivery-discarded"
+      && (exitable || (failed && receipt.resend === "verify-first"));
+    const retryingBusy = pending
+      && !uncertain
+      && typeof receipt.reason === "string"
+      && RECOVERABLE_BUSY_RETRY_REASONS.has(receipt.reason);
+    if (unknownFate) return unknownCard(receipt);
+    return (
+      <div
+        key={receipt.operationId}
+        className={`flex min-w-0 flex-col items-end gap-0.5 rounded-control bg-card/70 px-2 py-1 ${chipNamesState ? "sm:py-0.5" : ""}`}
+        {...(pending ? { "data-optimistic-message": "true" } : {})}
+      >
+        {/* On phones the chip's children share the row's wrapping
+            context, so Dismiss can sit beside Retry/Edit instead
+            of consuming another 44px line below the whole chip. */}
+        {/* The list behind the chip keeps a few lines: on a desktop a message
+            is one line with its actions beside it, its whole text on hover. */}
+        <div className={`flex w-full min-w-0 flex-wrap items-start justify-end gap-1.5 max-sm:[&>[data-operation]]:contents ${
+          chipNamesState ? "sm:flex-nowrap sm:items-center sm:[&>[data-operation]]:flex-nowrap" : ""
+        }`}>
+          <span
+            className={`min-w-[8rem] flex-1 whitespace-pre-wrap break-words text-right text-secondary ${
+              chipNamesState ? "sm:min-w-0 sm:truncate sm:text-left" : ""
+            }`}
+            title={chipNamesState && receipt.text ? stripTaskReferenceLines(receipt.text) : undefined}
+            data-receipt-message
+          >
+            {receipt.text ? stripTaskReferenceLines(receipt.text) : receipt.text}
+          </span>
+          {group.attempts.length > 1 ? (
+            <Badge
+              tone="neutral"
+              data-receipt-attempt-count
+              aria-label={t("runtime.receipt.attemptCount", { count: group.attempts.length })}
+              title={t("runtime.receipt.attemptCount", { count: group.attempts.length })}
+            >
+              <span aria-hidden>×{group.attempts.length}</span>
+              <span className="sr-only">{t("runtime.receipt.attemptCount", { count: group.attempts.length })}</span>
+            </Badge>
+          ) : null}
+          <ReceiptChip
+            receipt={receipt}
+            wait={wait}
+            actionsDisabled={actionsDisabled}
+            onRetry={!isRetryableReceipt(receipt)
+              ? undefined
+              : failed
+                ? () => retryFailed(receipt)
+                : exitable && alternateRetry(receipt)
+                  ? () => onRetry(receipt, "uncertain")
+                  : undefined}
+            onEdit={editable(receipt) ? () => onEdit(receipt) : undefined}
+            onDiscard={discardable && onDiscard ? () => onDiscard(receipt) : undefined}
+          />
+          {/* A settled problem is dismissible (issue #264 rule 3):
+              the dismissal records every settled attempt of the
+              row and persists, while a still-moving attempt in the
+              group keeps rendering — dismissal never hides live
+              delivery truth. */}
+          {onDismiss && !receiptHasUnknownFate(receipt) && deliveryProblem(receipt.status) ? (
+            <button
+              type="button"
+              aria-label={t("runtime.receipt.dismiss")}
+              title={t("runtime.receipt.dismiss")}
+              data-receipt-dismiss
+              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0 sm:px-0.5"
+              onClick={() => onDismiss(group.attempts
+                .filter((attempt) => receiptIsTerminal(attempt.status))
+                .map((attempt) => attempt.operationId))}
+            >
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          ) : null}
+          {receipt.status === "pending" && !uncertain ? (
+            <span
+              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-muted motion-reduce:animate-none"
+              aria-hidden
+            />
+          ) : null}
+          {retryingBusy ? (
+            <span
+              className="min-w-0 max-w-[52%] truncate text-caption text-muted"
+              data-runtime-receipt-busy
+              title={t("runtime.receipt.busyRetry")}
+            >
+              {t("runtime.receipt.busyRetry")}
+            </span>
+          ) : null}
+        </div>
+        {/* Why it is not coming, in one sentence (issue #1213).
+            Wraps rather than truncates: this is where the operator
+            learns why the message was parked before choosing its
+            same-identity retry or terminal discard. */}
+        {uncertain ? (
+          <span
+            className="min-w-0 max-w-full text-right text-caption text-muted"
+            data-receipt-uncertain-why
+          >
+            {deliveryUncertainWhy(t, wait!)}
+          </span>
+        ) : null}
+        {history.length ? (
+          <span
+            className="min-w-0 max-w-full truncate text-caption text-muted"
+            data-receipt-history
+            title={history.join(" · ")}
+          >
+            {history.join(" · ")}
+          </span>
+        ) : null}
+      </div>
+    );
+  };
+  /* Textless message failures (no echo to group by): one history
+      row per consecutive cause, counted, with the same chip and
+      dismissal the standalone pills used to carry. */
+  const textlessRow = (bucket: RuntimeReceipt[]) => {
+    const receipt = bucket[0]!;
+    if (receiptHasUnknownFate(receipt)) return unknownCard(receipt);
+    return (
+      <div
+        key={receipt.operationId}
+        className={`flex min-w-0 flex-wrap items-center justify-end gap-1.5 rounded-control bg-card/70 px-2 py-1 ${chipNamesState ? "sm:flex-nowrap sm:py-0.5" : ""}`}
+        data-receipt-standalone-row
+      >
+        {bucket.length > 1 ? (
+          <Badge
+            tone="neutral"
+            data-receipt-attempt-count
+            aria-label={t("runtime.receipt.attemptCount", { count: bucket.length })}
+            title={t("runtime.receipt.attemptCount", { count: bucket.length })}
+          >
+            <span aria-hidden>×{bucket.length}</span>
+            <span className="sr-only">{t("runtime.receipt.attemptCount", { count: bucket.length })}</span>
+          </Badge>
+        ) : null}
+        <ReceiptChip
+          receipt={receipt}
+          actionsDisabled={actionsDisabled}
+          onRetry={isRetryableReceipt(receipt) && receipt.status === "failed" ? () => retryFailed(receipt) : undefined}
+        />
+        {onDismiss && receiptIsTerminal(receipt.status) ? (
+          <button
+            type="button"
+            aria-label={t("runtime.receipt.dismiss")}
+            title={t("runtime.receipt.dismiss")}
+            data-receipt-dismiss
+            className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0 sm:px-0.5"
+            onClick={() => onDismiss(bucket.map((attempt) => attempt.operationId))}
+          >
+            <X className="h-3 w-3" aria-hidden />
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+  /* WITH THE CHIP IN THE COMPOSER'S ROW the state and its count are named
+     there, so the open list's header carries only what acts on the list (2026-10-12). */
+  const chipNamesState = Boolean(chipMount);
+  /* The list is its own scroller; a fade at its foot and the closed frame say
+     there are rows below the edge. */
+  const stackRef = useRef<HTMLDetailsElement>(null);
+  const [moreBelow, setMoreBelow] = useState(false);
+  const measureMoreBelow = useCallback(() => {
+    const stack = stackRef.current;
+    if (stack) setMoreBelow(stack.scrollHeight - stack.scrollTop - stack.clientHeight > 1);
+  }, []);
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    if (!stack) { setMoreBelow(false); return; }
+    measureMoreBelow();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measureMoreBelow);
+    observer.observe(stack);
+    for (const child of Array.from(stack.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [shown, detailsOpen, measureMoreBelow, attemptGroups.length, textlessRows.length]);
+  const failureDetail = notice && noticeFailure?.detail ? (
+    <div className="border-t border-border/70 px-3.5 py-2 text-secondary" data-delivery-notice-detail>
+      <p className="whitespace-pre-wrap break-words" data-delivery-notice-sentence>
+        {noticeFailure.detail.sentence}
+      </p>
+      {noticeFailure.detail.remediation ? (
+        <p className="whitespace-pre-wrap break-words text-muted" data-delivery-notice-remediation>
+          {noticeFailure.detail.remediation}
+        </p>
+      ) : null}
+    </div>
+  ) : null;
+  /* The list behind the chip leads with the rows the operator can act on
+     (2026-10-12): it keeps only a few lines of the composer's budget, and the
+     settled failures that «Retry failed» sends again must not wait below a row
+     that is still moving. Each group keeps its order beside the others. */
+  const rowNodes = [
+    ...attemptGroups.map((group) => ({ settled: chipNamesState && retrySafely(group.current), node: groupRow(group) })),
+    ...textlessRows.map((bucket) => ({ settled: chipNamesState && retrySafely(bucket[0]!), node: textlessRow(bucket) })),
+  ].sort((left, right) => Number(right.settled) - Number(left.settled)).map((row) => row.node);
+
   const chip = chipMount && shown ? createPortal(
     <>
       <button
@@ -765,25 +981,44 @@ export function RuntimeComposerReceipts({
             /* Failure reads through a 2px danger edge, the glyph and the label
                only (design §3.7: role in the edge, never a full wash) — an
                annotation under the composer, subordinate to it in both themes. */
-            className={`group w-full min-w-0 rounded-control border border-border ${
+            ref={stackRef}
+            /* The frame is the list's own scroller, bounded by the room the
+               composer's box leaves it: a list that outgrows that room scrolls
+               behind its sticky header and ends in a closed frame, never cut
+               flat at the field (operator, 2026-10-12). */
+            className={`group min-h-0 w-full min-w-0 shrink rounded-control border border-border ${
+              detailsOpen ? `overflow-y-auto overscroll-contain ${unknownReceipts.length ? "max-h-[18rem]" : "max-h-[12rem]"} ` : ""
+            }${
               notice ? noticeUnknown ? "border-l-2 border-l-warning " : "border-l-2 border-l-danger " : ""
             }bg-sunken/55 text-caption text-secondary`}
             data-runtime-receipt-stack
             {...(notice ? { "data-delivery-notice": "" } : {})}
             open={detailsOpen}
             onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
+            onScroll={measureMoreBelow}
           >
             <summary
               aria-describedby={statusId}
               aria-label={summaryAriaLabel}
               /* The notice row drops the vertical padding so its 44px touch
                  actions fit inside the same 44px line the summary always had. */
-              className={`flex min-h-11 max-h-11 cursor-pointer list-none items-center overflow-hidden rounded-control px-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden ${
-                notice ? "gap-1 sm:gap-1.5" : "gap-1 py-1"
+              className={`sticky top-0 z-[1] flex min-h-11 max-h-11 cursor-pointer list-none items-center overflow-hidden rounded-control px-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden ${SOLID_LIST_BACKGROUND} ${
+                chipNamesState ? "gap-1 sm:min-h-6 sm:max-h-6 sm:gap-1.5" : notice ? "gap-1 sm:gap-1.5" : "gap-1 py-1"
               }`}
             >
               <ChevronRight className="h-3 w-3 shrink-0 text-muted transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" aria-hidden />
-              {notice ? (
+              {chipNamesState ? (
+                <>
+                  <span className="min-w-0 flex-1" aria-hidden />
+                  {/* Read, never drawn: the chip beside the field names the state. */}
+                  {notice ? <span className="sr-only" data-delivery-notice-cause>{noticeLine}</span> : (
+                    <>
+                      <span className="sr-only">{receiptSummaryLabel}</span>
+                      <span className="sr-only" data-receipt-preview>{summaryPreview}</span>
+                    </>
+                  )}
+                </>
+              ) : notice ? (
                 <>
                   <CircleAlert className={`h-3 w-3 shrink-0 ${noticeUnknown ? "text-warning" : "text-danger"}`} aria-hidden />
                   {/* At rest: status word + terse cause on one truncating line;
@@ -818,7 +1053,7 @@ export function RuntimeComposerReceipts({
                   </span>
                 </>
               )}
-              <span className="flex shrink-0 items-center gap-1" data-receipt-counts>
+              <span className="flex shrink-0 items-center gap-1" data-receipt-counts hidden={chipNamesState}>
                 {pendingReceipts.length ? (
                   <Badge
                     tone="warning"
@@ -854,7 +1089,7 @@ export function RuntimeComposerReceipts({
                   type="button"
                   data-receipts-retry-failed
                   disabled={actionsDisabled}
-                  className="inline-flex min-h-11 shrink-0 items-center rounded-control border border-border bg-card px-2 text-caption font-semibold text-primary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:min-h-7"
+                  className="relative inline-flex h-8 shrink-0 items-center rounded-full border border-border bg-canvas px-3 text-caption font-semibold text-primary before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-[''] hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:h-5 sm:px-2 sm:before:hidden"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -919,193 +1154,22 @@ export function RuntimeComposerReceipts({
                 remediation after it, once for the run — never once per
                 attempt. Wraps rather than truncates: this is where the
                 operator reads what to do. */}
-            {notice && noticeFailure?.detail ? (
-              <div className="border-t border-border/70 px-3.5 py-2 text-secondary" data-delivery-notice-detail>
-                <p className="whitespace-pre-wrap break-words" data-delivery-notice-sentence>
-                  {noticeFailure.detail.sentence}
-                </p>
-                {noticeFailure.detail.remediation ? (
-                  <p className="whitespace-pre-wrap break-words text-muted" data-delivery-notice-remediation>
-                    {noticeFailure.detail.remediation}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
+            {chipNamesState ? null : failureDetail}
             <div
-              /* A card for an unconfirmed delivery holds the message, its one
-                 sentence and two 44px controls on a phone, which the settled
-                 rows' cap would cut through. */
-              className={`${unknownReceipts.length ? "max-h-60" : "max-h-36"} space-y-1 overflow-y-auto border-t border-border/70 p-1.5`}
+              /* The frame scrolls; the rows only lay out. */
+              className={`space-y-1 border-t border-border/70 ${chipNamesState ? "p-1.5 sm:p-0.5 sm:space-y-0.5" : "p-1.5"}`}
               data-runtime-receipt-details
             >
-              {attemptGroups.map((group) => {
-                const receipt = group.current;
-                const history = supersededStatusLabels(group.attempts);
-                const failed = receipt.status === "failed";
-                const pending = !receiptIsTerminal(receipt.status);
-                const wait = waitFor(group);
-                const unknownFate = receiptHasUnknownFate(receipt);
-                const uncertain = unknownFate || wait?.phase === "uncertain";
-                const serverBacked = !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX);
-                const exitable = uncertain && serverBacked;
-                /* #1560: Discard ends the ORIGINAL operation, and the route
-                   refuses that for an injection exactly as it refuses Retry —
-                   so the control is gated on the same question. Without this an
-                   injection parked `queued` behind a dead host crosses the
-                   uncertain wait threshold, renders Discard, and answers 409. */
-                const discardable = serverBacked
-                  && isRetryableReceipt(receipt)
-                  && receipt.reason !== "delivery-discarded"
-                  && (exitable || (failed && receipt.resend === "verify-first"));
-                const retryingBusy = pending
-                  && !uncertain
-                  && typeof receipt.reason === "string"
-                  && RECOVERABLE_BUSY_RETRY_REASONS.has(receipt.reason);
-                if (unknownFate) return unknownCard(receipt);
-                return (
-                  <div
-                    key={receipt.operationId}
-                    className="flex min-w-0 flex-col items-end gap-0.5 rounded-control bg-card/70 px-2 py-1"
-                    {...(pending ? { "data-optimistic-message": "true" } : {})}
-                  >
-                    {/* On phones the chip's children share the row's wrapping
-                        context, so Dismiss can sit beside Retry/Edit instead
-                        of consuming another 44px line below the whole chip. */}
-                    <div className="flex w-full min-w-0 flex-wrap items-start justify-end gap-1.5 max-sm:[&>[data-operation]]:contents">
-                      <span
-                        className="min-w-[8rem] flex-1 whitespace-pre-wrap break-words text-right text-secondary"
-                        data-receipt-message
-                      >
-                        {receipt.text ? stripTaskReferenceLines(receipt.text) : receipt.text}
-                      </span>
-                      {group.attempts.length > 1 ? (
-                        <Badge
-                          tone="neutral"
-                          data-receipt-attempt-count
-                          aria-label={t("runtime.receipt.attemptCount", { count: group.attempts.length })}
-                          title={t("runtime.receipt.attemptCount", { count: group.attempts.length })}
-                        >
-                          <span aria-hidden>×{group.attempts.length}</span>
-                          <span className="sr-only">{t("runtime.receipt.attemptCount", { count: group.attempts.length })}</span>
-                        </Badge>
-                      ) : null}
-                      <ReceiptChip
-                        receipt={receipt}
-                        wait={wait}
-                        actionsDisabled={actionsDisabled}
-                        onRetry={!isRetryableReceipt(receipt)
-                          ? undefined
-                          : failed
-                            ? () => retryFailed(receipt)
-                            : exitable && alternateRetry(receipt)
-                              ? () => onRetry(receipt, "uncertain")
-                              : undefined}
-                        onEdit={editable(receipt) ? () => onEdit(receipt) : undefined}
-                        onDiscard={discardable && onDiscard ? () => onDiscard(receipt) : undefined}
-                      />
-                      {/* A settled problem is dismissible (issue #264 rule 3):
-                          the dismissal records every settled attempt of the
-                          row and persists, while a still-moving attempt in the
-                          group keeps rendering — dismissal never hides live
-                          delivery truth. */}
-                      {onDismiss && !receiptHasUnknownFate(receipt) && deliveryProblem(receipt.status) ? (
-                        <button
-                          type="button"
-                          aria-label={t("runtime.receipt.dismiss")}
-                          title={t("runtime.receipt.dismiss")}
-                          data-receipt-dismiss
-                          className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0 sm:px-0.5"
-                          onClick={() => onDismiss(group.attempts
-                            .filter((attempt) => receiptIsTerminal(attempt.status))
-                            .map((attempt) => attempt.operationId))}
-                        >
-                          <X className="h-3 w-3" aria-hidden />
-                        </button>
-                      ) : null}
-                      {receipt.status === "pending" && !uncertain ? (
-                        <span
-                          className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-muted motion-reduce:animate-none"
-                          aria-hidden
-                        />
-                      ) : null}
-                      {retryingBusy ? (
-                        <span
-                          className="min-w-0 max-w-[52%] truncate text-caption text-muted"
-                          data-runtime-receipt-busy
-                          title={t("runtime.receipt.busyRetry")}
-                        >
-                          {t("runtime.receipt.busyRetry")}
-                        </span>
-                      ) : null}
-                    </div>
-                    {/* Why it is not coming, in one sentence (issue #1213).
-                        Wraps rather than truncates: this is where the operator
-                        learns why the message was parked before choosing its
-                        same-identity retry or terminal discard. */}
-                    {uncertain ? (
-                      <span
-                        className="min-w-0 max-w-full text-right text-caption text-muted"
-                        data-receipt-uncertain-why
-                      >
-                        {deliveryUncertainWhy(t, wait!)}
-                      </span>
-                    ) : null}
-                    {history.length ? (
-                      <span
-                        className="min-w-0 max-w-full truncate text-caption text-muted"
-                        data-receipt-history
-                        title={history.join(" · ")}
-                      >
-                        {history.join(" · ")}
-                      </span>
-                    ) : null}
-                  </div>
-                );
-              })}
-              {/* Textless message failures (no echo to group by): one history
-                  row per consecutive cause, counted, with the same chip and
-                  dismissal the standalone pills used to carry. */}
-              {textlessRows.map((bucket) => {
-                const receipt = bucket[0]!;
-                if (receiptHasUnknownFate(receipt)) return unknownCard(receipt);
-                return (
-                  <div
-                    key={receipt.operationId}
-                    className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 rounded-control bg-card/70 px-2 py-1"
-                    data-receipt-standalone-row
-                  >
-                    {bucket.length > 1 ? (
-                      <Badge
-                        tone="neutral"
-                        data-receipt-attempt-count
-                        aria-label={t("runtime.receipt.attemptCount", { count: bucket.length })}
-                        title={t("runtime.receipt.attemptCount", { count: bucket.length })}
-                      >
-                        <span aria-hidden>×{bucket.length}</span>
-                        <span className="sr-only">{t("runtime.receipt.attemptCount", { count: bucket.length })}</span>
-                      </Badge>
-                    ) : null}
-                    <ReceiptChip
-                      receipt={receipt}
-                      actionsDisabled={actionsDisabled}
-                      onRetry={isRetryableReceipt(receipt) && receipt.status === "failed" ? () => retryFailed(receipt) : undefined}
-                    />
-                    {onDismiss && receiptIsTerminal(receipt.status) ? (
-                      <button
-                        type="button"
-                        aria-label={t("runtime.receipt.dismiss")}
-                        title={t("runtime.receipt.dismiss")}
-                        data-receipt-dismiss
-                        className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0 sm:px-0.5"
-                        onClick={() => onDismiss(bucket.map((attempt) => attempt.operationId))}
-                      >
-                        <X className="h-3 w-3" aria-hidden />
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })}
+              {rowNodes}
             </div>
+            {chipNamesState ? failureDetail : null}
+            {moreBelow ? (
+              <div
+                aria-hidden
+                data-receipt-more-below
+                className={`pointer-events-none sticky bottom-0 -mt-5 h-5 bg-gradient-to-t ${SOLID_LIST_FADE}`}
+              />
+            ) : null}
           </details>
           {behindChip ? null : statusRegion}
         </>
@@ -1708,6 +1772,11 @@ export function restoreOutboxDraft(id: string, entry: OutboxEntry): void {
 /* On a phone the notice's actions keep the 44px hit area in a 32px box (the
    composer's own icon-button pattern: the hit extends through `before:`),
    so the terse cause keeps its width beside them at 390px. */
+/* The list's frame is `bg-sunken/55` over the card; its sticky header and the
+   fade at its foot need the opaque colour that blend lands on. */
+const SOLID_LIST_BACKGROUND = "bg-[color-mix(in_srgb,var(--color-sunken)_55%,var(--color-card))]";
+const SOLID_LIST_FADE = "from-[color-mix(in_srgb,var(--color-sunken)_55%,var(--color-card))] to-transparent";
+
 const noticeActionClass = "relative inline-flex h-11 w-8 shrink-0 items-center justify-center rounded-control text-muted before:absolute before:inset-y-0 before:-inset-x-1.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:h-6 sm:w-6 sm:before:hidden";
 
 /** A retained message's state, and the short form it takes once a Re-check
