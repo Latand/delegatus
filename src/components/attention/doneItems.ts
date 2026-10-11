@@ -18,6 +18,12 @@ const ROUTE = "/api/attention/done";
 const EMPTY: readonly DoneItemV1[] = [];
 
 let server: readonly DoneItemV1[] = EMPTY;
+/* Reads are numbered as they leave; one that comes back behind a later read
+   that was already applied carries an older server, so it is dropped. The
+   read an acknowledgement sends after its write always leaves later than any
+   read in flight before it. */
+let reads = 0;
+let applied = 0;
 /* Acknowledged (true) or taken back (false) on this device, ahead of the read. */
 const layer = new Map<string, { acknowledged: boolean; item: DoneItemV1; until: number }>();
 let snapshot: readonly DoneItemV1[] = EMPTY;
@@ -40,6 +46,7 @@ const subscribe = (listener: () => void) => {
 };
 
 export async function refreshDoneItems(): Promise<void> {
+  const read = ++reads;
   let body: DoneItemsAnswer;
   try {
     const response = await fetch(ROUTE, { cache: "no-store" });
@@ -48,7 +55,8 @@ export async function refreshDoneItems(): Promise<void> {
   } catch {
     return;
   }
-  if (!Array.isArray(body?.items)) return;
+  if (!Array.isArray(body?.items) || read < applied) return;
+  applied = read;
   server = body.items;
   /* A layer the read already agrees with is done. */
   const present = new Set(server.map((item) => item.key));
@@ -117,6 +125,8 @@ export function useDoneItems(enabled = true): readonly DoneItemV1[] {
 
 export function resetDoneItemsForTests(): void {
   server = EMPTY;
+  reads = 0;
+  applied = 0;
   layer.clear();
   snapshot = EMPTY;
 }

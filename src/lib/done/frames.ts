@@ -11,7 +11,8 @@ import type { DoneFrame } from "./types";
  *      decided yet — its rendered result, newest round, the first frame of its
  *      first variant, the frame's original as the «before»;
  *   2. the newest picture in the task album that the lane's visual critic
- *      looked at, else a rendered evidence file any of its stages named;
+ *      looked at, else a rendered evidence file any of its stages named,
+ *      whether or not the lane has a visual critic;
  *   3. the chosen variant of the newest decided round on the task, the design
  *      target the lane built.
  *
@@ -46,10 +47,6 @@ function frameOf(frame: Frame | undefined, caption: string): DoneFrame | null {
 
 const newestFirst = (left: PrototypeRoundRead, right: PrototypeRoundRead) => Date.parse(right.createdAt) - Date.parse(left.createdAt);
 
-export function laneHasVisualCritic(pipeline: Pipeline): boolean {
-  return pipeline.stages.some((stage) => (stage.effectiveRole?.roleId ?? stage.role?.roleId) === "visual-critic");
-}
-
 export async function lookupDoneFrame(subject: { pipeline: Pipeline | null; taskIds: readonly string[] }, ports: DoneFramePorts): Promise<DoneFrameAnswer> {
   const rounds = subject.taskIds.flatMap((taskId) => ports.rounds(taskId)).sort(newestFirst);
   const lane = subject.pipeline;
@@ -61,7 +58,10 @@ export async function lookupDoneFrame(subject: { pipeline: Pipeline | null; task
     }
   }
   let settled = true;
-  if (lane && laneHasVisualCritic(lane)) {
+  /* Asked for every lane: the album puts the visual critic's pictures first
+     and falls back to evidence any stage of the lane rendered, a builder's
+     included. The projector's per-run album budget bounds the indexing. */
+  if (lane) {
     for (const taskId of subject.taskIds) {
       const answer = await ports.album(taskId, lane);
       if (answer.frame) return { frame: answer.frame, settled: answer.settled };

@@ -6,20 +6,19 @@ import type { LimitSample } from "@/lib/types";
 
 import { doneCandidates, type DoneCandidate, type DoneDeployment } from "./candidates";
 import { lookupDoneFrame, type DoneFramePorts } from "./frames";
-import { doneActivation, doneDatabase, readDoneRows, writeDoneProjection } from "./store";
+import { doneActivation, doneDatabase, doneFloor, readDoneRows, writeDoneProjection } from "./store";
 import type { DoneItemV1 } from "./types";
 
 /*
  * The «Готово» projection (docs/design/done-section.md §3): read the sources
- * over the window, insert the keys the store has never seen, refresh what an
- * unacknowledged row may show, and leave every acknowledged row alone. It runs
- * inside the read route at most once every 30 s per process, so no background
- * job exists, and a Viewer opened after a quiet day catches up over the window.
+ * since the store's activation, insert the keys the store has never seen,
+ * refresh what an unacknowledged row may show, and leave every acknowledged
+ * row alone. The release that owns traffic runs it every minute (`sweep.ts`)
+ * and the read route runs it too, each at most once every 30 s per process, so
+ * an outcome reaches the store while its source still holds it, tab or no tab.
  */
 
-/** Sources are read over at most this much history (§2.2). */
-export const DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-/** A read projects at most this often per process. */
+/** A projection runs at most this often per process. */
 export const DONE_PROJECTION_THROTTLE_MS = 30_000;
 /** Album lookups one projection may run; the rest wait for the next one. */
 const ALBUM_LOOKUPS_PER_PROJECTION = 4;
@@ -61,10 +60,12 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
   }
   stamps[database] = now;
   const activation = Date.parse(doneActivation(now));
-  const floor = Math.max(activation, now - DONE_WINDOW_MS);
+  /* Rows the store holds keep refreshing whatever their age; a key it does
+     not hold is inserted only past the settled floor (§3). */
+  const floor = doneFloor(now);
   const candidates = doneCandidates({
     now,
-    floor,
+    floor: activation,
     forge: world.forge(),
     pipelines: world.pipelines(),
     tasks: world.tasks(),
@@ -82,6 +83,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
   for (const candidate of candidates) {
     const row = held.get(candidate.key);
     if (row?.acknowledgedAt) continue;
+    if (!row && !(Date.parse(candidate.at) >= floor)) continue;
     let frame = row?.frame ?? null;
     let frameCheckedAt = row?.frameCheckedAt ?? null;
     if (candidate.subject && !frameCheckedAt) {

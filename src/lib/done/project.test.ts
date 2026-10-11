@@ -11,8 +11,10 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { LimitSample } from "@/lib/types";
 
 import type { DoneDeployment } from "./candidates";
+import { lookupDoneFrame } from "./frames";
 import { DONE_PROJECTION_THROTTLE_MS, projectDoneItems, resetDoneProjectionThrottleForTests, type DoneWorld } from "./project";
-import { acknowledgeDoneItems, DONE_ACKNOWLEDGED_RETENTION_MS, doneRevision, readDoneRows, resetDoneCollectionsForTests, unacknowledgedDoneItems } from "./store";
+import { acknowledgeDoneItems, DONE_ACKNOWLEDGED_RETENTION_MS, DONE_MAX_ROWS, doneRevision, readDoneRows, resetDoneCollectionsForTests, unacknowledgedDoneItems, writeDoneProjection } from "./store";
+import { DONE_SWEEP_INTERVAL_MS, runDoneSweepOnce, startDoneSweep, stopDoneSweep } from "./sweep";
 import type { DoneFrame } from "./types";
 
 /*
@@ -184,7 +186,7 @@ test("a second projection writes nothing, and an acknowledged key stays acknowle
   expect(unacknowledgedDoneItems().map((item) => item.title)).toEqual(["Пряме злиття, нова назва"]);
 });
 
-test("nothing from before the store was first written, nor older than the window", async () => {
+test("nothing from before the store was first written", async () => {
   await activate();
   const state = world({
     tasks: [
@@ -202,11 +204,53 @@ test("nothing from before the store was first written, nor older than the window
   expect(keys()).toEqual(["deploy:dep-after", "deploy:dep-failed", "task:t-after"]);
   const failed = unacknowledgedDoneItems().find((item) => item.key === "deploy:dep-failed")!;
   expect(failed).toMatchObject({ look: "incident", project: null, refs: { sha: "d".repeat(40), phase: "rolled-back" } });
-  /* Eight days on, a task done nine days ago is past the window. */
+});
+
+test("an outcome no read ever saw still arrives days later: there is no window, only the activation", async () => {
+  await activate();
+  /* Done a second after activation, then nothing reads the store for eight days. */
+  await projectDoneItems(ports(world({ now: T0 + 8 * 24 * HOUR, tasks: [
+    task("t-quiet", "Тиха", { status: "done", doneAt: iso(T0 + 1_000) }),
+    task("t-before", "До активації", { status: "done", doneAt: iso(T0 - 1_000) }),
+  ] })), { force: true });
+  expect(keys()).toEqual(["task:t-quiet"]);
+});
+
+test("the Viewer's own sweep keeps outcomes no browser read, after their source has rotated away", async () => {
+  await activate();
+  const report: BridgeReportV1 = { seq: 1, id: "r-sweep", at: iso(T0 + HOUR), class: "status", origin: { kind: "manager", conversationId: "conversation_manager", role: "orchestrator" },
+    project: PROJECT, body: "body", outcome: { kind: "incident", summary: "Лінію перезапущено" } };
+  const deployment: DoneDeployment = { deploymentId: "dep-sweep", revision: "e".repeat(40), phase: "succeeded", terminal: true, updatedAt: iso(T0 + HOUR) };
+  const state = world({ now: T0 + HOUR + 60_000, reports: [report], deployments: [deployment] });
+  /* A release that does not own traffic leaves the store alone. */
+  expect(await runDoneSweepOnce({ world: () => ports(state), ownsTraffic: async () => false })).toBe(false);
+  expect(keys()).toEqual([]);
+  expect(await runDoneSweepOnce({ world: () => ports(state), ownsTraffic: async () => true })).toBe(true);
+  /* The report log and the deploy ledger roll over, days pass, nobody read. */
   resetDoneProjectionThrottleForTests();
-  await projectDoneItems(ports(world({ now: T0 + 9 * 24 * HOUR, tasks: [task("t-late", "Пізня", { status: "done", doneAt: iso(T0 + 12 * HOUR) }), task("t-new", "Нова", { status: "done", doneAt: iso(T0 + 8 * 24 * HOUR) })] })), { force: true });
-  expect(keys()).toContain("task:t-new");
-  expect(keys()).not.toContain("task:t-late");
+  await projectDoneItems(ports(world({ now: T0 + 10 * 24 * HOUR })), { force: true });
+  expect(keys()).toEqual(["deploy:dep-sweep", "report:r-sweep"]);
+});
+
+test("the sweep arms one process-wide clock that re-arms after each run", async () => {
+  const armed: Array<{ run: () => void; delay: number }> = [];
+  let runs = 0;
+  const schedule = (run: () => void, delay: number) => {
+    armed.push({ run, delay });
+    return setTimeout(() => {}, 0);
+  };
+  try {
+    startDoneSweep({ schedule, sweep: async () => { runs += 1; } });
+    startDoneSweep({ schedule, sweep: async () => { runs += 100; } });
+    expect(armed.length).toBe(1);
+    armed[0]!.run();
+    await Bun.sleep(0);
+    expect(runs).toBe(1);
+    expect(armed.length).toBe(2);
+    expect(armed[1]!.delay).toBe(DONE_SWEEP_INTERVAL_MS);
+  } finally {
+    stopDoneSweep();
+  }
 });
 
 test("an outcome marker makes an item only on the orchestrator's own report", async () => {
@@ -294,8 +338,36 @@ test("a lane with no frame anywhere is a technical item, settled at once and nev
   await projectDoneItems(ports(state), { force: true });
   expect(unacknowledgedDoneItems()[0]).toMatchObject({ look: "technical", frame: null });
   expect(unacknowledgedDoneItems()[0]!.frameCheckedAt).not.toBeNull();
-  /* No visual critic on the lane: the album is never indexed for it. */
-  expect(albumReads).toBe(0);
+  expect(albumReads).toBe(1);
+  /* Settled: the next projection does not index the album again. */
+  await projectDoneItems(ports({ ...state, now: T0 + 11 * HOUR }), { force: true });
+  expect(albumReads).toBe(1);
+});
+
+test("a builder-only lane's rendered evidence is its thumbnail; no visual critic is needed", async () => {
+  await activate();
+  const evidence = { src: "/api/artifact?path=%2Fvar%2Ftmp%2Fevidence%2Fdesktop.png", caption: "desktop.png" };
+  const asked: string[] = [];
+  const state = world({
+    forge: forge([{ number: 31, head: "pipeline/builder", state: "merged", mergedAt: iso(T0 + HOUR) }]),
+    pipelines: [lane("builder", { taskIds: ["t-builder"] })],
+    tasks: [task("t-builder", "Зміна з доказом", { status: "done", doneAt: iso(T0 + HOUR) })],
+    album: async (taskId) => { asked.push(taskId); return { frame: evidence, settled: true }; },
+  });
+  await projectDoneItems(ports(state), { force: true });
+  expect(asked).toEqual(["t-builder"]);
+  expect(unacknowledgedDoneItems()[0]).toMatchObject({ key: `pr:${REPO}#31`, look: "visible", frame: evidence });
+});
+
+test("the frame lookup asks the album for a lane with no visual critic, and an indexing album keeps it open", async () => {
+  const builderOnly = lane("solo", { taskIds: ["t-solo"] });
+  let calls = 0;
+  const indexing = await lookupDoneFrame({ pipeline: builderOnly, taskIds: ["t-solo"] }, {
+    rounds: () => [],
+    album: async () => { calls += 1; return { frame: null, settled: false }; },
+  });
+  expect(calls).toBe(1);
+  expect(indexing).toEqual({ frame: null, settled: false });
 });
 
 test("a read projects at most once per throttle window", async () => {
@@ -314,6 +386,38 @@ test("retention: an acknowledged row leaves 30 days after its acknowledgement; a
   const state = world({ now: T0 + HOUR, tasks: [task("t-a", "Перша", { status: "done", doneAt: iso(T0 + HOUR) }), task("t-b", "Друга", { status: "done", doneAt: iso(T0 + HOUR) })] });
   await projectDoneItems(ports(state), { force: true });
   acknowledgeDoneItems(["task:t-a"], { undo: false, surface: "desktop", now: T0 + 2 * HOUR });
-  await projectDoneItems(ports(world({ now: T0 + 2 * HOUR + DONE_ACKNOWLEDGED_RETENTION_MS + HOUR })), { force: true });
+  const later = T0 + 2 * HOUR + DONE_ACKNOWLEDGED_RETENTION_MS + HOUR;
+  await projectDoneItems(ports(world({ now: later })), { force: true });
   expect(readDoneRows().map((row) => row.key)).toEqual(["task:t-b"]);
+  /* Its source still holds the task: the pruned key does not come back,
+     through this reader or a fresh one. */
+  await projectDoneItems(ports({ ...state, now: later + HOUR }), { force: true });
+  resetDoneCollectionsForTests();
+  await projectDoneItems(ports({ ...state, now: later + 2 * HOUR }), { force: true });
+  expect(keys()).toEqual(["task:t-b"]);
+});
+
+test("crossing the row cap never brings an accepted item back, and every unaccepted one stays", async () => {
+  await activate();
+  const done = (index: number) => task(`t${index}`, `Задача ${index}`, { status: "done", doneAt: iso(T0 + HOUR + index * 1_000) });
+  const tasks = Array.from({ length: DONE_MAX_ROWS }, (_, index) => done(index));
+  const state = world({ now: T0 + 2 * HOUR, tasks });
+  await projectDoneItems(ports(state), { force: true });
+  acknowledgeDoneItems(["task:t0"], { undo: false, surface: "desktop", now: T0 + 3 * HOUR });
+  const replay = readDoneRows().find((row) => row.key === "task:t0")!;
+  /* A 2 001st item the same day, then the initial candidates again. */
+  state.tasks = [...tasks, done(DONE_MAX_ROWS)];
+  await projectDoneItems(ports({ ...state, now: T0 + 3 * HOUR }), { force: true });
+  writeDoneProjection({ upserts: [{ ...replay, acknowledgedAt: null, acknowledgedBy: null }] }, T0 + 3 * HOUR);
+  expect(unacknowledgedDoneItems().some((item) => item.key === "task:t0")).toBe(false);
+  /* Days later the cap removes the accepted row; neither a replay nor a
+     fresh reader finds a way back for it. */
+  await projectDoneItems(ports({ ...state, now: T0 + 3 * 24 * HOUR }), { force: true });
+  expect(readDoneRows().some((row) => row.key === "task:t0")).toBe(false);
+  writeDoneProjection({ upserts: [{ ...replay, acknowledgedAt: null, acknowledgedBy: null }] }, T0 + 3 * 24 * HOUR);
+  resetDoneCollectionsForTests();
+  await projectDoneItems(ports({ ...state, now: T0 + 3 * 24 * HOUR + HOUR }), { force: true });
+  const waiting = unacknowledgedDoneItems();
+  expect(waiting.some((item) => item.key === "task:t0")).toBe(false);
+  expect(waiting.length).toBe(DONE_MAX_ROWS);
 });

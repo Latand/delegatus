@@ -575,3 +575,52 @@ test("an empty «Готово» draws nothing, and «Nothing is waiting» shows 
   expect(other.querySelector("[data-needs-you-empty]")).toBeNull();
   expect(title(other)).toBe("Waiting for you · 1");
 });
+
+test("a read that left before an acceptance never brings the row back, nor one that left before its Undo", async () => {
+  resetDoneItemsForTests();
+  const { acknowledgeDone, refreshDoneItems } = await import("./doneItems");
+  const item = doneItem("task:one", { kind: "task", look: "closed" });
+  let waiting: DoneItemV1[] = [item];
+  let revision = 1;
+  /* Each read answers what the server held when it arrived, and is let go by hand. */
+  const held: Array<() => void> = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "POST") {
+      const body = JSON.parse(String(init!.body)) as Acknowledged;
+      waiting = body.undo ? [item] : [];
+      revision += 1;
+      return new Response(JSON.stringify({ ok: true, changed: [item] }));
+    }
+    const answer = JSON.stringify({ ok: true, items: waiting, revision });
+    return new Promise<Response>((resolve) => { held.push(() => resolve(new Response(answer))); });
+  }) as typeof fetch;
+  function Probe() {
+    const items = useDoneItems(false);
+    return <span data-probe>{items.map((entry) => entry.key).join(",")}</span>;
+  }
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  await act(async () => { root = createRoot(host); root.render(<Probe />); });
+  const shown = () => host.querySelector("[data-probe]")!.textContent;
+  const release = async (index: number) => { await act(async () => { held[index]!(); await Bun.sleep(5); }); };
+
+  void refreshDoneItems();
+  await release(0);
+  expect(shown()).toBe("task:one");
+  /* A poll leaves at revision 1, the operator accepts, the confirming read lands first. */
+  void refreshDoneItems();
+  await act(async () => { await acknowledgeDone([item], { surface: "desktop" }); });
+  expect(shown()).toBe("");
+  await release(2);
+  expect(shown()).toBe("");
+  await release(1);
+  expect(shown()).toBe("");
+  /* The same ordering around Undo. */
+  void refreshDoneItems();
+  await act(async () => { await acknowledgeDone([item], { undo: true, surface: "desktop" }); });
+  expect(shown()).toBe("task:one");
+  await release(4);
+  expect(shown()).toBe("task:one");
+  await release(3);
+  expect(shown()).toBe("task:one");
+});

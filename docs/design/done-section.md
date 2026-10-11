@@ -107,15 +107,21 @@ headRefName`), then by `delivery.target.pr` or `merge.prNumber`, across live
 and archived pipelines. Its tasks are the pipeline's `taskIds` (the
 `finishesTaskIds` first) plus any task whose `workLinks` name the PR.
 
-### 2.2 Window and floor
+### 2.2 Floor and capture
 
-The projector considers only source events at or after
-`max(activation, now − 7 days)`. `activation` is the instant the store was
-first written, kept in its meta row, so the first deploy shows nothing from
-before it. Seven days is inside every source's own retention (the limits
-history keeps 8 days, the report log 500 rows, the deploy ledger is read 20
-deep), so an unacknowledged item is never lost to a source trimming: once
-created it lives in the store (§3).
+The projector considers source events at or after `activation`, the instant
+the store was first written, kept in its meta row, so the first deploy shows
+nothing from before it. There is no rolling window: an outcome nobody has read
+yet stays eligible however long ago it happened, so a task done a second after
+activation still arrives when the next projection runs eight days later.
+
+Three sources roll over on their own (the limits history keeps 8 days, the
+report log 500 rows, the deploy ledger is read 20 deep), so an outcome has to
+reach the store while its source still holds it. The release that owns traffic
+projects every minute (`src/lib/done/sweep.ts`, started with the other
+controllers), whether or not a tab is open; the read route projects as well.
+Once an item is in the store it stays there until acknowledged (§3), whatever
+its source does next.
 
 ### 2.3 Incidents and publications: a marker on the report
 
@@ -184,23 +190,32 @@ interface DoneItemV1 {
   candidates and inserts the keys it has never seen. An existing row is never
   re-created: an acknowledged row stays acknowledged whatever its source does
   next. An unacknowledged row may refresh its `title`, its limit text and its
-  `frame`. Running it twice writes nothing the second time. It runs inside the
-  read route, at most once every 30 s per process (a `globalThis` stamp, as
-  `src/lib/lifecycle/projector.ts` throttles), so no new background job exists;
-  a Viewer opened after a quiet day catches up over the window.
+  `frame`. Running it twice writes nothing the second time. The sweep of the
+  release that owns traffic runs it every minute and the read route runs it
+  too, each at most once every 30 s per process (a `globalThis` stamp, as
+  `src/lib/lifecycle/projector.ts` throttles); a Viewer that was stopped
+  catches up from `activation` when it starts.
 - **Acknowledgement.** Sets `acknowledgedAt` and `acknowledgedBy`; undo clears
   both. Operator only, through the Viewer's own route: no MCP tool takes it, so
   no agent can acknowledge what the operator has not seen.
-- **Retention.** An acknowledged row is kept 30 days after its acknowledgement,
-  longer than the 7-day window, so its key cannot come back. Unacknowledged rows
-  stay until acknowledged; past 2 000 rows the oldest acknowledged go first.
+- **Retention.** An acknowledged row is kept 30 days after its acknowledgement.
+  Past 2 000 rows the acknowledged rows with the oldest events go first, but
+  only those whose event is at least a day old, since a source can still report
+  a younger one late (the forge sweep sees a merge an hour on). Unacknowledged
+  rows stay until acknowledged. Removing a row moves the meta row's
+  `settledThrough` up to that row's event time in the same transaction, and the
+  store never inserts a key whose event is at or before it, so neither a
+  repeated source nor a fresh reader after a restart can re-create a pruned
+  acknowledgement.
 - **Routes.** `GET /api/attention/done` answers `{ items, revision }`, the
   unacknowledged rows, newest event first, after projecting.
   `POST /api/attention/done` takes `{ keys, undo?, surface }` (at most 200
   keys), same-origin checked as the dismissals route is, and answers the rows
   it changed. The Viewer reads it on mount, every 30 s while the tab is visible,
   and after each acknowledgement; another device sees an acknowledgement on its
-  next read.
+  next read. Reads are numbered as they leave, and an answer that comes back
+  behind a later applied read is dropped, so a poll that left before an
+  acknowledgement or its undo cannot redraw the old state.
 
 The store lives under the state directory, so it obeys
 `src/lib/stateOwnership.ts`: the route runs in the Viewer, a build or a test gets
@@ -242,10 +257,11 @@ Run at projection for `pr` and `pipeline` items, stopping at the first hit:
    (the design target the lane built), with its `original` when present.
 
 No hit: the item is technical. An album still indexing leaves `frameCheckedAt`
-empty and the next projection tries again; a settled answer is final. Album
-reads use the album's own budget, and only for items whose pipeline has a
-`visual-critic` stage or names an evidence root, so a technical night costs no
-indexing.
+empty and the next projection tries again; a settled answer is final. Step 2
+runs for every item with a pipeline, a builder-only lane included, since its
+evidence frame is as much the lane's rendered result as a critic's; one
+projection reads at most four albums and leaves the rest open for the next, so
+indexing stays bounded and retryable.
 
 A press on the thumbnail opens `Lightbox` with `{ src, before }`, unchanged.
 
@@ -329,15 +345,18 @@ By path, under isolated state (one `mktemp -d` root holding HOME,
   time, no item for the batch PR, a PR-less passed lane, a task without a
   pipeline, none for a task its pipeline covers, none for a discarded lane);
   idempotent second run; an acknowledged key stays acknowledged while its source
-  repeats; nothing before `activation`; manager-only `outcome`; a limit episode
-  keeps its key as its reset arrives; retention;
+  repeats; nothing before `activation`; an unread outcome arriving days later;
+  the sweep keeping items past their source's rollover; manager-only `outcome`;
+  a limit episode keeps its key as its reset arrives; retention and the row cap
+  never re-creating an acknowledged key; a builder-only lane's evidence frame;
 - forge sweep: `title`/`mergedAt` parsed on both field sets; the batch-title
   parser;
 - the route: GET projects and answers unacknowledged rows; POST acknowledges,
   undoes, refuses cross-origin and more than 200 keys;
 - `AttentionPanel.dom.test.tsx` and `MobileAttentionSheet.dom.test.tsx`: the
   section after the decisions, the counter, row, group and all acknowledgement,
-  the collapsed receipt, a thumbnail opening `Lightbox` with `before`;
+  the collapsed receipt, a thumbnail opening `Lightbox` with `before`, a read
+  that left before an acknowledgement or its undo arriving last;
 - `bunx tsc --noEmit` through `scripts/gate-slot.sh`;
 - rendered evidence with the existing drivers only: a `describe` case in
   `src/components/kanban/kanbanBoard.browser.test.tsx` for 1440 and in
