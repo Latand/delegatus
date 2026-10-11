@@ -131,6 +131,7 @@ export class TranscriptSearchWorker {
     child.once("close", fail);
     leasedHelperInput(child).on("error", fail);
     child.stdout!.setEncoding("utf8");
+    child.stdout!.on("error", fail);
     child.stdout!.on("data", (chunk: string) => {
       if (this.worker !== worker) return;
       worker.buffer += chunk;
