@@ -463,7 +463,8 @@ describe("self-update reload notice", () => {
    the same once the reading landed, and the installation after a deployment
    that already serves the available target (no "commits behind" left). Each
    state is framed on the desktop and at 390 px, in en and uk, with the
-   dialog's controls measured and the Update press's confirmation read.
+   dialog's controls measured and the Update press's confirmation read
+   (its own geometry is gated in the block after this one).
    The last state arrives while a "Check now" is held: its late answer, and
    then a late refusal of a second check, both carry the old installation and
    neither brings back the old revision, its badge or the Update button. */
@@ -503,8 +504,9 @@ describe("Updates dialog first state", () => {
         const page = await context.newPage();
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const confirms: string[] = [];
-        page.on("dialog", (dialog) => { confirms.push(dialog.message()); void dialog.dismiss(); });
+        /* No native dialog is ever raised: the confirmation is the app's own. */
+        const nativeDialogs: string[] = [];
+        page.on("dialog", (dialog) => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
         try {
           await context.addInitScript(({ lang }) => {
             localStorage.setItem("llv_lang", lang);
@@ -591,17 +593,23 @@ describe("Updates dialog first state", () => {
           const loaded = await frame("loaded-work-pending", "[data-work='pending']");
           expect(loaded.work).toBe(translate(lang, "selfUpdate.work.pending"));
           expect(loaded.controls.some((control) => control.action === "update" && !control.disabled)).toBe(true);
+          const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
           await dialog.locator("[data-action='update']").click();
-          await page.waitForTimeout(100);
-          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.work.pendingConfirm"));
-          expect(confirms.at(-1)).not.toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 0 }));
+          await confirmation.locator("[data-confirm-work='pending']").waitFor();
+          expect(await confirmation.innerText()).toContain(translate(lang, "selfUpdate.confirmApply.pending"));
+          expect(await confirmation.innerText()).not.toContain(translate(lang, "selfUpdate.confirmApply.idle"));
+          await page.keyboard.press("Escape");
+          await confirmation.waitFor({ state: "detached" });
 
           await emit("state", snapshot(OLD, "ready"));
           const read = await frame("loaded-work-read", "[data-work='ready']");
           expect(read.work).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
           await dialog.locator("[data-action='update']").click();
-          await page.waitForTimeout(100);
-          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+          /* This reading counted the work and sent no list to name. */
+          expect(await confirmation.locator("[data-confirm-more]").innerText()).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+          await page.keyboard.press("Escape");
+          await confirmation.waitFor({ state: "detached" });
+          expect(nativeDialogs).toEqual([]);
 
           /* Each "Check now" is held until the driver answers it, after the
              stream has moved on. */
@@ -642,6 +650,215 @@ describe("Updates dialog first state", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 180_000);
+});
+
+/* The update confirmation (docs/design/self-update-confirm.md, variant 1):
+   «Update» opens the app's own dialog over the Updates dialog, centred on the
+   desktop and a bottom sheet on the phone. The work is named by the fixture's
+   own cards and projects, grouped by project, with a seat, an agent working
+   for a card, an agent in a folder nobody named, a turn inside a listed stage
+   and a 120-character card title; then pending and unreadable work, and a
+   20-stage list that scrolls under the buttons. Escape takes back only the
+   confirmation, and «Update now» closes it into the Update card's progress.
+   Framed at 1440 and 390, light and dark, en and uk. */
+describe("self-update confirmation modal", () => {
+  browserTest("variant 1 on desktop and phone, light and dark, en and uk", async () => {
+    const out = path.resolve(".artifacts/self-update-confirm");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const { CHECKOUT_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const OLD = "36accb1".padEnd(40, "1");
+    const TARGET = "e7893bc".padEnd(40, "e");
+    const at = "2026-10-11T12:34:20.000Z";
+    const rev = (sha: string, version: string) => ({ sha, short: sha.slice(0, 7), version, date: "2026-10-11T09:00:00.000Z" });
+    const proc = (pid: number) => ({ ...stoppedProcess(), state: "healthy" as const, pid, startedAt: "2026-10-11T10:00:00.000Z", lastHealthAt: at, lastHealthOk: true, revision: OLD.slice(0, 7), tail: [] });
+    const LOOSE = `dir-${"1a".repeat(16)}`;
+    const stage = (pipelineId: string, stageId: string, task: string, project: string, roleId: string | null, taskId: string | null) =>
+      ({ pipelineId, stageId, cursor: "running", task, conversationId: `conversation_${pipelineId}`, project, roleId, taskId });
+    const STAGES = [
+      stage("lane-search", "implement", "#3553 search index swap: keep the old index live until", "atlas", "builder", "t-search"),
+      stage("lane-upload", "review", "Redesign attachment upload", "atlas", "reviewer", "t-upload"),
+      stage("lane-long", "architect", "You are the reviewer in an implement-review loop", "harbor-docs", "architect", "t-longtitle"),
+    ];
+    const TURNS = [
+      { conversationId: "conversation_lane-upload", engine: "codex", project: "atlas", stage: { pipelineId: "lane-upload", stageId: "review" }, seat: false },
+      { conversationId: "conversation_seat-fixture", engine: "claude", project: "atlas", stage: null, seat: true },
+      { conversationId: "conversation_export-impl", engine: "claude", project: "atlas", stage: null, seat: false },
+      { conversationId: "conversation_loose-fixture", engine: "claude", project: LOOSE, stage: null, seat: false },
+    ];
+    const MANY = [...STAGES, ...Array.from({ length: 17 }, (_, index) => stage(`lane-more-${index}`, "build", `Lane number ${index + 1} rebuilds part of the index`, index % 3 ? "atlas" : "harbor-docs", ["builder", "reviewer", "verifier"][index % 3]!, null))];
+    const snapshot = (work: "ready" | "pending" | "unavailable" | "many" | "running") => ({
+      mode: "checkout", unsupportedReason: null, installed: rev(OLD, "1.10.4"),
+      serving: { web: rev(OLD, ""), runtimeHost: rev(OLD, "") },
+      available: rev(TARGET, "1.11.0"),
+      check: { ...idleCheck(), state: "update-available", at, nextPollAt: "2026-10-11T13:34:00.000Z", relation: "behind", behind: 5,
+        delta: { commits: [{ short: TARGET.slice(0, 7), subject: "Fix privacy self-test fixture cleanup timeout" }], summary: { commitCount: 5, entryCount: 0, counts: [], groups: [] } } },
+      update: work === "running"
+        ? { ...idleUpdate(CHECKOUT_STEPS), state: "running", trigger: "operator", target: TARGET, targetShort: TARGET.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
+          steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "running" : "pending", startedAt: index === 0 ? at : null })) }
+        : idleUpdate(CHECKOUT_STEPS),
+      busy: work === "running" ? "update" : null,
+      processes: { web: { ...proc(4141), port: 8899 }, runtimeHost: proc(4242) },
+      meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: "/var/tmp/checkout", pollMinutes: 60, serverTime: at },
+      workEvidence: { state: work === "many" || work === "running" ? "ready" : work, since: at, at: work === "pending" ? null : at, error: work === "unavailable" ? "journal read timed out after 15 s" : null, phases: null },
+      ...(work === "pending" || work === "unavailable" ? {} : { resumeWork: work === "many"
+        ? { turns: TURNS.length, stages: MANY.length, turnList: TURNS, stageList: MANY, unreadable: null }
+        : { turns: TURNS.length, stages: STAGES.length, turnList: TURNS, stageList: STAGES, unreadable: null } }),
+    });
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) for (const width of [1440, 390]) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const context = await browser.newContext({ viewport, colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const nativeDialogs: string[] = [];
+        page.on("dialog", (dialog) => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
+        try {
+          await context.addInitScript(({ lang, running }) => {
+            localStorage.setItem("llv_lang", lang);
+            /* The dialog's own stream (no readOnly) becomes one the driver speaks through. */
+            const dialogStreams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true,
+              get: () => installed,
+              set: (Source: typeof EventSource) => {
+                installed = class extends Source {
+                  constructor(url: string | URL) {
+                    super(url);
+                    if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                      const stream = { listeners: {} as Record<string, ((event: { data: string }) => void)[]> };
+                      dialogStreams.push(stream);
+                      Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (stream.listeners[type] ??= []).push(listener); } });
+                    }
+                  }
+                } as typeof EventSource;
+              },
+            });
+            /* «Update now» is answered here with the update running. */
+            const updates: unknown[] = [];
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/self-update/update")
+                  ? (updates.push(JSON.parse(String(init?.body ?? "null"))), Promise.resolve(new Response(JSON.stringify(running), { status: 202, headers: { "content-type": "application/json" } })))
+                  : next(input, init)) as typeof fetch;
+              },
+            });
+            Object.assign(window, { selfUpdateEmit: (type: string, data: unknown) => {
+              for (const stream of dialogStreams) for (const listener of stream.listeners[type] ?? []) listener({ data: JSON.stringify(data) });
+              return dialogStreams.length;
+            }, selfUpdatePosts: () => updates.length });
+          }, { lang, running: snapshot("running") });
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          await dialog.waitFor();
+          const emit = (data: unknown) => page.evaluate((data) => (window as unknown as { selfUpdateEmit(type: string, data: unknown): number }).selfUpdateEmit("state", data), data);
+          const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
+          const ask = async (work: "ready" | "pending" | "unavailable" | "many") => {
+            await emit(snapshot(work));
+            await dialog.locator("[data-action='update']:not([disabled])").click();
+            await confirmation.waitFor();
+            await confirmation.locator(work === "pending" ? "[data-confirm-work='pending']" : work === "unavailable" ? "[data-confirm-work='unavailable']" : "[data-confirm-row]").first().waitFor();
+            /* The names come from the Viewer's own cards a beat after the list. */
+            if (work === "ready") await confirmation.getByText("Restore search results after the index rebuild").waitFor();
+            const reading = await confirmation.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              const title = element.querySelector("h2")!;
+              const scroller = element.lastElementChild as HTMLElement;
+              const scrollerBox = scroller.getBoundingClientRect();
+              const buttons = [...element.querySelectorAll<HTMLButtonElement>("[data-confirm-buttons] button")].map((button) => {
+                const edge = button.getBoundingClientRect();
+                return { action: button.dataset.action, label: (button.textContent ?? "").trim(), disabled: button.disabled, top: Math.round(edge.top), bottom: Math.round(edge.bottom), left: Math.round(edge.left), right: Math.round(edge.right), height: Math.round(edge.height) };
+              });
+              const buttonsTop = Math.min(...buttons.map((button) => button.top));
+              const rows = [...element.querySelectorAll("[data-confirm-row]")];
+              return {
+                box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
+                viewport: { width: window.innerWidth, height: window.innerHeight },
+                title: title.textContent,
+                titleCut: title.scrollWidth > title.clientWidth + 1,
+                sideways: element.scrollWidth > element.clientWidth + 1 || scroller.scrollWidth > scroller.clientWidth + 1,
+                buttons,
+                rows: rows.length,
+                rowsVisible: rows.filter((row) => { const edge = row.getBoundingClientRect(); return edge.top >= scrollerBox.top && edge.bottom <= buttonsTop; }).length,
+                scrolls: scroller.scrollHeight > scroller.clientHeight,
+                projects: [...element.querySelectorAll("[data-confirm-project]")].map((node) => node.textContent),
+                work: element.querySelector("[data-confirm-work]")?.getAttribute("data-confirm-work") ?? null,
+                text: (element as HTMLElement).innerText,
+              };
+            });
+            const name = `${lang}-${width}-${scheme}-${work}`;
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            const failures: string[] = [];
+            for (const button of reading.buttons) {
+              if (button.top < 0 || button.bottom > reading.viewport.height || button.left < 0 || button.right > reading.viewport.width) failures.push(`${button.action} is not fully on screen`);
+              if (button.disabled) failures.push(`${button.action} is disabled`);
+            }
+            if (reading.titleCut) failures.push("the title is cut");
+            if (reading.sideways) failures.push("the confirmation overflows sideways");
+            if (/repo-|dir-|conversation_/.test(reading.text)) failures.push("a project key or a conversation id is shown");
+            if (phone && (reading.box.width !== width || reading.box.y + reading.box.height !== reading.viewport.height)) failures.push("the phone confirmation is no bottom sheet");
+            if (!phone && reading.box.width !== 480) failures.push("the desktop confirmation is not 480 px wide");
+            if (phone && reading.buttons.some((button) => button.height < 44)) failures.push("a phone button is under 44 px");
+            readings.push({ name, ...reading, text: undefined, failures });
+            expect(failures).toEqual([]);
+            return reading;
+          };
+          const dismiss = async () => {
+            await page.keyboard.press("Escape");
+            await confirmation.waitFor({ state: "detached" });
+            /* Escape took back the confirmation only. */
+            expect(await dialog.count()).toBe(1);
+          };
+
+          const ready = await ask("ready");
+          expect(ready.title).toBe(translate(lang, "selfUpdate.confirmApply.title", { target: "e7893bc (1.11.0)" }));
+          expect(ready.projects).toEqual(["atlas", "harbor-docs", translate(lang, "dash.projectUnnamed")]);
+          expect(ready.rows).toBe(6);
+          expect(ready.rowsVisible).toBe(6);
+          for (const title of ["Restore search results after the index rebuild", "Redesign attachment upload for large files", "Simplify the export settings sheet",
+            translate(lang, "selfUpdate.auto.block.seatUnnamed"), translate(lang, "roleCopy.builder.name"), translate(lang, "roleCopy.architect.name"),
+            translate(lang, "selfUpdate.confirmApply.resumes")]) expect(ready.text).toContain(title);
+          await dismiss();
+
+          const pending = await ask("pending");
+          expect(pending.work).toBe("pending");
+          expect(pending.text).toContain(translate(lang, "selfUpdate.confirmApply.pending"));
+          await dismiss();
+
+          const unavailable = await ask("unavailable");
+          expect(unavailable.work).toBe("unavailable");
+          expect(unavailable.text).toContain("journal read timed out after 15 s");
+          await dismiss();
+
+          const many = await ask("many");
+          expect(many.rows).toBe(MANY.length + 3);
+          expect(many.scrolls).toBe(true);
+
+          /* «Update now» closes the confirmation into the card's progress. */
+          await confirmation.locator("[data-action='confirm-apply']").click();
+          await confirmation.waitFor({ state: "detached" });
+          const progress = dialog.locator("[data-section='update'][data-update='running']");
+          await progress.waitFor();
+          const progressBox = await progress.boundingBox();
+          expect(progressBox).not.toBeNull();
+          expect(progressBox!.y).toBeLessThan(viewport.height);
+          await page.screenshot({ path: path.join(out, `${lang}-${width}-${scheme}-progress.png`) });
+          expect(await page.evaluate(() => (window as unknown as { selfUpdatePosts(): number }).selfUpdatePosts())).toBe(1);
+          expect(nativeDialogs).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
 });
 
 /* The loading leaf draws its own header bar until the Board mounts and draws
