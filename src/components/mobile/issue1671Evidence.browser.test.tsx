@@ -8817,7 +8817,7 @@ describe("role memory curation: reversible window", () => {
         const pass = curation.claimPass({ project: "atlas", repoDir: root, now: Date.now() })!;
         const current = store.roleMemoryCollection()!.get(`s:${role}`);
         applyCuration(pass, { scopes: [{ scope: role, revision: current!.kind === "scope" ? current!.revision : 0, order: [ids[2]] }, { scope: every, revision: 0, order: [ids[0]] }, { scope: project, revision: 0, order: [] }],
-          rewrite: [{ id: ids[0], rule: "Inspect stored guidance and its readers before changing the scope.", note: "This class is useful to builders in every repository." }], move: [{ id: ids[0], to: every }], archive: [{ id: ids[1], reason: "task-specific", note: "This records one completed task." }] });
+          rewrite: [{ id: ids[0], rule: "Inspect stored guidance and its readers before changing the scope.", note: "This class is useful to builders in every repository." }], move: [{ id: ids[0], to: every, note: "This class guides builders in every repository." }], archive: [{ id: ids[1], reason: "task-specific", note: "This records one completed task." }] });
         curation.patchPass(pass.id, { state: "succeeded", endedAt: new Date().toISOString() });
         store.recordLessonRequest({ ...source, attempt: 2, at: new Date().toISOString() });
         const candidate = store.leaveLessons({ request: { ...source, attempt: 2 }, source: { ...source, attempt: 2 }, lessons: [{ scope: "role", rule: "Read the current scope revision before proposing a stored rewrite.", why: "A stale write had changed the record underneath the reader." }], none: null }).left[0].id;

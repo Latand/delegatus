@@ -365,6 +365,33 @@ test("project succession keeps a live pass visible and owned through either proj
   expect(projectView("curation-renamed").curation?.passes[0]?.state).toBe("succeeded");
   expect(projectView("curation-renamed").curation?.lastAt).toBe(at(1000));
 });
+test("a live pass reads and applies canonical scopes after project succession", () => {
+  const originalScope = roleScope(PROJECT, "builder"), one = fixture(originalScope), p = pass();
+  const staleCursor = Buffer.from(JSON.stringify({ scope: originalScope, revision: 1, offset: 0 })).toString("base64url");
+  expect(persistProjectAliases([{ source: PROJECT, target: "curation-renamed", displayName: "curation-renamed" }])).toBe(true);
+
+  const renamedScope = roleScope("curation-renamed", "builder");
+  const overview = readCuration(p);
+  if (!("scopes" in overview) || !overview.scopes) throw Error("expected the pass scope list");
+  const listed = overview.scopes.find(item => item.scope === renamedScope);
+  if (!listed) throw Error("successor scope is missing from the live pass");
+  const current = roleMemoryCollection()?.get(`s:${renamedScope}`);
+  expect(listed.revision).toBe(current?.kind === "scope" ? current.revision : -1);
+  const read = readCuration(p, renamedScope);
+  if (!("rules" in read)) throw Error("expected the successor scope rules");
+  expect(read.rules.some(rule => rule.kind === "active" && rule.id === one)).toBe(true);
+  try { readCuration(p, originalScope, staleCursor); throw Error("accepted a cursor from before succession"); }
+  catch (error) { expect((error as { code?: string }).code).toBe("CURATE_STALE"); }
+
+  const edit = input({ [renamedScope]: [one] }, { rewrite: [{ id: one, rule: text + " Follow the current scope revision.", note: "This remains useful to builders in every task." }] });
+  expect(() => applyCuration(p, edit, at(100))).not.toThrow();
+  const versionId = row(one).versions![0];
+  expect(roleMemoryCollection()?.get(`r:${versionId}`)).toMatchObject({ kind: "rule", rule: text, versionOf: one });
+  ended(p);
+  expect(revertCuratorPass(p.id, at(2000)).skipped).toEqual([]);
+  expect(row(one).rule).toBe(text);
+  expect(row(one).versions).toHaveLength(2);
+});
 test("the v1 row kinds and optional metadata survive an apply, and clean curator has no injected rules", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: [], "role:*:builder": [one] }, { move: [{ id: one, to: "role:*:builder", note: "Builders across projects use this guidance." }], rewrite: [{ id: one, rule: text + " Read its revision.", note: "The revision identifies the current record." }] }), at(100));

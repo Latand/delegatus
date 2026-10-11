@@ -51,15 +51,16 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
   const fresh = readPass(pass.id);
   if (!fresh || !passIsLive(fresh)) refuse("CURATE_ENDED", "this curator pass has ended");
   joinMovedScopes(now);
+  const allowedScopes = new Set(fresh.scopes.map(canonicalScope));
   if (!input.scopes?.length || input.scopes.length > 64) refuse("CURATE_INVALID", "name 1–64 scopes");
   const result = roleMemoryCollection(true)!.boundedPatch(4096, tx => {
     if (!passIsLive(readPass(pass.id))) refuse("CURATE_ENDED", "this curator pass has ended");
-    const previousAt = Math.max(0, ...pass.scopes.flatMap(scope => { const row = tx.get(`s:${scope}`); return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : []; }));
+    const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => { const row = tx.get(`s:${scope}`); return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : []; }));
     now = new Date(Math.max(Date.parse(now), previousAt + 1)).toISOString();
     const scopes = new Map<string, RoleMemoryScopeRow>();
     const before = new Map<string, RoleMemoryRule>();
     for (const item of input.scopes) {
-      if (!pass.scopes.includes(item.scope) || scopes.has(item.scope)) refuse("CURATE_SCOPE", "every scope must belong to this pass exactly once");
+      if (!allowedScopes.has(item.scope) || scopes.has(item.scope)) refuse("CURATE_SCOPE", "every scope must belong to this pass exactly once");
       const held = tx.get(`s:${item.scope}`);
       const row: RoleMemoryScopeRow = held?.kind === "scope" ? held : { kind: "scope", scope: item.scope, revision: 0, active: [], history: [] };
       if (item.revision !== row.revision) refuse("CURATE_STALE", `${item.scope} is now revision ${row.revision}; read it again`);
@@ -161,7 +162,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (rule.state === "active" && !ordered.has(id)) refuse("CURATE_PARTITION", "every active rule needs an order or disposition");
       if (rule.against) {
         const against = work.get(rule.against) ?? tx.get(`r:${rule.against}`);
-        if (rule.against === id || against?.kind !== "rule" || against.versionOf || against.state !== "active" || !pass.scopes.includes(canonicalScope(against.scope))) refuse("CURATE_INVALID", "against must name a rule active after this call");
+        if (rule.against === id || against?.kind !== "rule" || against.versionOf || against.state !== "active" || !allowedScopes.has(canonicalScope(against.scope))) refuse("CURATE_INVALID", "against must name a rule active after this call");
       }
     }
     // Rank is a change too; keep its prior metadata without manufacturing a text version.
