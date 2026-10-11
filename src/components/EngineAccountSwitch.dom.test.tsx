@@ -85,6 +85,7 @@ function accountState(select: EngineAccountsState["select"]): EngineAccountsStat
     cancelLogin: async () => true,
     retryLogin: async () => true,
     remove: async () => true,
+    restore: async () => true,
     cleanupOrphans: async () => true,
     copyTerminalCommand: async () => true,
     refreshLimits: async () => true,

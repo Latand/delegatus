@@ -49,6 +49,7 @@ function state(currentLogin: ClaudeLoginView, over: Partial<EngineAccountsState>
     cancelLogin: async () => true,
     retryLogin: async () => true,
     remove: async () => true,
+    restore: async () => true,
     cleanupOrphans: async () => true,
     copyTerminalCommand: async () => true,
     refreshLimits: async () => true,
@@ -329,7 +330,7 @@ const SUMMARY: AccountRemovalSummary = {
   accountId: "acc", label: "Account B",
   archive: archiveUnderHome("claude-b"),
   files: 1284, bytes: 2_100_000_000, conversations: 37, pins: 2, deliveries: 1, migrations: 1,
-  credential: "clean",
+  credential: "clean", bindings: 0, hiddenHome: null,
 };
 
 test("the summary renders after the row is gone, with every counted line, and no Force remove anywhere", async () => {
@@ -741,4 +742,64 @@ test("an action in flight marks its button busy and holds the other action until
   expect(use.disabled).toBeTrue();
   expect(refresh.disabled).toBeTrue();
   expect(refresh.getAttribute("aria-busy")).toBeNull();
+});
+
+/* Task d7759de2: every account is removed through the one remove control. */
+const mainAcc = { id: "default", label: "Main", kind: "legacy" as const, authPresent: true, loginPending: false, loginState: "authenticated" as const, deviceAuth: null, login: null };
+
+test("Main arms and confirms through the same remove control, saying its folder is kept", async () => {
+  let removed: string | null = null;
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [mainAcc, managedAcc], active: "acc", remove: async (id) => { removed = id; return true; } }));
+  mounted.push(view);
+  flushSync(() => { (view.host.querySelector('[data-account-remove="default"]') as HTMLButtonElement).click(); });
+  const armed = view.host.querySelector('[data-account-remove-armed="default"]')!;
+  expect(armed.textContent).toContain("Remove Main from Delegatus? Nothing in its own folder is deleted");
+  flushSync(() => { buttonNamed(armed as HTMLElement, "Remove")!.click(); });
+  expect(removed as unknown as string).toBe("default");
+});
+
+test("a live-session refusal names each conversation as a link that opens it", async () => {
+  const refusal: AccountRemovalRefusal = {
+    accountId: "acc", label: "Acc", reasons: ["live_sessions"], sessionCount: 4,
+    sessions: [
+      { conversationId: "conversation_one", path: null, title: "Fix the login form" },
+      { conversationId: null, path: "/sessions/2026/10/rollout-two.jsonl", title: null },
+    ],
+  };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc], removal: { kind: "refused", refusal } }));
+  mounted.push(view);
+  const links = [...view.host.querySelectorAll("[data-account-refusal-sessions] a")] as HTMLAnchorElement[];
+  expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+    ["Fix the login form", "#c=conversation_one"],
+    ["rollout-two.jsonl", "#f=%2Fsessions%2F2026%2F10%2Frollout-two.jsonl"],
+  ]);
+  expect(view.host.querySelector("[data-account-refusal-sessions]")!.textContent).toContain("Open each one to stop it or move it to another account");
+  expect(view.host.querySelector("[data-account-refusal-sessions]")!.textContent).toContain("and 2 more");
+});
+
+test("Main's summary says its files stay in place and offers Show again", async () => {
+  let restored: string | null = null;
+  const hidden: AccountRemovalSummary = { ...SUMMARY, accountId: "default", label: "Main", archive: null, files: 0, bytes: 0, conversations: 0, pins: 1, deliveries: 0, migrations: 0, bindings: 2, hiddenHome: ["", "home", "someone", ".claude"].join("/") };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc], removal: { kind: "removed", summary: hidden }, restore: async (id) => { restored = id; return true; } }));
+  mounted.push(view);
+  const card = view.host.querySelector('[data-account-removal-card="removed"]')!;
+  expect(card.textContent).toContain("Main removed from Delegatus");
+  expect(card.textContent).toContain("Left where they are");
+  expect(card.textContent).toContain("~/.claude");
+  expect(card.textContent).toContain("2 project bindings removed");
+  expect(card.textContent).not.toContain("Moved");
+  flushSync(() => { buttonNamed(card as HTMLElement, "Show Main again")!.click(); });
+  expect(restored as unknown as string).toBe("default");
+  await view.rerender(state(login({ phase: "authenticated" }), { accounts: [mainAcc, managedAcc], removal: { kind: "removed", summary: { ...hidden, restored: "done" } } }));
+  expect(view.host.querySelector('[data-account-removal-restore="done"]')?.textContent).toContain("Main is listed again.");
+});
+
+test("a sign-in refusal ends the open sign-in from the refusal itself", async () => {
+  let canceled: string | null = null;
+  const refusal: AccountRemovalRefusal = { accountId: "acc", label: "Acc", reasons: ["login_pending"] };
+  const view = await mount(state(login({ operationId: "op-open", phase: "awaiting_code" }), { removal: { kind: "refused", refusal }, cancelLogin: async (operationId) => { canceled = operationId; return true; } }));
+  mounted.push(view);
+  const block = view.host.querySelector('[data-account-refusal="acc"]') as HTMLElement;
+  flushSync(() => { buttonNamed(block, "Cancel sign-in")!.click(); });
+  expect(canceled as unknown as string).toBe("op-open");
 });

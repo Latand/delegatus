@@ -82,6 +82,12 @@ function autoBalanceProjection(engine: MigrationEngine, snapshot: ReturnType<Ret
   };
 }
 
+/** Routing that still names a listed account; one left on a removed account
+    names nothing, so the panel and the launch draft never show it active. */
+function listedOr(accounts: readonly { id: string }[], id: string | null): string | null {
+  return id && accounts.some((account) => account.id === id) ? id : null;
+}
+
 /** Pure durable projection. Live auth/quota/login reconciliation runs in the controller. */
 export async function GET() {
   /* Whether each engine's command resolves (#1876): a bounded `--version`,
@@ -177,14 +183,14 @@ export async function GET() {
   const [claudeCli, codexCli] = await cliProbe;
   return NextResponse.json({
     codex: {
-      active: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
+      active: listedOr(codexAccountList, snapshot.engineRouting.codex.activeAccountId) ?? activeCodexAccountId(),
       cli: codexCli,
       accounts: codexAccounts,
       migration: codexMigration,
       autoBalance: codexAuto,
     },
     claude: {
-      active: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
+      active: listedOr(claudeAccountList, snapshot.engineRouting.claude.activeAccountId) ?? activeClaudeAccountId(),
       cli: claudeCli,
       accounts: claudeAccounts,
       mutationLocked: claudeAccountsMutationLocked(),

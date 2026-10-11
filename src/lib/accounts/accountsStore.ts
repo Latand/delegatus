@@ -578,10 +578,13 @@ export function readRetiredAccountIds(engine: "claude" | "codex", directory = ac
     body = legacy.body;
   }
   const retired = isRecord(body) ? body.retired : null;
-  if (!Array.isArray(retired)) return { kind: "known", ids: new Set() };
+  /* Main the operator removed counts as retired too: it is only hidden, and
+     nothing may launch on it until it is shown again. */
+  const hidden = isRecord(body) && body.legacyHidden === true ? ["default"] : [];
+  if (!Array.isArray(retired)) return { kind: "known", ids: new Set(hidden) };
   return {
     kind: "known",
-    ids: new Set(retired.flatMap((entry) => (isRecord(entry) && typeof entry.id === "string" ? [entry.id] : []))),
+    ids: new Set([...hidden, ...retired.flatMap((entry) => (isRecord(entry) && typeof entry.id === "string" ? [entry.id] : []))]),
   };
 }
 

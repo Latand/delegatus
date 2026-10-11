@@ -251,7 +251,7 @@ export function observedAccountFields(raw: unknown, authPresent: boolean): Pick<
   return { authHealth, plan, limits: parseAccountLimits(record.limits), resetCredits: parseResetCredits(record.resetCredits) };
 }
 export type AccountLoadState = "loading" | "ready" | "error";
-export type AccountOperation = "refresh" | "add" | "switch" | "login" | "remove" | "cleanup" | "terminal" | "refreshLimits" | "resetCredit";
+export type AccountOperation = "refresh" | "add" | "switch" | "login" | "remove" | "restore" | "cleanup" | "terminal" | "refreshLimits" | "resetCredit";
 
 /** The per-card limits actions (issues #1418, #1373) run one at a time and
     keep the rest of the panel usable; this names the card and the action. */
@@ -295,10 +295,22 @@ const CODE_REASONS = new Set<AccountRefusalReason>(["unsafe_home", "archive_unav
 /** A refusal block draws at most this many blocker lines. */
 export const MAX_REFUSAL_REASONS = 3;
 
+/** One piece of live work a refusal names, with the conversation where it is
+    stopped or moved to another account. */
+export interface AccountRemovalLiveWork {
+  conversationId: string | null;
+  path: string | null;
+  title: string | null;
+}
+
 export interface AccountRemovalRefusal {
   accountId: string;
   label: string;
   reasons: AccountRefusalReason[];
+  /** The live work behind `live_sessions`/`current_conversations`: the first
+      few named, `sessionCount` all of them. */
+  sessions?: AccountRemovalLiveWork[];
+  sessionCount?: number;
   /** The archive destination `archive_unavailable` names. */
   archive?: string;
   /** The failed filesystem step's errno, for `removal_failed`. */
@@ -319,6 +331,13 @@ export interface AccountRemovalSummary {
   /** `pending`: the sign-in file is still inside the archive (`cleanupPending`);
       `deleted`: a later clean-up took it out. */
   credential: "clean" | "pending" | "deleted";
+  /** Project bindings that named the account and went with it. */
+  bindings: number;
+  /** Set for the engine's own default home: Delegatus only stopped listing
+      it, the files at this path stay, and it can be shown again. */
+  hiddenHome: string | null;
+  /** The answer to Show again, while the summary is up. */
+  restored?: "done" | "failed";
 }
 
 /** The clean-up answer: `removed[]`, `unresolved[]` and, once the server moves
@@ -349,11 +368,16 @@ function strings(value: unknown): string[] {
 export function removalRefusalOf(accountId: string, label: string, status: number | null, body: unknown): AccountRemovalRefusal {
   const base = { accountId, label };
   if (status === null) return { ...base, reasons: ["no_answer"] };
-  const record = (body ?? {}) as { code?: unknown; blockers?: unknown; archive?: unknown; errno?: unknown };
+  const record = (body ?? {}) as { code?: unknown; blockers?: unknown; archive?: unknown; errno?: unknown; sessions?: unknown; sessionCount?: unknown };
   if (record.code === "account_removal_blocked") {
     const reasons = [...new Set(strings(record.blockers))].filter((item): item is AccountRefusalReason => BLOCKER_REASONS.has(item as AccountRefusalReason));
-    if (reasons.length > 0) return { ...base, reasons: reasons.slice(0, MAX_REFUSAL_REASONS) };
-    return { ...base, reasons: ["removal_failed"] };
+    if (reasons.length === 0) return { ...base, reasons: ["removal_failed"] };
+    const sessions = liveWorkOf(record.sessions);
+    return {
+      ...base,
+      reasons: reasons.slice(0, MAX_REFUSAL_REASONS),
+      ...(sessions.length > 0 ? { sessions, sessionCount: Math.max(sessions.length, count(record.sessionCount)) } : {}),
+    };
   }
   const code = typeof record.code === "string" && CODE_REASONS.has(record.code as AccountRefusalReason) ? record.code as AccountRefusalReason : "removal_failed";
   return {
@@ -364,9 +388,22 @@ export function removalRefusalOf(accountId: string, label: string, status: numbe
   };
 }
 
+/** A refusal names at most this many pieces of live work. */
+const MAX_LIVE_WORK = 5;
+
+function liveWorkOf(value: unknown): AccountRemovalLiveWork[] {
+  if (!Array.isArray(value)) return [];
+  const text = (field: unknown) => typeof field === "string" && field.trim() ? field : null;
+  return value.flatMap((raw) => {
+    const item = (raw ?? {}) as { conversationId?: unknown; path?: unknown; title?: unknown };
+    const work = { conversationId: text(item.conversationId), path: text(item.path), title: text(item.title) };
+    return work.conversationId || work.path ? [work] : [];
+  }).slice(0, MAX_LIVE_WORK);
+}
+
 /** Reads a 200 DELETE answer into the summary; a missing number reads as zero. */
 export function removalSummaryOf(accountId: string, label: string, body: unknown): AccountRemovalSummary {
-  const record = (body ?? {}) as { moved?: { archive?: unknown; files?: unknown; bytes?: unknown }; conversationsRewritten?: unknown; pinsCleared?: unknown; deliveriesDropped?: unknown; migrationsSettled?: unknown; cleanupPending?: unknown };
+  const record = (body ?? {}) as { moved?: { archive?: unknown; files?: unknown; bytes?: unknown }; hidden?: { home?: unknown }; conversationsRewritten?: unknown; pinsCleared?: unknown; deliveriesDropped?: unknown; migrationsSettled?: unknown; cleanupPending?: unknown; bindingsCleared?: unknown };
   return {
     accountId,
     label,
@@ -378,6 +415,8 @@ export function removalSummaryOf(accountId: string, label: string, body: unknown
     deliveries: count(record.deliveriesDropped),
     migrations: count(record.migrationsSettled),
     credential: record.cleanupPending === true ? "pending" : "clean",
+    bindings: count(record.bindingsCleared),
+    hiddenHome: typeof record.hidden?.home === "string" && record.hidden.home ? record.hidden.home : null,
   };
 }
 
@@ -461,8 +500,10 @@ export interface EngineAccountsState extends EngineAccountsSnapshot {
   /** Restarts sign-in for an existing managed Claude account (claude only) —
       recovers a canceled/failed/broken account without deleting it. */
   retryLogin: (accountId: string) => Promise<boolean>;
-  /** Removes one managed account; its answer lands on `removal`. */
+  /** Removes one account (Main is only hidden); its answer lands on `removal`. */
   remove: (accountId: string) => Promise<boolean>;
+  /** Lists a hidden Main again; the summary it was hidden from says how it went. */
+  restore: (accountId: string) => Promise<boolean>;
   /** Cleans up leftovers (failed sign-in folders, retired homes); the report
       lands on `removal`, or, while a summary waits on its sign-in file, marks
       that file deleted. */
@@ -965,6 +1006,30 @@ export function createEngineAccountsStore(
     });
   };
 
+  const restore = (accountId: string): Promise<boolean> => {
+    return runMutation("restore", async () => {
+      const summary = snapshot.removal?.kind === "removed" && snapshot.removal.summary.accountId === accountId ? snapshot.removal.summary : null;
+      const settle = (restored: "done" | "failed") => {
+        if (summary) patchSnapshot({ removal: { kind: "removed", summary: { ...summary, restored } } });
+      };
+      try {
+        const response = await fetcher(addUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "restore", id: accountId }),
+        });
+        if (!response.ok) throw new Error("restore failed");
+      } catch {
+        settle("failed");
+        await refresh();
+        return false;
+      }
+      settle("done");
+      await refresh();
+      return true;
+    });
+  };
+
   const copyTerminalCommand = (accountId: string): Promise<boolean> => {
     const target = snapshot.accounts.find((account) => account.id === accountId);
     if (!target?.authPresent || target.loginPending) return Promise.resolve(false);
@@ -1155,6 +1220,7 @@ export function createEngineAccountsStore(
     cancelLogin,
     retryLogin,
     remove,
+    restore,
     cleanupOrphans,
     dismissRemoval,
     copyTerminalCommand,
@@ -1200,6 +1266,7 @@ export function useEngineAccounts(engine: Engine): EngineAccountsState {
     cancelLogin: store.cancelLogin,
     retryLogin: store.retryLogin,
     remove: store.remove,
+    restore: store.restore,
     cleanupOrphans: store.cleanupOrphans,
     dismissRemoval: store.dismissRemoval,
     copyTerminalCommand: store.copyTerminalCommand,

@@ -327,9 +327,9 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
   const tint = engineTintOf(engine);
   const usable = account.authPresent && authHealth(account) !== "signed_out" && (!account.provider || authHealth(account) !== "error") && !account.loginPending;
   const selectionDisabled = disabled || !usable;
-  // Removal moves the home into the shared archive, so the first click arms it
-  // and only a second, explicit confirm runs it. Escape or ten quiet seconds
-  // disarm it.
+  // Removal moves the home into the shared archive (Main is only hidden, its
+  // folder untouched), so the first click arms it and only a second, explicit
+  // confirm runs it. Escape or ten quiet seconds disarm it.
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const confirmRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -380,7 +380,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
           <code className="select-all font-semibold text-primary">{account.deviceAuth.code}</code>
         </div>
       ) : null}
-      {confirmingRemove && account.kind === "managed" ? (
+      {confirmingRemove ? (
         <div
           data-account-remove-armed={account.id}
           className="flex items-end gap-1 px-3.5 pb-2 pl-[30px]"
@@ -391,7 +391,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
             setConfirmingRemove(false);
           }}
         >
-          <span className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-danger">{t("accounts.removeConfirm", { label: account.label })}</span>
+          <span className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-danger">{t(account.kind === "legacy" ? "accounts.removeConfirmLegacy" : "accounts.removeConfirm", { label: account.label })}</span>
           <button
             ref={confirmRef}
             type="button"
@@ -429,7 +429,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
             {t("accounts.copyCli")}
           </button>
           <span className="min-w-0 flex-1" />
-          {account.kind !== "managed" ? null : removing ? (
+          {removing ? (
             <span role="status" className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 px-1.5 text-[10.5px] font-semibold text-secondary sm:min-h-[28px]">
               <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />
               {t("accounts.removing")}
@@ -710,6 +710,7 @@ function operationText(operation: AccountOperation, t: TFunction): string {
     case "switch": return t("accounts.operation.switch");
     case "login": return t("accounts.operation.login");
     case "remove": return t("accounts.operation.remove");
+    case "restore": return t("accounts.operation.restore");
     case "cleanup": return t("accounts.operation.cleanup");
     case "terminal": return t("accounts.operation.terminal");
     case "refreshLimits": return t("accounts.operation.refreshLimits");
@@ -722,6 +723,12 @@ function operationText(operation: AccountOperation, t: TFunction): string {
 function rowRefusal(state: EngineAccountsState, accountId: string, phone = false): React.ReactNode {
   const removal = state.removal;
   if (removal?.kind !== "refused" || removal.refusal.accountId !== accountId) return null;
+  /* An open sign-in is ended from the refusal itself: Claude cancels its
+     operation, Codex its device login (which the desktop row has no control for). */
+  const operationId = state.accounts.find((account) => account.id === accountId)?.login?.operationId ?? null;
+  const cancelSignIn = state.engine === "codex"
+    ? () => void cancelCodexDeviceSignIn(state, accountId)
+    : operationId ? () => void state.cancelLogin(operationId) : undefined;
   return (
     <AccountRemovalRefusal
       refusal={removal.refusal}
@@ -730,6 +737,7 @@ function rowRefusal(state: EngineAccountsState, accountId: string, phone = false
       onDismiss={state.dismissRemoval}
       onRetry={() => void state.remove(accountId)}
       onRefresh={() => void state.refresh()}
+      onCancelSignIn={cancelSignIn}
     />
   );
 }
@@ -743,7 +751,7 @@ function RemovalOutcome({ state, phone = false }: { state: EngineAccountsState; 
   if (!removal) return null;
   switch (removal.kind) {
     case "removed":
-      return <AccountRemovalSummary summary={removal.summary} phone={phone} busy={busy} onDismiss={state.dismissRemoval} onFinishCleanup={() => void state.cleanupOrphans()} />;
+      return <AccountRemovalSummary summary={removal.summary} phone={phone} busy={busy} onDismiss={state.dismissRemoval} onFinishCleanup={() => void state.cleanupOrphans()} onRestore={() => void state.restore(removal.summary.accountId)} />;
     case "cleanup":
       return <AccountCleanupResult report={removal.report} phone={phone} onDismiss={state.dismissRemoval} />;
     case "cleanupFailed":

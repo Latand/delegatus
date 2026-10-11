@@ -105,37 +105,70 @@ function Line({ label, children }: { label: string; children: React.ReactNode })
 
 const LIST = "mt-2 grid grid-cols-[96px_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1";
 
+const ACTION = "inline-flex shrink-0 items-center gap-1 rounded-[6px] border border-border bg-canvas px-2 text-[10.5px] font-semibold text-primary hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+
 /**
  * What a removal moved (#1857 §5.3). `Moved` and `Archive` always draw; the
- * four counts draw only above zero. A sign-in file left in the archive adds a
- * warning line whose button runs the clean-up. No timer: it stays until the
- * operator closes it or the panel.
+ * counts draw only above zero. A sign-in file left in the archive adds a
+ * warning line whose button runs the clean-up. Main, which is only hidden,
+ * draws its folder as left in place instead, with Show again. No timer: it
+ * stays until the operator closes it or the panel.
  */
-export function AccountRemovalSummary({ summary, phone = false, busy, onDismiss, onFinishCleanup }: {
+export function AccountRemovalSummary({ summary, phone = false, busy, onDismiss, onFinishCleanup, onRestore }: {
   summary: Summary;
   phone?: boolean;
   busy: boolean;
   onDismiss: () => void;
   onFinishCleanup: () => void;
+  onRestore?: () => void;
 }) {
   const { t, locale } = useLocale();
+  const hidden = summary.hiddenHome;
+  const target = phone ? "min-h-[44px]" : "min-h-[44px] sm:min-h-[24px]";
   return (
-    <Card testId="removed" title={t("accounts.removed.title", { label: summary.label })} icon="done" dismissLabel={t("accounts.removed.dismiss")} onDismiss={onDismiss} phone={phone}>
-      <p className="mt-0.5 text-[11px] leading-[1.45] text-secondary">{t("accounts.removed.readable")}</p>
+    <Card testId="removed" title={t(hidden ? "accounts.removed.titleHidden" : "accounts.removed.title", { label: summary.label })} icon="done" dismissLabel={t("accounts.removed.dismiss")} onDismiss={onDismiss} phone={phone}>
+      <p className="mt-0.5 text-[11px] leading-[1.45] text-secondary">{t(hidden ? "accounts.removed.readableHidden" : "accounts.removed.readable")}</p>
       <dl className={LIST}>
-        <Line label={t("accounts.removed.moved")}>
-          {t("accounts.removed.movedValue", { count: summary.files, files: formatFileCount(summary.files, locale), size: formatArchiveBytes(summary.bytes, t, locale) })}
-        </Line>
-        <Line label={t("accounts.removed.archive")}>
-          {summary.archive
-            ? <ArchivePath path={summary.archive} copyLabel={t("accounts.removed.copyPath")} phone={phone} />
-            : <span className="text-secondary">{t("accounts.removed.noArchive")}</span>}
-        </Line>
+        {hidden ? (
+          <Line label={t("accounts.removed.files")}>
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="text-secondary">{t("accounts.removed.filesKept")}</span>
+              <ArchivePath path={hidden} copyLabel={t("accounts.removed.copyFolder")} phone={phone} />
+            </span>
+          </Line>
+        ) : (
+          <>
+            <Line label={t("accounts.removed.moved")}>
+              {t("accounts.removed.movedValue", { count: summary.files, files: formatFileCount(summary.files, locale), size: formatArchiveBytes(summary.bytes, t, locale) })}
+            </Line>
+            <Line label={t("accounts.removed.archive")}>
+              {summary.archive
+                ? <ArchivePath path={summary.archive} copyLabel={t("accounts.removed.copyPath")} phone={phone} />
+                : <span className="text-secondary">{t("accounts.removed.noArchive")}</span>}
+            </Line>
+          </>
+        )}
         {summary.conversations > 0 ? <Line label={t("accounts.removed.conversations")}>{t("accounts.removed.conversationsValue", { count: summary.conversations })}</Line> : null}
         {summary.pins > 0 ? <Line label={t("accounts.removed.pins")}>{summary.pins}</Line> : null}
         {summary.deliveries > 0 ? <Line label={t("accounts.removed.deliveries")}>{t("accounts.removed.deliveriesValue", { count: summary.deliveries })}</Line> : null}
         {summary.migrations > 0 ? <Line label={t("accounts.removed.migrations")}>{t("accounts.removed.migrationsValue", { count: summary.migrations })}</Line> : null}
+        {summary.bindings > 0 ? <Line label={t("accounts.removed.bindings")}>{t("accounts.removed.bindingsValue", { count: summary.bindings })}</Line> : null}
       </dl>
+      {hidden && onRestore ? (
+        <div data-account-removal-restore={summary.restored ?? "offered"} className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-[1.45] text-secondary">
+          {summary.restored === "done" ? (
+            <span className="min-w-0 flex-1 basis-[180px]">{t("accounts.removed.restoreDone", { label: summary.label })}</span>
+          ) : (
+            <>
+              <span className={`min-w-0 flex-1 basis-[180px] ${summary.restored === "failed" ? "text-danger" : ""}`}>{t(summary.restored === "failed" ? "accounts.removed.restoreFailed" : "accounts.removed.restoreHint")}</span>
+              <button type="button" disabled={busy} onClick={onRestore} className={`${ACTION} ${target}`}>
+                {busy ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+                {t("accounts.removed.restore", { label: summary.label })}
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
       {summary.credential === "pending" ? (
         <div data-account-removal-credential="pending" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-[1.45] text-warning">
           <span className="min-w-0 flex-1 basis-[180px]">{t("accounts.removed.credentialLeft")}</span>

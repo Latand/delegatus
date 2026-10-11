@@ -132,6 +132,7 @@ function engineState(engine: "claude" | "codex", accounts: AccountOption[], acti
     cancelLogin: async () => true,
     retryLogin: async () => true,
     remove: async () => true,
+    restore: async () => true,
     cleanupOrphans: async () => true,
     copyTerminalCommand: async () => true,
     refreshLimits: async () => true,
@@ -403,7 +404,7 @@ test("the removal summary is the first element of its engine section on the phon
   const { host } = await mount([engineState("claude", [claudeMain], "cl-main", {
     removal: {
       kind: "removed",
-      summary: { accountId: "cl-lab", label: "Lab", archive: archiveUnderHome("cl-lab"), files: 12, bytes: 14_200_000, conversations: 3, pins: 0, deliveries: 0, migrations: 0, credential: "clean" },
+      summary: { accountId: "cl-lab", label: "Lab", archive: archiveUnderHome("cl-lab"), files: 12, bytes: 14_200_000, conversations: 3, pins: 0, deliveries: 0, migrations: 0, credential: "clean", bindings: 0, hiddenHome: null },
     },
   })]);
   const section = host.querySelector('[data-mobile2-accounts-engine="claude"]')!;

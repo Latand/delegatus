@@ -695,3 +695,42 @@ test("a Viewer killed after the accounts registry committed finishes the removal
   expect(fs.readFileSync(path.join(fixture.archive, "history.jsonl"), "utf8")).toBe(LEFTOVERS["history.jsonl"]!);
   expect(readRegistryJson().removals ?? []).toEqual([]);
 });
+
+/* Task d7759de2: Main is removed through the same control as every other
+   account. It is forgotten, never deleted: ~/.claude is the operator's own. */
+test("removing Main hides it from every list and pick, keeps its home and transcripts, and restores", () => {
+  const legacy = process.env.LLV_CLAUDE_HOME!;
+  const transcript = path.join(legacy, "projects", "-repo", "99999999-1234-1234-1234-123456789abc.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "{}\n");
+  fs.writeFileSync(path.join(legacy, ".credentials.json"), "{}", { mode: 0o600 });
+  const work = mod.createManagedClaudeAccount("Work");
+  fs.writeFileSync(path.join(work.home, ".credentials.json"), "{}", { mode: 0o600 });
+  const registry = agentRegistry();
+  registry.setEngineRouting("claude", "default");
+
+  mod.hideLegacyClaudeAccount();
+
+  expect(mod.listClaudeAccounts().map((account) => account.id)).toEqual([work.id]);
+  expect(mod.activeClaudeAccountId()).toBe(work.id);
+  expect(mod.claudeAccountForSpawn().id).toBe(work.id);
+  expect(() => mod.claudeAccountForSpawn("default")).toThrow(mod.UnknownClaudeAccountError);
+  expect(() => mod.setActiveClaudeAccount("default")).toThrow(mod.UnknownClaudeAccountError);
+  expect(mod.claudeAccountListed("default")).toBe(false);
+  expect(registry.engineRouting("claude").activeAccountId).toBe(work.id);
+  expect(fs.readFileSync(path.join(legacy, ".credentials.json"), "utf8")).toBe("{}");
+  expect(fs.readFileSync(transcript, "utf8")).toBe("{}\n");
+  expect(mod.claudeProjectRoots()).toContain(path.join(legacy, "projects"));
+  expect(persistedAccountRegistry("claude")).toMatchObject({ legacyHidden: true });
+
+  mod.restoreLegacyClaudeAccount();
+  expect(mod.listClaudeAccounts().map((account) => account.id)).toEqual(["default", work.id]);
+});
+
+test("Main stays listed while an agent runs on it, and the refusal changes nothing", () => {
+  beginLegacySpawnFixture(agentRegistry(), { engine: "claude", cwd: "/repo", accountId: "default" });
+
+  expect(() => mod.hideLegacyClaudeAccount()).toThrow(AccountRemovalBlockedError);
+  expect(mod.listClaudeAccounts().map((account) => account.id)).toEqual(["default"]);
+  expect(persistedAccountRegistry("claude").legacyHidden).toBeUndefined();
+});

@@ -14,10 +14,13 @@
 export const DEFAULT_ACCOUNT_ID = "default";
 
 const ACCOUNT_PATH = /[/\\]accounts[/\\](?:claude|codex|copilot)[/\\]([^/\\]+)[/\\]/;
+/** A removed account's home in the shared archive (issue #1857) keeps its id
+    as the folder name, so its history stays attributed to it. */
+const RETIRED_ACCOUNT_PATH = /[/\\]shared[/\\](?:claude|codex|copilot)[/\\]retired[/\\]([^/\\]+)[/\\]/;
 
 /** The account id owning a transcript path, or {@link DEFAULT_ACCOUNT_ID}. */
 export function accountIdFromPath(path: string | null | undefined): string {
   if (!path) return DEFAULT_ACCOUNT_ID;
-  const match = ACCOUNT_PATH.exec(path);
+  const match = ACCOUNT_PATH.exec(path) ?? RETIRED_ACCOUNT_PATH.exec(path);
   return match ? match[1]! : DEFAULT_ACCOUNT_ID;
 }
