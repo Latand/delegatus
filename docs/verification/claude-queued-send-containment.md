@@ -13,9 +13,11 @@ The urgent repair sets Claude's `supportsQueuedSend` to `false`. The existing
 journal while Claude is active or awaiting permission. Each input is written
 only after idle, confirmed under its original operation, and completed by its
 own result boundary. Permission answers and explicit interrupts keep their
-existing control path. Follow-ups wait for the active turn to finish; native
-batching remains deferred pending authoritative per-input identity evidence
-tracked in #2742.
+existing control path. An explicit operator interrupt-active replacement
+passes queued agent follow-ups, including across the incumbent's transition
+back to idle. The follow-up stays in its original journal slot until the
+replacement reaches its terminal boundary. Native batching remains deferred
+pending authoritative per-input identity evidence tracked in #2742.
 
 ## Evidence
 
@@ -35,6 +37,14 @@ credentials, transcript excerpts or agent controls were used.
   permission answer and expiration, explicit interruption, and a subsequent
   interrupt-active image send from idle. Reopened delivery records retain
   each original payload and canonical confirmation under its original ID.
+- The operator-replacement regression admits an agent note with an image
+  before an explicit operator interrupt-active send. It verifies one
+  interruption control, then checks that the first user stdin frame after the
+  incumbent result is the replacement. A fresh live permission request is
+  installed immediately before replacement admission in the permission case.
+  The earlier note retains its receipt and image through the replacement's
+  terminal boundary, then delivers once; replaying its operation remains
+  idempotent across replacement queue executors.
 - Installed Claude CLI 2.1.284, using synthetic authentication and responses
   from a loopback port-0 Messages API: three direct inputs produced a seed
   replay and a combined two-payload replay. Only the seed receipt was

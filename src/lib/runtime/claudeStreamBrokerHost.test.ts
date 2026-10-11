@@ -1204,7 +1204,8 @@ describe("ClaudeStreamBrokerHost", () => {
     { policy: "queue", pathway: "permission-answered" },
     { policy: "steer-or-queue", pathway: "permission-expired" },
     { policy: "queue", pathway: "interrupted" },
-  ] as const)("Claude keeps $policy follow-ups in the journal until idle: $pathway", async ({ policy, pathway }) => {
+    { policy: "steer-or-queue", pathway: "interrupt-permission" },
+  ] as const)("review: an operator replacement reaches past deferred follow-ups: $policy / $pathway", async ({ policy, pathway }) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-contained-"));
     const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
     const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
@@ -1240,10 +1241,12 @@ describe("ClaudeStreamBrokerHost", () => {
       expect(done()).toBe(true);
     };
     const commands: Array<{ kind: "send"; operationId: string; idempotencyKey: string; conversationId: string;
-      text: string; images: StructuredImageRef[]; policy: "queue" | "steer-or-queue" | "interrupt-active" }> = [];
-    const admit = (id: string, sendPolicy: typeof policy | "interrupt-active" = policy) => {
+      text: string; images: StructuredImageRef[]; policy: "queue" | "steer-or-queue" | "interrupt-active";
+      origin?: { kind: "operator" | "agent"; role?: string } }> = [];
+    const admit = (id: string, sendPolicy: typeof policy | "interrupt-active" = policy,
+      origin: { kind: "operator" | "agent"; role?: string } = { kind: "operator" }) => {
       const command = { kind: "send" as const, operationId: id, idempotencyKey: id, conversationId,
-        text: `input ${id}`, images: id.endsWith("image") ? [image] : [], policy: sendPolicy };
+        text: `input ${id}`, images: id.endsWith("image") ? [image] : [], policy: sendPolicy, origin };
       commands.push(command); journal.executeOperation(command); return command;
     };
     const echo = (command: (typeof commands)[number]) => child.emitJson({ type: "user", isReplay: true,
@@ -1306,20 +1309,50 @@ describe("ClaudeStreamBrokerHost", () => {
         }
       }
       // An explicit interrupt still owns the active turn, and waits for its result.
-      if (pathway === "interrupted") {
+      if (pathway.startsWith("interrupt")) {
         const incumbent = admit("interrupt-incumbent"); await deliver(incumbent);
-        const replacement = admit("interrupt-replacement-image", "interrupt-active");
+        const deferred = admit("interrupt-deferred-image", policy, { kind: "agent", role: "reviewer" });
         const count = users().length;
-        await queue.drain();
+        await queue.drain(); await queue.drain();
+        expect(users()).toHaveLength(count);
+        expect(journal.operationResult(deferred.operationId)?.receipt.status).toBe("queued");
+        const deferredReceipt = structuredClone(journal.operationResult(deferred.operationId)?.receipt);
+        if (pathway === "interrupt-permission") {
+          child.emitJson({ type: "control_request", request_id: "interrupt-permission",
+            request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" } } });
+          await Bun.sleep(0);
+          expect((await host.health()).pendingAttention).toContain("interrupt-permission");
+        }
+        const replacement = admit("interrupt-replacement-image", "interrupt-active");
+        const written = users().length;
+        queue = newQueue();
+        await queue.drain(); await queue.drain();
         await wait(() => child.inputs.some(frame => frame.type === "control_request"));
-        const control = child.inputs.find(frame => frame.type === "control_request")!;
+        const control = child.inputs.find(frame => frame.type === "control_request" && frame.request_id !== "interrupt-permission")!;
+        expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(1);
+        expect(users()).toHaveLength(written);
+        expect(journal.operationResult(deferred.operationId)?.receipt).toEqual(deferredReceipt);
         child.emitJson({ type: "control_response", response: { subtype: "success", request_id: control.request_id } });
         await Bun.sleep(0); await queue.drain();
-        expect(users()).toHaveLength(count);
-        result(); await idle(); await deliver(replacement); result(); await idle();
+        expect(users()).toHaveLength(written);
+        const interruptRequests = child.inputs.filter(frame => frame.type === "control_request"
+          && (frame.request as { subtype?: string })?.subtype === "interrupt");
+        expect(interruptRequests).toHaveLength(1);
+        queue = newQueue();
+        result(); await idle(); await queue.drain();
+        await wait(() => users().length > written);
+        expect(JSON.stringify(users()[written]?.message)).toContain(replacement.text);
+        echo(replacement); await wait(() => journal.operationResult(replacement.operationId)?.receipt.status === "delivered");
+        expect(journal.operationResult(deferred.operationId)?.receipt).toEqual(deferredReceipt);
+        expect(journal.effectBatch(100).find(effect => effect.payload.operationId === deferred.operationId)?.payload.images)
+          .toEqual(deferred.images);
+        expect(journal.executeOperation(deferred).replayed).toBe(true);
+        result(); await idle();
+        expect(users().filter(frame => JSON.stringify(frame.message).includes(replacement.text))).toHaveLength(1);
+        await deliver(deferred); result(); await idle();
         expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended"
           && event.turnId === incumbent.operationId)).toEqual([expect.objectContaining({ status: "interrupted" })]);
-        expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(1);
+        expect(child.inputs.filter(frame => frame.type === "control_request").filter(frame => frame.request_id !== "interrupt-permission")).toHaveLength(1);
       }
       const controls = child.inputs.filter(frame => frame.type === "control_request").length;
       const subsequent = admit("subsequent-image", "interrupt-active"); await deliver(subsequent); result(); await idle();
@@ -1329,10 +1362,11 @@ describe("ClaudeStreamBrokerHost", () => {
       await queue.drain(); expect(users()).toHaveLength(commands.length);
       expect(commands.map(command => journal.operationResult(command.operationId)?.receipt)).toEqual(receipts);
       const reopened = new FileClaudeDeliveryLedger(path.join(directory, "deliveries")).load(host.identity.sessionId);
-      expect(reopened.map(row => [row.entry.id, row.engineMessageId, row.delivered]))
-        .toEqual(commands.map(command => [command.operationId, `echo-${command.operationId}`, true]));
-      expect(reopened.map(row => [row.entry.content.text, row.entry.content.images]))
-        .toEqual(commands.map(command => [command.text, command.images]));
+      for (const command of commands) {
+        const row = reopened.find(candidate => candidate.entry.id === command.operationId);
+        expect(row).toMatchObject({ engineMessageId: `echo-${command.operationId}`, delivered: true });
+        expect(row?.entry.content).toEqual(expect.objectContaining({ text: command.text, images: command.images }));
+      }
     } finally { await host.release(); journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
 
