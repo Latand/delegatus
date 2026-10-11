@@ -1514,6 +1514,9 @@ interface StoredEntry {
   /** The delivery identity on the record that produced this row; see
       {@link FeedEntry.submissionDedup}. */
   submissionDedup?: string;
+  /** The engine id of the message record that produced this row, whatever
+      kind the row has; two records naming one id are one delivery. */
+  deliveryId?: string;
 }
 
 interface CallRec {
@@ -1687,6 +1690,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   let pushSeq = 0;
   let curSrc = 0;
   let nativeRecordKey: string | undefined;
+  /** The engine id of the Claude message record being rendered, stamped on
+      every row its text and pictures push. */
+  let recordDeliveryId: string | undefined;
   /** Absolute index just past the last consumed line; null before first feed. */
   let consumedEnd: number | null = null;
   /** Window start of the previous feed — a start that moved backwards means
@@ -1775,7 +1781,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const push = (item: Item, submissionDedup?: string): number => {
     if (nativeRecordKey && (item.kind === "user" || item.kind === "tmsg")) nativeUserRefs.set(item, nativeRecordKey);
     entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item,
-      ...(submissionDedup ? { submissionDedup } : {}) });
+      ...(submissionDedup ? { submissionDedup } : {}), ...(recordDeliveryId ? { deliveryId: recordDeliveryId } : {}) });
     snapshot = null;
     return pushSeq++;
   };
@@ -3256,11 +3262,22 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const deliveredMessage = isClaudeSdkDeliveredUser(obj)
         ? { engineMessageId: textPart(obj.uuid) || null, ts }
         : undefined;
-      if (typeof content === "string") addUserText(ts, content, isHarness, deliveredMessage);
+      /* Every row the message itself pushes names the record's engine id, so
+         a delivery journaled twice (a mid-turn `queued_command` and a user
+         record) collapses to one whatever kind its rows render as. */
+      const asDelivery = (render: () => void) => {
+        recordDeliveryId = textPart(obj.uuid) || undefined;
+        try {
+          render();
+        } finally {
+          recordDeliveryId = undefined;
+        }
+      };
+      if (typeof content === "string") asDelivery(() => addUserText(ts, content, isHarness, deliveredMessage));
       else {
         for (const part of arr(content)) {
-          if (part.type === "text") addUserText(ts, textPart(part.text), isHarness, deliveredMessage);
-          else if (part.type === "image") pushImage(part, fileWrap);
+          if (part.type === "text") asDelivery(() => addUserText(ts, textPart(part.text), isHarness, deliveredMessage));
+          else if (part.type === "image") asDelivery(() => pushImage(part, fileWrap));
           else if (part.type === "tool_result") {
             if (typeof part.content === "string") {
               addOutput(textPart(part.tool_use_id), part.content, part.is_error === true, undefined, ts);
@@ -3923,12 +3940,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     /* One delivery, one row: an input Claude journaled both as a mid-turn
        `queued_command` attachment and as a user record names the same engine
        id on each, so only the first record in the window that names it keeps
-       its rows. Every row of one record shares that id, so it is compared per
-       source line. */
+       its rows, whether they render as the operator's bubble or a system row.
+       Every row of one record shares that id, so it is compared per source
+       line. */
     const deliveredBy = new Map<string, number>();
     const repeatedDeliveries = new Set<number>();
     for (const entry of entries) {
-      const id = entry.item.kind === "sysmsg" ? entry.item.deliveredMessage?.engineMessageId : null;
+      const id = entry.deliveryId;
       if (!id) continue;
       const first = deliveredBy.get(id);
       if (first === undefined) deliveredBy.set(id, entry.bornSrc);

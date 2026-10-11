@@ -104,6 +104,48 @@ describe("Claude messages delivered mid-turn", () => {
       .toEqual(["first part", "second part"]);
   });
 
+  test("a delivery journaled twice shows one row whichever kind each record renders as", () => {
+    const record = (fields: Record<string, unknown>) => JSON.stringify({
+      type: "user", uuid: "queued-one", timestamp: "2026-10-11T09:00:05.000Z",
+      message: { role: "user", content: [{ type: "text", text: QUEUED_TEXT }] }, ...fields,
+    });
+    const between = claudeProse("between");
+    const interactive = queuedPrompt().replace("\"entrypoint\":\"sdk-cli\"", "\"entrypoint\":\"cli\"");
+    const pairs: [string, string][] = [
+      /* The structured host's queued row beside a user record that lacks the SDK marker. */
+      [queuedPrompt(), record({ entrypoint: "sdk-cli" })],
+      /* An interactive session: both records are the operator's own bubble. */
+      [interactive, record({ entrypoint: "cli" })],
+    ];
+    for (const [queued, user] of pairs) {
+      for (const lines of [[queued, between, user], [user, between, queued]]) {
+        const feed = buildFeed(claudeFile, lines, false, "");
+        const messages = feed.items.filter((item) => item.kind === "user" || item.kind === "sysmsg");
+        expect(messages).toHaveLength(1);
+        expect(feed.items[0]).toBe(messages[0]);
+        assertParity(lines, { chunks: [1] });
+        assertParity(lines, { chunks: [1], cap: 2 });
+        assertParity(lines, { chunks: [2, 1] });
+      }
+    }
+  });
+
+  test("two sends of the same text with different engine ids stay two rows", () => {
+    const between = claudeProse("between");
+    for (const queued of [queuedPrompt(), queuedPrompt().replace("\"entrypoint\":\"sdk-cli\"", "\"entrypoint\":\"cli\"")]) {
+      const second = queued.replace("\"source_uuid\":\"queued-one\"", "\"source_uuid\":\"queued-two\"");
+      const user = JSON.stringify({
+        type: "user", uuid: "queued-three", timestamp: "2026-10-11T09:00:05.000Z", entrypoint: "cli",
+        message: { role: "user", content: QUEUED_TEXT },
+      });
+      const lines = [queued, between, second, between, user];
+      const feed = buildFeed(claudeFile, lines, false, "");
+      expect(feed.items.filter((item) => item.kind === "user" || item.kind === "sysmsg")).toHaveLength(3);
+      assertParity(lines, { chunks: [1] });
+      assertParity(lines, { chunks: [1], cap: 3 });
+    }
+  });
+
   test("a prompt queued in an interactive session is the operator's own bubble", () => {
     const lines = [queuedPrompt().replace("\"entrypoint\":\"sdk-cli\"", "\"entrypoint\":\"cli\"")];
     const feed = buildFeed(claudeFile, lines, false, "");
