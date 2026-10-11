@@ -66,7 +66,20 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
   if (round.questions?.length) lines.push('<tg-button-row align="center">', button("Скопіювати рекомендовані", prototypeCopyLine(round), true), "</tg-button-row>");
   const variants = [...round.variants].sort((a, b) => a.number - b.number);
   for (let i = 0; i < variants.length; i += 8) lines.push('<tg-button-row align="center">', ...variants.slice(i, i + 8).map(v => button(`Варіант ${v.number}`, prototypeCopyLine(round, v.number))), "</tg-button-row>");
-  return { markdown: lines.join("\n"), images: slides.map(({ id, blob }) => ({ id, blob })) };
+  const plain = [`🧪 ${sample ? "Зразок · " : ""}Прототип · ${round.title}`, `${taskTitle.split("\n")[0]!} · ${prototypeReference(round)}`, ""];
+  for (const variant of variants) {
+    plain.push(`${variant.number} · ${variant.name}`, variant.description,
+      ...slides.filter(s => s.variantNumber === variant.number).map(s => s.caption), "");
+  }
+  for (const [i, question] of (round.questions ?? []).entries()) {
+    plain.push(`Питання ${i + 1}/${round.questions!.length} · ${question.text}${question.multiple ? " (можна кілька)" : ""}`,
+      ...question.options.map((o, j) => `${String.fromCharCode(97 + j)}) ${o.label}${o.recommended ? " ✅" : ""}`),
+      ...(question.other ? ["+ Інше — у коментарі"] : []), "");
+  }
+  plain.push("Надішліть клону скопійований рядок відповіді. Повне рев’ю — у Delegatus.");
+  if (round.questions?.length) plain.push(`Скопіювати рекомендовані: ${prototypeCopyLine(round)}`);
+  for (const variant of variants) plain.push(`Варіант ${variant.number}: ${prototypeCopyLine(round, variant.number)}`);
+  return { markdown: lines.join("\n"), plainText: plain.join("\n"), images: slides.map(({ id, blob }) => ({ id, blob })) };
 }
 
 export async function postPrototypeReviewToTelegram(round: PrototypeReviewRound): Promise<void> {
@@ -75,8 +88,9 @@ export async function postPrototypeReviewToTelegram(round: PrototypeReviewRound)
     if (!destination) return;
     const task = loadTasks().find(t => t.id === round.taskId);
     const slides = await prototypeSlides(round);
+    const fallback = renderPrototypeTelegram(round, [], task?.text);
     await telegramBotService().sendRichMessage({ clientRequestId: round.id, chat: destination.chat, topicId: destination.topicId,
-      message: renderPrototypeTelegram(round, slides, task?.text), fallbackMarkdown: renderPrototypeTelegram(round, [], task?.text).markdown });
+      message: renderPrototypeTelegram(round, slides, task?.text), fallbackMarkdown: fallback.markdown, fallbackPlainText: fallback.plainText });
   } catch (error) {
     // Never log a task title, Telegram description, path or destination.
     console.warn("prototype Telegram post refused", error instanceof TelegramBotError ? error.code : "unavailable");
