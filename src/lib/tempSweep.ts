@@ -28,9 +28,10 @@ import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
  * - **Only when stale**: the newest modification time of the directory and its
  *   immediate entries is older than the threshold (24 h by default).
  * - **Never in use**: no live process has it, or anything inside it, as its
- *   working directory, an open file, or its `TMPDIR`/`LLV_STATE_DIR`/
+ *   working directory, an open file, or its `HOME`/`TMPDIR`/`LLV_STATE_DIR`/
  *   `XDG_CONFIG_HOME`/`CLAUDE_CODE_TMPDIR`. A stage agent whose shell is idle
- *   still carries its scratch directory in `TMPDIR`, so it is kept.
+ *   still carries its scratch directory in `TMPDIR`, so it is kept. Roots
+ *   claimed after startup keep an open directory descriptor in `tempDirs.ts`.
  * - **Never a pipeline worktree**, or a directory holding one, or holding any
  *   git checkout: registered linked merger, review and attribution checkouts
  *   are freed by the worktree sweep after its commit preservation proof,
@@ -67,7 +68,7 @@ const LEGACY_OWNED_PREFIXES = ["pending-producer-", "inflight-producer-", "child
 /** Owned names that hold live, shared state and are never swept. */
 const KEPT_OWNED_NAMES = new Set(["llv-spawn-sandbox", "llv-tmux-cwd"]);
 /** Environment variables whose directory a process is using even while it holds nothing open there. */
-const IN_USE_ENV = ["TMPDIR", "TMP", "TEMP", "LLV_STATE_DIR", "XDG_CONFIG_HOME", "CLAUDE_CODE_TMPDIR"] as const;
+const IN_USE_ENV = ["HOME", "TMPDIR", "TMP", "TEMP", "LLV_STATE_DIR", "XDG_CONFIG_HOME", "CLAUDE_CODE_TMPDIR"] as const;
 
 export function isOwnedTempName(name: string): boolean {
   if (KEPT_OWNED_NAMES.has(name)) return false;

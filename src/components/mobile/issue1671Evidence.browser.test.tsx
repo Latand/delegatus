@@ -8797,8 +8797,11 @@ describe("role memory: rules window and the rule line", () => {
     const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
     /* The card's lane is the fixture's `p-md-decision`, whose builder stage `implement` reported. */
     const seed = (pipelineId: string, stageId: string, minutes: number, roleId: string, lessons: Parameters<typeof store.leaveLessons>[0]["lessons"], project = "atlas") => {
-      store.recordLessonRequest({ pipelineId, stageId, attempt: 1, project, roleId, conversationId: `conversation_${pipelineId}`, at: at(minutes) });
-      store.leaveLessons({ request: { pipelineId, stageId, attempt: 1 }, source: { project, pipelineId, stageId, attempt: 1, roleId, fixRound: stageId === "fix", conversationId: `conversation_${pipelineId}` }, lessons, none: null, now: at(minutes) });
+      lessons.forEach((lesson, index) => {
+        const attempt = index + 1;
+        store.recordLessonRequest({ pipelineId, stageId, attempt, project, roleId, conversationId: `conversation_${pipelineId}`, at: at(minutes) });
+        store.leaveLessons({ request: { pipelineId, stageId, attempt }, source: { project, pipelineId, stageId, attempt, roleId, fixRound: stageId === "fix", conversationId: `conversation_${pipelineId}` }, lessons: [lesson], none: null, now: at(minutes) });
+      });
     };
     seed("p-search", "build", 3 * 24 * 60, "builder", [
       { scope: "role", rule: "Before opening a pull request, check each acceptance criterion of the pinned specification against the head, one by one.", why: "A lane met its brief and failed review on a criterion only the specification named." },

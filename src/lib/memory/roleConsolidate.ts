@@ -2,8 +2,8 @@ import { ROLE_MEMORY_BOUND, type RoleMemoryRule } from "./roleTypes";
 
 /* Consolidation keeps a scope under its bound without a model call: a lesson
    that repeats an active rule (case, spacing and a closing full stop aside)
-   merges into it, and while the scope is over the bound its oldest rule is
-   archived. Every symbol counts: "x > 0" and "x < 0", or "set -x" and
+   merges into it; curation order decides what leaves when the scope exceeds
+   its bound, with uncurated rules leaving before curated ones. Every symbol counts: "x > 0" and "x < 0", or "set -x" and
    "set +x", ask for different things. Similar wording is never merged: two
    rules that share most of their words can still ask for different things, or
    opposite ones, and only a model could combine them without losing one.
@@ -16,7 +16,7 @@ export function codePoints(text: string): number {
 }
 
 export function ruleLine(rule: Pick<RoleMemoryRule, "id" | "rule" | "why">): string {
-  return `- [${rule.id}] ${rule.rule} Why: ${rule.why}`;
+  return `- [${rule.id}] ${rule.rule}`;
 }
 
 /** The size of a scope as injected: its rule lines, in code points. */
@@ -38,7 +38,7 @@ export function sameRule(a: string, b: string): boolean {
 }
 
 export interface AppendOutcome {
-  /** The scope's active rules after the append, in injection order. */
+  /** The scope's active rules after the append, in order of leaving. */
   active: RoleMemoryRule[];
   /** Records whose state changed, the incoming one included when it merged into an older rule. */
   changed: RoleMemoryRule[];
@@ -47,27 +47,52 @@ export interface AppendOutcome {
   archived: string[];
 }
 
+export function leavingOrder(rules: readonly RoleMemoryRule[]): RoleMemoryRule[] {
+  return [
+    ...rules.filter(rule => !rule.curatedAt && !rule.keptByOperatorAt),
+    ...rules.filter(rule => rule.curatedAt && !rule.keptByOperatorAt),
+    ...rules.filter(rule => rule.keptByOperatorAt),
+  ];
+}
+
+/** The same bound applies to append, rewrite, succession and operator Return. */
+export function retainRules(rules: readonly RoleMemoryRule[], at: string, protectedIds: ReadonlySet<string> = new Set(), bound = ROLE_MEMORY_BOUND): Pick<AppendOutcome, "active" | "changed" | "archived"> {
+  const active = leavingOrder(rules);
+  const changed: RoleMemoryRule[] = [];
+  const archived: string[] = [];
+  while (active.length > 1 && scopeChars(active) > bound) {
+    let index = active.findIndex(rule => !protectedIds.has(rule.id) && !rule.keptByOperatorAt);
+    if (index < 0) index = active.findIndex(rule => !protectedIds.has(rule.id));
+    if (index < 0) break;
+    const [left] = active.splice(index, 1);
+    changed.push({ ...left!, state: "archived", reason: "budget", changedAt: at });
+    archived.push(left!.id);
+  }
+  return { active, changed, archived };
+}
+
 export function appendRule(active: readonly RoleMemoryRule[], incoming: RoleMemoryRule, at: string, bound = ROLE_MEMORY_BOUND): AppendOutcome {
-  const next = [...active];
+  const next = leavingOrder(active);
   const changed: RoleMemoryRule[] = [];
   const added: string[] = [];
   const merged: { from: string; into: string }[] = [];
-  const archived: string[] = [];
   const duplicate = next.find((rule) => sameRule(rule.rule, incoming.rule));
   if (duplicate) {
     changed.push({ ...incoming, state: "merged", reason: "duplicate", mergedInto: duplicate.id, changedAt: at });
     merged.push({ from: incoming.id, into: duplicate.id });
+    if (!duplicate.curatedAt && !duplicate.keptByOperatorAt) {
+      next.splice(next.indexOf(duplicate), 1);
+      const refreshed = { ...duplicate, changedAt: at };
+      next.push(refreshed);
+      changed.push(refreshed);
+    }
   } else {
     next.push(incoming);
     changed.push(incoming);
     added.push(incoming.id);
   }
-  while (next.length > 1 && scopeChars(next) > bound) {
-    const oldest = next.shift()!;
-    changed.push({ ...oldest, state: "archived", reason: "budget", changedAt: at });
-    archived.push(oldest.id);
-  }
-  return { active: next, changed, added, merged, archived };
+  const retained = retainRules(next, at, new Set([duplicate?.id ?? incoming.id]), bound);
+  return { active: retained.active, changed: [...changed, ...retained.changed], added, merged, archived: retained.archived };
 }
 
 /** Letters and digits a lesson's rule and why each need. Below this a text is

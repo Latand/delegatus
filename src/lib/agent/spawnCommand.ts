@@ -59,9 +59,9 @@ import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "
 import { loadPipelines } from "@/lib/pipelines/store";
 import { listFiles } from "@/lib/scanner";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
+import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
-import { derivedSpawnTitle, durableSemanticTitle, firstPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
+import { derivedSpawnTitle, durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentWithPrompt, verifyTmuxHostEvidence } from "@/lib/tmux";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
@@ -308,7 +308,7 @@ export function spawnLauncherFor(
   return { value: null };
 }
 
-type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
+type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; account?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
 
 export async function executeSpawnRequest(
   req: NextRequest,
@@ -422,7 +422,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (!authenticatedCallerError) await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
     return NextResponse.json({ error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal) }, { status: 409 });
   }
-  if (body.accountId !== undefined && typeof body.accountId !== "string") return NextResponse.json({ error: "accountId must be a string" }, { status: 400 });
+  if (body.account !== undefined && body.account !== null && typeof body.account !== "string") return NextResponse.json({ error: "account must be a string or null" }, { status: 400 });
+  if (body.account !== undefined && body.accountId !== undefined && body.account !== body.accountId) return NextResponse.json({ error: "account and accountId must agree" }, { status: 400 });
+  const requestedAccount = body.account === undefined ? body.accountId : body.account ?? undefined;
+  if (requestedAccount !== undefined && typeof requestedAccount !== "string") return NextResponse.json({ error: "accountId must be a string" }, { status: 400 });
   if (body.clientAttemptId !== undefined && (typeof body.clientAttemptId !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(body.clientAttemptId))) return NextResponse.json({ error: "clientAttemptId must be 8-128 URL-safe characters" }, { status: 400 });
 
   const reasoning = reasoningFromBody(engine, {
@@ -456,7 +459,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (body.title !== undefined && !explicitTitle) {
     return NextResponse.json({ error: "title must be a semantic, non-placeholder string" }, { status: 400 });
   }
-  const derivedTitle = firstPromptLine(userPrompt, 60)
+  const derivedTitle = firstMeaningfulPromptLine(userPrompt, 60)
     ? derivedSpawnTitle(role.value?.role ?? engine, userPrompt)
     : null;
   let transport;
@@ -486,12 +489,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   const registry = registryForCaller ?? dependencies.registry();
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   const existingAttempt = clientAttemptId ? registry.spawnReceiptForClientAttempt(clientAttemptId) : null;
-  if (!explicitTitle && !existingAttempt) {
+  if (!explicitTitle && !derivedTitle && !existingAttempt) {
     return NextResponse.json({ error: SPAWN_TITLE_REQUIRED_ERROR }, { status: 400 });
   }
   const launchTitle = explicitTitle
-    ?? derivedTitle
-    ?? durableSemanticTitle(existingAttempt?.launchProfile.title, 120);
+    ?? durableSemanticTitle(existingAttempt?.launchProfile.title, 120)
+    ?? derivedTitle;
   if (!launchTitle) {
     return NextResponse.json({ error: SPAWN_TITLE_REQUIRED_ERROR }, { status: 400 });
   }
@@ -779,7 +782,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       accountId: string,
       launchProfile: ReturnType<typeof emptyLaunchProfile>,
       requestDigest: string,
-      accountPin = body.accountId !== undefined,
+      accountPin = requestedAccount !== undefined,
     ): SpawnRequest => ({
       engine,
       cwd,
@@ -842,7 +845,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     });
     const terminalizePinnedAccountFailure = async (failure: unknown): Promise<NextResponse<SpawnResponse | ApiError>> => {
       if (isAccountAdmissionRetryable(failure)) throw failure;
-      const accountId = body.accountId as string;
+      const accountId = requestedAccount as string;
       const reason = (failure instanceof Error ? failure.message : String(failure)).slice(0, 240);
       const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
         accountId,
@@ -865,25 +868,32 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       }));
     };
     if (existingAttempt
-      && body.accountId !== undefined
+      && requestedAccount !== undefined
       && existingAttempt.accountPin
       && (existingAttempt.state === "failed" || existingAttempt.state === "conflicted")) {
       return await terminalizePinnedAccountFailure(
         new Error(existingAttempt.error ?? "the requested account is not available for this launch"),
       );
     }
-    const requestedAccountId = typeof body.accountId === "string" ? body.accountId : null;
-    /* #1279: the project the launch belongs to, and nothing more. The rule
-       itself — which accounts this project allows, whether any of them has
-       capacity, and what a record nobody can read means — lives at the account
-       seam with every other automatic selection's copy of it, so this route
-       carries no second copy to drift from the first. */
+    const requestedAccountId = typeof requestedAccount === "string" ? requestedAccount : null;
+    // Automatic account selection uses the target project's pool and capacity
+    // at the account seam. An advertised pin also enforces that pool here.
     const spawnProject = explicitProject ?? projectForCwd(cwd);
+    const assertRequestedAccountBinding = (): void => {
+      // The advertised account pin follows pipeline policy; accountId retains
+      // the operator's legacy override contract.
+      if (typeof body.account !== "string" || engine === "copilot") return;
+      const allowedAccountIds = allowedAccountIdsForProject(spawnProject, engine);
+      if (allowedAccountIds !== null && !allowedAccountIds.includes(body.account)) {
+        throw new ProjectAccountRefusedError({ kind: "not_allowed", accountId: body.account, allowedAccountIds }, engine, spawnProject);
+      }
+    };
     let account: HealthySpawnAccountResolution;
     try {
+      assertRequestedAccountBinding();
       account = existingAttempt && existingAttempt.accountId !== null && !(existingAttempt.accountPin && requestedAccountId)
         ? dependencies.resolveSpawnAccount(existingAttempt.engine, existingAttempt.accountId)
-        : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject, selectedModel.model, launchTier ? { id: launchTier, model: selectedModel.model!, required: tierResolution.required } : undefined);
+        : await dependencies.resolveHealthySpawnAccount(engine, requestedAccount, spawnProject, selectedModel.model, launchTier ? { id: launchTier, model: selectedModel.model!, required: tierResolution.required } : undefined);
     } catch (error) {
       if (isAccountAdmissionRetryable(error)) throw error;
       /* The record needs the operator, and until it gets them this launch
@@ -906,7 +916,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }
-      if (body.accountId === undefined) throw error;
+      if (requestedAccount === undefined) throw error;
       if (engine === "claude" && requestedAccountId) {
         try {
           const pinned = dependencies.resolveSpawnAccount(engine, requestedAccountId);
@@ -935,13 +945,16 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (queuedUntil && requestedAccountId) {
       account = dependencies.resolveSpawnAccount(engine, requestedAccountId);
     }
+    if (typeof body.account === "string" && account.accountId !== body.account) {
+      return await terminalizePinnedAccountFailure(new Error("the requested account is unavailable for this launch"));
+    }
     const pinFallback = Boolean(requestedAccountId && !queuedUntil && account.accountId !== requestedAccountId);
     /* Idempotency binds the caller's requested account even when policy
        degrades that pin to a fallback account. A replay can therefore recover
        the admitted fallback while a changed pin still conflicts. */
     if (existingAttempt) launchTier = existingAttempt.launchProfile.serviceTier ?? null;
     const digest = requestDigestForAccount(
-      typeof body.accountId === "string" ? body.accountId : account.accountId,
+      typeof requestedAccount === "string" ? requestedAccount : account.accountId,
       pinFallback || queuedUntil !== null,
     );
     const specForAccount = (
@@ -1006,8 +1019,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     /* The receipt keeps the caller's requested account as durable routing
        authority. The separate account context below owns this generation's
        actual launch, so a degraded fallback cannot silently rebind the pin. */
-    const receiptAccountId = pinFallback && typeof body.accountId === "string"
-      ? body.accountId
+    const receiptAccountId = pinFallback && typeof requestedAccount === "string"
+      ? requestedAccount
       : account.accountId;
     const admissionAccount = existingAttempt ? null : await accountProbeSnapshot(
       () => dependencies.resolveSpawnAccount(engine, account.accountId),
@@ -1015,6 +1028,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     );
     const begun = await withAccountMutationLockAsync(() => {
       dependencies.authorizeAutonomousLaunch?.();
+      assertRequestedAccountBinding();
       const autonomous = authenticatedCaller?.kind === "agent" || req.headers.get(VIEWER_AUTONOMOUS_SPAWN_HEADER) === "1";
       if ((dependencies.autonomousAdmissionHeld?.() || (autonomous && activeDrain()))
         && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) return null;
@@ -1045,7 +1059,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         receiptAccountId,
         spec.launchProfile,
         digest,
-        existingAttempt?.accountPin ?? (body.accountId !== undefined),
+        existingAttempt?.accountPin ?? (requestedAccount !== undefined),
       ));
     }, { holder: "spawn admission", caller: "spawn" });
     if (!begun) {
