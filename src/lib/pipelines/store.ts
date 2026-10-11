@@ -764,7 +764,8 @@ function isPipelineMerge(value: unknown): boolean {
   return MERGE_STATES.has(String(merge.state))
     && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
     && typeof merge.repository === "string" && merge.repository.length > 0
-    && Number.isSafeInteger(merge.prNumber) && (merge.prNumber as number) > 0
+    && ((Number.isSafeInteger(merge.prNumber) && (merge.prNumber as number) > 0)
+      || (merge.prNumber === null && merge.by === null && ["queued", "blocked", "cancelled"].includes(String(merge.state))))
     && typeof merge.policyChangedAt === "string"
     && typeof merge.reviewedHead === "string"
     && isStringList(merge.chain)

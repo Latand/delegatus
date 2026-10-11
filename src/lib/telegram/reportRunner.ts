@@ -72,9 +72,8 @@ import { readTelegramConnection, type StoredTelegramConnection } from "./session
  * reads" is a property of the code rather than an instruction an agent is
  * trusted to follow — and the recorded identity never has to enter a prompt.
  *
- * Only `ok` and `quiet` advance the window cursor, and a failed run records the
- * boundary it did not reach, so the day it missed is covered by the next run's
- * window (capped at 72 h) instead of being lost.
+ * Only `ok` and `quiet` advance the window cursor. A failed run retains both
+ * bounds, so a retry covers that same period before reading later activity.
  *
  * Nothing here logs a value. {@link ReportRunnerPorts.log} takes a code from a
  * closed vocabulary and nothing else: the errors this module catches come from
@@ -479,6 +478,22 @@ export class TelegramReportRunner {
         this.settle(runId, "failed", "connector_unavailable", false, { requeue: readiness.reason === "unavailable" });
         return;
       }
+      /* Readiness can start the feed after beginRun's provisional end. Finalize
+         a fresh window now, before reads can fail and freeze its bounds. Owed
+         windows and already-planned deferred admissions keep both bounds. */
+      if (!file.cursor.unreportedUntilAt && !active.admissionDeferred) {
+        const readyWindow = reportWindowFor(this.ports.now(), file.cursor);
+        let current = false;
+        updateTelegramReports((state) => {
+          if (state.active?.runId !== runId) return;
+          state.active.windowStart = readyWindow.startAt;
+          state.active.windowEnd = readyWindow.endAt;
+          current = true;
+        });
+        if (!current) return;
+        window.startAt = readyWindow.startAt;
+        window.endAt = readyWindow.endAt;
+      }
       /* A mismatch is the issue's `account-mismatch` outcome: no report, no
          window advance, and — because this runs before the source pass — no
          read of the wrong account's dialogs either. */
@@ -502,6 +517,16 @@ export class TelegramReportRunner {
           groups: file.settings.groups,
           promptVersion: DAILY_REPORT_PROMPT_VERSION,
         });
+        let current = false;
+        updateTelegramReports((state) => {
+          if (state.active?.runId !== runId) return;
+          state.active.windowStart = plan.windowStart;
+          state.active.windowEnd = plan.windowEnd;
+          current = true;
+        });
+        if (!current) return;
+        window.startAt = plan.windowStart;
+        window.endAt = plan.windowEnd;
         sourcesPath = writeReportSources(runId, plan);
       } catch {
         this.ports.log("sources_failed");
@@ -704,26 +729,26 @@ export class TelegramReportRunner {
         hasReport,
         promptVersion: active.promptVersion,
       }, ...state.history];
-      /* Only a run that actually covered the window moves the cursor. Every
-         other outcome records the boundary this run did NOT reach, so the next
-         run starts there instead of 24 h before itself. The earliest such
-         boundary wins; the 72 h cap is applied when the window is built. */
+      /* Failures pin both bounds; a retry must not accumulate more work. */
       if (status !== "ok" && status !== "quiet") {
         const owed = state.cursor.unreportedSinceAt;
         if (!owed || Date.parse(active.windowStart) < Date.parse(owed)) {
           state.cursor.unreportedSinceAt = active.windowStart;
+          state.cursor.unreportedUntilAt = active.windowEnd;
         }
+        state.cursor.unreportedUntilAt ??= active.windowEnd;
         return;
       }
       state.cursor.lastSuccessfulWindowEndAt = active.windowEnd;
       state.cursor.unreportedSinceAt = null;
-      /* A successful run satisfies the day's slot whoever asked for it: a
-         Run now at 10:05 must not be followed by the 10:00 scheduled run
-         reporting the five minutes since. A run BEFORE the slot leaves the
-         day unstamped, so the scheduled report still arrives on time. */
+      state.cursor.unreportedUntilAt = null;
+      /* A retry covering an older window leaves today's slot owed. A run
+         whose window reached today's slot satisfies it whoever asked for it. */
       const today = localDayKey(this.ports.now(), REPORT_TIME_ZONE);
-      if (this.ports.now() >= slotInstant(today, state.settings.time, REPORT_TIME_ZONE)) {
+      if (Date.parse(active.windowEnd) >= slotInstant(today, state.settings.time, REPORT_TIME_ZONE)) {
         state.cursor.lastScheduledDay = today;
+      } else if (state.cursor.lastScheduledDay === today) {
+        state.cursor.lastScheduledDay = null;
       }
     });
     /* The source plan and the inbox belong to the run, not to its history. */
@@ -738,8 +763,7 @@ export class TelegramReportRunner {
    * its day stamped by `tick`, so without recording the boundary here the day
    * it was meant to cover would simply be gone and the next successful run
    * would start 24 h before ITSELF. Same rule as {@link settle}: the earliest
-   * unreported boundary wins, and the 72 h cap is applied when the window is
-   * built.
+   * unreported window wins, including its end, so retries stay bounded.
    */
   private recordFailure(
     trigger: TelegramReportTrigger,
@@ -768,7 +792,9 @@ export class TelegramReportRunner {
       const owed = state.cursor.unreportedSinceAt;
       if (!owed || Date.parse(window.startAt) < Date.parse(owed)) {
         state.cursor.unreportedSinceAt = window.startAt;
+        state.cursor.unreportedUntilAt = window.endAt;
       }
+      state.cursor.unreportedUntilAt ??= window.endAt;
     });
     return { ok: false, code };
   }

@@ -2415,28 +2415,51 @@ export async function handOverHostForDemotion(
   key: SessionKey,
   current: HostState,
   options: DemotionInterruptionOptions,
+  readState: () => Promise<HostState>,
 ): Promise<boolean> {
-  if (current.pid === null || current.processStartIdentity === null) return false;
-  const inFlight = current.status === "active" || current.status === "attention";
+  if (current.pid == null || current.processStartIdentity == null) return false;
+  const owner = captureProcessIdentity(current.pid, undefined, current.processStartIdentity);
   let marked = false;
-  /* An idle host's cut is decided again when its evidence moved between the
-     decision and the record: work that ended in that window is owed nothing. */
-  for (let attempt = 0; attempt < RELEASE_TAIL_READS; attempt += 1) {
-    const idle = !inFlight && current.status === "idle" ? await idleHostCut(registry, key) : NO_IDLE_HOST_CUT;
-    if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return marked;
-    if (!marked && !registry.markStructuredHostHandoff(
-      key,
-      captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
-    )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+  const markHandoff = () => {
+    if (marked) return;
+    if (!registry.markStructuredHostHandoff(key, owner)) {
+      throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+    }
     marked = true;
+  };
+  /* A completion can arrive during the transcript or seat reads for any
+     host. Re-read its health when that evidence moves before recording. */
+  for (let attempt = 0; attempt < RELEASE_TAIL_READS; attempt += 1) {
+    const conversation = Object.values(registry.readOnlySnapshot().conversations).find((candidate) =>
+      candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
+    const transcriptPath = conversation?.generations.at(-1)?.path;
+    const before = transcriptPath ? idleHostEvidenceIdentity(key.sessionId, transcriptPath) : null;
+    const evidenceStands = () => !transcriptPath || idleHostEvidenceIdentity(key.sessionId, transcriptPath) === before;
+    const latest = await readState();
+    if (latest.pid !== owner.pid || latest.processStartIdentity !== owner.startIdentity) {
+      throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+    }
+    current = latest;
+    if (!evidenceStands()) continue;
+    const inFlight = current.status === "active" || current.status === "attention";
+    const idle = !inFlight && current.status === "idle" ? await idleHostCut(registry, key) : NO_IDLE_HOST_CUT;
+    if (!evidenceStands() || !idle.evidenceStands()) continue;
+    if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return marked;
     if (await recordDemotionInterruption(
-      registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork, idle.evidenceStands,
-    )) return true;
+      registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork,
+      () => {
+        if (!evidenceStands() || !idle.evidenceStands()) return false;
+        /* The handoff itself can authorize Codex continuation. Publish it
+           only after the awaited reads still prove this cut. */
+        markHandoff();
+        return true;
+      },
+    )) {
+      markHandoff();
+      return true;
+    }
   }
-  controllerDiagnosticError("[viewer release] an idle host's evidence kept moving before its cut was recorded; recording nothing for it", {
-    hostKey: sessionKeyId(key),
-  });
-  return marked;
+  throw new Error(`structured host ${sessionKeyId(key)} evidence kept moving before Viewer demotion`);
 }
 
 /** Releases every engine host owned by this Viewer before release demotion.
@@ -2470,7 +2493,7 @@ export async function releaseStructuredDeliveryHostsForDemotion(
     const registry = unpublishedLaunchHosts.get(sessionKeyId(key))?.registry ?? state.activeRegistry;
     try {
       const current = await host.health();
-      if (registry) await handOverHostForDemotion(registry, key, current, options);
+      if (registry) await handOverHostForDemotion(registry, key, current, options, () => host.health());
       else if ((current.status === "active" || current.status === "attention")
         && current.pid !== null && current.processStartIdentity !== null) {
         throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);

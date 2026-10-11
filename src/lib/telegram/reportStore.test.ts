@@ -57,6 +57,7 @@ test("settings, cursor and history survive a restart, and the file is owner-only
     state.settings = { enabled: true, time: "09:30", groups: [{ id: "-1001", title: "Team room", mode: "light" }] };
     state.cursor.lastSuccessfulWindowEndAt = "2026-08-21T07:00:00.000Z";
     state.cursor.unreportedSinceAt = "2026-08-20T07:00:00.000Z";
+    state.cursor.unreportedUntilAt = "2026-08-21T07:00:00.000Z";
     state.history = [row("report-fixture-0001")];
   });
   /* A fresh read is what a restarted Viewer does. */
@@ -65,10 +66,23 @@ test("settings, cursor and history survive a restart, and the file is owner-only
   expect(reread.settings.groups).toEqual([{ id: "-1001", title: "Team room", mode: "light" }]);
   expect(reread.cursor.lastSuccessfulWindowEndAt).toBe("2026-08-21T07:00:00.000Z");
   expect(reread.cursor.unreportedSinceAt).toBe("2026-08-20T07:00:00.000Z");
+  expect(reread.cursor.unreportedUntilAt).toBe("2026-08-21T07:00:00.000Z");
   expect(reread.history.map((item) => item.id)).toEqual(["report-fixture-0001"]);
 
   const stat = fs.statSync(path.join(SANDBOX, "state", "telegram", "reports.json"));
   expect(stat.mode & 0o077).toBe(0);
+});
+
+test("a legacy failed cursor recovers its fixed end from the earliest matching failure", () => {
+  updateTelegramReports((state) => {
+    state.cursor.unreportedSinceAt = "2026-08-20T07:00:00.000Z";
+    delete state.cursor.unreportedUntilAt;
+    state.history = [
+      row("report-fixture-later", { status: "failed", windowEnd: "2026-08-22T07:00:00.000Z" }),
+      row("report-fixture-first", { status: "failed" }),
+    ];
+  });
+  expect(readTelegramReports().cursor.unreportedUntilAt).toBe("2026-08-21T07:00:00.000Z");
 });
 
 test("a report body is stored owner-only and read back by id", () => {

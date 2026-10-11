@@ -289,6 +289,7 @@ function harness(options: {
             pageSeatChildren: registry.pageSeatChildren.bind(registry),
             seatTickConversation: registry.seatTickConversation.bind(registry),
             seatMcpReceipt: registry.seatMcpReceipt.bind(registry),
+            conversationDeliverySnapshot: registry.conversationDeliverySnapshot.bind(registry),
             conversation: (id: string) => registry.conversation(id as never),
             conversationForPath: (artifactPath: string) => registry.conversationForPath(artifactPath),
             readOnlySnapshot: () => { result.snapshots += 1; return registry.readOnlySnapshot(); },
@@ -669,6 +670,28 @@ test("a wake is delivered by durable conversation id, with an idempotent client 
   expect(rig.written.at(-1)!.lastWakeAt).toBe(new Date(NOW).toISOString());
 });
 
+test("a completed dead seat receives its deploy-settled wake in one tick and never twice", async () => {
+  let revived = false;
+  const rig = harness({
+    seatActivity: { conversationId: CONVERSATION, lifecycle: "gone", reason: "host_gone_turn_settled", host: { state: "gone", kind: "structured", pid: null } },
+    seatDeployments: [{ conversationId: CONVERSATION, deploymentId: "settled-deploy" }],
+    deployments: { "settled-deploy": { phase: "succeeded", terminal: true, revision: "abcdef1234" } },
+    deliverWith: async message => {
+      expect(rig.deps.readState!(PROJECT).outstandingWake?.clientMessageId).toBe(message.clientMessageId ?? undefined);
+      revived = true;
+      return { ok: true, target: null, spawned: true, structured: true, outcome: "delivered" };
+    },
+  });
+  rig.deps.mcpHealth = () => revived ? { status: "healthy", detail: "fresh MCP is live" }
+    : { status: "dead", detail: "old MCP has no heartbeat" };
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record?.reasons).toContain("deploy-settled");
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["settled-deploy"]);
+  await runSeatTickCheck(PROJECT, { ...rig.deps });
+  expect(rig.sent).toHaveLength(1);
+});
+
 test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick wakes", async () => {
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
   const record = await runSeatTickCheck(PROJECT, {
@@ -681,6 +704,299 @@ test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick 
     kind: "mcp-unavailable", ref: "seat-viewer-mcp-unavailable", state: "open", instance: "7",
   }) });
   expect(rig.written.at(-1)?.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+});
+
+test.each([
+  "cleared", "retained dead claim", "retained during MCP grace", "terminal failure", "unsettled failure",
+  "composer after cleanup", "composer during MCP grace", "rotation after cleanup",
+] as const)("a deploy-settled wake runs shared composer recovery with %s", async scenario => {
+  const { recoverDeadStructuredConversation } = await import("@/lib/runtime/structuredRecovery");
+  const f = childFixture("composer-deploy-recovery", false, "off");
+  setAgentRegistryForTests(f.registry);
+  fs.writeFileSync(f.seat.path!, "");
+  const key = sessionKeyFromTranscript("claude", f.seat.path!)!;
+  const entry = { key, artifactPath: f.seat.path!, cwd: f.cwd, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "Completed orchestrator" }), status: "dead" as const, host: null,
+    structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null };
+  const old = f.registry.beginSpawnRequest({ engine: "claude", cwd: f.cwd, transport: "structured",
+    conversationId: f.seat.conversationId as never, expectedArtifactPath: f.seat.path!, launchProfile: entry.launchProfile,
+    spawnCapabilityDigest: "a".repeat(64) });
+  f.registry.completeSpawn(old.receipt.launchId, entry);
+  f.registry.setReceiptViewerMcpTransport(old.receipt.launchId, "stdio");
+  const composerRace = scenario === "composer after cleanup" || scenario === "composer during MCP grace";
+  const mcpGrace = scenario === "retained during MCP grace" || scenario === "composer during MCP grace";
+  const retainedClaim = scenario === "retained dead claim" || mcpGrace || composerRace || scenario === "rotation after cleanup";
+  if (retainedClaim) f.registry.upsert({ ...entry, status: "idle", claimOwner: "structured-host:predecessor",
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:predecessor", process: { pid: 2_000_000_000, startIdentity: "gone" },
+      eventCursor: 0, protocolVersion: "v1", writerClaimEpoch: entry.claimEpoch, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const oldDigest = f.registry.seatMcpReceipt(f.seat.conversationId)!.spawnCapabilityDigest;
+  f.seed();
+  let spawns = 0;
+  const deliveredKeys: string[] = [];
+  const rig = childRig(f, { seatDeployments: [{ conversationId: f.seat.conversationId, deploymentId: "composer-deploy" }],
+    deployments: { "composer-deploy": { phase: "succeeded", terminal: true, revision: "abcdef1234" } },
+    seatActivity: { conversationId: f.seat.conversationId, host: { state: "gone", kind: "structured", pid: null }, lifecycle: "gone", reason: "host_gone_turn_settled" },
+    deliverWith: message => deliverConversationMessage(message, {
+      recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: {} as RuntimeHostClient,
+        transport: () => "structured", park: () => null,
+        resolveAccount: () => {
+          if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
+          if (scenario === "rotation after cleanup") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+          return { engine: "claude", accountId: "default", kind: "legacy", home: f.dir, transcriptRoot: f.dir, env: { NODE_ENV: "test" } };
+        },
+        spawn: async input => {
+          expect(f.row().outstandingWake?.clientMessageId).toBe(message.clientMessageId ?? undefined);
+          spawns += 1;
+          if (scenario === "terminal failure" || scenario === "unsettled failure") {
+            if (scenario === "terminal failure") f.registry.failSpawn(input.receipt.launchId, "No conversation found with session ID");
+            throw new Error("No conversation found with session ID");
+          }
+          f.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
+          f.registry.setReceiptViewerMcpTransport(input.receipt.launchId, "stdio");
+          f.registry.completeSpawn(input.receipt.launchId, entry);
+          return { ok: true, target: null, path: f.seat.path!, launchId: input.receipt.launchId,
+            conversationId: f.seat.conversationId as never, launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+        }, requestDeliveryDrain: () => {},
+      }),
+      enqueueStructured: async request => {
+        request.admissionGuard?.();
+        expect(request.clientMessageId).toBe(message.clientMessageId);
+        deliveredKeys.push(request.clientMessageId!);
+        const held = f.registry.holdDelivery(f.seat.conversationId as never, request.text, request.clientMessageId!);
+        f.registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+        return { ok: true, structured: true, target: f.seat.conversationId, outcome: "delivered", operationId: held.command.operationId,
+          receipt: { operationId: held.command.operationId, idempotencyKey: request.clientMessageId!,
+            conversationId: f.seat.conversationId, kind: "send", status: "delivered", at: held.createdAt, revision: 1 } };
+      },
+    }),
+  });
+  rig.deps.sources!.seatDeployments = () => [{ conversationId: f.seat.conversationId, deploymentId: "composer-deploy",
+    project: f.project, revision: "abcdef1234", requestedAt: ago(f, 10) }];
+  rig.deps.sources!.deployment = () => ({ state: "ok", value: { deploymentId: "composer-deploy", phase: "succeeded",
+    terminal: true, revision: "abcdef1234", error: null, updatedAt: ago(f, 2) } }) as never;
+  rig.deps.mcpHealth = () => f.registry.seatMcpReceipt(f.seat.conversationId)?.spawnCapabilityDigest === oldDigest
+    ? { status: mcpGrace ? "untracked" : "dead", detail: "predecessor MCP absent" }
+    : { status: "untracked", detail: "fresh stdio MCP starting" };
+  let rotations = 0;
+  rig.deps.seatRecovery = { rotate: async body => {
+    expect(body.expectedIncumbentSeatEpoch).toBe(f.seat.seatEpoch);
+    rotations += 1;
+    return { status: 503, body: { error: "replacement unavailable" } };
+  } };
+  if (retainedClaim) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process?.pid).toBe(2_000_000_000);
+  if (composerRace || scenario === "rotation after cleanup") {
+    await runSeatTickCheck(f.project, rig.deps);
+    expect(spawns).toBe(0);
+    expect(rotations).toBe(0);
+    expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(1);
+    expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
+    return;
+  }
+  if (scenario === "terminal failure" || scenario === "unsettled failure") {
+    await runSeatTickCheck(f.project, rig.deps);
+    const owed = f.row().outstandingWake?.clientMessageId;
+    expect(spawns).toBe(1);
+    expect(rotations).toBe(scenario === "terminal failure" ? 1 : 0);
+    expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
+    expect(owed).toBeTruthy();
+    if (scenario === "terminal failure") {
+      expect(f.row().hostRecovery?.state).toBe("failed");
+      expect(rig.cards.filter(({ card }) => card.ref === "seat-host-recovery" && card.state === "open")).toHaveLength(1);
+      await runSeatTickCheck(f.project, rig.deps);
+      expect(rotations).toBe(1);
+      expect(f.row().outstandingWake?.clientMessageId).toBe(owed);
+    } else expect(f.row().hostRecovery).toBeFalsy();
+    return;
+  }
+  expect((await runSeatTickCheck(f.project, rig.deps))?.delivery?.outcome).toBe("delivered");
+  expect(spawns).toBe(1);
+  expect(f.registry.seatMcpReceipt(f.seat.conversationId)?.spawnCapabilityDigest).not.toBe(oldDigest);
+  expect(f.registry.seatMcpReceipt(f.seat.conversationId)?.viewerMcpTransport).toBe("stdio");
+  expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "resolved")).toBe(false);
+  expect(f.row().announcedDeploys).toEqual(["composer-deploy"]);
+  await runSeatTickCheck(f.project, rig.deps);
+  expect(spawns).toBe(1);
+  expect(rotations).toBe(0);
+  expect(deliveredKeys).toHaveLength(1);
+});
+
+test.each(["rotated", "failed"] as const)("a definitively failed dead-seat revival rotates once and leaves a durable %s notice", async state => {
+  let failedFreshReceipt = false;
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    seatActivity: { conversationId: CONVERSATION, lifecycle: "gone", reason: "host_gone_turn_settled", host: { state: "gone", kind: "structured", pid: null } },
+    deliverWith: async () => { failedFreshReceipt = true; return { ok: false, outcome: "failed", status: 503, error: "resume failed to publish", code: "structured_revival_impossible" }; },
+  });
+  rig.deps.mcpHealth = () => failedFreshReceipt ? { status: "untracked", detail: "failed successor is still inside MCP startup grace" }
+    : { status: "dead", detail: "old MCP has no heartbeat" };
+  const rotations: Record<string, unknown>[] = [];
+  rig.deps.seatRecovery = { rotate: async body => {
+    rotations.push(body);
+    expect(body.expectedIncumbentSeatEpoch).toBe(7);
+    if (state === "rotated") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+    return state === "rotated" ? { status: 200, body: { ok: true } }
+      : { status: 503, body: { ok: false, error: "replacement unavailable" } };
+  } };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  await runSeatTickCheck(PROJECT, { ...rig.deps });
+  expect(rotations).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).hostRecovery?.state).toBe(state);
+  expect(rig.cards.filter(({ card }) => card.ref === "seat-host-recovery" && card.state === "open")).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).lastWakeAt).toBe(OVERDUE.lastWakeAt);
+});
+
+test("a failed revival notice stays owed across controller restart until the board accepts it", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    seatActivity: { conversationId: CONVERSATION, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled" },
+    delivery: { ok: false, outcome: "failed", status: 503, error: "resume did not publish", code: "structured_revival_impossible" },
+  });
+  let boardReady = false;
+  let notices = 0;
+  let rotations = 0;
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "old MCP absent" });
+  rig.deps.ensureCard = (_project, card) => {
+    if (card.kind !== "host-recovery") return true;
+    if (!boardReady) return false;
+    notices += 1;
+    return true;
+  };
+  rig.deps.seatRecovery = { rotate: async () => { rotations += 1; return { status: 503, body: { error: "replacement unavailable" } }; } };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.deps.readState!(PROJECT).hostRecovery?.told).toBe(false);
+  boardReady = true;
+  await runSeatTickCheck(PROJECT, { ...rig.deps });
+  await runSeatTickCheck(PROJECT, { ...rig.deps });
+  expect(rig.deps.readState!(PROJECT).hostRecovery?.told).toBe(true);
+  expect(notices).toBe(1);
+  expect(rotations).toBe(1);
+});
+
+test.each([false, true])("a pending recovery after restart updates one production card before recording the failure as told (closed: %s)", async closed => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "recovery-board-"));
+  try {
+    const { loadTasks, mutateTasksFile } = await import("@/lib/tasks/store");
+    const { patchTask } = await import("@/lib/tasks/commands");
+    const { seatHostRecoveryKey } = await import("./seatHostRecovery");
+    const stateFile = statePath("seat-tick.json");
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, accounting: undefined,
+      hostRecovery: { id: seatHostRecoveryKey(PROJECT, 7, CONVERSATION), conversationId: CONVERSATION,
+        seatEpoch: 7, at: new Date(NOW - MINUTE).toISOString(), state: "pending", detail: "resume did not publish", told: false },
+    }, stateFile);
+    const cards = () => loadTasks(statePath("tasks.json")).filter(task =>
+      task.project === PROJECT && task.text.startsWith("Відновлення оркестратора"));
+    let rotations = 0;
+    let pendingCards: ReturnType<typeof cards> = [];
+    const toldCards: ReturnType<typeof cards>[] = [];
+    const check = async () => {
+      const rig = harness({ pipelines: OPEN_LANE, stateFile,
+        seatActivity: { conversationId: CONVERSATION, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled" },
+        delivery: { ok: false, outcome: "failed", status: 503, error: "resume did not publish", code: "structured_revival_impossible" },
+      });
+      const writeState = rig.deps.writeState!;
+      await runSeatTickCheck(PROJECT, { ...rig.deps, ensureCard: undefined,
+        mcpHealth: () => ({ status: "dead", detail: "old MCP absent" }),
+        writeState: (project, row) => {
+          if (row.hostRecovery?.state === "failed" && row.hostRecovery.told) toldCards.push(cards());
+          writeState(project, row);
+        },
+        seatRecovery: { rotate: async () => {
+          rotations += 1;
+          pendingCards = cards();
+          if (closed) {
+            mutateTasksFile(state => {
+              const done = patchTask(state.tasks, pendingCards[0]!.id, { status: "done" });
+              if (!done.ok) throw new Error(done.error);
+              return { state: { ...state, tasks: done.tasks }, result: undefined };
+            }, statePath("tasks.json"));
+            expect(cards()[0]!.status).toBe("done");
+          }
+          return { status: 503, body: { error: "replacement unavailable" } };
+        } },
+      });
+    };
+    await check();
+    expect(pendingCards).toHaveLength(1);
+    expect(pendingCards[0]!.text).toContain("Ротацію розпочато");
+    const terminal = cards();
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]!.id).toBe(pendingCards[0]!.id);
+    expect(terminal[0]!.status).toBe("inbox");
+    expect(terminal[0]!.text).toContain("Відновлення та ротація не вдалися");
+    expect(terminal[0]!.details).toContain(`${new Date(NOW).toISOString()}: failed; replacement unavailable`);
+    expect(terminal[0]!.details).toContain("monitor-ref: seat-host-recovery-");
+    expect(toldCards.length).toBeGreaterThan(0);
+    for (const snapshot of toldCards) expect(snapshot).toEqual(terminal);
+    expect(readSeatTickState(PROJECT, stateFile).hostRecovery).toMatchObject({ state: "failed", told: true });
+    await check();
+    expect(rotations).toBe(1);
+    expect(cards()).toEqual(terminal);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("a composer host appearing during fallback fences rotation even with healthy MCP", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    seatActivity: { conversationId: CONVERSATION, lifecycle: "gone", reason: "host_gone_turn_settled", host: { state: "gone", kind: "structured", pid: null } },
+    delivery: { ok: false, outcome: "failed", status: 503, error: "resume did not publish", code: "structured_revival_impossible" },
+  });
+  let composerLive = false;
+  const registry = rig.deps.sources!.registry();
+  registry.seatMcpReceipt = () => ({ spawnCapabilityDigest: (composerLive ? "b" : "a").repeat(64),
+    createdAt: new Date(NOW - 30 * MINUTE).toISOString(), viewerMcpTransport: "stdio" });
+  rig.deps.sources!.registry = () => registry;
+  rig.deps.mcpHealth = () => ({ status: composerLive ? "healthy" : "dead", detail: "fixture MCP" });
+  let rotations = 0;
+  rig.deps.seatRecovery = { rotate: async (_body, _dependencies, _triggeredBy, admission) => {
+    rotations += 1;
+    composerLive = true;
+    const hold = await admission!.replacementHold!();
+    expect(hold?.status).toBe(409);
+    return hold!;
+  } };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rotations).toBe(1);
+  expect(rig.deps.readState!(PROJECT).hostRecovery?.state).toBe("superseded");
+});
+
+test.each(["live", "unknown"] as const)("a %s host with broken MCP refuses even a newly confirmed lane stall", async hostState => {
+  const rig = harness({ pipelines: [{ ...OPEN_LANE[0]!, state: "running", attemptState: "running", attemptConversationId: "stalled-stage" }], state: OVERDUE });
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "broken MCP" });
+  rig.deps.sources!.liveness = async request => [{ conversationId: request.conversationId ?? "stalled-stage",
+    host: { state: hostState === "live" ? "alive" : "unknown", kind: "structured", pid: null },
+    pipeline: request.conversationId ? null : { pipelineId: OPEN_LANE[0]!.id, stageId: "build", attempt: 1 },
+    lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "busy" } as AgentLivenessRecord];
+  await runSeatTickCheck(PROJECT, rig.deps);
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toEqual([]);
+});
+
+test("a composer replacement during dead-host evidence refuses recovery into its broken MCP", async () => {
+  let receipt = { spawnCapabilityDigest: "a".repeat(64), createdAt: new Date(NOW - 30 * MINUTE).toISOString(), viewerMcpTransport: "stdio" as const };
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const registry = rig.deps.sources!.registry();
+  registry.seatMcpReceipt = () => receipt;
+  rig.deps.sources!.registry = () => registry;
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "MCP broken" });
+  rig.deps.sources!.liveness = async request => {
+    if (request.conversationId !== CONVERSATION) return [];
+    receipt = { ...receipt, spawnCapabilityDigest: "b".repeat(64) };
+    return [{ conversationId: CONVERSATION, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled" } as AgentLivenessRecord];
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toEqual([]);
+});
+
+test("a rotation during dead-host evidence starts no predecessor recovery", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "old MCP absent" });
+  rig.deps.sources!.liveness = async () => {
+    rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+    return [{ conversationId: CONVERSATION, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled" } as AgentLivenessRecord];
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toEqual([]);
 });
 
 test("persisted MCP cards survive repeated outages and equal-epoch projects", async () => {
@@ -785,9 +1101,14 @@ test("seat MCP health follows its recorded launch transport across server flag c
     ] as const) {
       const fixture = childFixture(`mcp-transport-${selected}-${current}-${crypto.randomUUID()}`);
       const digest = createHash("sha256").update(crypto.randomUUID()).digest("hex");
+      // This is an old launch; fresh receipts intentionally get startup grace.
+      globalThis.Date = new Proxy(WALL_DATE, {
+        construct(target, args) { return Reflect.construct(target, args.length ? args : [fixture.now - 30 * MINUTE]); },
+      });
       const begun = fixture.registry.beginSpawnRequest({ engine: "claude", cwd: fixture.cwd,
         conversationId: fixture.seat.conversationId as never, spawnCapabilityDigest: digest,
         launchProfile: { title: "Seat transport" } });
+      globalThis.Date = WALL_DATE;
       const launched = requestedHttp
         ? viewerMcpTransportForLaunch({ LLV_SPAWN_CAPABILITY: "c".repeat(43) }, {
             LLV_MCP_TRANSPORT: "http", LLV_TOKEN: "test-key", LLV_MCP_HTTP_URL: "http://127.0.0.1:41234/api/mcp",
@@ -4321,6 +4642,48 @@ test("dead Viewer MCP withholds a recordless refusal retry under its original ke
   expect(fixture.row().outstandingWake).toBeNull();
 });
 
+test("a dead-host original-key retry recovers without changing its wake or acknowledging early", async () => {
+  const fixture = childFixture("dead-host-same-key");
+  setAgentRegistryForTests(fixture.registry);
+  const child = fixture.spawn({ title: "owed worker", turn: "terminal" });
+  fixture.seed();
+  await runSeatTickCheck(fixture.project, childRig(fixture, { realWakeState: true, deliverWith: refuseBeforeReservation(503) }).deps);
+  const pending = fixture.row().outstandingWake!;
+  const recovered = childRig(fixture, { realWakeState: true, now: fixture.now + 5 * MINUTE,
+    seatActivity: { conversationId: fixture.seat.conversationId, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled", lifecycle: "gone" },
+    deliverWith: async message => {
+      expect(fixture.acknowledged()).toEqual([]);
+      expect(message.clientMessageId).toBe(pending.clientMessageId);
+      return { ok: true, target: null, outcome: "delivered", structured: true, spawned: true };
+    },
+  });
+  recovered.deps.mcpHealth = () => ({ status: "dead", detail: "old MCP absent" });
+  await runSeatTickCheck(fixture.project, recovered.deps);
+  expect(recovered.sent).toHaveLength(1);
+  expect(recovered.sent[0]!.text).toBe(pending.text!);
+  expect(fixture.acknowledged()).toEqual([child.id]);
+  expect(fixture.row().outstandingWake).toBeNull();
+  expect(fixture.row().hostRecovery?.state).toBe("revived");
+});
+
+test.each(["retained", "uncertain", "unknown", "unreadable"] as const)("a failed revival with a %s operation never rotates or loses its key", async wakeState => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    wakeState: wakeState === "unreadable" ? "unknown" : wakeState, holderThrows: wakeState === "unreadable",
+    seatActivity: { conversationId: CONVERSATION, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled", lifecycle: "gone" },
+    delivery: { ok: false, outcome: "failed", status: 503, error: "resume failed", code: "structured_revival_impossible", operationId: "original-operation" },
+  });
+  let rotations = 0;
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "old MCP absent" });
+  rig.deps.seatRecovery = { rotate: async () => { rotations += 1; return { status: 200, body: { ok: true } }; } };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const pending = rig.deps.readState!(PROJECT).outstandingWake!;
+  expect(pending.operationId).toBe("original-operation");
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rotations).toBe(0);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).outstandingWake?.clientMessageId).toBe(pending.clientMessageId);
+});
+
 test("a drain retains an unaccepted wake's original key until its retry is admitted", async () => {
   const fixture = childFixture("drain-refused-retry");
   setAgentRegistryForTests(fixture.registry);
@@ -7237,11 +7600,15 @@ test("restart wakes a confirmed lane stall despite a missing MCP heartbeat, once
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-stall-")), "seat-tick.json");
   const options = { pipelines: [{ id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", attemptConversationId: "stage-conversation", src: CONVERSATION }], state: OVERDUE, stateFile };
   const before = harness(options);
-  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: "restart-lane", stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  let seatGone = false;
+  const liveness: NonNullable<SeatTickControllerDependencies["sources"]>["liveness"] = async request => request.conversationId === CONVERSATION
+    ? seatGone ? [{ conversationId: CONVERSATION, host: { state: "gone", kind: "structured", pid: null }, lifecycle: "gone", reason: "host_gone_turn_settled", turnState: "idle" } as AgentLivenessRecord] : []
+    : [{ conversationId: "stage-conversation", pipeline: { pipelineId: "restart-lane", stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "busy" } as AgentLivenessRecord];
   before.deps.sources!.liveness = liveness;
   before.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
   await runSeatTickCheck(PROJECT, before.deps);
   expect(before.sent).toHaveLength(0);
+  seatGone = true;
   // A new controller reads the first observation from the isolated disk store.
   const restarted = harness({ ...options, state: undefined });
   restarted.deps.sources!.liveness = liveness;
@@ -7273,7 +7640,9 @@ test("a second interruption parking an announced running stall wakes its seat de
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-park-wake-")), "seat-tick.json");
   const lane = { id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", attemptConversationId: "stage-conversation", src: CONVERSATION };
   const first = harness({ pipelines: [lane], state: OVERDUE, stateFile });
-  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: lane.id, stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  const liveness: NonNullable<SeatTickControllerDependencies["sources"]>["liveness"] = async request => request.conversationId === CONVERSATION
+    ? [{ conversationId: CONVERSATION, host: { state: "gone", kind: "structured", pid: null }, lifecycle: "gone", reason: "host_gone_turn_settled", turnState: "idle" } as AgentLivenessRecord]
+    : [{ conversationId: "stage-conversation", pipeline: { pipelineId: lane.id, stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "busy" } as AgentLivenessRecord];
   first.deps.sources!.liveness = liveness;
   first.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
   await runSeatTickCheck(PROJECT, first.deps);

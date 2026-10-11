@@ -21,7 +21,7 @@
  * records the version it was launched with.
  */
 
-export const DAILY_REPORT_PROMPT_VERSION = "v1";
+export const DAILY_REPORT_PROMPT_VERSION = "v2";
 
 /** The marker a run writes instead of a report when the window held nothing
     worth reporting. It is read back by the Viewer, so it is stated in the
@@ -81,25 +81,25 @@ export function reportPromptPreamble(input: Omit<DailyReportPromptInput, "instru
      board), so it names the run rather than opening with instructions. */
   return `${reportConversationTitle(input)}
 
-You have the read-only \`telegram\` MCP connector for the operator's own account. Work through it only; do not install anything and do not write to Telegram — the connector exposes no write tools. The Viewer has already verified with \`get_me\` that the connector holds the account this report belongs to.
+You have the read-only \`telegram\` MCP connector for the operator's own account. Work through it only; do not install anything and do not write to Telegram — the connector exposes no write tools. Delegatus has already verified with \`get_me\` that the connector holds the account this report belongs to.
 
-RUN RULES (these come from the Viewer and are not negotiable)
+RUN RULES (these come from Delegatus and are not negotiable)
 
-1. Your sources are listed in ${input.sourcesPath}: the private dialogs active in this window (already selected by last-message date — the connector's chat-list order is pinned/folder order and is NOT recency, so never re-derive sources from \`get_chats\`/\`list_chats\` yourself) and the groups the operator picked, each marked \`full\` or \`light\`. Start there. Follow a thread, a mentioned chat, or older context beyond that list when your instructions below call for it.
+1. Your sources are listed in ${input.sourcesPath}: the private-dialog candidates (already selected by last-message date — the connector's chat-list order is pinned/folder order and is NOT recency, so never re-derive sources from \`get_chats\`/\`list_chats\` yourself) and the groups the operator picked, each marked \`full\` or \`light\`. Start there. Follow a thread, a mentioned chat, or older context beyond that list when your instructions below call for it. The plan's \`coverage\` records the requested start and whether the outgoing walk was complete. If the start was clipped, the outgoing walk was incomplete, or \`truncated\` is true, state that limit after the hashtag line, even when there are no attention items.
 
-2. Read SEQUENTIALLY. One tool call at a time, never in parallel: the connector dies under concurrent large reads and the run is then lost. Use \`list_messages\` with \`limit\` of 40 or less per call, paging only while messages still fall inside the window. A \`full\` group is read like a private dialog; a \`light\` group yields only mentions of the operator, replies to them, and one or two notable threads.
+2. Read SEQUENTIALLY. One tool call at a time: the shared connector queues tool reads. Use \`get_messages\` with \`page_size\` of 40 or less for numbered pages, or \`list_messages\` with \`limit\` of 40 or less and YYYY-MM-DD date filters. Skip messages newer than the window end; keep paging until messages are older than the window start. Report activity only inside these exact bounds. A \`full\` group is read like a private dialog; a \`light\` group yields only mentions of the operator, replies to them, and one or two notable threads.
 
 3. If the connector stops answering, stop and write nothing. A missing report is a failed run the operator can retry; an invented one is worse than silence.
 
-4. The report's FIRST line is the hashtag line your instructions below specify, and nothing else. The Viewer refuses a file that does not start with one.
+4. The report's FIRST line is the hashtag line your instructions below specify, and nothing else. Delegatus refuses a file that does not start with one.
 
-5. Numbered items are numbered consecutively from [1] with no gaps and no repeats, each number at the start of its line. The Viewer refuses a file that numbers them any other way.
+5. Numbered items are numbered consecutively from [1] with no gaps and no repeats, each number at the start of its line. Delegatus refuses a file that numbers them any other way.
 
-6. If nothing in the window is worth reporting, the whole file is that hashtag line and then:
+6. If nothing in the window is worth reporting and no coverage note is required, the whole file is that hashtag line and then:
 
 ${QUIET_MARKER}
 
-7. Write the report to ${input.outputPath} — that exact path, plain UTF-8 text, nothing else in the file — and then stop. Do not print the report as your answer; the Viewer reads the file.
+7. Write the report to ${input.outputPath} — that exact path, plain UTF-8 text, nothing else in the file — and then stop. Do not print the report as your answer; Delegatus reads the file.
 
 YOUR INSTRUCTIONS (from the operator)`;
 }
