@@ -323,7 +323,10 @@ async function listFilesInternal(
     if (entry.path.endsWith(".jsonl") && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "openclaw" || entry.engine === "copilot")) {
       const authoritative = transcriptTurnResult(entry.path, entry.size, entry.mtime * 1000, entry.engine);
       entry.derivationComplete &&= authoritative.complete;
-      if (authoritative.complete) entry.authoritativeTurn = authoritative.turn;
+      if (authoritative.complete) {
+        entry.authoritativeTurn = authoritative.turn;
+        entry.recoveryReleased = authoritative.recoveryReleased;
+      }
     }
     const models = entryModelsResult(entry);
     entry.model = models.value.display;

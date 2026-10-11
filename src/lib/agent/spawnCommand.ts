@@ -61,7 +61,7 @@ import { listFiles } from "@/lib/scanner";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
-import { derivedSpawnTitle, durableSemanticTitle, firstPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
+import { derivedSpawnTitle, durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentWithPrompt, verifyTmuxHostEvidence } from "@/lib/tmux";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
@@ -459,7 +459,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (body.title !== undefined && !explicitTitle) {
     return NextResponse.json({ error: "title must be a semantic, non-placeholder string" }, { status: 400 });
   }
-  const derivedTitle = firstPromptLine(userPrompt, 60)
+  const derivedTitle = firstMeaningfulPromptLine(userPrompt, 60)
     ? derivedSpawnTitle(role.value?.role ?? engine, userPrompt)
     : null;
   let transport;
@@ -489,12 +489,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   const registry = registryForCaller ?? dependencies.registry();
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   const existingAttempt = clientAttemptId ? registry.spawnReceiptForClientAttempt(clientAttemptId) : null;
-  if (!explicitTitle && !existingAttempt) {
+  if (!explicitTitle && !derivedTitle && !existingAttempt) {
     return NextResponse.json({ error: SPAWN_TITLE_REQUIRED_ERROR }, { status: 400 });
   }
   const launchTitle = explicitTitle
-    ?? derivedTitle
-    ?? durableSemanticTitle(existingAttempt?.launchProfile.title, 120);
+    ?? durableSemanticTitle(existingAttempt?.launchProfile.title, 120)
+    ?? derivedTitle;
   if (!launchTitle) {
     return NextResponse.json({ error: SPAWN_TITLE_REQUIRED_ERROR }, { status: 400 });
   }

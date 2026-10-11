@@ -37,6 +37,7 @@ const { lastTurnFor } = await import("@/lib/scanner/turnDuration");
 const { pendingQuestionFor } = await import("@/lib/scanner/questions");
 const { AgentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { reconcileMigrationInventory } = await import("@/lib/accounts/migration/coordinator");
+const { oauthFailureWithRecoveryTail } = await import("@/lib/accounts/migration/fixtures/claudeRecoveryTail");
 
 afterEach(() => setFileCatalogMembershipProbeForTests(null));
 
@@ -534,7 +535,7 @@ test("persisted Claude question state hydrates without transcript reads and stay
   }
 }, 30_000);
 
-test("a persisted Claude result rebuilds recovery evidence, and every rebuilt Claude turn costs exactly one bounded read", async () => {
+test("a warm restart primes settled Claude turns without tail reads and invalidates changed identities", async () => {
   const previousTestStateDir = process.env.LLV_STATE_DIR;
   const testStateDir = path.join(sandbox, "durable-claude-result-state");
   const projectDir = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "-repo-claude-result-hydration");
@@ -603,22 +604,29 @@ test("a persisted Claude result rebuilds recovery evidence, and every rebuilt Cl
       complete: true,
       turn: { state: "terminal", source: "lifecycle" },
     });
-    expect(transcriptReads).toBe(1);
+    expect(transcriptReads).toBe(0);
     /* No `result` record behind it, so this transcript's only terminal evidence
        is the assistant record's own `end_turn` stop reason (issue #1792).
-       That makes it a terminal AUTHORITATIVE Claude turn, the one shape
-       `primeTranscriptTurnEvidence` deliberately refuses to carry across a
-       restart — a persisted snapshot cannot say whether the release hinged on
-       `recoveryReleased`, which the migration coordinator reads to re-impose
-       busy while a live host still owns the transcript. So it costs one
-       bounded tail read here, where before the fix it hydrated as busy for
-       free and wrongly. The reads are still bounded and identity-keyed: the
-       count below rises by exactly one and nothing re-reads twice. */
+       Its persisted recovery distinction permits authoritative priming. */
     expect(transcriptTurnResult(assistantPath, restartedAssistant.size, restartedAssistant.mtime * 1000, "claude")).toMatchObject({
       complete: true,
       turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-07-16T12:00:01.000Z" },
     });
-    expect(transcriptReads).toBe(2);
+    expect(transcriptReads).toBe(0);
+
+    /* Older snapshots rebuild the recovery distinction from the transcript. */
+    const snapshotPath = path.join(testStateDir, "files-scan-snapshot.json");
+    const legacy = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as { snapshot: { files: FileEntry[] } };
+    for (const entry of legacy.snapshot.files) delete entry.recoveryReleased;
+    fs.writeFileSync(snapshotPath, JSON.stringify(legacy) + "\n");
+    for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
+    resetFilesRouteCacheForTests();
+    const legacyRestart = await cachedFileScan(undefined, undefined, 0);
+    const legacyResult = legacyRestart.snapshot.files.find((entry) => entry.path === resultPath)!;
+    expect(transcriptTurnResult(resultPath, legacyResult.size, legacyResult.mtime * 1000, "claude")).toMatchObject({
+      complete: true, recoveryReleased: false, turn: { state: "terminal" },
+    });
+    expect(transcriptReads).toBe(1);
 
     fs.appendFileSync(resultPath, "\n");
     const changed = fs.statSync(resultPath);
@@ -629,7 +637,7 @@ test("a persisted Claude result rebuilds recovery evidence, and every rebuilt Cl
       complete: true,
       turn: { state: "terminal", source: "lifecycle" },
     });
-    expect(transcriptReads).toBe(4);
+    expect(transcriptReads).toBe(3);
   } finally {
     fs.openSync = originalOpen;
     fs.closeSync = originalClose;
@@ -639,6 +647,84 @@ test("a persisted Claude result rebuilds recovery evidence, and every rebuilt Cl
     resetFilesRouteCacheForTests();
     closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("a warm restart rebuilds Claude recovery evidence and migration keeps the registered host busy", async () => {
+  const previousTestStateDir = process.env.LLV_STATE_DIR;
+  const testStateDir = path.join(sandbox, "durable-claude-recovery-state");
+  const projectDir = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "-repo-recovery-hydration");
+  const transcript = path.join(projectDir, "warm-recovery.jsonl");
+  const cacheStore = globalThis as typeof globalThis & { __llvCaches?: Record<string, Map<string, unknown>> };
+  const originalOpen = fs.openSync;
+  const originalRead = fs.readSync;
+  const originalClose = fs.closeSync;
+  const tracked = new Set<number>();
+  let transcriptReads = 0;
+  let registry: InstanceType<typeof AgentRegistry> | undefined;
+  try {
+    process.env.LLV_STATE_DIR = testStateDir;
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(transcript, oauthFailureWithRecoveryTail()
+      .map((record) => JSON.stringify({ cwd: "/repo", ...record })).join("\n") + "\n");
+    resetFilesRouteCacheForTests();
+    const initial = await currentFileScan({ fresh: true });
+    expect(initial.snapshot.files.find((entry) => entry.path === transcript)).toMatchObject({
+      authoritativeTurn: { state: "terminal" }, recoveryReleased: true, derivationComplete: true,
+    });
+
+    for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
+    resetFilesRouteCacheForTests();
+    fs.openSync = ((filename: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      const fd = originalOpen(filename, flags, mode);
+      if (String(filename) === transcript) tracked.add(fd);
+      return fd;
+    }) as typeof fs.openSync;
+    fs.readSync = ((fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: fs.ReadPosition) => {
+      if (tracked.has(fd)) transcriptReads += 1;
+      return originalRead(fd, buffer, offset, length, position);
+    }) as typeof fs.readSync;
+    fs.closeSync = ((fd: number) => { tracked.delete(fd); return originalClose(fd); }) as typeof fs.closeSync;
+
+    const restarted = await cachedFileScan(undefined, undefined, 0);
+    const entry = restarted.snapshot.files.find((entry) => entry.path === transcript)!;
+    registry = new AgentRegistry(path.join(testStateDir, "migration-registry.json"));
+    const hostEntry = {
+      key: { engine: "claude" as const, sessionId: "warm-recovery" },
+      artifactPath: transcript, cwd: "/repo", accountId: "main",
+      claimEpoch: 1, claimOwner: "test-owner", pendingAction: null,
+    };
+    registry.upsert({
+      ...hostEntry, status: "live",
+      host: {
+        kind: "tmux", endpoint: path.join(testStateDir, "fixture.sock"),
+        server: { pid: 4100, startIdentity: "4100:fixture" }, paneId: "%41",
+        panePid: { pid: 4101, startIdentity: "4101:fixture" }, windowName: "fixture",
+        agent: { pid: 4102, startIdentity: "4102:fixture" }, argv: ["claude", "--resume"],
+      },
+    });
+    await reconcileMigrationInventory(registry, [entry]);
+    expect(registry.conversationForPath(transcript)?.turn.state).toBe("busy");
+    expect(transcriptReads).toBeGreaterThan(0);
+    expect(transcriptTurnResult(transcript, entry.size, entry.mtime * 1000, "claude")).toMatchObject({
+      complete: true, recoveryReleased: true, turn: { state: "terminal" },
+    });
+    const rebuiltReads = transcriptReads;
+    registry.upsert({ ...hostEntry, status: "unhosted", host: null });
+    await reconcileMigrationInventory(registry, [entry]);
+    expect(registry.conversationForPath(transcript)?.turn.state).toBe("terminal");
+    expect(transcriptReads).toBe(rebuiltReads);
+  } finally {
+    fs.openSync = originalOpen;
+    fs.readSync = originalRead;
+    fs.closeSync = originalClose;
+    registry?.close();
+    fs.rmSync(projectDir, { recursive: true, force: true });
+    process.env.LLV_STATE_DIR = previousTestStateDir;
+    resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
+    fs.rmSync(testStateDir, { recursive: true, force: true });
+    for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
   }
 }, 30_000);
 
