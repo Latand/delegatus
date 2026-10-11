@@ -645,3 +645,44 @@ for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`orp
     expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
   }
 });
+
+/* Task d7759de2: every signed-in account goes through the same remove
+   control. Main is only forgotten, its home untouched, and comes back on request. */
+test("Main is removed through DELETE with its home untouched and comes back through restore", async () => {
+  const legacy = process.env.LLV_CLAUDE_HOME!;
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, ".credentials.json"), "{}", { mode: 0o600 });
+  const work = createManagedClaudeAccount("After Main");
+  agentRegistry().setEngineRouting("claude", "default");
+
+  const response = await remove(deleteRequest({ id: "default" }));
+
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toMatchObject({ removed: { id: "default" }, hidden: { home: legacy }, moved: { archive: null } });
+  expect(listClaudeAccounts().map((account) => account.id)).toEqual([work.id]);
+  expect(fs.readFileSync(path.join(legacy, ".credentials.json"), "utf8")).toBe("{}");
+  expect(claudeProjectRoots()).toContain(path.join(legacy, "projects"));
+  expect(agentRegistry().engineRouting("claude").activeAccountId).toBe(work.id);
+
+  const restored = await POST(new NextRequest("http://127.0.0.1/api/accounts/claude", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "restore", id: "default" }),
+  }));
+  expect(restored.status).toBe(200);
+  expect(listClaudeAccounts().map((account) => account.id)).toEqual(["default", work.id]);
+});
+
+test("a live agent on Main refuses its removal and the answer names the conversation to open", async () => {
+  const begun = beginLegacySpawnFixture(agentRegistry(), { engine: "claude", cwd: "/repo", accountId: "default" });
+  if (begun.kind !== "created") throw new Error("expected a launch receipt");
+
+  const response = await remove(deleteRequest({ id: "default" }));
+
+  expect(response.status).toBe(409);
+  await expect(response.json()).resolves.toMatchObject({
+    code: "account_removal_blocked",
+    blockers: ["live_sessions"],
+    sessions: [expect.objectContaining({ conversationId: begun.receipt.conversationId })],
+    sessionCount: 1,
+  });
+  expect(listClaudeAccounts().map((account) => account.id)).toContain("default");
+});

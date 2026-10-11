@@ -35,6 +35,7 @@ let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
 let lockLauncherStartup;
 let retireTelegramConnector, retireViewerGroup, retireViewerHelpers, viewerGeneration, viewerGenerationSpawnOptions;
+let stopStartedProcesses;
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -242,7 +243,12 @@ function usage() {
 }
 
 function fail(message) {
-  if (relaunch?.hasTrial()) throw new Error(message);
+  throw new Error(message);
+}
+
+async function exitWithFailure(message) {
+  if (relaunch?.hasTrial()) await relaunch.failed(message);
+  await stopStartedProcesses?.();
   startupOutput.release();
   console.error(message);
   process.exit(1);
@@ -504,15 +510,9 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
   /* Attached first, so a failed spawn is always reported by it (#2178). A
      restart's spawn failure is that restart's to report: readiness sees it. */
   child.on("error", (error) => {
-    if (state.restarting) {
-      state.spawnError = error;
-      return;
-    }
-    state.stopping = true;
-    void Promise.all([
-      tailscaleProcessRef?.current ? stopChild(tailscaleProcessRef.current) : Promise.resolve(),
-      runtimeHostSupervisor.stop(),
-    ]).finally(() => fail(m.serverStartFail(error.message)));
+    state.spawnError = error;
+    if (state.restarting) return;
+    void exitWithFailure(m.serverStartFail(error.message));
   });
 
   /* A child that could not be spawned may have no stdio streams at all. */
@@ -932,13 +932,14 @@ async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor) {
 /* `serverRef.current` is whichever web process runs at shutdown: a
    self-update restart (#2007) replaces the one startup launched. */
 function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, onShutdown = () => {}) {
-  let stopping = false;
-  const shutdown = async () => {
-    if (stopping) return;
-    stopping = true;
+  let stopping = null;
+  const stop = () => stopping ??= (async () => {
     relaunch?.requestStop();
     onShutdown();
     await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
+  })();
+  const shutdown = async () => {
+    await stop();
     process.exit(0);
   };
 
@@ -947,6 +948,7 @@ function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSuperv
   /* The Viewer leads a session of its own and no longer hears the terminal
      hang up: this launcher stops it. */
   process.on("SIGHUP", shutdown);
+  return stop;
 }
 
 async function prepareRuntime(options) {
@@ -1062,6 +1064,7 @@ async function main() {
   let runtimeHostSupervisor = null;
   const tailscaleProcessRef = { current: null };
   const serverRef = { current: null, release: releaseNow() };
+  let restartRequests = null;
   let webRestartTimer = null;
   let webRecovery = null;
   let webRestartFailures = 0;
@@ -1175,6 +1178,14 @@ async function main() {
       }),
     },
   );
+  // Register cleanup before starting the runtime host. Fatal startup errors and
+  // terminal signals retire the same owned processes and cancel recovery.
+  stopStartedProcesses = installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, () => {
+    recoverWeb = null;
+    pauseWebRecovery();
+    restartRequests?.stop();
+    if (!relaunch.retainsCustody()) record.remove();
+  });
   try {
     await runtimeHostSupervisor.start();
   } catch (error) {
@@ -1214,13 +1225,6 @@ async function main() {
     return handle;
   };
   const serverProcess = launchWeb(serverRef.release, relaunch.isReplacementStart());
-  let restartRequests = null;
-  installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, () => {
-    recoverWeb = null;
-    pauseWebRecovery();
-    restartRequests?.stop();
-    if (!relaunch.retainsCustody()) record.remove();
-  });
 
   /* The --tailscale switch keeps its foreground serve, which stops with the
      Viewer. The remembered choice publishes in the background once the
@@ -1270,6 +1274,7 @@ async function main() {
     serverProcess.child.signalCode !== null
   ) {
     if (relaunch.hasTrial()) throw new Error("The replacement Viewer exited as it became ready.");
+    await stopStartedProcesses();
     process.exit(serverProcess.state.sawAddressInUse ? 1 : (serverProcess.child.exitCode ?? 1));
   }
   record.set("web", { state: "healthy", error: null });
@@ -1594,6 +1599,5 @@ try {
   const selectedLauncher = releaseLauncher();
   if (!selectedLauncher || !(await handOffLauncher(selectedLauncher))) await checkoutLauncher();
 } catch (error) {
-  if (relaunch?.hasTrial()) await relaunch.failed(error instanceof Error ? error.message : String(error));
-  fail(error instanceof Error ? error.message : String(error));
+  await exitWithFailure(error instanceof Error ? error.message : String(error));
 }

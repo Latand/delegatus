@@ -115,6 +115,7 @@ test("phone provider credential damage shows repair and never offers sign-in", a
 function engineState(engine: "claude" | "codex", accounts: AccountOption[], active: string, over: Partial<EngineAccountsState> = {}): EngineAccountsState {
   return {
     engine,
+    hidden: [],
     accounts,
     active,
     identityVersion: 0,
@@ -132,6 +133,7 @@ function engineState(engine: "claude" | "codex", accounts: AccountOption[], acti
     cancelLogin: async () => true,
     retryLogin: async () => true,
     remove: async () => true,
+    restore: async () => true,
     cleanupOrphans: async () => true,
     copyTerminalCommand: async () => true,
     refreshLimits: async () => true,
@@ -403,7 +405,7 @@ test("the removal summary is the first element of its engine section on the phon
   const { host } = await mount([engineState("claude", [claudeMain], "cl-main", {
     removal: {
       kind: "removed",
-      summary: { accountId: "cl-lab", label: "Lab", archive: archiveUnderHome("cl-lab"), files: 12, bytes: 14_200_000, conversations: 3, pins: 0, deliveries: 0, migrations: 0, credential: "clean" },
+      summary: { accountId: "cl-lab", label: "Lab", archive: archiveUnderHome("cl-lab"), files: 12, bytes: 14_200_000, conversations: 3, pins: 0, deliveries: 0, migrations: 0, credential: "clean", bindings: 0, hiddenHome: null },
     },
   })]);
   const section = host.querySelector('[data-mobile2-accounts-engine="claude"]')!;
@@ -412,4 +414,22 @@ test("the removal summary is the first element of its engine section on the phon
   expect(text(card)).toContain("12 files · 14.2 MB");
   const first = section.querySelector("[data-mobile2-account]")!;
   expect(card.compareDocumentPosition(first) & 4).toBe(4);
+});
+
+/* Task d7759de2: on the phone (and the setup guide's Engines step, which
+   draws this section) a hidden Main is offered back under the add row. */
+test("a hidden Main is offered back under the add row on the phone", async () => {
+  const restored: string[] = [];
+  const { host } = await mount([engineState("claude", [claudeLab], "cl-lab", {
+    hidden: [{ id: "default", label: "Main" }],
+    restore: async (id) => { restored.push(id); return true; },
+  })]);
+  const section = host.querySelector('[data-mobile2-accounts-engine="claude"]')!;
+  const offer = section.querySelector('[data-account-hidden-offer="default"]')!;
+  expect(text(offer)).toContain("Main is removed from Delegatus");
+  expect(section.querySelector('[data-mobile2-account-add="claude"]')!.compareDocumentPosition(offer) & 4).toBe(4);
+  const button = offer.querySelector('[data-account-restore="default"]') as HTMLButtonElement;
+  expect(button.className).toContain("min-h-[44px]");
+  await act(async () => button.click());
+  expect(restored).toEqual(["default"]);
 });
