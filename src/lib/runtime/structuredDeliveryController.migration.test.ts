@@ -13,6 +13,7 @@ import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { NativeCodexQueue } from "./nativeCodexQueue";
 import { FakeEngineHost } from "./fixtures/fakeEngineHost";
 import type { EngineHost } from "./engineHost";
+import type { NativeQueueProof } from "./nativeQueueContracts";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -26,6 +27,51 @@ function fixture() {
   roots.push(f.root);
   return f;
 }
+
+test("a production drain settles a native entry solely through canonical reconciliation (#1674)", async () => {
+  const f = fixture();
+  const binding = { threadId: f.key.sessionId, accountId: "account-a" };
+  const input = [{ type: "text" as const, text: "queued native message" }];
+  let proof: NativeQueueProof | null = null;
+  let evidenceReads = 0;
+  let actuations = 0;
+  const nativeHost = Object.assign(f.host, { nativeQueue: {
+    queue: new NativeCodexQueue({ rpc: async () => { actuations++; throw new Error("reconciliation must not actuate Codex"); } }, binding.threadId),
+    prepare: async () => input,
+    evidence: async () => { evidenceReads++; return proof; },
+    sendWithdrawn: async () => { actuations++; throw new Error("reconciliation must not send"); },
+  } });
+  const health = nativeHost.health.bind(nativeHost);
+  nativeHost.health = async () => ({ ...await health(), activeFlags: ["native-queue"] });
+  f.client.nativeQueueRead = async id => f.journal.nativeQueueRead(id);
+  f.client.nativeQueueTransition = async (id, change) => f.journal.nativeQueueTransition(id, change);
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: nativeHost }], {
+      registry: f.registry, client: f.client,
+      hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0,
+    });
+    expect(f.journal.executeOperation({ kind: "native-queue", operationId: "native-convergence", idempotencyKey: "native-convergence",
+      conversationId: f.conversation.id, action: "add", binding, text: input[0].text }).receipt.status).toBe("queued");
+    f.journal.nativeQueueTransition("native-convergence", { phase: "prepared", input });
+    f.journal.nativeQueueTransition("native-convergence", { phase: "acknowledged", nativeSubmissionId: "native-submission" });
+    await kickStructuredDeliveryQueue();
+    for (let attempt = 0; attempt < 100 && evidenceReads === 0; attempt++) await Bun.sleep(5);
+    const entry = f.journal.nativeQueueRead(f.conversation.id)[0]!;
+    expect(entry.state).toBe("queued");
+    expect(entry.proof).toBeNull();
+    expect(evidenceReads).toBeGreaterThan(0);
+    proof = { threadId: binding.threadId, clientUserMessageId: entry.clientUserMessageId, revision: entry.revision,
+      turnId: "canonical-turn", itemId: "canonical-item", input };
+    for (let attempt = 0; attempt < 100 && f.journal.nativeQueueRead(f.conversation.id)[0]?.state !== "delivered"; attempt++) {
+      await kickStructuredDeliveryQueue();
+      await Bun.sleep(5);
+    }
+    expect(f.journal.nativeQueueRead(f.conversation.id)[0]).toMatchObject({ state: "delivered", proof });
+    expect(f.journal.operationResult("native-convergence")?.receipt.status).toBe("delivered");
+    expect(f.host.ledger.writes).toHaveLength(0);
+    expect(actuations).toBe(0);
+  } finally { await f.cleanup(); }
+});
 
 for (const phase of ["before dispatch", "during delivering journal write"] as const)
 test(`production journal queue refuses a revoked owner's first prompt without a cancellation registry write (${phase})`, async () => {
