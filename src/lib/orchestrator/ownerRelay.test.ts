@@ -169,6 +169,21 @@ test("verified owner turn reaches the designated seat through MCP and HTTP with 
   expect(delivered[1].text).toBe(delivered[0].text);
 });
 
+test("an owner report reply carries verbatim approval and stored report only to its source seat", async () => {
+  const sender = actor(); const recipient = actor("project-b"); const otherSeat = actor("project-a"); ownerRun(sender);
+  const reportText = "Create a clone with one button? Confirm the start.";
+  changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, request: { text: "/ai го", requestText: "го" },
+    bridgeReport: { project: "project-b", sourceSeat: recipient.id, reportId: "report", reportText } } }));
+  const tools = toolsFor(sender);
+  expect(await tools.service.callTool("send_message_to_orchestrator", relayArgs("report-reply"))).toMatchObject({ ok: true, conversationId: recipient.id });
+  expect(delivered[0].text).toContain(JSON.stringify({ text: "/ai го", requestText: "го" }));
+  expect(delivered[0].text).toContain(reportText);
+  expect(await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("wrong-report-seat"), project: "project-a" })).toMatchObject({ ok: false, code: "owner_report_seat_unavailable" });
+  const response = await orchestratorPOST(request(sender.capability, { project: "project-a", conversationId: otherSeat.id, text: "go", clientMessageId: "wrong-report-http" }));
+  expect(response.status).toBe(409);
+  expect(delivered).toHaveLength(1);
+});
+
 for (const scenario of ["member", "switch-off", "worker", "cancelled", "dead-owner", "missing-owner-request", "paused", "disabled"] as const)
   test(`${scenario} cannot acquire owner relay authority through MCP or HTTP`, async () => {
     const sender = actor(); actor("project-b");
@@ -299,9 +314,27 @@ test("MCP recovers an owner relay after a lost HTTP response using the server-bu
     return payload;
   } });
   const args = relayArgs("owner-lost-response");
-  expect(await tools.service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: false, code: "outcome_unknown" });
+  expect(await tools.service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, recovered: true });
   const held = Object.values(registry.readOnlySnapshot().heldDeliveries)[0];
   registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
   expect(await tools.service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, operationId: held.command.operationId });
+  expect(delivered).toHaveLength(1);
+});
+
+test("a report reply recovers its original seat after rotation and refuses fresh work", async () => {
+  const sender = actor(); const source = actor("project-b"); ownerRun(sender); realAdmission();
+  changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, request: { text: "/ai го", requestText: "го" },
+    bridgeReport: { project: "project-b", sourceSeat: source.id, reportId: "report", reportText: "Proceed with clone creation?" } } }));
+  const body = { project: "project-b", text: "go", clientMessageId: "report-original" };
+  expect((await orchestratorPOST(request(sender.capability, body))).status).toBe(200);
+  const held = Object.values(registry.readOnlySnapshot().heldDeliveries)[0];
+  registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+  actor("project-b");
+  const recovered = await orchestratorPOST(request(sender.capability, body));
+  expect(recovered.status).toBe(200);
+  expect(await recovered.json()).toMatchObject({ target: source.id });
+  const fresh = await orchestratorPOST(request(sender.capability, { ...body, clientMessageId: "report-fresh" }));
+  expect(fresh.status).toBe(409);
+  expect(await fresh.json()).toMatchObject({ code: "owner_report_seat_unavailable" });
   expect(delivered).toHaveLength(1);
 });

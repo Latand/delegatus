@@ -1,5 +1,6 @@
 import { ownerRelayAuthorized } from "./ownerAuthority";
-import { runOwnerAgent, type OwnerRunPorts } from "./ownerRun";
+import { resolveOwnerBridgeContext, ownerNeedsClarification } from "./ownerBridgeContext";
+import { runOwnerAgent, ownerClarificationAnswer, type OwnerRunPorts } from "./ownerRun";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
@@ -279,6 +280,10 @@ export async function runClaimedRequest(
   }
   const profile = answerProfileFor(requester);
   const owner = ownerTierFor(target, request);
+  if (owner) {
+    try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
+    catch { owner.bridgeReport = null; }
+  }
   if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
   if (activeDrain()) return finish(declined(leaseId, "busy"));
   let conversation: RelayConversation | null = null;
@@ -299,7 +304,7 @@ export async function runClaimedRequest(
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
-      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, request: { text: owner.text, requestText: owner.requestText } } } : {}),
+      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, request: { text: owner.text, requestText: owner.requestText }, ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}) } } : {}),
       requestId,
       leaseId,
       relayId: relay.id,
@@ -316,6 +321,7 @@ export async function runClaimedRequest(
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
     markActive(relay, target);
+    if (owner && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner) });
     const context = conversationContext(request.input.requester);
     if (!owner && readRelaySwitches().chat_conversations && request.chat && context) {
       sweepConversations([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), undefined, relay.id);

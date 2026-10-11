@@ -2,6 +2,9 @@ import fs from "node:fs";
 import { procBackend } from "@/lib/proc";
 import { bridgeDirectiveBody } from "@/lib/bridge/directive";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
+import { agentRegistry } from "@/lib/agent/registry";
+import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { externalRelayFile, type RunLedger, type RelayStore, type RunRecord } from "./store";
 
 /** MCP reads only: no store creation, pruning or mutation during admission. */
@@ -28,12 +31,25 @@ function liveOwnerRelayRun(conversationId: string): RunRecord | null {
 /** Reuse the gateway's directive body, keeping agent authorship. The quoted
  * instruction comes from the runner's verified owner turn, never MCP input. */
 export function ownerRelayPayload(text: string, conversationId: string): { text: string; origin: MessageOrigin } | null {
-  const request = liveOwnerRelayRun(conversationId)?.ownerTurn?.request;
+  const turn = liveOwnerRelayRun(conversationId)?.ownerTurn;
+  const request = turn?.request;
   if (!request || typeof request.text !== "string" || (request.requestText !== null && typeof request.requestText !== "string")) return null;
   return {
-    text: bridgeDirectiveBody(`The install owner delegated this request through a verified owner relay. The quoted owner request carries operator authority, as a voice gateway directive does. Act on it within this project's scope.\n\nOwner request: ${JSON.stringify(request)}\n\nRelay context:\n${text}`),
+    text: bridgeDirectiveBody(`The install owner delegated this request through a verified owner relay. The quoted owner request carries operator authority, as a voice gateway directive does. Act on it within this project's scope.\n\nOwner request: ${JSON.stringify(request)}${turn?.bridgeReport ? `\n\nQuoted bridge report: ${JSON.stringify(turn.bridgeReport)}` : ""}\n\nRelay context:\n${text}`),
     origin: { kind: "agent", role: "owner-relay", conversationId },
   };
+}
+
+/** A report approval stays addressed to its source seat, including migrations
+ * that rekey that same conversation. It cannot authorize a different project. */
+export function ownerRelayTargetMatches(conversationId: string, project: string, recipient: string | null | undefined): boolean {
+  const run = liveOwnerRelayRun(conversationId);
+  if (!run) return false;
+  const report = run.ownerTurn?.bridgeReport;
+  if (!report) return true;
+  if (!recipient || canonicalOrchestratorProject(report.project) !== canonicalOrchestratorProject(project)) return false;
+  const canonical = seatIdentityResolver(id => agentRegistry().canonicalConversationId(id));
+  return canonical(report.sourceSeat) === canonical(recipient);
 }
 
 

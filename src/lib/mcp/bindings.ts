@@ -1,4 +1,4 @@
-import { liveOwnerRelayConversation, ownerRelayPayload } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -6962,6 +6962,9 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     });
   }
   const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
+  if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId)) {
+    throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
+  }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.

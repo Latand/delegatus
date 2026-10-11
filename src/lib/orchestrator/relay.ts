@@ -8,7 +8,7 @@ import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { messageOriginProject, sameMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lookupOriginalSend, type SendReceipt } from "@/lib/runtime/sendSettlement";
 import { admittedVoiceBinding } from "@/lib/voiceCompanion/admission";
-import { ownerRelayPayload } from "@/lib/externalRelay/ownerAuthority";
+import { ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 
 import { authorizedManagerSeats, type AuthorizedManagerSeat } from "./authority";
 import { deputyAskerOf } from "./deputyAsker";
@@ -74,7 +74,13 @@ export function admitOrchestratorRelay(
     if (!voiceBinding) return refused("voice_admission_refused", "the voice send does not match a confirmed proposal", 409);
     payload = { text, origin: { kind: "operator", channel: "voice-delegatus" } };
   }
-  return resolveOrchestratorRelay(project, recipient, payload, text, clientMessageId, seat ?? undefined, voiceBinding);
+  const resolved = resolveOrchestratorRelay(project, recipient, payload, text, clientMessageId, seat ?? undefined, voiceBinding);
+  // Recover the frozen recipient before comparing report custody. A retry may
+  // settle the original source seat's receipt after its designation rotates.
+  if (owner && !ownerRelayTargetMatches(conversationId!, project, resolved.ok ? resolved.recipient : recipient)) {
+    return refused("owner_report_seat_unavailable", "the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", 409);
+  }
+  return resolved;
 }
 
 /** Recipient and durable recovery shared by local and authenticated link relays.
