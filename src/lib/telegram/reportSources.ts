@@ -6,70 +6,19 @@ import { readFeedDialogsSince, scopedFeedFile, type FeedDialog } from "./reportF
 import type { TelegramReportGroup } from "./reportContracts";
 
 /**
- * Source discovery for a Daily Report run (issues #1086, #1091, #1128).
+ * Source discovery for a daily report. The incoming feed supplies activity
+ * inside its coverage window; the start is capped to that coverage. Missing
+ * coverage fails before any dialog reads.
  *
- * THE FEED IS THE SOURCE OF INCOMING ACTIVITY SINCE THE LAST RUN. The connector
- * records every settled incoming private burst to its event feed the moment it
- * happens (`reportFeed.ts`), so incoming dialogs are read from that file in one
- * bounded pass, with no dependence on any list order. A dialog ranked dead last
- * by the connector's chat listing is exactly as visible as the first one.
+ * Chat listings follow pins and folders, so they enumerate candidates only.
+ * Sequential single-message probes add candidates for outgoing activity, with
+ * the same bounded budget for young and mature feeds. A latest message after
+ * the window still leaves the dialog eligible: the analyst pages its history
+ * and filters messages to the exact bounds.
  *
- * The candidate WALK supplies direction-neutral coverage. The feed knows only
- * what arrived while the connector was running and listening: a dialog where
- * the operator did the writing, or one that was active before this connector
- * generation started, has no feed line. The walk runs over every enumerated
- * candidate the feed has not already accounted for and decides by LAST MESSAGE
- * DATE. Position never decides selection.
- *
- * The walk is a SUPPLEMENT and never a substitute. A run whose connector is
- * not running a feed at all fails (`sources_failed`) instead of quietly
- * walking alone: the walk is bounded by a probe budget over a list ordered by
- * pins and folders, so falling back to it silently would hand the operator a
- * report that omits whatever sat past the budget and say nothing about it —
- * the v1 defect this issue exists to end. The supervisor keeps that rare:
- * a connector without the feed is not adopted (`connector.ts`).
- *
- * A feed that is RUNNING is still not automatically a feed that covers the
- * window: a listener started this morning knows nothing about last night, and
- * on the first day after a connect it knows nothing about the window at all.
- * A complete plan needs incoming coverage from the feed plus outgoing coverage
- * from the walk. A mature feed lets the walk spend the enumeration's full
- * bounded surface; a younger feed retains the smaller ordinary probe ceiling.
- * Any exhausted probe budget or truncated enumeration fails the pass.
- *
- * The connector's chat listing is NOT ordered by recency — it follows pinned
- * and folder order, proven on the live connector by a dialog whose last
- * message was 16 h old being absent from the first page while one last active
- * six weeks earlier ranked second. So the listing is used only to enumerate
- * candidates.
- *
- * Enumeration cannot stop at one page either. `list_chats` applies its 100-chat
- * ceiling to the dialog list BEFORE the `chat_type` filter, so an operator with
- * a hundred groups above their private dialogs would have those dialogs simply
- * not exist for this run. `get_chats` pages the same list (ids and titles only,
- * `page` 1..10), so candidates come from `list_chats` for the typed head and
- * from bounded `get_chats` pages beyond it, where a POSITIVE marked id is what
- * identifies a private dialog. The operator's GROUP picker walks the same paged
- * list for the same reason (#1091): a group below the ceiling could not be
- * chosen as a source at all while only the typed head was offered.
- *
- * The probing is deliberately dull: one single-message read per candidate,
- * sequentially. The connector died once under three concurrent 120-message
- * reads, so NOTHING here runs in parallel — not the feed read, not the
- * listings, not the probes — and nothing asks for more than one message at a
- * time. The ordinary walk stops at {@link MAX_PROBES}; a feed covering the
- * window raises the ceiling only to the already bounded enumeration surface so
- * outgoing-only dialogs receive the same coverage as incoming dialogs. Every
- * candidate inside the applicable ceiling is probed. An earlier revision also
- * stopped after a run of consecutive stale candidates,
- * which was a recency assumption about a list this module opens by saying is
- * not ordered by recency: a dialog answered an hour ago, sitting below a block
- * of dormant ones, was silently dropped from the report.
- *
- * The resulting plan is written to owner-only state and READ by the run from
- * there — it never travels through the prompt — because it names the
- * operator's private dialogs, which must not enter a transcript, a launch
- * profile, or the registry.
+ * Enumeration and probe limits are explicit in the plan, so a bounded pass
+ * can finish and the analyst can state its coverage. Dialog names stay in an
+ * owner-only file, outside the prompt, launch profile and registry.
  */
 
 export type TelegramChatKind = "user" | "group";
@@ -96,7 +45,7 @@ export interface TelegramReadPort {
       running a feed at all, or when its file cannot be read safely: a report
       whose recency source is missing is a failed run, not a quietly narrower
       one. */
-  feedDialogs(input: { sinceMs: number }): Promise<{ dialogs: FeedDialog[]; coveredSinceMs: number | null }>;
+  feedDialogs(input: { sinceMs: number; untilMs?: number }): Promise<{ dialogs: FeedDialog[]; coveredSinceMs: number | null }>;
   /** One bounded page of chats of a kind, in whatever order the connector
       returns them — the caller must not treat it as recency. */
   listChats(input: { kind: TelegramChatKind; limit: number }): Promise<TelegramChatSummary[]>;
@@ -113,12 +62,9 @@ export const CHAT_PAGE_LIMIT = 100;
     ceiling reach 300 dialogs, well past where an account's active private
     conversations live, and the connector refuses a page above 10 anyway. */
 export const MAX_CHAT_PAGES = 3;
-/** Hard ceiling on single-message probes while the feed covers only part of
-    the report window. */
+/** Previous young-feed ceiling, retained for regression comparisons. */
 export const MAX_PROBES = 150;
-/** Mature-feed ceiling for the direction-neutral residual walk. It equals the
-    already bounded enumeration surface, so every enumerated dialog can be
-    checked for operator-sent activity while connector reads remain finite. */
+/** Probe ceiling for every feed age, matching the bounded enumeration size. */
 export const MAX_MATURE_FEED_PROBES = MAX_CHAT_PAGES * CHAT_PAGE_LIMIT;
 /** Private dialogs carried into one report, newest activity first. */
 export const MAX_PRIVATE_DIALOGS = 25;
@@ -143,10 +89,14 @@ export type ReportSourcePlan = {
   feedDialogs: number;
   /** Whether more active dialogs existed than the plan carries. */
   truncated: boolean;
-  /** Whether the walk ran out of probe budget before it ran out of
-      candidates. Complete plans keep this false; an exhausted walk fails the
-      source pass before persistence. */
+  /** Whether candidates remain beyond the bounded probe pass. */
   probeBudgetExhausted: boolean;
+  /** Limits the analyst must state in the report. */
+  coverage: {
+    requestedWindowStart: string;
+    enumerationTruncated: boolean;
+    outgoingComplete: boolean;
+  };
 };
 
 /** Telegram requires every bot username to end in `bot`, so the listing alone
@@ -214,11 +164,9 @@ async function candidateDialogs(
  *     cost no probe and depend on no list order, so an active dialog ranked
  *     last by the connector is in the plan regardless of what the walk reaches.
  *  2. THE WALK — every remaining candidate, probed in list order until the
- *     applicable probe budget runs out, carried when its last message falls in
- *     the window. A mature feed raises the budget to the bounded enumeration
- *     surface because its journal contains incoming activity only. Position
- *     never decides whether a dialog is LOOKED at; the date decides whether it
- *     is CARRIED.
+ *     probe budget runs out, carried when its last message is at or after the
+ *     start. Newer messages can hide activity inside a historical window, so
+ *     the analyst filters the subsequent history reads to the exact bounds.
  *
  * Groups are exactly what the operator picked, with their full/light flag — a
  * group is a source because the operator said so, never because it was busy.
@@ -227,11 +175,21 @@ export async function planReportSources(
   port: TelegramReadPort,
   input: { windowStart: string; windowEnd: string; groups: readonly TelegramReportGroup[]; promptVersion: string },
 ): Promise<ReportSourcePlan> {
-  const windowStart = Date.parse(input.windowStart);
-  const fromFeed = await port.feedDialogs({ sinceMs: windowStart });
+  const requestedStart = Date.parse(input.windowStart);
+  const windowEnd = Date.parse(input.windowEnd);
+  const fromFeed = await port.feedDialogs({ sinceMs: requestedStart, untilMs: windowEnd });
+  if (fromFeed.coveredSinceMs === null || !Number.isFinite(fromFeed.coveredSinceMs)) {
+    throw new Error("Telegram report sources cannot cover this window");
+  }
+  if (fromFeed.coveredSinceMs > windowEnd) {
+    throw new Error("Telegram report feed coverage starts after this window");
+  }
+  const windowStart = Math.max(requestedStart, fromFeed.coveredSinceMs);
   const active: ReportSourceDialog[] = [];
   const carried = new Set<string>();
   for (const dialog of fromFeed.dialogs) {
+    const at = Date.parse(dialog.lastMessageAt);
+    if (!Number.isFinite(at) || at < windowStart || at > windowEnd) continue;
     if (carried.has(dialog.id)) continue;
     carried.add(dialog.id);
     active.push({ id: dialog.id, title: dialog.title, lastMessageAt: dialog.lastMessageAt });
@@ -239,8 +197,7 @@ export async function planReportSources(
   /* Sequential on purpose: see the module comment. */
   const enumerated = await candidateDialogs(port);
   const candidates = enumerated.candidates.filter((chat) => !carried.has(chat.id));
-  const feedCoversIncomingWindow = fromFeed.coveredSinceMs !== null && fromFeed.coveredSinceMs <= windowStart;
-  const probeLimit = feedCoversIncomingWindow ? MAX_MATURE_FEED_PROBES : MAX_PROBES;
+  const probeLimit = MAX_MATURE_FEED_PROBES;
   let probes = 0;
   for (const chat of candidates) {
     if (probes >= probeLimit) break;
@@ -253,21 +210,10 @@ export async function planReportSources(
   }
   active.sort((left, right) => Date.parse(right.lastMessageAt) - Date.parse(left.lastMessageAt));
   const probeBudgetExhausted = probes >= probeLimit && candidates.length > probes;
-  /* The completeness bar, and the reason a plan may not be returned at all.
-     The FEED covers settled incoming activity from its coverage instant. The
-     WALK covers operator-sent activity only when it reaches every candidate.
-     A mature feed therefore grants the walk the full bounded enumeration
-     surface. A truncated enumeration still leaves outgoing activity unknown,
-     and a younger feed cannot fill either direction past the ordinary probe
-     ceiling. Both conditions fail the source pass and record `sources_failed`;
-     the next run's window still covers the day it missed. */
-  if (probeBudgetExhausted || enumerated.truncated) {
-    throw new Error("Telegram report sources cannot cover this window");
-  }
   return {
     version: 1,
     promptVersion: input.promptVersion,
-    windowStart: input.windowStart,
+    windowStart: new Date(windowStart).toISOString(),
     windowEnd: input.windowEnd,
     privateDialogs: active.slice(0, MAX_PRIVATE_DIALOGS),
     groups: input.groups.map((group) => ({ ...group })),
@@ -275,6 +221,11 @@ export async function planReportSources(
     feedDialogs: carried.size,
     truncated: active.length > MAX_PRIVATE_DIALOGS,
     probeBudgetExhausted,
+    coverage: {
+      requestedWindowStart: input.windowStart,
+      enumerationTruncated: enumerated.truncated,
+      outgoingComplete: !probeBudgetExhausted && !enumerated.truncated,
+    },
   };
 }
 
@@ -327,6 +278,8 @@ export interface TelegramConnectorReadPorts {
   sleep(ms: number): Promise<void>;
   now(): number;
   readinessTimeoutMs?: number;
+  /** Durable feed generation; a replacement must be visible to a read pass. */
+  feedCoverageSince?(credentialRef: string): number | null;
 }
 
 const CONNECTOR_READINESS_TIMEOUT_MS = 30_000;
@@ -337,6 +290,7 @@ const CONNECTOR_READINESS_TIMEOUT_MS = 30_000;
 export const REPORT_CONNECTOR_READINESS_TIMEOUT_MS = 90_000;
 const CONNECTOR_READINESS_INITIAL_BACKOFF_MS = 250;
 const CONNECTOR_READINESS_MAX_BACKOFF_MS = 2_000;
+const CONNECTOR_RESTARTED_MESSAGE = "Telegram connector restarted during this read pass; retry the pass";
 
 function toolText(result: unknown): string {
   const blocks = (result as ToolResult)?.content ?? [];
@@ -392,6 +346,7 @@ const productionConnectorReadPorts: TelegramConnectorReadPorts = {
   ensureConnector: (session) => ensureTelegramConnector(session),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: Date.now,
+  feedCoverageSince: connectorFeedCoverageSince,
 };
 
 function currentReadSession(
@@ -532,6 +487,14 @@ export function connectorReadPort(
   ports: TelegramConnectorReadPorts = productionConnectorReadPorts,
 ): TelegramReadPort {
   let pinned = credentialRef;
+  let feedGeneration: number | null = null;
+  const checkGeneration = () => {
+    const current = pinned === null ? null : ports.feedCoverageSince?.(pinned) ?? null;
+    if (feedGeneration !== null && current !== feedGeneration) {
+      throw new Error(CONNECTOR_RESTARTED_MESSAGE);
+    }
+    feedGeneration = current;
+  };
   const call = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
     const session = ports.readSession();
     if (!session) throw new Error("Telegram is not connected");
@@ -539,7 +502,10 @@ export function connectorReadPort(
     /* One fixed sentence: nothing about which generations these were belongs
        in an error a caller may log. */
     if (session.credentialRef !== pinned) throw new Error("Telegram credential generation changed");
-    return await callTelegramConnectorWithReadiness(session, name, args, ports);
+    checkGeneration();
+    const result = await callTelegramConnectorWithReadiness(session, name, args, ports);
+    checkGeneration();
+    return result;
   };
   return {
     async getMe() {
@@ -579,7 +545,8 @@ export function connectorReadPort(
         /* After the call, so the pin is the generation the read authenticated
            as rather than one this line re-read for itself. */
         feedFile = scopedFeedFile(status, pinned);
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && error.message === CONNECTOR_RESTARTED_MESSAGE) throw error;
         /* Falls through to the one sanitized sentence below. */
       }
       /* One fixed sentence: the upstream error may carry connector text, and
@@ -589,12 +556,11 @@ export function connectorReadPort(
          owner-only fence failure, a window too large for one bounded read —
          are already sanitized, and each says something different about why the
          run has no recency source. */
-      const dialogs = readFeedDialogsSince(feedFile, input.sinceMs);
-      /* What this feed can VOUCH for, which the file cannot say about itself:
-         a listener started this morning holds nothing about last night, and
-         the caller decides whether the walk behind it covered that stretch
-         (#1091). */
-      return { dialogs, coveredSinceMs: pinned === null ? null : connectorFeedCoverageSince(pinned) };
+      const coveredSinceMs = pinned === null ? null : connectorFeedCoverageSince(pinned);
+      const dialogs = readFeedDialogsSince(feedFile, Math.max(input.sinceMs, coveredSinceMs ?? input.sinceMs), input.untilMs);
+      /* A listener started this morning holds nothing about last night. The
+         planner caps its window to this connector's recorded coverage. */
+      return { dialogs, coveredSinceMs };
     },
     async listChats(input) {
       const result = await call("list_chats", { chat_type: input.kind, limit: Math.min(input.limit, CHAT_PAGE_LIMIT) });

@@ -527,6 +527,7 @@ function harness() {
   let worktreePresent = true;
   let residentHosts = false;
   let monotonic: () => number = () => Date.now();
+  const stageCommitMessages = new Map<string, string>();
   const ports: PipelinePorts = {
     exec: (rawCommand, rawArgs, cwd, env, options) => {
       // Artifact safety reads inspect the actual fixture index, including
@@ -534,6 +535,14 @@ function harness() {
       if (options?.stdoutEncoding === "latin1") return realExec(rawCommand, rawArgs, cwd, env, options);
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      if (args[0] === "write-tree") return { code: 0, stdout: `${"8".repeat(40)}\n`, stderr: "" };
+      if (args[0] === "symbolic-ref") return { code: 0, stdout: `refs/heads/${loadPipelines()[0]?.branch ?? "pipeline/test"}\n`, stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--git-path")) return { code: 0, stdout: `${path.join(cwd, ".git", "index")}\n`, stderr: "" };
+      if (args[0] === "commit") {
+        stageCommitMessages.set(cwd, args.filter((_, index) => args[index - 1] === "-m").join("\n\n"));
+      }
+      if (args[0] === "show" && args.includes("--format=%P%x00%T%x00%B")) return {
+        code: 0, stdout: `${ORIGIN_MAIN_SHA}\0${"8".repeat(40)}\0${stageCommitMessages.get(cwd) ?? ""}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--verify") return { code: 0, stdout: `${ORIGIN_MAIN_SHA}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
@@ -13538,6 +13547,8 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
   let pushFails = false;
   let remoteReadFails = options.remoteReadFails ?? false;
   let remoteReadAttempts = 0;
+  let commitParent = localHead;
+  let commitMessage = "";
   const baseExec = h.ports.exec;
   h.ports.exec = (rawCommand, rawArgs, cwd) => {
     const command = rawCommand === "timeout" ? "git" : rawCommand;
@@ -13546,7 +13557,11 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
     const branch = loadPipelines()[0]?.branch ?? "pipeline/test";
     if (args[0] === "status") return { code: 0, stdout: dirty ? " M src/lib/thing.ts\n" : "", stderr: "" };
     if (args[0] === "add") return { code: 0, stdout: "", stderr: "" };
+    if (args[0] === "show" && args.includes("--format=%P%x00%T%x00%B")) return {
+      code: 0, stdout: `${commitParent}\0${"8".repeat(40)}\0${commitMessage}\n`, stderr: "" };
     if (args[0] === "commit") {
+      commitParent = localHead;
+      commitMessage = args.filter((_, index) => args[index - 1] === "-m").join("\n\n");
       dirty = false;
       localHead = passedSha;
       order.push("commit");
@@ -24326,6 +24341,70 @@ for (const engine of ["claude", "codex"] as const) {
       for (const at of ["2026-10-05T21:45:00Z", "2026-10-05T23:00:30Z", "2026-10-05T23:01:30Z"]) { f.advance(Date.parse(at) - f.now()); await tick(); }
       expect({ sends: f.sends.length, state: loadPipelines()[0]!.state, spawns: f.h.spawnInputs.length })
         .toEqual({ sends: 1, state: "running", spawns: 1 });
+    });
+  }
+}
+
+// Incomplete history can open confirmation before any provider wait exists.
+for (const engine of ["claude", "codex"] as const) {
+  for (const pool of [false, true]) {
+    test.each(["hours-later", "same-wait", "closure-tick", "same-chain"] as const)(`${engine} first-tick incomplete chain owns its confirmation window (pool=${pool}, %s)`, async shape => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
+      f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+      f.h.ports.allowedAccountIds = () => pool ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT];
+      const records: Record<string, unknown>[] = [];
+      const file = stageTranscript(`chain-first-incomplete-${engine}-${pool}-${shape}`, []);
+      const k = cutChainKit(f, engine, () => file, records);
+      const oversized = () => records.push({ type: "queue-operation", timestamp: f.h.ports.now(), padding: "x".repeat(9 * 1024 * 1024) });
+      k.notice("10pm", CHAIN_RESET["10pm"]);
+      oversized();
+      f.advance(1_000);
+      k.notice("10pm", CHAIN_RESET["10pm"]);
+      k.write();
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      // Fresh ports on each tick read the persisted wait and the real transcript.
+      const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
+      const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
+      await tick();
+      const firstStartedAt = f.h.ports.now();
+      expect(attempt().providerWait).toBeUndefined();
+      expect(attempt().controllerWait?.startedAt).toBe(firstStartedAt);
+      expect(loadPipelines()[0]!.state).toBe("running");
+
+      f.advance(20_000);
+      await k.harnessWake();
+      if (shape !== "same-chain") k.output();
+      if (shape === "closure-tick") {
+        k.write();
+        await tick();
+        expect(attempt().controllerWait).toBeUndefined();
+      }
+      f.advance(Date.parse(shape === "hours-later" ? "2026-10-05T21:30:00Z" : "2026-10-05T17:22:50Z") - f.now());
+      k.notice("2am", CHAIN_RESET["2am"]);
+      oversized();
+      f.advance(1_000);
+      k.notice("2am", CHAIN_RESET["2am"]);
+      k.write();
+      await tick();
+      const startedAt = shape === "same-chain" ? firstStartedAt : f.h.ports.now();
+      expect({ state: loadPipelines()[0]!.state, startedAt: attempt().controllerWait?.startedAt })
+        .toEqual({ state: "running", startedAt });
+      expect(attempt().providerWait).toBeUndefined();
+      expect(f.sends).toHaveLength(0);
+      expect(f.h.spawnInputs).toHaveLength(1);
+
+      // The new chain gets the full ten minutes; repeated cuts cannot extend it.
+      f.advance(Date.parse(startedAt) + 9 * 60_000 + 59_000 - f.now());
+      await tick();
+      expect(loadPipelines()[0]!.state).toBe("running");
+      expect(attempt().controllerWait?.startedAt).toBe(startedAt);
+      f.advance(1_000);
+      await tick();
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      expect(loadPipelines()[0]!.stateDetail).toContain("provider transport recovery exhausted after 10 minutes");
+      expect(attempt().providerWait?.stageRetry).toBeUndefined();
+      expect(f.sends).toHaveLength(0);
+      expect(f.h.spawnInputs).toHaveLength(1);
     });
   }
 }

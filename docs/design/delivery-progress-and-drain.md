@@ -1215,11 +1215,12 @@ mutation; only how its lock is waited for changes.
 | `retireAccount` (`registry.ts:8037`) from the removal's step 4 (`accounts/removal.ts:758`) | path rewrite, pins, owed deliveries ended with the account-removed reason, parked migrations settled | settle, bind | `account.retire` | `deliveryWriteNow`. The removal runs inside the accounts registry file lock, whose waiters spin with a synchronous sleep (`accounts/codex.ts:296`–`:320`, `claude.ts:282`); holding it across an `await` would let a same-process waiter spin on the loop while the holder cannot run. So the write makes one attempt and never waits. A refusal takes the step's existing failure branch (`putHomeBack`, journal cleared, `removal.ts:759`–`:765`): nothing retired, the held sends still held, and the operator's dialog answers that the registry was busy and to try again |
 | `retireAccount` from removal recovery (`removal.ts:834`) | the same | settle, bind | `account.retire` | `deliveryWriteNow`; a refusal is the recovery's existing `return null` ("busy: retried by the next listing", `:835`–`:837`) |
 
-The C5 inventory also includes both restoration branches in `removal.ts`:
+The C5 inventory also includes the restoration branches in `removal.ts`:
 
 | Site | Write | Effect | Label | A refused acquisition |
 |---|---|---|---|---|
 | accounts commit failure | owned `restoreSnapshot` | bind, restore | `account.retirement-rollback`, stable removal operation | `deliveryWriteNow`; keep the archive and the retiring journal with its rewrites. A later recovery finishes the documented retirement; no send is replayed |
+| commit failure of an in-place retirement (`retireAccountInPlace`: an engine's hidden default home, a Copilot home) | owned `restoreSnapshot` | bind, restore | `account.retirement-rollback`, stable removal operation | `deliveryWriteNow`; the account stays listed and launchable, what the retirement settled stays settled, and the answer asks for the removal again, which finishes it |
 | archiving recovery, including a home already renamed back | `rewriteAccountPaths` | bind | `account.archive-recovery`, stable removal operation | `deliveryWriteNow`; return null and retain the journal. After a successful acquisition, restore the home and its generation paths; clear the intent only afterward |
 
 Note 1: leaving a never-dispatched send claimed (a refused requeue at `:1163`,

@@ -3351,7 +3351,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
   deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. `refusedByFlag` counts, across the whole sweep and every project, the flags behind each no-active-flags refusal, and a refused item names its own `flags`. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
-  resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. viewer is null with viewerUnavailable \"not-the-viewer\" when this tool is served by a stdio MCP server beside the agent, which cannot measure the web server's tree; the HTTP transport answers it from the Viewer itself.",
+  resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. Launched agents delegate this read to the Viewer, over either transport. A legacy stdio client without a launch capability measures locally and returns viewer:null with viewerUnavailable \"not-the-viewer\".",
   conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
   agent_activity: "Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} when the turn waits on an unanswered tool permission request (reason permission_request), and drops the transcript paths, host detail and the selection and timing reports. Every answer returns within a second and names what it could not confirm. catalog:\"pending\" means this process holds no completed conversation catalog yet: the rows are the hosts the registry names, and a later call lists the rest. catalog:\"stale\" means the rows come from an earlier catalog while a newer one is read; call again for conversations started since. evidence:\"pending\" with unverifiedCount means that many rows are projected without their transcript tail (evidenceSource \"projection\" in the full answer), and undescribedHostCount (undescribedTargetCount for a transcript the call named) counts those with no row yet; a later call returns them verified.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
@@ -4521,7 +4521,33 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
  * Viewer MCP server writes (so a clientRequestId replays the same way whichever
  * process or transport it arrives on), the per-call policy, and recovery.
  */
-export async function createProductionViewerMcpService(hostHealthProbe = false): Promise<McpToolService> {
+export async function createProductionViewerMcpService(hostHealthProbe = false, stdioReads = false): Promise<McpToolService> {
+  /* Only a launched agent can delegate its identity. Candidate probes and
+     legacy clients identified by ancestry keep their existing local surface.
+     The Viewer's HTTP service must never delegate back to itself. */
+  if (stdioReads && !hostHealthProbe && /^[A-Za-z0-9_-]{43}$/.test(process.env.LLV_SPAWN_CAPABILITY ?? "")) {
+    const { VIEWER_LARGE_READS, readFromViewer } = await import("./largeReads");
+    let local: Promise<McpToolService> | null = null;
+    return {
+      async callTool(toolName, args, context = {}) {
+        if (VIEWER_LARGE_READS.has(toolName as McpToolName)) {
+          try { return await readFromViewer(toolName as McpToolName, args, context); }
+          catch (error) {
+            return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
+              "tool_failed", error instanceof Error ? error.message : "Viewer MCP read failed", true);
+          }
+        }
+        if (!local) {
+          const created = createProductionViewerMcpService(hostHealthProbe);
+          local = created;
+          created.catch(() => {
+            if (local === created) local = null;
+          });
+        }
+        return (await local).callTool(toolName, args, context);
+      },
+    };
+  }
   const {
     productionViewerControlDependencies,
     viewerMcpBindings,
@@ -4544,7 +4570,7 @@ export async function startViewerMcpServer(): Promise<void> {
   const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
-  const service = await createProductionViewerMcpService(hostHealthProbe);
+  const service = await createProductionViewerMcpService(hostHealthProbe, true);
   const server = createViewerMcpServer(service);
   const transport = new StdioServerTransport();
   // The SDK does not close its transport on EOF. A dead client (including a
