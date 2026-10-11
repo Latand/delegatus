@@ -26,7 +26,7 @@ function KindIcon({ kind }: { kind: WorkRow["kind"] }) {
   return <Icon className="mt-[3px] h-4 w-4 shrink-0 text-muted" aria-hidden />;
 }
 
-export function SelfUpdateConfirm({ snapshot: s, title, onConfirm, onCancel }: { snapshot: Snapshot; title: string; onConfirm: () => void; onCancel: () => void }) {
+export function SelfUpdateConfirm({ snapshot: s, title, lead, onConfirm, onCancel }: { snapshot: Snapshot; title: string; lead?: string | null; onConfirm: () => void; onCancel: () => void }) {
   const { t } = useLocale();
   const names = useBlockerNames();
   const evidence = s.workEvidence;
@@ -103,7 +103,10 @@ export function SelfUpdateConfirm({ snapshot: s, title, onConfirm, onCancel }: {
   return (
     <TeamDialog title={title} onClose={onCancel} closeLabel={t("common.cancel")} testId="self-update-confirm">
       <div className="flex flex-col gap-4">
-        <p className="m-0 text-ui leading-relaxed text-secondary">{t("selfUpdate.confirmApply.consequence")}</p>
+        <p className="m-0 text-ui leading-relaxed text-secondary">
+          {lead ? <><span data-confirm-lead="" className="font-semibold text-primary">{lead}</span>{" "}</> : null}
+          {t("selfUpdate.confirmApply.consequence")}
+        </p>
         {body}
         {/* The dialog's one scroller keeps the buttons on its bottom edge. */}
         <div data-confirm-buttons="" className="sticky bottom-[-16px] z-[1] -mx-4 -mb-4 flex justify-end gap-2 border-t border-border bg-card px-4 py-3 max-sm:flex-col-reverse max-sm:pb-[max(12px,env(safe-area-inset-bottom))]">

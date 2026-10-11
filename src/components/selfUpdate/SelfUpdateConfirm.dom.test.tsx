@@ -218,20 +218,20 @@ describe("SelfUpdateConfirm", () => {
 /* ── Inside the Update dialog ────────────────────────────────────────────── */
 
 describe("the Update dialog asks before it applies", () => {
-  async function open(work: WorkEvidence["state"] = "ready") {
+  async function open(work: WorkEvidence["state"] = "ready", served: (work: WorkEvidence["state"]) => Snapshot = snapshot, openAction = "update") {
     const posts: { path: string; body: unknown }[] = [];
     globals.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (init?.method === "POST") {
         posts.push({ path, body: init.body ? JSON.parse(String(init.body)) : undefined });
-        return new Response(JSON.stringify(snapshot(work)), { status: 202, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(served(work)), { status: 202, headers: { "content-type": "application/json" } });
       }
-      return new Response(JSON.stringify(snapshot(work)), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify(served(work)), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     let closed = 0;
     await mount(<SelfUpdateDialog onClose={() => { closed += 1; }} />);
-    for (let wait = 0; wait < 40 && !dom.document.querySelector("[data-action='update']"); wait++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
-    const update = button(dom.document, "[data-action='update']");
+    for (let wait = 0; wait < 40 && !dom.document.querySelector(`[data-action='${openAction}']`); wait++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    const update = button(dom.document, `[data-action='${openAction}']`);
     expect(update).not.toBeNull();
     await act(async () => { update.click(); });
     expect(confirmDialog()).not.toBeNull();
@@ -261,5 +261,20 @@ describe("the Update dialog asks before it applies", () => {
     expect(confirmDialog()).toBeNull();
     expect(first.posts.map((post) => post.path)).toEqual(["/api/self-update/update"]);
     expect(Object.keys(first.posts[0]!.body as object)).toEqual(["key"]);
+  });
+
+  test("Retry asks with a short title, names the target in the body and posts the retry", async () => {
+    const failed = (work: WorkEvidence["state"]): Snapshot => {
+      const base = snapshot(work);
+      const steps = idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "failed" as const : "pending" as const }));
+      return { ...base, update: { ...idleUpdate(CHECKOUT_STEPS), state: "failed", trigger: "operator", target: NEW, targetShort: NEW.slice(0, 7), targetVersion: "1.11.0", steps } };
+    };
+    const { posts } = await open("ready", failed, "retry");
+    expect(confirmDialog()!.getAttribute("aria-label")).toBe("Retry the update?");
+    expect(text()).toContain("Trying the update to e7893bc (1.11.0) again.");
+    await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+    expect(posts.map((post) => post.path)).toEqual(["/api/self-update/update"]);
+    expect(Object.keys(posts[0]!.body as object).sort()).toEqual(["key", "retry"]);
+    expect((posts[0]!.body as { retry: boolean }).retry).toBe(true);
   });
 });

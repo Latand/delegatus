@@ -124,7 +124,9 @@ Every variant uses the same rows. Each running item shows:
 
 Every variant says that the work continues after the restart. The copy is in
 `prototypes/self-update-confirm/copy.ts`. The title is «Оновити до e7893bc
-(1.11.0)?», and «Повторити оновлення до …?» for a retry. The consequence
+(1.11.0)?», and «Повторити оновлення?» for a retry, whose target moves into the
+body («Повторна спроба оновлення до …») so the title fits one line at 390 px.
+The consequence
 sentence is «Delegatus перезапуститься, а ця сторінка перепідключиться сама.
 Робота, що зараз іде, продовжиться після перезапуску.» The buttons are
 «Оновити зараз» and «Скасувати».
@@ -340,7 +342,7 @@ Both are answered under [Decisions](#decisions).
   and by conversation beside the names it published before.
 - **The modal.** `SelfUpdateConfirm.tsx` is `TeamDialog` with `BUTTON.primary`
   / `BUTTON.secondary`, unchanged. `update`, `retry` and `installAction` open
-  it; only the title changes («Оновити до …?», «Повторити оновлення до …?»,
+  it; only the title changes («Оновити до …?», «Повторити оновлення?»,
   or the install action's own words). The buttons are pinned to the bottom of
   the dialog's one scroller. A reading that counted more than the server's
   20-item lists says «і ще N»; a reading with counts and no list says the

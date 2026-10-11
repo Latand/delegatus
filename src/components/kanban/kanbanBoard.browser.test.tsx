@@ -688,7 +688,7 @@ describe("self-update confirmation modal", () => {
       { conversationId: "conversation_loose-fixture", engine: "claude", project: LOOSE, stage: null, seat: false },
     ];
     const MANY = [...STAGES, ...Array.from({ length: 17 }, (_, index) => stage(`lane-more-${index}`, "build", `Lane number ${index + 1} rebuilds part of the index`, index % 3 ? "atlas" : "harbor-docs", ["builder", "reviewer", "verifier"][index % 3]!, null))];
-    const snapshot = (work: "ready" | "pending" | "unavailable" | "many" | "running") => ({
+    const snapshot = (work: "ready" | "pending" | "unavailable" | "many" | "running", via?: "retry" | "action") => ({
       mode: "checkout", unsupportedReason: null, installed: rev(OLD, "1.10.4"),
       serving: { web: rev(OLD, ""), runtimeHost: rev(OLD, "") },
       available: rev(TARGET, "1.11.0"),
@@ -697,7 +697,11 @@ describe("self-update confirmation modal", () => {
       update: work === "running"
         ? { ...idleUpdate(CHECKOUT_STEPS), state: "running", trigger: "operator", target: TARGET, targetShort: TARGET.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
           steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "running" : "pending", startedAt: index === 0 ? at : null })) }
-        : idleUpdate(CHECKOUT_STEPS),
+        : via === "retry"
+          ? { ...idleUpdate(CHECKOUT_STEPS), state: "failed", trigger: "operator", target: TARGET, targetShort: TARGET.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
+            steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "failed" : "pending" })) }
+          : idleUpdate(CHECKOUT_STEPS),
+      ...(via === "action" ? { action: { id: "restart-service", button: true, unit: "delegatus.service" } } : {}),
       busy: work === "running" ? "update" : null,
       processes: { web: { ...proc(4141), port: 8899 }, runtimeHost: proc(4242) },
       meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: "/var/tmp/checkout", pollMinutes: 60, serverTime: at },
@@ -761,9 +765,10 @@ describe("self-update confirmation modal", () => {
           await dialog.waitFor();
           const emit = (data: unknown) => page.evaluate((data) => (window as unknown as { selfUpdateEmit(type: string, data: unknown): number }).selfUpdateEmit("state", data), data);
           const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
-          const ask = async (work: "ready" | "pending" | "unavailable" | "many") => {
-            await emit(snapshot(work));
-            await dialog.locator("[data-action='update']:not([disabled])").click();
+          /* «Update», the failed update's «Retry» and the install action each open the same question. */
+          const ask = async (work: "ready" | "pending" | "unavailable" | "many", via?: "retry" | "action") => {
+            await emit(snapshot(work, via));
+            await dialog.locator(`[data-action='${via === "retry" ? "retry" : via === "action" ? "install-action" : "update"}']:not([disabled])`).click();
             await confirmation.waitFor();
             await confirmation.locator(work === "pending" ? "[data-confirm-work='pending']" : work === "unavailable" ? "[data-confirm-work='unavailable']" : "[data-confirm-row]").first().waitFor();
             /* The names come from the Viewer's own cards a beat after the list. */
@@ -780,7 +785,7 @@ describe("self-update confirmation modal", () => {
               const buttonsTop = Math.min(...buttons.map((button) => button.top));
               const rows = [...element.querySelectorAll("[data-confirm-row]")];
               return {
-                box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
+                box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height), bottom: Math.round(box.bottom) },
                 viewport: { width: window.innerWidth, height: window.innerHeight },
                 title: title.textContent,
                 titleCut: title.scrollWidth > title.clientWidth + 1,
@@ -794,7 +799,7 @@ describe("self-update confirmation modal", () => {
                 text: (element as HTMLElement).innerText,
               };
             });
-            const name = `${lang}-${width}-${scheme}-${work}`;
+            const name = `${lang}-${width}-${scheme}-${via ?? work}`;
             await page.screenshot({ path: path.join(out, `${name}.png`) });
             const failures: string[] = [];
             for (const button of reading.buttons) {
@@ -804,7 +809,7 @@ describe("self-update confirmation modal", () => {
             if (reading.titleCut) failures.push("the title is cut");
             if (reading.sideways) failures.push("the confirmation overflows sideways");
             if (/repo-|dir-|conversation_/.test(reading.text)) failures.push("a project key or a conversation id is shown");
-            if (phone && (reading.box.width !== width || reading.box.y + reading.box.height !== reading.viewport.height)) failures.push("the phone confirmation is no bottom sheet");
+            if (phone && (reading.box.width !== width || reading.box.bottom !== reading.viewport.height)) failures.push("the phone confirmation is no bottom sheet");
             if (!phone && reading.box.width !== 480) failures.push("the desktop confirmation is not 480 px wide");
             if (phone && reading.buttons.some((button) => button.height < 44)) failures.push("a phone button is under 44 px");
             readings.push({ name, ...reading, text: undefined, failures });
@@ -826,6 +831,17 @@ describe("self-update confirmation modal", () => {
           for (const title of ["Restore search results after the index rebuild", "Redesign attachment upload for large files", "Simplify the export settings sheet",
             translate(lang, "selfUpdate.auto.block.seatUnnamed"), translate(lang, "roleCopy.builder.name"), translate(lang, "roleCopy.architect.name"),
             translate(lang, "selfUpdate.confirmApply.resumes")]) expect(ready.text).toContain(title);
+          await dismiss();
+
+          const retried = await ask("ready", "retry");
+          expect(retried.title).toBe(translate(lang, "selfUpdate.confirmApply.retryTitle"));
+          expect(retried.titleCut).toBe(false);
+          expect(retried.text).toContain(translate(lang, "selfUpdate.confirmApply.retryTarget", { target: "e7893bc (1.11.0)" }));
+          await dismiss();
+
+          const installed = await ask("ready", "action");
+          expect(installed.title).toBe(translate(lang, "selfUpdate.confirmApply.actionTitle", { action: translate(lang, "selfUpdate.actionButton.restart-service") }));
+          expect(installed.titleCut).toBe(false);
           await dismiss();
 
           const pending = await ask("pending");

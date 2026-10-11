@@ -102,10 +102,16 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const confirmTitle = () => {
     if (!s) return "";
     if (confirming === "install-action" && s.action?.button) return t("selfUpdate.confirmApply.actionTitle", { action: t(`selfUpdate.actionButton.${s.action.id}` as MessageKey) });
-    if (confirming === "retry" && s.update.targetShort) return t("selfUpdate.confirmApply.retryTitle", { target: targetText(s.update.targetShort, s.update.targetVersion) });
+    if (confirming === "retry") return t("selfUpdate.confirmApply.retryTitle");
     if (s.available && s.check.state === "update-available") return t("selfUpdate.confirmApply.title", { target: targetText(s.available.short, s.available.version || null) });
     return t("selfUpdate.confirmApply.nowTitle");
   };
+
+  /* The retry's title stays short enough for the phone's one line; the
+     target it retries is said in the body. */
+  const confirmLead = () => confirming === "retry" && s?.update.targetShort
+    ? t("selfUpdate.confirmApply.retryTarget", { target: targetText(s.update.targetShort, s.update.targetVersion) })
+    : null;
 
   /* «Update now» closes the question; the Update card shows the progress. */
   const apply = () => {
@@ -219,7 +225,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
   /* Portaled to the body: here only so it closes with this dialog. */
   const confirm = s && confirming
-    ? <SelfUpdateConfirm snapshot={s} title={confirmTitle()} onConfirm={apply} onCancel={() => setConfirming(null)} />
+    ? <SelfUpdateConfirm snapshot={s} title={confirmTitle()} lead={confirmLead()} onConfirm={apply} onCancel={() => setConfirming(null)} />
     : null;
 
   if (isMobile) {
