@@ -550,6 +550,46 @@ test("legacy account reconfiguration queues a conversation reseat without touchi
   });
 });
 
+for (const refuse of [false, true]) test(`pane reseat writes its profile and migration off-loop and leaves a refused send intact (${refuse})`, async () => {
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("./agent/registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("./blockingWaits");
+  const made = sqliteRegistryFixture("llv-pane-reseat", refuse ? { sqliteWriterDeadlineMs: 80 } : {});
+  const registry = made.registry;
+  const holder = registryLockHolder(made.sqliteFilename);
+  const sessionId = crypto.randomUUID();
+  const pathname = path.join(made.root, `${sessionId}.jsonl`);
+  fs.writeFileSync(pathname, "");
+  const conversation = registry.ensureConversation("codex", pathname, "source-account");
+  registry.upsert({ key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: made.root,
+    accountId: "source-account", launchProfile: emptyLaunchProfile({ cwd: made.root, model: "gpt-5.6-sol", effort: "high" }),
+    status: "live", host: KILL_HOST, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  const held = registry.holdDelivery(conversation.id, "accepted before pane switch", "pane-original-key");
+  const previous = registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile;
+  const entry: FileEntry = { path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer", title: "worker",
+    engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "live", proc: "running",
+    pid: KILL_HOST.agent.pid, model: "gpt-5.6-sol", effort: "high", fast: false, pendingQuestion: null, waitingInput: null };
+  const switchAccount = () => reconfigureConversation(pathname, { model: "gpt-5.6-terra", effort: "medium", fast: true, accountId: "target-account" },
+    { pathAllowed: () => true, listFiles: async () => [entry], registry, validateAccount: async () => {}, resolveAccount: () => ({}) as AccountContext,
+      requestMigrationTick: () => {}, attributeAccountChoice: () => null });
+  try {
+    resetBlockingWaitsForTests(() => {});
+    await holder.hold(600);
+    const { value, gapMs } = await longestLoopGap(switchAccount);
+    expect(gapMs).toBeLessThan(50);
+    expect(value).toMatchObject(refuse ? { ok: false, status: 503, code: "REGISTRY_WRITER_BUSY" } : { ok: true, outcome: "pending" });
+    expect(registry.snapshot().heldDeliveries[held.id]?.text).toBe(held.text);
+    if (refuse) {
+      expect(registry.conversation(conversation.id)?.migration).toBeNull();
+      expect(registry.conversation(conversation.id)?.generations.at(-1)?.launchProfile).toEqual(previous);
+      await holder.release();
+      expect(await switchAccount()).toMatchObject({ ok: true, outcome: "pending" });
+    } else {
+      expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "migration.reseat-request")?.operationId).toBe(registry.conversation(conversation.id)?.migration?.operationId);
+    }
+    expect(registry.conversation(conversation.id)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gpt-5.6-terra", effort: "medium", fast: true });
+  } finally { await holder.close(); registry.close(); made.cleanup(); }
+});
+
 test("legacy account reconfiguration leaves the conversation untouched when auth preflight fails", async () => {
   const sessionId = "019f4e76-66b4-\x37f87-94b2-cfa9bf744441";
   const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
