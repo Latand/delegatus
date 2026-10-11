@@ -224,4 +224,6 @@ jobs:
           TEMP: ${{ runner.temp }}\llv-tmp
           LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
           LLV_HELPER_LEASE_ENTRY: bin/helper-lease.mjs
-        run: bash scripts/gate-slot.sh bun test src/lib/search/transcriptSearchWorker.test.ts
+        run: |
+          bash scripts/gate-slot.sh bun test bin/helper-lease-windows.test.ts
+          bash scripts/gate-slot.sh bun test src/lib/search/transcriptSearchWorker.test.ts
