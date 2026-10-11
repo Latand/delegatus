@@ -9,7 +9,7 @@ import { stateDir, statePath } from "@/lib/configDir";
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
 import { accountProbeIdentity, withAccountMutationLockAsync, withAccountMutationLock } from "./accountMutation";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -558,10 +558,6 @@ export function createManagedCodexAccount(label: string): CodexAccount {
   });
 }
 
-function historyFitsRetainedSessions(report: AccountHistoryInventoryReport): boolean {
-  return report.artifacts.filter((artifact) => artifact.history).every((artifact) => artifact.path.startsWith(`sessions${path.sep}`));
-}
-
 function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void {
   const current = mutableRegistry();
   writeRegistry({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
@@ -570,12 +566,13 @@ function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewr
 /** The registry once `id` is removed: it leaves, a retired record points at
     its archive, and its journal record moves to `scrubbing`. */
 function withAccountRetired(registry: Registry, id: string): Registry {
-  const label = registry.accounts.find((account) => account.id === id)?.label ?? id;
+  const previous = registry.retired.find((account) => account.id === id);
+  const label = registry.accounts.find((account) => account.id === id)?.label ?? previous?.label ?? id;
   return {
     ...registry,
     active: registry.active === id ? DEFAULT_ID : registry.active,
     accounts: registry.accounts.filter((account) => account.id !== id),
-    retired: [...registry.retired.filter((account) => account.id !== id), { id, label, retiredAt: Date.now(), archived: true }],
+    retired: [...registry.retired.filter((account) => account.id !== id), { id, label, retiredAt: previous?.retiredAt ?? Date.now(), archived: true }],
     removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
   };
 }
@@ -594,6 +591,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         home: managedHome(entry.id),
         entry,
         listed: registry.accounts.some((account) => account.id === entry.id),
+        retiredInPlace: registry.retired.some((account) => account.id === entry.id && !account.archived),
         commitRetired: () => {
           writeRegistry(withAccountRetired(mutableRegistry(), entry.id));
         },
@@ -632,6 +630,12 @@ function recoverRemovalsAtStartup(): void {
   }
 }
 
+function codexArchiveRewrites(home: string, archive: string): AccountPathRewrite[] {
+  const spellings = [home];
+  try { const real = fs.realpathSync(home); if (real !== home) spellings.push(real); } catch { /* the lexical spelling still applies */ }
+  return spellings.map((from) => ({ from, to: archive }));
+}
+
 /**
  * Removes a managed account (issue #1857). The whole home, rollouts and
  * provider state included, moves in one rename into
@@ -653,11 +657,7 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
       home: managedHome(id),
       homeIsSafe: () => managedHomeIsSafe(id, true),
       unsafeHome: () => new UnsafeCodexHomeError(),
-      rewrites: (home, archive) => {
-        const spellings = [home];
-        try { const real = fs.realpathSync(home); if (real !== home) spellings.push(real); } catch { /* the lexical spelling still applies */ }
-        return spellings.map((spelling) => ({ from: spelling, to: archive }));
-      },
+      rewrites: codexArchiveRewrites,
       registry: {
         journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
         commitRetired: () => writeRegistry(withAccountRetired(before, id)),
@@ -667,9 +667,26 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
   });
 }
 
-/** Removes failed-login homes that have no registry owner. Only safe direct
- *  children qualify. Retired archives are never deleted — their sessions are
- *  the point — but a strip left incomplete by an earlier removal is retried. */
+/** The caller holds the registry lock; older retired homes use the same
+ * journaled move and path rewrites as newly removed accounts. */
+function archiveRetiredCodexHome(id: string): AccountArchiveRemovalReport {
+  const before = mutableRegistry();
+  return removeManagedAccountIntoArchive({
+    engine: "codex", accountId: id, home: managedHome(id),
+    homeIsSafe: () => managedHomeIsSafe(id, true),
+    unsafeHome: () => new UnsafeCodexHomeError(),
+    rewrites: codexArchiveRewrites,
+    registry: {
+      journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
+      commitRetired: () => writeRegistry(withAccountRetired(before, id)),
+      restore: () => writeRegistry(before),
+    },
+  });
+}
+
+/** Removes safe failed-login homes, moves retired-in-place homes into the
+ * shared archive, and retries incomplete credential cleanup. Archived
+ * sessions remain retained. */
 export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
   return withRegistryLock(() => {
     /* A removal whose archive still holds its sign-in file stays journaled;
@@ -677,44 +694,33 @@ export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
     const recovery = recoverRemovalsLocked();
     const registry = mutableRegistry();
     const registered = new Set(registry.accounts.map((account) => account.id));
-    const retired = new Set(registry.retired.map((account) => account.id));
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(codexAccountsRoot(), { withFileTypes: true }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { removed: [], unresolved: [...recovery.unresolved].sort() }; throw error; }
     const removed: string[] = [];
     const unresolved: string[] = [...recovery.unresolved];
+    const archived: NonNullable<AccountOrphanCleanupReport["archived"]> = [];
     const historyReports: Record<string, AccountHistoryInventoryReport> = {};
     for (const entry of entries) {
       if (registered.has(entry.name)) continue;
+      if (unresolved.includes(entry.name)) continue;
       if (accountRemovalBlockers("codex", entry.name).length > 0) { unresolved.push(entry.name); continue; }
       if (!entry.isDirectory() || !managedHomeIsSafe(entry.name, true)) { unresolved.push(entry.name); continue; }
+      const retired = registry.retired.find((account) => account.id === entry.name);
+      if (retired) {
+        if (retired.archived) { unresolved.push(entry.name); continue; }
+        try {
+          const report = archiveRetiredCodexHome(entry.name);
+          archived.push({ id: entry.name, files: report.files, bytes: report.bytes });
+          if (report.cleanupPending) unresolved.push(entry.name);
+        } catch { unresolved.push(entry.name); }
+        continue;
+      }
       let history: AccountHistoryInventoryReport;
       try { history = accountHistoryInventory("codex", entry.name, managedHome(entry.name)); }
       catch (error) {
         if (error instanceof AccountHistoryInventoryBlockedError) historyReports[entry.name] = error.report;
         unresolved.push(entry.name); continue;
-      }
-      if (retired.has(entry.name)) {
-        if (!history.artifacts.some((artifact) => artifact.history)) {
-          try {
-            if (removeHistoryFreeAccountHome("codex", entry.name, managedHome(entry.name))) removed.push(entry.name);
-            else unresolved.push(entry.name);
-          } catch (error) {
-            if (error instanceof AccountHistoryInventoryBlockedError) historyReports[entry.name] = error.report;
-            unresolved.push(entry.name);
-          }
-          continue;
-        }
-        if (!historyFitsRetainedSessions(history)) { historyReports[entry.name] = history; unresolved.push(entry.name); continue; }
-        try {
-          const scrub = scrubAccountHomeToRetainedHistory("codex", entry.name, managedHome(entry.name), "sessions");
-          if (!scrub.complete) unresolved.push(entry.name);
-          else if (scrub.changed) removed.push(entry.name);
-        } catch (error) {
-          if (error instanceof AccountHistoryInventoryBlockedError) historyReports[entry.name] = error.report;
-          unresolved.push(entry.name);
-        }
-        continue;
       }
       if (history.artifacts.some((artifact) => artifact.history)) { historyReports[entry.name] = history; unresolved.push(entry.name); continue; }
       try {
@@ -729,6 +735,7 @@ export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
     return {
       removed: removed.sort(),
       unresolved: unresolved.sort(),
+      ...(archived.length > 0 ? { archived: archived.sort((left, right) => left.id.localeCompare(right.id)) } : {}),
       ...(Object.keys(historyReports).length > 0 ? { history: historyReports } : {}),
     };
   });
