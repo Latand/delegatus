@@ -278,6 +278,36 @@ test("a queued first-message lookup fences replacement by a controller that lost
   } finally { setAgentRegistryForTests(null); }
 });
 
+test.each(["uncertainty", "writer"] as const)("recovery retains newer %s recorded at its persistence boundary", async boundary => {
+  const f = await fixture();
+  const persist = f.registry.preserveSpawnArtifactOwnership.bind(f.registry);
+  let raced = false;
+  const seam = spyOn(f.registry, "preserveSpawnArtifactOwnership").mockImplementation((...args) => {
+    const incoming = stagedLaunchRecovery({ error: args[1] });
+    if (!raced && incoming?.checks === 1 && incoming.phase === "unpublished") {
+      raced = true;
+      if (boundary === "writer") {
+        expect(f.registry.claimStructuredHost(f.original.key!, captureProcessIdentity(process.pid), { allowUnhosted: true })).not.toBeNull();
+      } else {
+        const latest = stagedLaunchRecovery(f.registry.readOnlySnapshot().receipts[f.original.launchId])!;
+        persist(f.original.launchId, "structured launch recovery: " + JSON.stringify({ ...latest, phase: "uncertain", reason: "first-message dispatch is unconfirmed" }));
+      }
+    }
+    return persist(...args);
+  });
+  try {
+    f.loseHost(); f.restore(); f.advance(61_000);
+    await tickPipelines([], f.ports);
+    expect(raced).toBe(true);
+    expect(stagedLaunchRecovery(f.registry.readOnlySnapshot().receipts[f.original.launchId])).toMatchObject({
+      phase: boundary === "writer" ? "unpublished" : "uncertain", checks: 0,
+    });
+    f.park();
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, f.ports)).error).toContain("path-pending");
+    expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]?.retryClaim).toBeUndefined();
+  } finally { seam.mockRestore(); setAgentRegistryForTests(null); }
+});
+
 test("retry-stage replaces an exhausted reservation with no transcript, host or registry generation", async () => {
   const f = await fixture(true);
   try {

@@ -6238,14 +6238,16 @@ export class AgentRegistry {
     });
   }
 
-  preserveSpawnArtifactOwnership(launchId: string, error: string): void {
-    this.mutate((file) => {
+  preserveSpawnArtifactOwnership(launchId: string, error: string, recoveryFence?: (file: RegistryFile, receipt: SpawnReceipt) => boolean): boolean {
+    return this.mutate((file) => {
       const receipt = file.receipts[launchId];
-      if (!receipt || receipt.state === "completed" || receipt.state === "failed") return;
+      if (!receipt || receipt.state === "completed" || receipt.state === "failed"
+        || (recoveryFence && !recoveryFence(file, receipt))) return false;
       receipt.state = "path-pending";
       receipt.error = error;
       receipt.verifiedHost = null;
       receipt.target = null;
+      return true;
     });
   }
 

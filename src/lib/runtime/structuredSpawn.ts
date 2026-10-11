@@ -1963,8 +1963,8 @@ export async function failStagedResume(
   if (failed.claimed) stagedContinuations.delete(launchId);
   return failed;
 }
-function writeStagedRecovery(registry: AgentRegistry, launchId: string, recovery: StagedLaunchRecovery): void {
-  registry.preserveSpawnArtifactOwnership(launchId, STAGED_RECOVERY_PREFIX + JSON.stringify(recovery));
+function writeStagedRecovery(registry: AgentRegistry, launchId: string, recovery: StagedLaunchRecovery, recoveryFence?: Parameters<AgentRegistry["preserveSpawnArtifactOwnership"]>[2]): boolean {
+  return registry.preserveSpawnArtifactOwnership(launchId, STAGED_RECOVERY_PREFIX + JSON.stringify(recovery), recoveryFence);
 }
 export function isTransientStagedLaunchFailure(error: unknown): boolean {
   if (isRuntimeHostTransportFailure(error)) return true;
@@ -2044,8 +2044,29 @@ export async function recoverStagedStructuredLaunch(
     if (!ownsHost && recovery.checks === 0 && now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
       recovery = { ...recovery, startedAt: now() };
     }
+    let observedError = receipt.error;
+    const matches = (latest: SpawnReceipt | undefined, entry: AgentRegistryEntry | null | undefined) => {
+      return latest?.state === "path-pending" && latest.conversationId === receipt.conversationId
+        && latest.error === observedError
+        && (latest.key ? receipt.key && sessionKeyId(latest.key) === sessionKeyId(receipt.key) : !receipt.key)
+        && entry?.claimOwner === writer?.claimOwner && entry?.claimEpoch === writer?.claimEpoch
+        && (ownsHost ? entry?.structuredHost?.writerClaimEpoch === writer!.claimEpoch : entry?.status === writer?.status)
+        && options.eligible?.() !== false;
+    };
+    const current = () => {
+      const snapshot = registry.readOnlySnapshot();
+      return matches(snapshot.receipts[launchId], receipt.key ? snapshot.entries[sessionKeyId(receipt.key)] : null);
+    };
+    const persist = (value: StagedLaunchRecovery) => {
+      // Compare the recovery record and writer inside the transaction: another
+      // observer's uncertainty or a replacement writer must win over this read.
+      const written = writeStagedRecovery(registry, launchId, value, (file, latest) => Boolean(matches(latest,
+        receipt.key ? file.entries[sessionKeyId(receipt.key)] : null)));
+      if (written) observedError = STAGED_RECOVERY_PREFIX + JSON.stringify(value);
+      return written;
+    };
     const stop = (reason: string) => {
-      writeStagedRecovery(registry, launchId, { ...recovery!, stopped: true, reason });
+      persist({ ...recovery!, stopped: true, reason });
       return read();
     };
     if (now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS || recovery.checks >= STAGED_RECOVERY_MAX_CHECKS) {
@@ -2055,17 +2076,7 @@ export async function recoverStagedStructuredLaunch(
     // Persist the next wake before I/O, so a controller restart cannot reset it.
     recovery.nextTryAt = Math.min(recovery.startedAt + STAGED_RECOVERY_BUDGET_MS,
       now() + Math.min(60_000, 1_000 * 2 ** Math.min(recovery.checks, 6)));
-    writeStagedRecovery(registry, launchId, recovery);
-    const current = () => {
-      const latest = read();
-      const entry = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
-      return latest?.state === "path-pending" && latest.conversationId === receipt.conversationId
-        && (latest.key ? receipt.key && sessionKeyId(latest.key) === sessionKeyId(receipt.key) : !receipt.key)
-        && (ownsHost ? registry.ownsStructuredHostClaim(receipt.key!, writer!.claimOwner!, writer!.claimEpoch)
-          : entry?.claimOwner === writer?.claimOwner && entry?.claimEpoch === writer?.claimEpoch
-            && entry?.status === writer?.status)
-        && options.eligible?.() !== false;
-    };
+    if (!persist(recovery)) return read();
     try {
       // Read ORIGINAL ids. A timeout is unknown; it cannot stand in for null.
       const launch = await client.operationStatus(launchId);
@@ -2080,7 +2091,7 @@ export async function recoverStagedStructuredLaunch(
       // Its presence fences replacement even while its receipt is queued.
       if (message && recovery.phase === "unpublished") {
         recovery = { ...recovery, phase: "uncertain" };
-        writeStagedRecovery(registry, launchId, recovery);
+        if (!persist(recovery)) return read();
       }
       if (launch && FAILED_SPAWN_OPERATION_STATUSES.has(launch.receipt.status)) return stop(launch.receipt.reason ?? `original launch ended as ${launch.receipt.status}`);
       const messageFailure = failedOperationReason(message, "original first message");
@@ -2089,7 +2100,7 @@ export async function recoverStagedStructuredLaunch(
       const delivered = recovery.phase === "delivered" || (message && INITIAL_MESSAGE_DELIVERED.has(message.receipt.status));
       if (delivered) {
         recovery = { ...recovery, phase: "delivered" };
-        writeStagedRecovery(registry, launchId, recovery);
+        if (!persist(recovery)) return read();
         if (!receipt.artifactPath || !structuredTranscriptIsReadable(receipt.artifactPath)) return read();
         await client.transitionOperation(launchId, "delivered");
         if (!current()) return read();
@@ -2104,7 +2115,7 @@ export async function recoverStagedStructuredLaunch(
       // A send that may have crossed the wire is lookup-only, even when a
       // successful lookup says absent. A delayed request may still arrive.
       if (recovery.phase === "uncertain" || message) {
-        writeStagedRecovery(registry, launchId, { ...recovery, reason: `original first-message lookup: ${message?.receipt.status ?? "absent; publication remains uncertain"}` });
+        persist({ ...recovery, reason: `original first-message lookup: ${message?.receipt.status ?? "absent; publication remains uncertain"}` });
         return read();
       }
       if (!ownsHost || !host || !receipt.key || !receipt.artifactPath) throw new RuntimeHostUnavailableError("staged host is awaiting its original owner", "HOST_BUSY");
@@ -2117,13 +2128,13 @@ export async function recoverStagedStructuredLaunch(
         // Persist uncertainty immediately before dispatch. A crash at this
         // boundary must never authorize a second first message.
         recovery = { ...recovery, phase: "uncertain" };
-        writeStagedRecovery(registry, launchId, recovery);
+        if (!persist(recovery)) return read();
         const outcome = await continuation.deliver();
         if (current()) {
           recovery = outcome === "held"
             ? { ...recovery, phase: "unpublished", reason: "first message held before dispatch" }
             : { ...recovery, phase: "delivered", reason: "first message delivered; transcript publication pending" };
-          writeStagedRecovery(registry, launchId, recovery);
+          persist(recovery);
         }
       } else {
         const effect = await structuredSpawnEffectForLaunch(client, launchId);
@@ -2135,7 +2146,7 @@ export async function recoverStagedStructuredLaunch(
         // Payload lookup and validation cannot publish a message. Keep their
         // failures retryable; uncertainty starts only at the dispatch boundary.
         recovery = { ...recovery, phase: "uncertain" };
-        writeStagedRecovery(registry, launchId, recovery);
+        if (!persist(recovery)) return read();
         const result = await enqueueStructuredMessage({ path: receipt.artifactPath, conversationId: receipt.conversationId,
           clientMessageId: `spawn_${launchId}`, operationId: `spawn_message_${launchId}`, launchId, text: effect.prompt, imageRefs: images,
           ...(origin ? { origin } : {}),
@@ -2147,14 +2158,14 @@ export async function recoverStagedStructuredLaunch(
           throw new Error(reason);
         }
         if (result.outcome === "held" && current()) {
-          writeStagedRecovery(registry, launchId, { ...recovery, phase: "unpublished", reason: "first message held before dispatch" });
+          persist({ ...recovery, phase: "unpublished", reason: "first message held before dispatch" });
         }
       }
       return read();
     } catch (error) {
       if (!current()) return read();
       if (!isTransientStagedLaunchFailure(error) && !(error instanceof StructuredInitialMessageTimeoutError)) return stop(stagedRecoveryFailureReason(error));
-      writeStagedRecovery(registry, launchId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
+      persist({ ...recovery, reason: stagedRecoveryFailureReason(error) });
       return read();
     }
   };
