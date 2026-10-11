@@ -1152,8 +1152,9 @@ export async function mapReplayPatchLocation(
     catalog: a role mailbox alone cannot make a private name publishable. */
 function admittedPublicationIdentity(name: string, email: string, field: "author" | "committer", parentCount: number): boolean {
   if (!name.trim() || /[\x00-\x1f\x7f]/.test(name)) return false;
-  const mailbox = /^([a-z0-9.!#$%&'*+/=?^_`{|}~-]+)@((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63})$/i.exec(email);
-  if (!mailbox) return false;
+  const mailboxes = [...email.matchAll(mailboxPattern(true))];
+  const mailbox = mailboxes.length === 1 ? mailboxes[0] : undefined;
+  if (!mailbox || mailbox.index !== 0 || mailbox[0].length !== email.length) return false;
   const local = mailbox[1].toLowerCase(), domain = mailbox[2].toLowerCase();
   const admittedMailbox = (local: string, domain: string) => local === "noreply" || local === "no-reply"
     || domain === "users.noreply.github.com" || (local === "support" && domain === "github.com");

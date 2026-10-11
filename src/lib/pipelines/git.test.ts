@@ -2232,19 +2232,40 @@ test("stage reconciliation accepts squashed content, preserves the tree, and use
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["noreply", "no-reply", "forge-account", "forge-role", "mailbox-name"])("stage reconciliation preserves an admitted configured %s identity", async (role) => {
+test.each(["noreply", "no-reply", "forge-account", "forge-role", "mailbox-name", "international-domain", "quoted-forge-account"])("stage reconciliation preserves an admitted literal %s identity", async (role) => {
   const box = await isolatedIdentityRepo();
   try {
     const subject = pipeline(); subject.worktreeDir = box.repo; subject.branch = "main";
     const base = await box.run("rev-parse", "HEAD");
-    const address = role === "forge-account" ? ["fixture-tool", "users.noreply.github.com"].join("@")
-      : role === "forge-role" ? ["support", "github.com"].join("@") : [role === "mailbox-name" ? "noreply" : role, "example.invalid"].join("@");
+    const addresses: Record<string, string> = {
+      "forge-account": ["fixture-tool", "users.noreply.github.com"].join("@"),
+      "forge-role": ["support", "github.com"].join("@"),
+      "mailbox-name": ["noreply", "example.invalid"].join("@"),
+      "international-domain": ["noreply", "bücher.example.invalid"].join("@"),
+      "quoted-forge-account": ['"fixture-tool"', "users.noreply.github.com"].join("@"),
+    };
+    const address = addresses[role] ?? [role, "example.invalid"].join("@");
     const configured = { GIT_AUTHOR_NAME: role === "mailbox-name" ? `Fixture Builder ${address}` : "Fixture Builder", GIT_AUTHOR_EMAIL: address,
       GIT_COMMITTER_NAME: "Fixture Publisher", GIT_COMMITTER_EMAIL: address };
     fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
     await box.run("add", "source.ts");
-    expect((await box.exec("git", ["commit", "-m", "configured machine work"], box.repo, configured)).code).toBe(0);
+    if (role === "quoted-forge-account") {
+      // Porcelain strips a leading quote from an identity. Record the valid
+      // literal mailbox directly, as another Git object writer can do.
+      const tree = await box.run("write-tree");
+      const object = spawnSync("git", ["hash-object", "-t", "commit", "-w", "--stdin"], {
+        cwd: box.repo, env: box.env, encoding: "utf8",
+        input: `tree ${tree}\nparent ${base}\nauthor ${configured.GIT_AUTHOR_NAME} <${address}> 1700000000 +0000\n`
+          + `committer ${configured.GIT_COMMITTER_NAME} <${address}> 1700000000 +0000\n\nconfigured machine work\n`,
+      });
+      expect(object.status).toBe(0);
+      await box.run("update-ref", "HEAD", object.stdout.trim(), base);
+    } else {
+      expect((await box.exec("git", ["commit", "-m", "configured machine work"], box.repo, configured)).code).toBe(0);
+    }
     subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    expect(await box.run("show", "-s", "--format=%an|%ae|%cn|%ce", subject.lastPassedCommit))
+      .toBe(Object.values(configured).join("|"));
     const publication = () => box.exec(process.execPath, [path.resolve("scripts/privacy-publication-gate.ts"),
       "--repository", box.repo, "--base", base, "--check-commits"], box.repo);
     expect((await publication()).code).toBe(0);
