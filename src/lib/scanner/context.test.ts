@@ -75,6 +75,13 @@ describe("ctxFor", () => {
     const file = entry([{ type: "assistant", timestamp: OBSERVED_AT, message: { model: "claude-newthing-9", usage: { input_tokens: 42_000 } } }], "claude-projects");
     expect(ctxFor(file)).toEqual({ usedTokens: 42_000, windowTokens: null, pct: null, source: "unknown", confidence: "unknown", observedAt: OBSERVED_AT });
   });
+
+  test("a Haiku 5.5 transcript uses 1M context while Haiku 4.5 stays at 200k", () => {
+    for (const [model, windowTokens, pct] of [["claude-haiku-5-5", 1_000_000, 10], ["claude-haiku-4-5-20251001", 200_000, 50]] as const) {
+      const file = entry([{ type: "assistant", timestamp: OBSERVED_AT, message: { model, usage: { input_tokens: 100_000 } } }], "claude-projects");
+      expect(ctxFor(file)).toMatchObject({ usedTokens: 100_000, windowTokens, pct, source: "registry", registryVersion: MODEL_REGISTRY_VERSION });
+    }
+  });
 });
 
 test("the board withholds pre-compaction usage until a fresh provider record", () => {

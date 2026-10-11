@@ -36,6 +36,8 @@ test("a pinned Claude id with the claude- prefix lands on its family's size clas
   expect(modelSizeClass("claude-sonnet-5-5")).toBe(2);
   expect(modelSizeClass("claude-sonnet-5")).toBe(2);
   expect(modelSizeClass("claude-haiku-4-5")).toBe(1);
+  expect(modelSizeClass("claude-haiku-5-5")).toBe(1);
+  expect(costClass({ model: "claude-haiku-5-5", effort: "low" })).toBe("light");
   expect(modelSizeClass("claude-opus-5-5")).toBe(3);
   expect(modelSizeClass("claude-fable-5-1")).toBe(3);
   expect(costClass({ model: "claude-sonnet-5-5", effort: "high" })).toBe(costClass({ model: "sonnet", effort: "high" }));
