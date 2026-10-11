@@ -5813,7 +5813,14 @@ async function spawnRunStage(
       // target's cut so later authentication or quota proof can re-admit it.
       parkProviderTarget(pipeline, attempt, detail, ports,
         error instanceof ProjectAccountRefusedError ? error : undefined);
-    } else park(pipeline, detail, attempt);
+    } else {
+      if (!attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
+        && (error instanceof ProjectAccountRefusedError || error instanceof AccountAuthenticationRequiredError)) {
+        if (error instanceof AccountAuthenticationRequiredError) attempt.accountId = error.accountId;
+        attempt.completedAt = ports.now();
+      }
+      park(pipeline, detail, attempt);
+    }
   } finally {
     /* The key only means "this spawn is in flight in this process". */
     spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
@@ -7990,22 +7997,42 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     const controlledAt = Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? ""));
     if (accountRefusal && controlledAt < unixMs(attempt.startedAt ?? pipeline.createdAt)
       && (!pipeline.controlGeneration || controlledAt > 0)) {
-      let admitted = false;
+      const cutAt = unixMs(attempt.completedAt ?? attempt.startedAt ?? pipeline.createdAt);
+      let target: string | null = null;
+      let failedAccounts: string[] = [];
       try {
         if (pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks())) return false;
         const pinned = attemptAccountPin(stage, attempt)?.trim();
+        failedAccounts = authRefusal && attempt.accountId
+          && ports.accountRecovered?.(engine, attempt.accountId, cutAt, attempt.effectiveRole.model, "auth_required") !== true
+          ? [attempt.accountId] : [];
+        const unavailableIds = priorPool.filter(id => ports.accountRecovered?.(engine, id, cutAt,
+          attempt.effectiveRole.model, "usage_limit") !== true).concat(failedAccounts);
         const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
-          project: pipeline.project, model: attempt.effectiveRole.model, requestedId: pinned,
+          project: pipeline.project, model: attempt.effectiveRole.model, requestedId: pinned, unavailableIds,
         });
         const allowed = ports.allowedAccountIds?.(pipeline.project, engine);
-        admitted = resolution.kind === "available" && (!allowed || allowed.includes(resolution.account.accountId))
+        if (resolution.kind === "available" && !unavailableIds.includes(resolution.account.accountId)
+          && (!allowed || allowed.includes(resolution.account.accountId))
           && (!pinned || pinned === resolution.account.accountId) && (ports.engineReadiness?.(engine, pipeline.project) ?? "connected") === "connected"
-          && (!priorPool.includes(resolution.account.accountId) || ports.accountRecovered?.(engine, resolution.account.accountId,
-            unixMs(attempt.startedAt ?? pipeline.createdAt), attempt.effectiveRole.model, "usage_limit") === true)
-          && (!authRefusal || ports.accountRecovered?.(engine, resolution.account.accountId,
-            unixMs(attempt.startedAt ?? pipeline.createdAt), attempt.effectiveRole.model, "auth_required") === true);
+          && (!authRefusal || attempt.accountId || ports.accountRecovered?.(engine, resolution.account.accountId,
+            cutAt, attempt.effectiveRole.model, "auth_required") === true)) target = resolution.account.accountId;
       } catch { /* Unavailable admission evidence keeps the recorded refusal. */ }
-      if (admitted) {
+      if (target) {
+        const at = ports.now();
+        // Carry the admitted target and the old refusal through live spawn
+        // admission. A stale preferred source must not win that second read.
+        const condition: ProviderCondition = capacityRefusal
+          ? { kind: "usage_limit", scope: "usage", resetLabel: null, label: `${engine} usage limit` }
+          : classifyProviderCondition(engine, "unauthorized", "Authentication required");
+        attempt.providerWait = { condition, text: attempt.error, accountId: attempt.accountId ?? priorPool[0] ?? null,
+          turnTs: 0, tries: 0, startedAt: at, resumeAt: at, resetsAt: null, switchedAccountId: target, failedAccounts };
+        attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: 0, startedAt: at, engine,
+          failedAccounts: [...new Set([...providerFailedAccountsOn(attempt, engine), ...failedAccounts])].filter(id => id !== target) };
+        if (priorPool.length) attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []).filter(item =>
+          (item.engine ?? engine) !== engine || !priorPool.includes(item.accountId)),
+          ...priorPool.map(accountId => ({ engine, accountId, limitedAt: cutAt, resetsAt: null, turnId: String(cutAt) }))];
+        attempt.accountId = target;
         attempt.state = "pending";
         attempt.error = null;
         attempt.completedAt = null;
