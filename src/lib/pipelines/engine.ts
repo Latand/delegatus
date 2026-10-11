@@ -5486,9 +5486,8 @@ async function spawnRunStage(
 ): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
   try {
-    /* Role memory, read once per activation and before the composer, so the
-       composed input leaves room for the learned rules' pointer. A clean
-       stage carries the clean mark and no rules. */
+    /* Carry the text-free role-memory selector through every spawn. Clean
+       stages carry only their clean mark. */
     const memory = stageMemoryForLaunch(pipeline, stage, attempt.effectiveRole.roleId ?? null);
     if (attempt.activation?.prepareInput || prepareInput) {
       const bound = attemptStage(stage, attempt);

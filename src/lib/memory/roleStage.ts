@@ -4,13 +4,13 @@ import { ROLE_IDS } from "@/lib/roles/types";
 import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
 import { LESSON_MATCH_MIN_CHARS, lettersAndDigits } from "./roleConsolidate";
 import { lessonRequestLines, type HandedFindings } from "./roleRender";
-import { learnedRulesBlock, leaveLessons, lessonRequest, recordLessonRequest, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
+import { leaveLessons, lessonRequest, recordLessonRequest, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
 import { roleMemoryEnabled } from "./settings";
 import { lessonText, lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind, type RewriteInput } from "./roleTypes";
 
-/* The three points where role memory meets a pipeline stage: the block at
+/* The three points where role memory meets a pipeline stage: the selector at
    spawn, the request in the answer to an accepted stage_report, and the
-   lessons the agent leaves with leave_lesson. Each reads the pipeline record
+   answer the agent leaves with leave_lesson. Each reads the pipeline record
    and writes only role memory's own collection. */
 
 function attemptOf(pipeline: Pipeline, stageId: string, n: number): PipelineStageAttempt | null {
@@ -20,12 +20,6 @@ function attemptOf(pipeline: Pipeline, stageId: string, n: number): PipelineStag
 /** Whether a stage reads and writes learned rules, by role and by the engine's review-gate classification. */
 export function stageMemoryExcluded(stage: Pick<PipelineStage, "kind" | "onFail"> | null, roleId: string | null): boolean {
   return automaticMemoryExcluded({ roleId, stage });
-}
-
-/** The learned rules a stage launch starts with, or null for a clean stage or an installation with the kill switch set. */
-export function learnedRulesForLaunch(pipeline: Pick<Pipeline, "project">, stage: Pick<PipelineStage, "kind" | "onFail">, roleId: string | null): string | null {
-  if (stageMemoryExcluded(stage, roleId) || !roleMemoryEnabled()) return null;
-  return learnedRulesBlock(pipeline.project, roleId);
 }
 
 /** What a stage launch carries from memory: whether it is clean (no automatic
