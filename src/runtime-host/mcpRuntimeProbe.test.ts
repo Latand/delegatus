@@ -5,46 +5,18 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 import { VIEWER_CONTROL_TOKEN_ENV } from "@/lib/mcp/controlEndpoint";
-import { MCP_TOOL_NAMES } from "@/lib/mcp/server";
 import { MCP_HEALTH_PROBE_CAPABILITY_ENV } from "@/lib/mcp/healthProbeAdmission";
+import { MCP_TOOL_NAMES } from "@/lib/mcp/server";
 
 import { RuntimeHost } from "./host";
 import { RuntimeJournal } from "./journal";
 import { McpHealthProbeAdmissions } from "./mcpHealthProbeAdmission";
+import { McpProbeStdioTransport } from "./mcpProbeStdioTransport";
 import { mcpProbeCallFailures, mcpProbeFailureDetail, probeControlUrl, probeMcpRuntime, VIEWER_CONTROL_URL_ENV } from "./mcpRuntimeProbe";
 import { serveRuntimeHost } from "./socket";
-import { McpProbeStdioTransport } from "./mcpProbeStdioTransport";
 
-const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
-
-/* Ordinary sessions can read the board under B+. A read outside the health
-   surface distinguishes a redeemed probe from an ordinary session without
-   writing a task or invoking an agent action. */
-async function probeIdentityCode(env: Record<string, string>, capability?: string, admissions?: McpHealthProbeAdmissions): Promise<unknown> {
-  const environment = { ...env };
-  delete environment[MCP_HEALTH_PROBE_CAPABILITY_ENV];
-  if (capability) environment[MCP_HEALTH_PROBE_CAPABILITY_ENV] = capability;
-  const transport = new McpProbeStdioTransport({
-    command: process.execPath,
-    args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
-    cwd: process.cwd(),
-    env: environment,
-    ...(admissions ? { healthAdmissions: admissions } : {}),
-  });
-  const client = new Client({ name: "health-admission-fixture", version: "1.0.0" });
-  try {
-    await client.connect(transport, { timeout: 5_000 });
-    const result = await client.callTool({ name: "get_task", arguments: { taskId: "missing-health-task" } }, undefined, { timeout: 5_000 });
-    const structured = result.structuredContent;
-    return structured && typeof structured === "object" && "code" in structured ? structured.code : undefined;
-  } finally {
-    await client.close().finally(() => transport.close());
-  }
-}
-
-/* The probed runtime reads through the control endpoint it is handed. Unset, it
-   resolves to the fixed loopback address, which belongs to whichever Viewer is
-   already serving (#790) - so every probe below is pointed at its own stub. */
+/* Every probe reads its own port-0 control stub. A missing control endpoint
+   is rejected before spawning the runtime. */
 function candidateControl() {
   return Bun.serve({
     hostname: "127.0.0.1",
@@ -57,8 +29,37 @@ function candidateControl() {
   });
 }
 
+async function healthPolicyCalls(
+  environment: Record<string, string>,
+  capability?: string,
+  admissions?: McpHealthProbeAdmissions,
+) {
+  const env = { ...environment };
+  delete env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
+  if (capability) env[MCP_HEALTH_PROBE_CAPABILITY_ENV] = capability;
+  const transport = new McpProbeStdioTransport({
+    command: process.execPath,
+    args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
+    cwd: process.cwd(),
+    env,
+    ...(admissions ? { healthAdmissions: admissions } : {}),
+  });
+  const client = new Client({ name: "health-policy-fixture", version: "1.0.0" });
+  try {
+    await client.connect(transport, { timeout: 2_000 });
+    for (const name of ["deployment_status", "board_snapshot"]) {
+      const result = await client.callTool({ name, arguments: { limit: 1 } }, undefined, { timeout: 2_000 });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ ok: true });
+    }
+    return await client.callTool({ name: "list_tasks", arguments: { limit: 1 } }, undefined, { timeout: 2_000 });
+  } finally {
+    await client.close();
+    await transport.close();
+  }
+}
+
 test("host-admitted managed MCP probes discover the complete surface, call required reads, and exit", async () => {
-  if (!NODE_BIN) throw new Error("the MCP probe fixture requires Node on PATH");
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-"));
   const socketPath = path.join(sandbox, "runtime.sock");
   const journal = new RuntimeJournal(path.join(sandbox, "runtime.sqlite"));
@@ -87,7 +88,7 @@ test("host-admitted managed MCP probes discover the complete surface, call requi
     for (const host of ["claude", "codex"]) {
       let processId: number | null = null;
       const evidence = await probeMcpRuntime({
-        command: host === "claude" ? process.execPath : NODE_BIN,
+        command: host === "claude" ? process.execPath : "node",
         args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
         cwd: process.cwd(),
         env: { ...environment, LLV_TEST_HOST: host },
@@ -125,8 +126,7 @@ test("host-admitted managed MCP probes discover the complete surface, call requi
   }
 }, 20_000);
 
-test("a release target with no staged bundle is refused within the probe timeout", async () => {
-  if (!NODE_BIN) throw new Error("the MCP probe fixture requires Node on PATH");
+test("a missing published runtime is refused within the configured probe timeout", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-missing-"));
   const socketPath = path.join(sandbox, "runtime.sock");
   const journal = new RuntimeJournal(path.join(sandbox, "runtime.sqlite"));
@@ -171,7 +171,7 @@ test("a release target with no staged bundle is refused within the probe timeout
   try {
     const startedAt = performance.now();
     const evidence = await probeMcpRuntime({
-      command: NODE_BIN,
+      command: "node",
       args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
       cwd: process.cwd(),
       env: environment,
@@ -180,7 +180,6 @@ test("a release target with no staged bundle is refused within the probe timeout
       healthProbeAdmissions: admissions,
       timeoutMs: 500,
     });
-
     expect(evidence).toMatchObject({ ok: false, processReady: false,
       calls: { deploymentStatus: false, boardSnapshot: false }, tools: [] });
     expect(evidence.detail).toContain("timed out");
@@ -193,7 +192,7 @@ test("a release target with no staged bundle is refused within the probe timeout
   }
 }, 20_000);
 
-test("absent, forged, expired, and replayed health admissions cannot imitate the runtime host", async () => {
+test("only an admitted health probe is limited to the two health reads", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-adversarial-"));
   const socketPath = path.join(sandbox, "runtime.sock");
   const journal = new RuntimeJournal(path.join(sandbox, "runtime.sqlite"));
@@ -218,19 +217,23 @@ test("absent, forged, expired, and replayed health admissions cannot imitate the
   environment.LLV_CLAUDE_HOME = path.join(sandbox, "claude");
   const control = candidateControl();
   environment[VIEWER_CONTROL_URL_ENV] = control.url.origin;
-  const run = (capability?: string) => probeIdentityCode(environment, capability, admissions);
+  const run = async (healthProbeCapability?: string) => {
+    return healthPolicyCalls(environment, healthProbeCapability, admissions);
+  };
 
   try {
-    expect(await run()).toBe("tool_failed");
-    expect(await run("A".repeat(43))).toBe("tool_failed");
+    expect((await run()).structuredContent).toMatchObject({ ok: true });
+    expect((await run("A".repeat(43))).structuredContent).toMatchObject({ ok: true });
 
     const expired = admissions.issue();
     now = 110;
-    expect(await run(expired)).toBe("tool_failed");
+    expect((await run(expired)).structuredContent).toMatchObject({ ok: true });
 
     const legitimate = admissions.issue();
-    expect(await run(legitimate)).toBe("tool_not_permitted");
-    expect(await run(legitimate)).toBe("tool_failed");
+    const bounded = await run(legitimate);
+    expect(bounded.isError).toBe(true);
+    expect(bounded.structuredContent).toMatchObject({ ok: false, code: "tool_not_permitted" });
+    expect((await run(legitimate)).structuredContent).toMatchObject({ ok: true });
   } finally {
     control.stop(true);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -239,14 +242,14 @@ test("absent, forged, expired, and replayed health admissions cannot imitate the
   }
 }, 20_000);
 
-test("the final launcher rejects capability approval from a caller-selected runtime socket", async () => {
+test("a caller-selected runtime socket cannot impose the health-probe identity", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-forged-socket-"));
   const socketPath = path.join(sandbox, "forged-runtime.sock");
   let admissionRequests = 0;
   const server = serveRuntimeHost(socketPath, {
     async handle(request) {
       if (request.method === "mcp-health-probe-admission") {
-        admissionRequests++;
+        admissionRequests += 1;
         return { id: request.id, ok: true, result: true };
       }
       if (request.method === "snapshot") {
@@ -268,7 +271,8 @@ test("the final launcher rejects capability approval from a caller-selected runt
   environment[VIEWER_CONTROL_URL_ENV] = control.url.origin;
 
   try {
-    expect(await probeIdentityCode(environment, "A".repeat(43))).toBe("tool_failed");
+    const tasks = await healthPolicyCalls(environment, "A".repeat(43));
+    expect(tasks.structuredContent).toMatchObject({ ok: true });
     expect(admissionRequests).toBe(0);
   } finally {
     control.stop(true);

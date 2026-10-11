@@ -14,7 +14,7 @@ import { structuredHostsEnabled } from "./flags";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import { actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import { actingOperation, actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -51,7 +51,7 @@ import {
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
 import type { DeliveryWaitReason } from "./deliveryWaitReason";
-import { recordAdmissionWait, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
+import { admissionRecordStanding, recordAdmissionWait, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
@@ -1415,6 +1415,30 @@ export async function enqueueStructuredMessage(
       status: 409,
     };
   }
+  /* A live journal attempt already owns this original key. A resend observes
+     it before any recovery, rearm or admission note can move its clocks. */
+  const queueLeads = (reservation: HeldDelivery) => admissionRecordStanding(progress, reservation.command.operationId,
+    record => record.executorId === null && actingOperation(reservation.conversationId) !== reservation.command.operationId).standing === "leave";
+  const liveReplay = async (reservation: HeldDelivery | null): Promise<StructuredMessageResult | null> => {
+    if (!reservation || (reservation.state !== "assigned" && reservation.state !== "delivery-uncertain")
+      || typeof client.operationStatus !== "function") return null;
+    let result: RuntimeOperationResult | null = null;
+    try { result = await client.operationStatus(reservation.command.operationId); } catch { /* the queue's standing record still owns its attempt */ }
+    if (!result || result.operationId !== reservation.command.operationId
+      || !["queued", "pending", "delivering"].includes(result.receipt.status)) {
+      if (!queueLeads(reservation)) return null;
+      requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
+      return acceptedHeld(reservation.command.operationId, conversation.id);
+    }
+    requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
+    return { ok: true, structured: true, target: conversation.id,
+      outcome: result.receipt.status === "delivering" ? "delivering" : "queued",
+      operationId: result.operationId, receipt: result.receipt };
+  };
+  const existingReservation = Object.values(registry.conversationDeliverySnapshot({ conversationId: conversation.id }).heldDeliveries)
+    .find(item => item.clientMessageId === idempotencyKey) ?? null;
+  const replay = await liveReplay(existingReservation);
+  if (replay) return replay;
   const generation = conversation.generations.at(-1);
   const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
   const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
@@ -1706,14 +1730,17 @@ export async function enqueueStructuredMessage(
        to the host that just came back comes back `assigned`, and the command
        below delivers it in this request. */
     let reservation = await admitDurably();
+    const replay = reservation.attempts > 0 ? await liveReplay(reservation) : null;
+    if (replay) return replay;
     let claimedReservationId: string | null = null;
     if (reservation.state === "delivery-uncertain") {
       /* The same-key resend re-arms its reservation (P16), off the loop; one
          the lock refused stays uncertain and answers so. */
       const uncertain = reservation;
       const rearmed = await registry.deliveryWrite({ label: "delivery.rearm", operationId: uncertain.command.operationId },
-        () => registry.retryUncertainDelivery(uncertain.id));
+        () => queueLeads(uncertain) ? null : registry.retryUncertainDelivery(uncertain.id));
       if (!rearmed.acquired) return uncertainReservationFailure(uncertain);
+      if (!rearmed.value) return acceptedHeld(uncertain.command.operationId, conversation.id);
       reservation = rearmed.value;
     }
     if (reservation.state === "held") {
