@@ -4817,7 +4817,7 @@ describe("CodexAppServerHost", () => {
       joined("generic", "-secret-value"),
       joined("eyJabcdefghijk", ".abcdefghijk", ".abcdefghijk"),
       joined("sk", "-ant-", "abcdefghijklmnopqrstuvwxyz"),
-      joined("gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890"),
+      joined("gh", "p_", "a".repeat(36)),
     ];
     const redacted = redactCodexHostDiagnostic([
       `${["oauth", "token"].join("_")}=${secrets[0]}`,
@@ -5670,13 +5670,20 @@ test.each([false, true, undefined, null, "false"])("native question flag %j reta
 
 test("Codex stdout preserves Unicode split inside a completed user echo", async () => {
   const server = new FakeAppServer("unicode-wire");
-  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const eventStore = new MemoryEventStore();
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
   await host.send({ id: "unicode-original", text: "Привіт 🌍" });
   const encoded = encodeCodexStructuredUserText("Привіт 🌍", undefined, undefined, undefined, deliveryDedup("unicode-original"));
   const bytes = Buffer.from(JSON.stringify({ method: "item/completed", params: { threadId: "unicode-wire", turnId: "turn-1", item: { type: "userMessage", id: "unicode-item", clientId: "unicode-original", content: [{ type: "text", text: encoded }] } } }) + "\n");
   const split = bytes.indexOf(Buffer.from("П")) + 1;
+  const beforeEcho = Date.now();
   server.stdout.write(bytes.subarray(0, split)); server.stdout.write(bytes.subarray(split));
   expect(await host.send({ id: "unicode-original", text: "Привіт 🌍" })).toMatchObject({ turnId: "turn-1" });
+  const echo = eventStore.load("unicode-wire").findLast(event => event.kind === "item" && event.phase === "completed") as { deliveryEcho?: { operationId: string; at: string } };
+  expect(echo.deliveryEcho?.operationId).toBe("unicode-original");
+  expect(echo.deliveryEcho?.at).toBeString();
+  expect(Date.parse(echo.deliveryEcho!.at)).toBeGreaterThanOrEqual(beforeEcho);
+  expect(Date.parse(echo.deliveryEcho!.at)).toBeLessThanOrEqual(Date.now());
   await expect(host.send({ id: "unicode-original", text: "wrong payload" })).rejects.toThrow("different payload");
   await host.release();
 });

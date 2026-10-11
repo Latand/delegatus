@@ -2396,6 +2396,91 @@ test("a late canonical acknowledgement corrects the progress record that ended u
   }
 });
 
+test("retained cold uncertain sends still mirror late delivered receipts", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { DeliveryProgressStore, DELIVERY_PHASE_HISTORY_LIMIT, readDeliveryProgress } = await import("./deliveryProgress");
+  const { restoreMissingRecords } = await import("./recordWait");
+  let clock = Date.now();
+  const active = fixture("cold-late-ack", { now: () => clock, sqlite: true });
+  const filename = path.join(path.dirname(active.registryPath), "delivery-progress.sqlite");
+  const noTimer = () => 0 as unknown as ReturnType<typeof setTimeout>;
+  let progress = new DeliveryProgressStore(filename, () => clock, noTimer);
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { clientMessageId: "cold-late-ack-key" });
+    progress.note(operationId, active.conversationId, { waitReason: "dispatching", originalKey: "cold-late-ack-key",
+      admittedAt: new Date(clock).toISOString(), executorId: "original-executor" });
+    progress.timing(operationId, { ingressAt: new Date(clock - 100).toISOString() });
+    for (let i = 0; i < DELIVERY_PHASE_HISTORY_LIMIT; i++) {
+      clock++;
+      progress.note(operationId, active.conversationId, { waitReason: "dispatching", detail: "waiting for acknowledgement", attempted: true });
+    }
+    progress.timing(operationId, { engineEchoAt: new Date(clock).toISOString() });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    progress.settle(operationId, "uncertain", SEND_UNVERIFIED_REASON);
+    const before = structuredClone(progress.get(operationId))!;
+    expect(progress.flush()).toBe(true);
+
+    clock += 1_000;
+    const db = new Database(filename);
+    try {
+      const insert = db.query("INSERT INTO delivery_progress VALUES (?, ?, ?, ?, ?, ?)");
+      db.transaction(() => {
+        for (let i = 0; i < 10_001; i++) {
+          const id = `newer-delivered-${i}`;
+          const record = { ...before, operationId: id, phaseHistory: [], ingressAt: null, engineEchoAt: null,
+            updatedAt: new Date(clock).toISOString(),
+            terminal: { state: "delivered", at: new Date(clock).toISOString(), reason: null } };
+          insert.run(id, record.conversationId, null, 1, clock, JSON.stringify(record));
+        }
+      })();
+    } finally { db.close(); }
+    clock += 10 * 60_000;
+    progress.checkpoint(clock);
+    expect(progress.flush()).toBe(true);
+    progress.close();
+    progress = new DeliveryProgressStore(filename, () => clock, noTimer);
+    expect(progress.open()).toEqual([]); // Fill the bounded startup cache before reconciliation.
+
+    const effectsBefore = active.journal.effectBatch(100);
+    const otherProcess = new AgentRegistry(active.registryPath, undefined, undefined,
+      { now: () => clock, sqliteMode: "sqlite", sqliteFilename: path.join(path.dirname(active.registryPath), "agent-registry.sqlite") });
+    otherProcess.recordDeliveryOutcome(deliveryId, "delivered");
+    expect(receiptOf(active, operationId)?.state).toBe("delivered");
+    expect(restoreMissingRecords(active.registry, progress, clock)).toBe(true);
+    mirrorSettledReceipts(active.registry, progress, clock);
+    expect(progress.flush()).toBe(true);
+    const record = readDeliveryProgress([operationId], filename).get(operationId)!;
+    expect(record.terminal?.state).toBe("delivered");
+    expect(record).toEqual({ ...before, nextWakeAt: null, stalledSince: null,
+      lastProgressAt: new Date(clock).toISOString(), updatedAt: new Date(clock).toISOString(),
+      terminal: { state: "delivered", at: new Date(clock).toISOString(), reason: null },
+      phaseHistory: [...before.phaseHistory!.slice(1), { phase: "delivered", reason: null, at: new Date(clock).toISOString() }],
+      phaseHistoryDropped: before.phaseHistoryDropped! + 1 });
+    expect(record.phaseHistory).toHaveLength(DELIVERY_PHASE_HISTORY_LIMIT);
+    const report = spawnSync(process.execPath, ["scripts/delivery-phase-report.ts",
+      "--since", new Date(Date.parse(before.ingressAt!) - 1).toISOString(),
+      "--until", new Date(clock + 1).toISOString()], {
+      cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: path.dirname(filename), LLV_STATE_OWNER: "" },
+      encoding: "utf8", timeout: 10_000,
+    });
+    expect(report.status).toBe(0);
+    const echoToConfirmation = (clock - Date.parse(before.engineEchoAt!)).toFixed(1);
+    expect(report.stdout).toContain(`total:echo-to-confirmation\t-\t1\t${echoToConfirmation}\t${echoToConfirmation}`);
+    expect(active.journal.effectBatch(100)).toEqual(effectsBefore);
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    // A second sweep must neither repeat the terminal phase nor schedule a send.
+    mirrorSettledReceipts(active.registry, progress, clock);
+    expect(progress.flush()).toBe(true);
+    expect(readDeliveryProgress([operationId], filename).get(operationId)).toEqual(record);
+    expect(active.journal.effectBatch(100)).toEqual(effectsBefore);
+  } finally {
+    progress.close();
+    active.close();
+  }
+});
+
 test("a compacted unknown Claude attempt retains its late delivered settlement", async () => {
   let clock = Date.now();
   const active = fixture("compacted-late-claude", { engine: "claude", now: () => clock });

@@ -18,7 +18,7 @@ import { nativeQueueDeliveryKey } from "./deliveryDedup";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { agentMessageOrigin } from "./agentMessageAuthor";
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
+import { ownedDeliveryProgressStore, recordDeliveryIngress, type DeliveryProgressRecord } from "./deliveryProgress";
 import { admissionRecordStanding, recordDirectWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { structuredHostsEnabled } from "./flags";
@@ -68,6 +68,7 @@ const defaults: Dependencies = {
 
 /** Admissions return as soon as the journal commits; no native RPC on this hop. */
 export async function handleNativeQueue(request: NextRequest, dependencies: Dependencies = defaults): Promise<NextResponse> {
+  const ingressAt = new Date().toISOString();
   const rejected = rejectCrossOrigin(request);
   if (rejected) return rejected;
   if (!dependencies.enabled()) return NextResponse.json({ error: "structured hosts are disabled" }, { status: 503 });
@@ -221,6 +222,7 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
         written = standing.standing === "fresh"
           ? recordDirectWait(progress, registry!, owner, { reason: "checking", detail: HANDING_OFF, nextWakeMs: null })
           : standing.standing === "continue" ? standing.record : null;
+        recordDeliveryIngress(owner.command.operationId, ingressAt, progress);
       }
       const result = await client.command(command);
       outcome = result.receipt.status === "rejected" ? "refused" : "accepted";
@@ -235,6 +237,7 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
           written = admissionRecordStanding(progress, owner.command.operationId, handOffWrote).standing === "leave"
             ? null
             : recordDirectWait(progress, registry!, owner, { reason: "queued", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs });
+          recordDeliveryIngress(owner.command.operationId, ingressAt, progress);
         }
       } else if (owner && result.receipt.status === "rejected") {
         await endRow(owner.command.operationId, result.receipt.reason || "native queue admission was refused");
