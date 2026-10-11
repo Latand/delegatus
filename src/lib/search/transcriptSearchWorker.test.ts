@@ -82,7 +82,7 @@ test("worker preserves every page, order, scope, copies and redaction before exc
   }
   await expect(lane.search({ query: "cobalt", cursor: "invalid" })).rejects.toHaveProperty("name", "InvalidTranscriptSearchCursorError");
   expect((await lane.search({ query: "cobalt" })).total).toBeGreaterThan(0);
-});
+}, 20_000); // Windows startup and the redaction round trips exceed Bun's default five seconds.
 
 function stub(body: string): { executable: string; workerPath: string } {
   const workerPath = path.join(root, "stub.mjs");
@@ -147,7 +147,8 @@ test("a confirmed exit after the retirement deadline unblocks the lane", async (
   const resident = (lane as unknown as { worker: { closed: Promise<void> } }).worker;
   const actualClose = resident.closed;
   let confirm!: () => void;
-  resident.closed = actualClose.then(() => new Promise<void>(resolve => { confirm = resolve; }));
+  const confirmation = new Promise<void>(resolve => { confirm = resolve; });
+  resident.closed = actualClose.then(() => confirmation);
   try {
     await expect(lane.shutdown()).rejects.toThrow("Transcript search worker did not stop");
     confirm();
