@@ -193,6 +193,22 @@ test("the production runtime-switch control preserves the fast flag for Ultrafas
   } finally { dispatch.mockRestore(); }
 });
 
+test("the production continuation port preserves the next-turn fence at admission", async () => {
+  const messages = await import("@/lib/runtime/structuredMessageDelivery");
+  const { defaultPipelinePorts } = await import("./engine");
+  const requests: import("@/lib/runtime/structuredMessageDelivery").StructuredMessageRequest[] = [];
+  const enqueue = spyOn(messages, "enqueueStructuredMessage").mockImplementation(async request => {
+    requests.push(request);
+    return { ok: true, structured: true, target: STAGE_CONVERSATION, outcome: "held", operationId: "fixture-continuation" };
+  });
+  try {
+    expect(await defaultPipelinePorts().resumeSeveredTurn!({ conversationId: STAGE_CONVERSATION, transcriptPath: STAGE_TRANSCRIPT,
+      clientMessageId: "fixture-continuation", text: "Continue the stage", policy: "steer-or-queue", turnId: null })).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ clientMessageId: "fixture-continuation", policy: "steer-or-queue", turnId: null });
+  } finally { enqueue.mockRestore(); }
+});
+
 test("a same-account tier-only switch reaches the exact-tier reconfigure executor", async () => {
   const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
@@ -389,10 +405,21 @@ for (const parked of [false, true]) test(`a refused no-op continuation settles p
   }, h.ports);
   expect(retry.error).toBeUndefined();
 });
-for (const parked of [false, true]) test(`a no-op continuation refused before admission settles without waiting for its deadline (parked=${parked})`, async () => {
+for (const outcome of ["no-op", "failed"] as const) for (const parked of [false, true]) test(`a ${outcome} continuation refused before admission settles without waiting for its deadline (parked=${parked})`, async () => {
   const h = switchHarness();
-  h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
-  h.setOutcome("pending");
+  if (outcome === "no-op") {
+    h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
+    h.setOutcome("pending");
+  } else {
+    const { listCodexAccounts } = await import("@/lib/accounts/codex");
+    for (const account of listCodexAccounts()) {
+      fs.mkdirSync(account.home, { recursive: true });
+      fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }] }] }));
+    }
+    h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "standard", access: "read-only", promptScaffold: "Stage guidance" });
+    h.setSeat({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "standard", accountId: "default", sessionId: "session-1", agentPath: STAGE_TRANSCRIPT });
+    h.setOutcome("failed");
+  }
   h.ports.runtimeSwitchDelivery = () => ({ state: "pending", admitted: false });
   let provenRefusal = !parked;
   h.ports.resumeSeveredTurn = async input => {
@@ -400,7 +427,8 @@ for (const parked of [false, true]) test(`a no-op continuation refused before ad
     input.onRefused?.("fixture ownership is unavailable", provenRefusal ? "refused" : undefined);
     return false;
   };
-  const requested = await requestSwitch(h);
+  const requested = await requestSwitch(h, outcome === "failed" ? { model: "gpt-6-astra", serviceTier: "priority" } : {});
+  expect(requested.error).toBeUndefined();
   await tickPipelines([], h.ports);
   if (parked) {
     const rows = loadPipelines();
@@ -410,7 +438,8 @@ for (const parked of [false, true]) test(`a no-op continuation refused before ad
     savePipelines(rows);
   }
   provenRefusal = true;
-  await tickPipelines([], h.ports);
+  const restarted = await import(`./engine?admission-refusal=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
   const lane = loadPipelines()[0]!;
   expect(lane).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("fixture ownership is unavailable") });
   expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "failed", settledAt: h.ports.now() });
@@ -421,7 +450,7 @@ for (const parked of [false, true]) test(`a no-op continuation refused before ad
   expect(retry.error).toBeUndefined();
 });
 
-for (const proof of ["untracked", "transport-uncertain"] as const) test(`an uncertain no-op admission retains its fence after the deadline (${proof})`, async () => {
+for (const outcome of ["no-op", "failed"] as const) for (const proof of ["untracked", "transport-uncertain"] as const) test(`an uncertain ${outcome} admission retains its fence after the deadline (${proof})`, async () => {
   const h = switchHarness();
   const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
   const { defaultPipelinePorts } = await import("./engine");
@@ -429,7 +458,8 @@ for (const proof of ["untracked", "transport-uncertain"] as const) test(`an unce
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "untracked-refusal-registry.json"));
   setAgentRegistryForTests(registry);
   try {
-    h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
+    if (outcome === "no-op") h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
+    else h.setOutcome("failed");
     h.ports.runtimeSwitchDelivery = proof === "untracked" ? defaultPipelinePorts().runtimeSwitchDelivery
       : () => ({ state: "pending", admitted: false });
     h.ports.resumeSeveredTurn = async input => {
@@ -447,6 +477,43 @@ for (const proof of ["untracked", "transport-uncertain"] as const) test(`an unce
       action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
     }, h.ports)).toMatchObject({ status: 409 });
   } finally { setAgentRegistryForTests(prior); }
+});
+
+for (const parked of [false, true]) test(`a refused rollback continuation closes a failed reconfigure immediately (parked=${parked})`, async () => {
+  const h = switchHarness();
+  h.setOutcome("pending");
+  h.ports.runtimeSwitchDelivery = (_id, key) => h.deliveries.get(key) ?? { state: "pending", admitted: false };
+  h.ports.resumeSeveredTurn = async input => {
+    h.continuations.push(input);
+    if (input.clientMessageId.endsWith("rollback")) {
+      input.onRefused?.("fixture rollback ownership is unavailable", "refused");
+      return false;
+    }
+    h.deliveries.set(input.clientMessageId, { state: "failed", at: h.ports.now() });
+    return true;
+  };
+  const requested = await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  if (parked) {
+    const rows = loadPipelines();
+    rows[0]!.state = "needs_decision";
+    rows[0]!.runs[0]!.attempts[0]!.state = "needs_decision";
+    savePipelines(rows);
+  }
+  h.setOutcome("failed");
+  const restarted = await import(`./engine?rollback-refusal=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane.state).toBe("needs_decision");
+  expect(lane.stateDetail).toContain("fixture rollback ownership is unavailable");
+  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "failed", rollback: true, settledAt: h.ports.now() });
+  expect(h.continuations).toHaveLength(2);
+  expect(h.continuations[1]!.clientMessageId).toContain("rollback");
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
+  const retry = await restarted.patchPipeline(requested.pipeline!.id, {
+    action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
+  }, h.ports);
+  expect(retry.error).toBeUndefined();
 });
 
 test("persisted switching replays deterministic operations and owes only one continuation", async () => {

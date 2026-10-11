@@ -191,7 +191,9 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
     if (policy !== undefined && policy !== "queue" && policy !== "steer-if-active" && policy !== "steer-or-queue" && policy !== "interrupt-active") {
       throw new Error("policy is invalid");
     }
-    if (policy === "steer-or-queue" && turnId !== undefined) throw new Error("steer-or-queue follows the live turn and takes no fence");
+    if (policy === "steer-or-queue" && turnId !== undefined && (kind !== "send" || turnId !== null)) {
+      throw new Error("steer-or-queue accepts only a null next-turn fence on send");
+    }
     const runtime = parseRuntimeSendSettings(body.runtime);
     const onlyIfIdle = body.onlyIfIdle === undefined ? undefined : parseRuntimeIdleKillFence(body.onlyIfIdle);
     if (onlyIfIdle && (kind !== "send" || policy !== "queue" || turnId !== null)) {

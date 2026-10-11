@@ -1895,7 +1895,8 @@ export class StructuredDeliveryQueue {
       }
       const steerOrQueue = effect.policy === "steer-or-queue";
       const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active"
-        || (steerOrQueue && host.supportsSteer === true
+        // An explicit next-turn fence queues until idle, including after recovery.
+        || (steerOrQueue && effect.turnId !== null && host.supportsSteer === true
           && this.refusedSteerTurns.get(effect.operationId) !== health.activeTurnRef);
       const maySteer = health.status === "active" && steerRequested;
       /* A host without steer that DECLARED an interrupt fallback (Copilot over

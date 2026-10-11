@@ -164,9 +164,10 @@ export async function driveRuntimeSwitch(
     let refusedBeforeAdmission = false;
     let uncertain = false;
     const admitted = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
-      // Native add stays paused after turn/interrupt. The managed send starts
-      // an idle Codex turn under its current profile and preserves this key.
+      // Native add stays paused after turn/interrupt. The managed send waits
+      // for idle, then starts a new turn under the current profile with this key.
       clientMessageId: key, policy: attempt.effectiveRole.engine === "codex" ? "steer-or-queue" : "queue", project: pipeline.project, cwd: pipeline.worktreeDir, cohortAt: attempt.startedAt ?? undefined,
+      ...(attempt.effectiveRole.engine === "codex" ? { turnId: null } : {}),
       text: "Delegatus stopped your turn for a runtime switch. Continue the same stage on the available runtime in the current worktree, preserving every committed and uncommitted change, branch, attempt number and receipts. Report when complete.",
       onRefused: (reason, admission) => { refusal = reason; refusedBeforeAdmission = admission === "refused"; },
       onUncertain: () => { uncertain = true; } });
@@ -413,7 +414,7 @@ export async function driveRuntimeSwitch(
     if (error instanceof RuntimeSwitchSuperseded) throw error;
     if (error instanceof RuntimeSwitchAdmissionRefused && record.mode === "fork") {
       const outcome = await runtimeSwitchReconfigureOutcome(record, ports);
-      if (outcome?.state === "applied" || outcome?.state === "superseded") {
+      if (outcome && ["applied", "superseded", "failed"].includes(outcome.state)) {
         const reason = `runtime switch continuation was refused: ${error.message}`;
         await settle("failed", reason); await park(reason); return;
       }

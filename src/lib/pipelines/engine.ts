@@ -367,6 +367,8 @@ export interface PipelinePorts {
     text: string;
     /** Restart recovery must not interrupt work that began after its snapshot. */
     policy?: "queue" | "steer-or-queue";
+    /** A switch continuation owes a new turn, even if recovery finds one active. */
+    turnId?: null;
     /** Recheck the cut after delivery preflight; the runtime also fences its idle revision. */
     continuationAllowed?: () => Promise<boolean>;
     /** The delivery layer's refusal, retained by provider recovery when it parks. */
@@ -1687,6 +1689,7 @@ export function defaultPipelinePorts(
         clientMessageId: input.clientMessageId,
         text: input.text,
         ...(input.policy ? { policy: input.policy } : {}),
+        ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
         /* #1117: the continuation is the controller's own message, and the
            feed labels it as one rather than as the operator's. */
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),

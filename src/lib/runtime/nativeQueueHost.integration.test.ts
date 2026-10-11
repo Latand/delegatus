@@ -21,7 +21,7 @@ import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipeli
 
 const binary = process.env.NATIVE_CODEX_QUEUE_TEST_BINARY;
 
-for (const scenario of ["small", "large", "two-image-turns", "runtime-switch"]) test.skipIf(!binary)(`native runtime: queue edits, canonical dispatch, lost reply and cold recovery (${scenario})`, async () => {
+for (const scenario of ["small", "large", "two-image-turns", "runtime-switch", "runtime-switch-running"]) test.skipIf(!binary)(`native runtime: queue edits, canonical dispatch, lost reply and cold recovery (${scenario})`, async () => {
   const largeImages = scenario === "large" || scenario === "two-image-turns";
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "nh-"));
   const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
@@ -254,7 +254,8 @@ plugins = false
       expect(journal.executeOperation(command).receipt.status).toBe("queued");
       await executor.execute(command); return journal.nativeQueueRead(conversationId).find(e => e.entryId === (extra.entryId ?? id))!;
     };
-    if (scenario === "runtime-switch") {
+    if (scenario.startsWith("runtime-switch")) {
+      const runningAtAdmission = scenario === "runtime-switch-running";
       await admit("before-switch", {});
       await until(() => responses.length === 1);
       const other = structuredClone(await admit("other-queued-entry", {}));
@@ -274,14 +275,20 @@ plugins = false
       }, () => host!);
       const ports: Partial<PipelinePorts> = { now,
         runtimeSwitchControl: async (_id, _path, action) => {
-          if (action === "reconfigure") return "already-current";
+          if (action === "reconfigure") {
+            if (runningAtAdmission) {
+              await host!.send({ id: "pre-continuation-turn", text: "Already running work", expectedTurnId: null });
+              await until(() => responses.length === 2);
+            }
+            return "already-current";
+          }
           await host!.interrupt((await host!.health()).activeTurnRef!);
           await until(async () => (await host!.health()).activeTurnRef === null);
         },
         resumeSeveredTurn: async input => {
           await publish();
           journal.executeOperation(parseRuntimeCommand("send", { conversationId, operationId: input.clientMessageId,
-            idempotencyKey: input.clientMessageId, policy: input.policy, text: input.text }));
+            idempotencyKey: input.clientMessageId, policy: input.policy, turnId: input.turnId, text: input.text }));
           return true;
         },
         runtimeSwitchDelivery: async (_id, key) => {
@@ -294,6 +301,16 @@ plugins = false
       const drive = () => driveRuntimeSwitch(pipeline, {} as PipelineStage, attempt, ports as PipelinePorts, () => {}, async () => { throw new Error("no handoff expected"); });
       await drive();
       const key = switchOperationKey(record, "continue");
+      if (runningAtAdmission) {
+        await delivery.drain(); await delivery.drain(); await drive();
+        expect(requests.filter(r => r.method === "turn/steer" && r.params.clientUserMessageId === key)).toHaveLength(0);
+        expect(requests.filter(r => r.method === "turn/start" && r.params.clientUserMessageId === key)).toHaveLength(0);
+        expect(journal.operationResult(key)?.receipt.status).toBe("queued");
+        expect(attempt.runtimeSwitches![0]!.phase).toBe("continuing");
+        expect(journal.nativeQueueRead(conversationId).find(entry => entry.entryId === other.entryId)).toEqual(other);
+        await host.interrupt((await host.health()).activeTurnRef!);
+        await until(async () => (await host!.health()).activeTurnRef === null);
+      }
       await until(async () => {
         for (const effect of journal.effectBatch(100, ["runtime.native-queue"])) {
           await executor.execute(effect.payload as unknown as NativeQueueCommand & { operationId: string });
@@ -310,8 +327,8 @@ plugins = false
       expect(requests.filter(r => r.method === "thread/queue/add" && r.params.clientUserMessageId === key)).toHaveLength(0);
       expect(journal.nativeQueueRead(conversationId).find(entry => entry.entryId === other.entryId)).toEqual(other);
       expect((await host.nativeQueue!.queue.refresh()).items?.map(item => item.id)).toEqual([other.nativeSubmissionId!]);
-      await until(() => responses.length === 2);
-      expect(responses).toHaveLength(2);
+      await until(() => responses.length === (runningAtAdmission ? 3 : 2));
+      expect(responses).toHaveLength(runningAtAdmission ? 3 : 2);
       return;
     }
     if (scenario === "two-image-turns") {
