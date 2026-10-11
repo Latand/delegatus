@@ -4817,7 +4817,7 @@ describe("CodexAppServerHost", () => {
       joined("generic", "-secret-value"),
       joined("eyJabcdefghijk", ".abcdefghijk", ".abcdefghijk"),
       joined("sk", "-ant-", "abcdefghijklmnopqrstuvwxyz"),
-      joined("gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890"),
+      joined("gh", "p_", "a".repeat(36)),
     ];
     const redacted = redactCodexHostDiagnostic([
       `${["oauth", "token"].join("_")}=${secrets[0]}`,
