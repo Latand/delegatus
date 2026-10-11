@@ -153,12 +153,23 @@ function Get-CimInstance {
 for (const reason of ["cancellation", "timeout", "shutdown"] as const) {
   test(`lease retirement after ${reason} reaps a busy query and descendant before replacement`, async () => {
     const launch = stub(`
-      const descendant = spawn(process.execPath, ["-e", 'process.stdout.write(String(process.pid)); setInterval(() => {}, 1000);'], { stdio: ["ignore", "pipe", "inherit"] });
-      descendant.stdout.once("data", () => {
-        fs.writeFileSync(${JSON.stringify(path.join(root, "ready"))}, JSON.stringify([process.pid, descendant.pid]));
+      if (frame.options.query === "prepare") {
+        const descendant = spawn(process.execPath, ["-e", 'process.stdout.write(String(process.pid)); setInterval(() => {}, 1000);'], { stdio: ["ignore", "pipe", "inherit"] });
+        descendant.stdout.once("data", () => {
+          fs.writeFileSync(${JSON.stringify(path.join(root, "pids"))}, JSON.stringify([process.pid, descendant.pid]));
+          process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");
+        });
+      } else {
+        fs.copyFileSync(${JSON.stringify(path.join(root, "pids"))}, ${JSON.stringify(path.join(root, "ready"))});
         while (true) {}
-      });`);
-    const lane = worker({ launch, timeoutMs: reason === "timeout" ? 2000 : 15_000 });
+      }`);
+    const runtime = { launch, timeoutMs: 15_000, env: { LLV_STATE_DIR: process.env.LLV_STATE_DIR } };
+    const lane = new TranscriptSearchWorker(runtime);
+    workers.push(lane);
+    // Only the busy request gets the short deadline. Process startup and the
+    // replacement can take longer under contention or on the Windows runner.
+    await lane.search({ query: "prepare" });
+    if (reason === "timeout") runtime.timeoutMs = 2000;
     const controller = new AbortController();
     const pending = lane.search({ query: "busy" }, controller.signal).catch(error => error);
     await ready();
@@ -175,6 +186,7 @@ for (const reason of ["cancellation", "timeout", "shutdown"] as const) {
       const error = await pending;
       expect(reason === "cancellation" ? error.name : error.message).toBe(reason === "cancellation" ? "AbortError"
         : reason === "timeout" ? "Transcript search timed out" : "Transcript search worker stopped");
+      runtime.timeoutMs = 15_000;
       await lane.shutdown();
       for (const identity of identities) {
         expect(processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)).toBe(true);
