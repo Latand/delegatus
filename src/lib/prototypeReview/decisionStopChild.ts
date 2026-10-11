@@ -1,8 +1,9 @@
 /*
- * Test fixture, run as its own process: the Viewer saving a decision and
- * stopping before the message reaches the send path. The decision is durable
- * when `recover` is entered and nothing was admitted yet, which is the moment
- * this process ends.
+ * Test fixture, run as its own process: the Viewer saving a decision,
+ * answering the operator, and stopping while the background delivery hands
+ * the message to the send path. The decision is durable and marked as handed
+ * over, the send path never ran, and the answer went out first: this process
+ * ends on the send, after it has checked that answer.
  *
  * The task store fixes its file when its module loads and everything else
  * resolves the state directory per call, so the parent test's two directories
@@ -21,7 +22,17 @@ const { prototypeDelivery } = await import("./decision");
 const { reviewPOST } = await import("./http");
 const { prototypeWorld } = await import("./world");
 
+let answered!: () => void;
+const checked = new Promise<void>(resolve => { answered = resolve; });
 const response = await reviewPOST(new NextRequest(`http://localhost/api/tasks/${taskId}/prototypes`,{ method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
-  body: JSON.stringify({ reviewId, chosen: [1,2], comment }) }),taskId,{ ...prototypeWorld, orchestrator: () => seat },{ ...prototypeDelivery, recover: async () => process.exit(0) });
-console.error(`the stop fixture answered ${response.status} before any delivery: ${await response.text()}`);
+  body: JSON.stringify({ reviewId, chosen: [1,2], comment }) }),taskId,{ ...prototypeWorld, orchestrator: () => seat },
+{ ...prototypeDelivery, send: async () => { await checked; process.exit(0); } });
+const body = await response.json() as { rounds: Array<{ id: string; decision?: { delivery: { phase?: string } } }> };
+if (response.status !== 200 || body.rounds.find(round => round.id === reviewId)?.decision?.delivery.phase !== "saved") {
+  console.error(`the stop fixture's decision was not answered as saved: ${response.status} ${JSON.stringify(body)}`);
+  process.exit(4);
+}
+answered();
+await new Promise(resolve => setTimeout(resolve, 20_000));
+console.error("the stop fixture's background delivery never reached the send path");
 process.exit(3);

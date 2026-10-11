@@ -79,6 +79,8 @@ export function prototypeButtonState(summary: PrototypeReviewSummary | undefined
   if (summary.waitingReviewId && summary.waitingDismissal) return "hidden";
   if (summary.waitingReviewId) return seenIds.has(summary.waitingReviewId) ? "opened" : "ready";
   if (!summary.decision) return null;
+  /* A decision this installation delivers is retried in the background, so the card warns only once it keeps failing. */
+  if (summary.decision.phase) return summary.decision.phase === "attention" ? "unsent" : "decided";
   return summary.decision.delivery === "failed" || summary.decision.delivery === "uncertain" ? "unsent" : "decided";
 }
 

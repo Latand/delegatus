@@ -37,3 +37,16 @@ test("a hidden undecided review keeps its history button without a waiting state
   expect(prototypeButtonState({ ...waiting, waitingDismissal: { at: "2026-10-09T10:00:00Z", by: { kind: "operator" } } }, new Set())).toBe("hidden");
   expect(prototypeButtonState(waiting, new Set())).toBe("ready");
 });
+
+test("a decision this installation delivers in the background stays decided while it retries, and is marked once it keeps failing", () => {
+  const phased = (delivery: NonNullable<PrototypeReviewSummary["decision"]>["delivery"], phase: NonNullable<NonNullable<PrototypeReviewSummary["decision"]>["phase"]>) => {
+    const summary = decided(delivery);
+    return { ...summary, decision: { ...summary.decision!, phase } };
+  };
+  expect(prototypeButtonState(phased("failed", "delivering"), new Set())).toBe("decided");
+  expect(prototypeButtonState(phased("uncertain", "delivering"), new Set())).toBe("decided");
+  expect(prototypeButtonState(phased("pending", "saved"), new Set())).toBe("decided");
+  expect(prototypeButtonState(phased("no-orchestrator", "waiting-seat"), new Set())).toBe("decided");
+  expect(prototypeButtonState(phased("failed", "attention"), new Set())).toBe("unsent");
+  expect(prototypeButtonState(phased("sent", "delivered"), new Set())).toBe("decided");
+});

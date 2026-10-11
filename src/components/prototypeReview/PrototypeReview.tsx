@@ -15,7 +15,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { usePrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { PrototypeAnswer, PrototypeDeliveryState, PrototypeMediaView, PrototypeQuestion, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeMediaView, PrototypeQuestion, PrototypeRoundView } from "@/lib/prototypeReview/types";
 
 import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
 
@@ -644,18 +644,25 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     </span>
   ));
 
-  const delivery = (state: PrototypeDeliveryState, retryable: boolean) => {
-    const tone = state === "sent" ? "text-success" : state === "pending" ? "text-muted" : "text-warning";
+  /* A decision this installation drives says quietly how its message goes:
+     saved, on its way, delivered. It raises its voice only once the message
+     has kept failing, and only then offers to send it again. A replicated
+     decision carries no phase and reads as its state. */
+  const delivery = ({ state, retryable, phase }: NonNullable<PrototypeRoundView["decision"]>["delivery"]) => {
+    const tone = phase ? phase === "delivered" ? "text-success" : phase === "attention" ? "text-warning" : "text-muted"
+      : state === "sent" ? "text-success" : state === "pending" ? "text-muted" : "text-warning";
+    const mark = phase ? phase === "delivered" ? <CircleCheck className="h-3.5 w-3.5" /> : phase === "attention" ? <TriangleAlert className="h-3.5 w-3.5" />
+      : phase === "delivering" ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <Check className="h-3.5 w-3.5" />
+      : state === "sent" ? <CircleCheck className="h-3.5 w-3.5" /> : state === "pending" ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <TriangleAlert className="h-3.5 w-3.5" />;
+    const offersRetry = phase ? phase === "attention" : retryable && state !== "pending" && state !== "sent";
     return (
-      <p role="status" data-prototype-delivery={state} className={`m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-label font-semibold ${tone}`}>
+      <p role="status" data-prototype-delivery={state} {...(phase ? { "data-prototype-delivery-phase": phase } : {})} className={`m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-label font-semibold ${tone}`}>
         {/* The mark stays on the first line of its words, which wrap inside themselves; only the retry moves to a line of its own. */}
         <span data-prototype-delivery-said="" className="flex min-w-0 items-start gap-2">
-          <span aria-hidden className="flex h-[1lh] shrink-0 items-center">
-            {state === "sent" ? <CircleCheck className="h-3.5 w-3.5" /> : state === "pending" ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <TriangleAlert className="h-3.5 w-3.5" />}
-          </span>
-          <span className="min-w-0">{t(`proto.delivery.${state}`)}</span>
+          <span aria-hidden className="flex h-[1lh] shrink-0 items-center">{mark}</span>
+          <span className="min-w-0">{t(phase ? `proto.saved.${phase}` : `proto.delivery.${state}`)}</span>
         </span>
-        {retryable && state !== "pending" && state !== "sent" && !elsewhere ? (
+        {offersRetry && !elsewhere ? (
           <button type="button" className={SECONDARY} data-prototype-retry="" disabled={review.saving} onClick={() => void review.retry(round!.id)}>
             {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RotateCw className="h-3.5 w-3.5" aria-hidden />}
             {t(state === "no-orchestrator" ? "proto.delivery.sendNow" : "proto.delivery.retry")}
@@ -762,7 +769,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       ) : hasQuestions ? null : (
         <p className="m-0 text-label text-muted">{t("proto.noComment")}</p>
       )}
-      {delivery(round.decision.delivery.state, round.decision.delivery.retryable)}
+      {delivery(round.decision.delivery)}
     </div>
   ) : round.hidden ? (
     <div data-prototype-hidden={round.id} className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-2">

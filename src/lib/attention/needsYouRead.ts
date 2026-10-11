@@ -110,6 +110,8 @@ export function needsYouEvidence(entry: MobileAttentionEntry, ports: NeedsYouEvi
     const sourceIndex = lane?.stages.findIndex(s => s.id === round?.source.stageId) ?? -1;
     if (lane && (["completed", "closed"].includes(lane.state) || sourceIndex >= 0 && lane.runs.some(r => lane.stages.findIndex(s => s.id === r.stageId) > sourceIndex && r.attempts.some(a => after(a.startedAt, since))))) add("lane-moved-past", true, "The publishing lane moved past this round", "pipelines", iso(laneMovedAt(lane) / 1000));
     if (task?.prototypeReviewReplica) add("elsewhere", false, "This review belongs to another installation", "tasks");
+    if (entry.notice.undelivered) add("undelivered", false, "The round is decided and its message keeps failing to reach the seat; Delegatus retries it", "tasks",
+      task?.prototypeReviews?.find(r => r.id === entry.notice.reviewId)?.decision?.delivery.failingSince ?? null);
   } else {
     add("answer-only", false, "The operator chooses deploy now or keep waiting", "self-update");
     if (entry.decision.blockers) add("blockers", false, JSON.stringify(entry.decision.blockers), "self-update", entry.decision.at);
@@ -124,7 +126,8 @@ function rowOf(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts, option
     : entry.kind === "pipeline" ? { pipelineId: entry.row.pipeline.id, ...(entry.row.pipeline.cursor?.stageId ? { stageId: entry.row.pipeline.cursor.stageId } : {}) }
     : entry.kind === "prototype" ? { reviewId: entry.notice.reviewId } : { decisionId: entry.decision.id };
   const facts = needsYouEvidence(entry, ports);
-  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
+  /* A decision whose message keeps failing clears once the message lands, so it offers nothing to dismiss. */
+  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? entry.notice.undelivered ? null : { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
     : needsYouSubject(entry) as DismissalTarget;
   return { id: entry.id, kind: entry.kind === "conversation" ? entry.item.reason.kind : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind,
     title: clip(text.title, 90), line: clip(text.line, 160), since: iso(needsYouEntrySince(entry)), taskId: task?.id ?? null, subject, target,

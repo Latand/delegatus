@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import { layerPrototypeDismissal, sendDismissal } from "@/components/attention/dismissalOverlay";
 import { prototypeReviewNotices, prototypeReviewSummary } from "@/lib/prototypeReview/model";
-import type { DecidePrototypeInput, PrototypeReviewNotice, PrototypeReviewRead } from "@/lib/prototypeReview/types";
+import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
+import type { DecidePrototypeInput, PrototypeReviewNotice, PrototypeReviewRead, PrototypeRoundRead } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
 export const OPEN_PROTOTYPE_REVIEW_EVENT = "llv:open-prototype-review";
@@ -33,6 +34,28 @@ export function usePrototypeReviewNotices(tasks: readonly BoardTask[],project?: 
     return { notices, needsYouCount: notices.length };
   },[tasks,project]);
 }
+type DecisionWrite = DecidePrototypeInput | { reviewId: string; retry: true };
+/** What the review shows the moment the operator presses save or retry, before
+    the server answers: the decision as saved, its message not yet handed to
+    the seat; or a retried message on its way. The server's answer replaces it. */
+export function optimisticPrototypeRead(data: PrototypeReviewRead, body: DecisionWrite, at = new Date().toISOString()): PrototypeReviewRead {
+  const round = data.rounds.find(entry => entry.id === body.reviewId);
+  if (!round) return data;
+  let decision: PrototypeRoundRead["decision"];
+  if ("retry" in body) {
+    if (!round.decision || round.decision.delivery.state === "sent") return data;
+    decision = { ...round.decision, delivery: { ...round.decision.delivery, phase: round.decision.delivery.state === "no-orchestrator" ? "waiting-seat" : "delivering" } };
+  } else {
+    if (round.decision) return data;
+    const questions = round.questions ?? [];
+    let answers = body.answers;
+    try { if (questions.length) answers = body.skip ? recommendedAnswers(questions) : normalizePrototypeAnswers(questions, body.answers, body.comment); } catch { /* the server says what is wrong */ }
+    decision = { chosen: [...body.chosen].sort((a, b) => a - b), ...(answers ? { answers } : {}), ...(body.skip ? { skipped: true as const } : {}), comment: body.comment, at,
+      delivery: { state: "pending", retryable: false, phase: "saved" } };
+  }
+  return { ...data, waitingReviewId: data.waitingReviewId === round.id ? null : data.waitingReviewId,
+    rounds: data.rounds.map(entry => entry.id === round.id ? { ...entry, decision } : entry) };
+}
 export function usePrototypeReview(taskId: string | null,enabled = true) {
   const [snapshot,setSnapshot] = useState<{ taskId: string | null; data: PrototypeReviewRead | null; error: string | null; saving: boolean }>({ taskId, data: null, error: null, saving: false });
   const { data,error,saving } = snapshot.taskId === taskId ? snapshot : { data: null, error: null, saving: false };
@@ -59,10 +82,15 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
     const timer = setInterval(() => { void refresh(controller.signal); },2000);
     return () => { controller.abort(); clearInterval(timer); };
   },[taskId,enabled,refresh]);
-  const write = useCallback(async (body: DecidePrototypeInput | { reviewId: string; retry: true }): Promise<boolean> => {
+  const write = useCallback(async (body: DecisionWrite): Promise<boolean> => {
     if (!taskId) return false;
     writing.current = taskId;
-    setSnapshot(previous => ({ taskId,data: previous.taskId === taskId ? previous.data : null,error: null,saving: true }));
+    /* The review answers the press at once; a refusal puts back what was there and says why. */
+    let before: PrototypeReviewRead | null = null;
+    setSnapshot(previous => {
+      before = previous.taskId === taskId ? previous.data : null;
+      return { taskId,data: before ? optimisticPrototypeRead(before,body) : null,error: null,saving: true };
+    });
     ++sequence.current;
     try {
       const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/prototypes`,{
@@ -73,7 +101,7 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
       if (active.current === taskId) { ++sequence.current; setSnapshot({ taskId,data: result,error: null,saving: false }); }
       fireTasksChanged(); return true;
     } catch (error) {
-      if (active.current === taskId) setSnapshot(previous => ({ ...previous,error: error instanceof Error ? error.message : "Prototype decision could not be saved",saving: false }));
+      if (active.current === taskId) setSnapshot(previous => ({ ...previous,data: before ?? previous.data,error: error instanceof Error ? error.message : "Prototype decision could not be saved",saving: false }));
       return false;
     } finally { if (writing.current === taskId) writing.current = null; }
   },[taskId]);
