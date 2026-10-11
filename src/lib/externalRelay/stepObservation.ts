@@ -3,6 +3,7 @@ import { tailRecords } from "@/lib/scanner/activity";
 import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { isBoardRead, type RelayStepObservation } from "./progressSteps";
 import type { AgentRegistry } from "@/lib/agent/registry";
+const finalActions = new Set<unknown>(["reply", "ignore", "handoff"]);
 
 export function readOwnerStepObservation(registry: Pick<AgentRegistry, "conversation">, id: string): RelayStepObservation {
   try {
@@ -30,6 +31,11 @@ export function stepObservationFromRecords(records: Record<string, unknown>[]): 
     }
     if (payload.type === "function_call" || payload.type === "custom_tool_call") start(payload.call_id, payload.name);
     if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") done(payload.call_id);
+    if (payload.type === "web_search_call" || payload.type === "local_shell_call") {
+      const id = payload.call_id ?? payload.id;
+      if (payload.status === "completed") done(id);
+      else start(id, "native_tool");
+    }
     if (payload.type === "message" && payload.role === "assistant" && payload.phase === "final_answer"
       || payload.type === "agent_message" && payload.phase === "final_answer" || payload.type === "task_complete") writingAnswer = true;
     const item = recordValue(row.item);
@@ -40,12 +46,12 @@ export function stepObservationFromRecords(records: Record<string, unknown>[]): 
       if (item.phase === "final_answer" || typeof item.text === "string" && /"action"\s*:\s*"(?:reply|ignore|handoff)"/.test(item.text)) writingAnswer = true;
     }
     const message = recordValue(row.message);
-    if (row.type === "result" && recordValue(row.structured_output)?.action) writingAnswer = true;
+    if (row.type === "result" && finalActions.has(recordValue(row.structured_output)?.action)) writingAnswer = true;
     const blocks = recordsValue(message?.content);
     if (row.type === "assistant") {
       for (const block of blocks) {
         if (block.type === "tool_use") {
-          if (block.name === "StructuredOutput" && recordValue(block.input)?.action) writingAnswer = true;
+          if (block.name === "StructuredOutput") writingAnswer = finalActions.has(recordValue(block.input)?.action);
           else start(block.id, block.name === "WebSearch" ? "web_search" : block.name);
         }
       }

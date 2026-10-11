@@ -103,7 +103,8 @@ test("record owner heartbeats through the real runner, with every step and a reg
     expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
     checkSteps(beats);
     expect(beats.map(b => b.progress?.label ?? null)).toEqual(["accepted", "thinking", "reading_board", "working", "writing_answer", null]);
-    for (let i = 1; i < arrival.length; i++) expect(arrival[i]! - arrival[i - 1]!).toBeGreaterThanOrEqual(3000);
+    for (let i = 1; i < 5; i++) expect(Date.parse(beats[i]!.progress!.at) - Date.parse(beats[i - 1]!.progress!.at)).toBeGreaterThanOrEqual(3000);
+    expect(arrival[5]! - arrival[4]!).toBeGreaterThan(3000); // The unchanged final step gets only its regular beat.
     if (process.env.LLV_RELAY_STEPS_CAPTURE) fs.writeFileSync(process.env.LLV_RELAY_STEPS_CAPTURE, JSON.stringify(beats, null, 2) + "\n");
     else {
       const recorded = JSON.parse(fs.readFileSync(captureFile, "utf8")) as Beat[];

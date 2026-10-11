@@ -83,6 +83,10 @@ test("Codex transcript pairs calls by id, retains concurrent tools, and detects 
   records.push({ type: "event_msg", payload: { type: "task_started" } });
   expect(relayStepFor(stepObservationFromRecords(records))).toBe("thinking");
   expect(JSON.stringify(stepObservationFromRecords(records))).not.toContain("private content");
+  add({ type: "web_search_call", id: "search", status: "in_progress", action: { query: "private content" } });
+  expect(relayStepFor(stepObservationFromRecords(records))).toBe("working");
+  add({ type: "web_search_call", id: "search", status: "completed" });
+  expect(relayStepFor(stepObservationFromRecords(records))).toBe("thinking");
 });
 
 test("Claude pairs tool results and reserves end_turn text for writing_answer", () => {
@@ -107,4 +111,10 @@ test("member stdout recognizes native search and final output while proposals st
   expect(relayStepFor(stepObservationFromRecords([{ type: "assistant", message: { content: [
     { type: "tool_use", id: "output", name: "StructuredOutput", input: { action: "reply", text: "private content" } },
   ] } }]))).toBe("writing_answer");
+  for (const action of ["call", "unexpected"]) {
+    expect(relayStepFor(stepObservationFromRecords([{ type: "assistant", message: { content: [
+      { type: "tool_use", id: "output", name: "StructuredOutput", input: { action } },
+    ] } }]))).toBe("thinking");
+    expect(relayStepFor(stepObservationFromRecords([{ type: "result", structured_output: { action } }]))).toBe("thinking");
+  }
 });
