@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { CodexLoginBusyError, codexAccountLoginBusy, withManagedCodexLogin, CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
+import { CodexLoginBusyError, codexAccountLoginBusy, withManagedCodexLogin, CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, hideLegacyCodexAccount, listCodexAccounts, removeManagedCodexAccount, restoreLegacyCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
-import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, removalErrno, removalResponse } from "@/lib/accounts/removal";
+import { forgetAccountProjectBindings } from "@/lib/accounts/projectBindings";
+import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, accountRemovalLiveWork, legacyRemovalResponse, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -16,6 +17,14 @@ export async function POST(req: NextRequest) {
   let body: { label?: unknown; id?: unknown; action?: unknown };
   try { body = await req.json() as { label?: unknown; id?: unknown; action?: unknown }; } catch { return NextResponse.json({ error: "invalid JSON" }, { status: 400 }); }
   try {
+    /* Main comes back after its removal (it was only hidden; its home was
+       never touched). */
+    if (body.action === "restore") {
+      if (body.id !== "default") return NextResponse.json({ error: "only Main can be restored", code: "invalid_request" }, { status: 400 });
+      await withAccountMutationLockAsync(() => restoreLegacyCodexAccount(), { caller: "Codex Main restore", holder: "Codex catalog restore" });
+      requestAccountMigrationTick();
+      return NextResponse.json({ restored: { id: "default" } });
+    }
     if (body.action === "retry" || body.action === "cancel") {
       if (typeof body.id !== "string") return NextResponse.json({ error: "id must be a string" }, { status: 400 });
       const account = listCodexAccounts().find((candidate) => candidate.id === body.id);
@@ -56,6 +65,17 @@ export async function POST(req: NextRequest) {
   }
 }
 
+/** A removed account leaves every project's pool; the removal stands even
+    when the binding record cannot be rewritten, since nothing selects it. */
+function forgetBindings(accountId: string): { bindingsCleared?: number } {
+  try {
+    const cleared = forgetAccountProjectBindings("codex", accountId);
+    return cleared > 0 ? { bindingsCleared: cleared } : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function DELETE(req: NextRequest) {
   const rejected = rejectCrossOrigin(req);
   if (rejected) return rejected;
@@ -77,24 +97,32 @@ export async function DELETE(req: NextRequest) {
     return await withAccountMutationLockAsync(async () => {
       if (codexAccountsMutationLocked()) return NextResponse.json({ error: "Codex accounts require registry repair", code: "accounts_locked" }, { status: 409 });
       const account = listCodexAccounts().find((candidate) => candidate.id === body.id);
-      if (!account || account.kind !== "managed") return NextResponse.json({ error: "Codex account is unavailable", code: "unknown_account" }, { status: 404 });
+      if (!account) return NextResponse.json({ error: "Codex account is unavailable", code: "unknown_account" }, { status: 404 });
       const login = managedCodexRuntime().peekLogin(account);
       const blockers = [
         ...accountRemovalBlockers("codex", account.id),
         ...(codexAccountLoginBusy(account.id) || login.attemptState === "pending" || account.loginPane !== null ? ["login_pending"] : []),
       ];
       if (blockers.length > 0) {
-        return NextResponse.json({ error: "Codex account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers }, { status: 409 });
+        return NextResponse.json({ error: "Codex account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers, ...accountRemovalLiveWork("codex", account.id) }, { status: 409 });
       }
       try {
+        /* Main is only forgotten: its home is the operator's own and stays untouched. */
+        if (account.kind === "legacy") {
+          const retirement = hideLegacyCodexAccount();
+          const bindingsCleared = forgetBindings(account.id);
+          requestAccountMigrationTick();
+          return NextResponse.json({ ...legacyRemovalResponse(account.id, account.home, retirement), ...bindingsCleared });
+        }
         if (login.attemptState === "pending") await managedCodexRuntime().cancelLogin(account.id);
         if (account.loginPane !== null) setCodexAccountLoginPane(account.id, null);
         const removal = removeManagedCodexAccount(account.id);
+        const bindingsCleared = forgetBindings(account.id);
         requestAccountMigrationTick();
-        return NextResponse.json(removalResponse(account.id, removal));
+        return NextResponse.json({ ...removalResponse(account.id, removal), ...bindingsCleared });
       } catch (error) {
         if (error instanceof AccountRemovalBlockedError) {
-          return NextResponse.json({ error: "Codex account has active sessions or conversations", code: "account_removal_blocked", blockers: error.blockers }, { status: 409 });
+          return NextResponse.json({ error: "Codex account has active sessions or conversations", code: "account_removal_blocked", blockers: error.blockers, ...accountRemovalLiveWork("codex", account.id) }, { status: 409 });
         }
         if (error instanceof AccountArchiveUnavailableError) {
           return NextResponse.json({ error: error.message, code: "archive_unavailable", archive: error.archive }, { status: 409 });

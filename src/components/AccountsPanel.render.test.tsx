@@ -9,6 +9,7 @@ import { formatResetClock } from "./rateLimit";
 
 const base = (over: Partial<EngineAccountsState> = {}): EngineAccountsState => ({
   engine: "codex",
+  hidden: [],
   accounts: [
     // Each capacity chip is reconciled from the account's own windows, so the
     // fixture carries the windows the chip percentages come from.
@@ -33,6 +34,7 @@ const base = (over: Partial<EngineAccountsState> = {}): EngineAccountsState => (
   cancelLogin: async () => true,
   retryLogin: async () => true,
   remove: async () => true,
+  restore: async () => true,
   cleanupOrphans: async () => true,
   copyTerminalCommand: async () => true,
   refreshLimits: async () => true,
@@ -259,10 +261,12 @@ test("the active account row stays keyboard reachable", () => {
   expect(active).not.toContain('disabled=""');
 });
 
-test("shows removal only for a managed account and keeps cleanup reachable", () => {
+/* Task d7759de2: Main is removed through the same control as every other
+   account (the server only hides it, its folder is never touched). */
+test("offers removal for every account, Main included, and keeps cleanup reachable", () => {
   const html = render(base());
   expect(html).toContain('aria-label="Remove Work"');
-  expect(html).not.toContain('aria-label="Remove Main"');
+  expect(html).toContain('aria-label="Remove Main"');
   expect(html).toContain("Clean up leftovers");
   expect(html).not.toContain("Force remove");
 });
