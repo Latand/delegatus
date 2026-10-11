@@ -21,7 +21,7 @@ test("all declarations execute through one allowlist, parameter schema and proje
     activity: async () => [{ conversationId: "conversation_a", project: "fixture", title: "Agent", lifecycle: "running" }], messages: async () => [{ role: "assistant", text: "Checked it" }] });
   const context = { project: "fixture", sessionId: session.id, callId: "call-a", delegationId: "delegation-a", admission, reads, endConversation: () => { ended = true; } };
   const args: Record<string, Record<string, unknown>> = { list_tasks: {}, get_task: { taskId: "task-a" }, list_pipelines: {}, get_pipeline: { pipelineId: "pipeline-a" },
-    agent_activity: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",reviewId:"review-a",mediaId:"frame-a"}, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
+    agent_activity: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",reviewId:"review-a",mediaId:"frame-a"}, orchestrator_reports: {}, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
     resolve_orchestrator_confirmation: { decision: "send" }, end_conversation: {} };
   expect(COMPANION_TOOLS.map(row => row.name)).toEqual(COMPANION_TOOL_REGISTRY.map(row => row.name));
   for (const tool of COMPANION_TOOL_REGISTRY) {
@@ -44,7 +44,7 @@ test("the delegation tool sends at once; the model's own flag asks first, and th
   const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
   const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
   const call = (callId: string, name: string, args: Record<string, unknown>, confirmationProposalId?: string) =>
-    runCompanionTool({ project: "fixture", sessionId: session.id, callId, delegationId: `delegation-${callId}`, confirmationProposalId, admission, reads, endConversation: () => undefined }, name, args);
+    runCompanionTool({ project: "fixture", sessionId: session.id, callId, delegationId: "delegation-turn", confirmationProposalId, admission, reads, endConversation: () => undefined }, name, args);
   // The default, with the flag null or left out: delivered before the tool answers, and a replayed call adds nothing.
   expect(await call("c1", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: null })).toMatchObject({ status: "sent", delivery: "delivered" });
   expect(await call("c1", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: null })).toMatchObject({ status: "sent" });
@@ -136,7 +136,8 @@ test("the model resolves a pending voice confirmation without a server-side cons
 test("asking first is the model's judgment in the schema: an optional reason, and no list of words anywhere in the registry", () => {
   const tool = COMPANION_TOOLS.find(row => row.name === "request_orchestrator_delegation")!;
   expect(tool.parameters.properties.confirmation_reason).toMatchObject({ type: ["string", "null"] });
-  expect(tool.parameters.required).toEqual(["project", "instruction", "confirmation_reason", "asked_again"]);
+  expect(tool.parameters.required).toEqual(["project", "instruction", "pending_request", "confirmation_reason", "asked_again"]);
+  expect(tool.parameters.properties.pending_request).toMatchObject({ type: ["string", "null"] });
   expect(tool.parameters.properties.asked_again).toMatchObject({ type: ["string", "null"] });
   expect(tool.description).toContain("delivered at once");
   expect(tool.description).toContain("your own judgment");
@@ -184,4 +185,42 @@ test("read filters reject widened schemas and malformed boolean, integer and sta
     await expect(runCompanionTool(context,"list_tasks",args)).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
   expect(await runCompanionTool(context,"list_tasks",{openOnly:true,statuses:["inbox"],limit:10,query:null,ids:null,cursor:null,project:null})).toMatchObject({total:0});
   admission.retire(session.id);
+});
+
+test("before a send, each backend turn sees once what already waits for a report; it names a rewording and nothing is sent, or passes null for a new question", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const sent: string[] = [];
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => ({ project: "fixture", conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" }), reports: () => reports,
+    send: async ({ text, delivery }) => { sent.push(`${text.split("\n")[0]!}|${delivery.clientMessageId}`); return { status: "delivered", operationId: `operation-${sent.length}` }; } });
+  const session = admission.create({ project: "fixture", locale: "uk", authority: "live-model" });
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const call = (callId: string, turnId: string, args: Record<string, unknown>, name = "request_orchestrator_delegation") =>
+    runCompanionTool({ project: "fixture", sessionId: session.id, callId, delegationId: turnId, admission, reads, endConversation: () => undefined }, name, args);
+  expect(await call("c1", "turn-1", { instruction: "Що з ревʼю голосу?", pending_request: null })).toMatchObject({ status: "sent" });
+  // A later turn: the first send is shown before anything else is sent.
+  expect(await call("c2", "turn-2", { instruction: "Спитай ще раз про ревʼю голосу і про деплой", pending_request: null }))
+    .toMatchObject({ status: "check_waiting", waiting: [{ request: "r1", ask: "Що з ревʼю голосу?", progressReports: 0 }] });
+  const waiting = await call("c3", "turn-2", { instruction: "Спитай ще раз про ревʼю голосу і про деплой", pending_request: "r1" }) as { status: string; speech: string };
+  expect(waiting).toMatchObject({ status: "awaiting_report", request: "r1" });
+  expect(waiting.speech).toContain("on its way");
+  // Shown once per turn: a new question in the same turn goes through.
+  expect(await call("c4", "turn-2", { instruction: "Яку модель обрати для голосу?", pending_request: null })).toMatchObject({ status: "sent" });
+  // The same words as a waiting request need no check, and still send nothing.
+  expect(await call("c5", "turn-3", { instruction: "Що з ревʼю голосу?", pending_request: null, asked_again: "Просить ще раз." })).toMatchObject({ status: "awaiting_report", request: "r1" });
+  // An overlong bundle is recomposed, never sliced or sent.
+  const bundle = await call("c6", "turn-3", { instruction: "Що з ревʼю голосу, ".repeat(30), pending_request: null }) as { status: string; speech: string };
+  expect(bundle).toMatchObject({ status: "too_long" });
+  expect(bundle.speech).toContain("400");
+  expect(sent.map(row => row.split("|")[0])).toEqual(["Що з ревʼю голосу?", "Яку модель обрати для голосу?"]);
+  // The answer arrives; the read returns it whole with its request, and naming that request sends nothing.
+  reports.push({ id: "answer-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "Ревʼю пройшло обидва раунди.",
+    correlatesDirective: sent[0]!.split("|")[1], origin: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" } });
+  admission.pollReports(session.id);
+  expect(await call("c7", "turn-4", {}, "orchestrator_reports")).toMatchObject({ requests: [
+    { request: "r1", state: "answered", answer: { status: "result", text: "Ревʼю пройшло обидва раунди." } },
+    { request: "r2", state: "waiting_for_report" }], reports: [], more: 0 });
+  expect(await call("c8", "turn-4", { instruction: "То що з ревʼю?", pending_request: "r1" }))
+    .toMatchObject({ status: "answered", request: "r1", report: { text: "Ревʼю пройшло обидва раунди." } });
+  expect(sent).toHaveLength(2);
 });

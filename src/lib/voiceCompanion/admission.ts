@@ -10,6 +10,7 @@ import { DELEGATION_REASONS, deliveryFailureReason, type DelegationCode } from "
 import { CompanionTranscriptRecords, type TranscriptEntry } from "./transcriptRecord";
 import { LIVE_VOICE } from "./sessionConfig";
 import { CompanionStorage, type SessionStarter, type StoredProposal, type StoredSession } from "./storage";
+import { voiceReportText } from "./reportSpeech";
 
 export interface CompanionDeliveryPaths {
   recipient(project: string): Recipient | null;
@@ -28,6 +29,16 @@ const sameRequest = (row: StoredProposal, sourceItemId: string, instruction: str
 /** Every request the session holds but `except`, for the gate's look back. */
 const earlierRequests = (session: StoredSession, except?: string, project?: string): EarlierRequest[] => Object.values(session.proposals)
   .filter(row => row.proposal.proposalId !== except && (project === undefined || canonicalProject(row.proposal.recipient.project) === canonicalProject(project))).map(row => ({ turn: row.sourceTurn, instruction: row.proposal.instruction }));
+/** How long a raised confirmation waits for the operator's answer. */
+const CONFIRMATION_MS = 120_000;
+/** A request the orchestrator received or may still receive, whose answering report has not arrived. */
+const awaitingReport = (row: StoredProposal) => row.state === "admitted" && !!row.delivery && row.status !== "failed" && !row.answered;
+/** Short handles the backend names this call's requests by, in the order they were raised. */
+const requestHandles = (session: StoredSession) => new Map(Object.keys(session.proposals).map((id, index) => [id, `r${index + 1}`]));
+export interface CallRequest { handle: string; proposalId: string; project: string; instruction: string; sentMinutesAgo: number; progressReports: number }
+const callRequest = (session: StoredSession, row: StoredProposal, now: number): CallRequest => ({ handle: requestHandles(session).get(row.proposal.proposalId)!,
+  proposalId: row.proposal.proposalId, project: canonicalProject(row.proposal.recipient.project), instruction: row.proposal.instruction,
+  sentMinutesAgo: Math.max(0, Math.floor((now - row.expiresAt + CONFIRMATION_MS) / 60_000)), progressReports: row.reports.filter(id => id !== row.answered).length });
 const sameRecipient = (left: Recipient | null, right: Recipient) => !!left && canonicalProject(left.project) === canonicalProject(right.project)
   && left.conversationId === right.conversationId && left.seatEpoch === right.seatEpoch && left.engine === right.engine;
 const reportStatus = (report: BridgeReportV1): "progress" | "result" | "question" | "blocked" | null => {
@@ -69,6 +80,10 @@ export function admittedVoiceBinding(input: { sessionId: string; proposalId: str
  * retain their completed-input policy for deterministic demo fixtures. */
 export type DelegationOutcome =
   | { state: "awaiting"; proposal: Proposal }
+  /** Nothing sent: the orchestrator already has this ask and its report has not arrived. */
+  | { state: "awaiting_report"; request: CallRequest }
+  /** Nothing sent: the orchestrator already answered this ask. */
+  | { state: "answered"; request: CallRequest; report: { status: string; text: string } | null }
   | { state: "sent"; status: "delivered" | "queued" | "unknown" | "failed"; failureCode?: string }
   | { state: "refused"; code: DelegationCode };
 type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech"; sourceTurn?: number };
@@ -76,6 +91,8 @@ export class CompanionAdmission {
   private readonly records = new CompanionTranscriptRecords();
   private readonly sending = new Map<string, Promise<void>>();
   private readonly secrets = new Set<string>();
+  /** Requests awaiting a report that the backend was shown, per session and delegation. */
+  private readonly shown = new Map<string, Set<string>>();
   constructor(readonly storage: CompanionStorage, private readonly paths: CompanionDeliveryPaths, private readonly now = Date.now) {}
   create(options: { project: string; locale: Locale; authority?: "live-model"; startedBy?: SessionStarter }): StoredSession {
     const session: StoredSession = { id: randomUUID(), project: canonicalProject(options.project), locale: options.locale, generation: 1,
@@ -211,7 +228,7 @@ export class CompanionAdmission {
    * is admitted and sent before this returns; a retry of the same call finds
    * its first outcome and never sends again. `confirmation` is the model's own
    * reason for asking first: nothing here reads the request to decide that. */
-  async delegate(id: string, callId: string, sourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string; renewed?: boolean; project?: string } = {}): Promise<DelegationOutcome> {
+  async delegate(id: string, callId: string, sourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string; renewed?: boolean; project?: string; pendingRequest?: string } = {}): Promise<DelegationOutcome> {
     const clean = this.cleaner();
     const logicalInstruction = clean(instruction).trim();
     const session = this.session(id);
@@ -227,6 +244,20 @@ export class CompanionAdmission {
       }
       return this.outcome(id, duplicate.proposal.proposalId);
     }
+    // An ask the orchestrator already has is never sent again while its report
+    // is on the way: the backend names it, or it repeats one in the same words.
+    // A renewal does not bypass this; a new question goes on to admission.
+    const held = options.pendingRequest !== undefined
+      ? Object.values(session.proposals).find(row => requestHandles(session).get(row.proposal.proposalId) === options.pendingRequest)
+      : Object.values(session.proposals).find(row => awaitingReport(row) && requestText(row.proposal.instruction) === requestText(logicalInstruction)
+        && !!project && canonicalProject(row.proposal.recipient.project) === canonicalProject(project));
+    if (held && awaitingReport(held)) return { state: "awaiting_report", request: callRequest(session, held, this.now()) };
+    if (held?.answered) {
+      const event = session.events.find(row => (row.type === "orchestrator.answer" || row.type === "orchestrator.report") && row.reportId === held.answered);
+      return { state: "answered", request: callRequest(session, held, this.now()),
+        report: event?.type === "orchestrator.answer" || event?.type === "orchestrator.report" ? { status: event.status, text: event.text } : null };
+    }
+    if (options.pendingRequest !== undefined) return { state: "refused", code: "request_not_waiting" };
     const proposal = this.propose(id, callId, sourceItemId, instruction, { ...options, autosend: !options.confirmation?.trim() });
     const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === clean(callId)
       || sameRequest(held, clean(sourceItemId), logicalInstruction, options.sourceTurn, project));
@@ -254,6 +285,53 @@ export class CompanionAdmission {
   lastAsked(id: string): Proposal | null {
     return Object.values(this.session(id).proposals).findLast(row => !!row.proposal.confirmation)?.proposal ?? null;
   }
+  /** This call's requests whose answering report has not arrived, oldest first. */
+  awaitingReports(id: string): CallRequest[] {
+    const session = this.session(id);
+    return Object.values(session.proposals).filter(awaitingReport).map(row => callRequest(session, row, this.now()));
+  }
+  /** Records that one backend delegation knows these waiting requests: it was shown them, or sent them itself. */
+  showAwaiting(id: string, delegationId: string, proposalIds: readonly string[]): void {
+    const key = `${id}\0${delegationId}`;
+    const seen = this.shown.get(key) ?? new Set<string>();
+    for (const proposalId of proposalIds) seen.add(proposalId);
+    this.shown.delete(key); this.shown.set(key, seen);
+    while (this.shown.size > 1_024) this.shown.delete(this.shown.keys().next().value!);
+  }
+  /** Waiting requests to the project this delegation has not been shown yet. */
+  unseenAwaiting(id: string, delegationId: string, project: string): CallRequest[] {
+    const seen = this.shown.get(`${id}\0${delegationId}`);
+    return this.awaitingReports(id).filter(request => request.project === canonicalProject(project) && !seen?.has(request.proposalId));
+  }
+  /** What this call asked the orchestrator and what came back, for the backend's read. */
+  callReports(id: string): { requests: Array<Record<string, unknown>>; reports: Array<Record<string, unknown>>; more: number } {
+    const session = this.session(id);
+    const handles = requestHandles(session);
+    const minutes = (atMs: number) => Math.max(0, Math.floor((this.now() - atMs) / 60_000));
+    const label = (project: string) => withoutLocalPaths(reportHeaderName(project, session.locale));
+    const reported = session.events.flatMap(event => event.type === "orchestrator.answer" || event.type === "orchestrator.report" ? [event] : []);
+    const requests = Object.values(session.proposals).filter(row => row.state === "admitted" && row.delivery).map(row => {
+      const request = callRequest(session, row, this.now());
+      const answer = row.answered ? reported.find(event => event.reportId === row.answered) : undefined;
+      return { request: request.handle, project: label(request.project), ask: request.instruction, sentMinutesAgo: request.sentMinutesAgo,
+        state: row.status === "failed" ? "delivery_failed" : row.answered ? "answered" : "waiting_for_report", progressReports: request.progressReports,
+        ...(answer ? { answer: { status: answer.status, text: answer.text } } : {}) };
+    });
+    // Answers already travel with their requests; the latest other reports follow, whole, within a bound.
+    const answering = new Set(Object.values(session.proposals).map(row => row.answered).filter(Boolean));
+    const reports: Array<Record<string, unknown>> = [];
+    let size = JSON.stringify(requests).length;
+    const others = reported.filter(event => !answering.has(event.reportId)).reverse();
+    for (const event of others) {
+      const row = event.type === "orchestrator.answer" ? session.proposals[event.delivery.proposalId] : undefined;
+      const report = { status: event.status, project: label(event.type === "orchestrator.answer" ? event.delivery.recipient.project : event.project),
+        minutesAgo: minutes(session.createdAt + event.atMs), text: event.text, ...(row ? { about: handles.get(row.proposal.proposalId) } : {}) };
+      size += JSON.stringify(report).length;
+      if (reports.length >= 5 || size > 12_000) break;
+      reports.unshift(report);
+    }
+    return { requests, reports, more: others.length - reports.length };
+  }
   /** `sourceTurn` binds this model request to the operator's Live turn. */
   propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string; autosend?: boolean; renewed?: boolean; project?: string } = {}): Proposal | null {
     const { sourceTurn } = options;
@@ -278,7 +356,7 @@ export class CompanionAdmission {
       if (Object.values(session.proposals).some(row => row.state === "pending" && row.proposal.sourceItemId === sourceItemId)) { refusal = "duplicate_proposal"; return null; }
       const proposal: Proposal = { proposalId: randomUUID(), callId, sourceItemId, instruction: instruction.trim(), recipient,
         ...(session.authority ? { authority: session.authority } : {}), ...(asked ? { confirmation: { reason: asked } } : {}) };
-      const row: StoredProposal = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + 120_000,
+      const row: StoredProposal = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + CONFIRMATION_MS,
         state: options.autosend && !asked ? "admitted" : "pending", reports: [], ...(sourceTurn !== undefined ? { sourceTurn } : {}), ...(options.renewed ? { renewed: true } : {}) };
       if (options.autosend && !asked) {
         // Commit the proposal, admission decision and retry identity together.
@@ -480,9 +558,12 @@ export class CompanionAdmission {
         const status = reportStatus(report);
         if (report.synthetic || report.origin?.kind !== "manager" || !status || spoken.includes(report.id)) continue;
         spoken.push(report.id);
-        const text = withoutLocalPaths(clean(report.body)).slice(0, 1_200).replace(/[\uD800-\uDBFF]$/u, "");
+        // The whole report: the voice relays every item the seat filed.
+        const text = withoutLocalPaths(clean(voiceReportText(report)));
         const row = rowFor(report);
         if (row) row.reports.push(report.id);
+        // Progress keeps the request waiting; any other correlated report answers it.
+        if (row && status !== "progress") row.answered ??= report.id;
         // A card can join only a receipt already published to the client. A
         // report arriving during a send or after a lost transport reply still
         // gets its own visible card, without inventing an operation identity.
@@ -511,5 +592,6 @@ export class CompanionAdmission {
       session.closed = true;
       for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }
     });
+    for (const key of this.shown.keys()) if (key.startsWith(`${id}\0`)) this.shown.delete(key);
   }
 }

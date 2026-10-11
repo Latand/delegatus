@@ -31,6 +31,7 @@ import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { isDismissedBy, type DismissedBy } from "@/lib/attention/dismissalTypes";
+import { boundComplete } from "./reportComplete";
 
 import {
   BRIDGE_ANSWERED_REF_CAPACITY,
@@ -49,6 +50,7 @@ import {
   type BridgePendingAnswerV1,
   type BridgeResolvedAskV1,
   type BridgeReportBatch,
+  type BridgeReportCompleteV1,
   type BridgeReportInput,
   type BridgeReportLogV1,
   type BridgeReportOrigin,
@@ -165,6 +167,24 @@ export function bridgeReportBody(value: string | null | undefined): string {
   return `${bytes.subarray(0, end).toString("utf8")}${marker}`;
 }
 
+/**
+ * The uncut report the voice relays, redacted like a body. Its byte bound is
+ * kept by leaving whole items out from the end, counted; malformed input
+ * yields none.
+ */
+export function bridgeReportComplete(value: unknown): BridgeReportCompleteV1 | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Partial<BridgeReportCompleteV1>;
+  if (typeof raw.summary !== "string" || !Array.isArray(raw.sections)) return undefined;
+  const line = (text: string) => hardenedRedact(text).replace(/\s+/g, " ").trim();
+  const sections = raw.sections.flatMap((section) => section && typeof section === "object" && typeof section.heading === "string" && Array.isArray(section.items)
+    ? [{ heading: line(section.heading), items: section.items.filter((item): item is string => typeof item === "string").map(line).filter(Boolean) }]
+    : []).filter((section) => section.items.length > 0);
+  const omitted = Number.isSafeInteger(raw.omitted) && (raw.omitted as number) > 0 ? raw.omitted as number : 0;
+  const complete = boundComplete({ summary: line(raw.summary), sections, ...(omitted ? { omitted } : {}) });
+  return complete.summary || complete.sections.length ? complete : undefined;
+}
+
 function readJsonFile(target: string): unknown | null {
   let contents: string;
   try {
@@ -235,6 +255,7 @@ function normalizeReport(value: unknown): BridgeReportV1 | null {
     class: candidate.class,
     ...(typeof candidate.key === "string" && candidate.key ? { key: candidate.key } : {}),
     body: typeof candidate.body === "string" ? candidate.body : "",
+    ...(bridgeReportComplete(candidate.complete) ? { complete: bridgeReportComplete(candidate.complete) } : {}),
     ...(origin ? { origin } : {}),
     ...(project !== undefined ? { project } : {}),
     ...(targetSeatConversationId !== undefined ? { targetSeatConversationId } : {}),
@@ -860,6 +881,7 @@ export function appendBridgeReports(
            hashed `id` exactly as it was before this field existed. */
         ...(isBridgeDecisionRequestClass(input.class) ? { key: input.key } : {}),
         body: bridgeReportBody(input.body),
+        ...(bridgeReportComplete(input.complete) ? { complete: bridgeReportComplete(input.complete) } : {}),
         ...(input.origin ? { origin: normalizeOrigin(input.origin) } : {}),
         ...("project" in input ? { project: typeof input.project === "string" ? input.project : null } : {}),
         ...("targetSeatConversationId" in input

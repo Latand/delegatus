@@ -1,7 +1,7 @@
 import type { GateRefusal } from "./gate";
 export type DelegationCode = GateRefusal | "invalid_instruction" | "already_requested" | "not_admitted" | "session_closed"
   | "duplicate_proposal" | "proposal_unavailable" | "proposal_changed" | "operator_cancelled" | "confirmation_expired"
-  | "not_requested" | "operator_refused";
+  | "not_requested" | "operator_refused" | "request_not_waiting";
 export const DELEGATION_REASONS: Record<DelegationCode, string> = {
   no_orchestrator: "This project has no designated orchestrator, so nothing was sent.",
   invalid_instruction: "The request text is empty or too long.", empty_instruction: "The request text is empty or too long.",
@@ -17,6 +17,7 @@ export const DELEGATION_REASONS: Record<DelegationCode, string> = {
   not_imperative: "The utterance does not ask to send.", not_addressed: "The request is not addressed to the orchestrator.",
   not_confirmed: "The confirmation must come in a later operator turn.", not_requested: "The operator did not request a send.",
   operator_refused: "The operator asked for nothing to be sent.",
+  request_not_waiting: "That earlier request is not waiting for a report: it was never sent or its delivery failed. Nothing was sent.",
 };
 export function deliveryFailureReason(code?: string): string {
   return code ? `The orchestrator's conversation refused the message (${code.replaceAll("_", " ").toLowerCase()}), so nothing was sent.`

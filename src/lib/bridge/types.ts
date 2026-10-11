@@ -60,6 +60,18 @@ export const BRIDGE_ANSWERED_REF_CAPACITY = 500;
 export const BRIDGE_ASK_TTL_SECONDS = 2 * 3600;
 /** §3: report bodies are bounded. Measured in UTF-8 bytes, not code units. */
 export const BRIDGE_REPORT_BODY_MAX_BYTES = 2_048;
+/** The whole report the voice relays, summary and items together, in UTF-8 bytes. */
+export const BRIDGE_REPORT_COMPLETE_MAX_BYTES = 8_192;
+
+/** Every item the seat filed, scrubbed of private information but not cut for
+    display. Kept only when the displayed body left something out, so the voice
+    can relay the report whole. */
+export interface BridgeReportCompleteV1 {
+  summary: string;
+  sections: Array<{ heading: string; items: string[] }>;
+  /** Items left out because the whole report would pass its byte bound. */
+  omitted?: number;
+}
 
 /**
  * The fixed, small set of things the manager may tell the gateway. Deliberately
@@ -181,6 +193,8 @@ export interface BridgeReportV1 {
   correlatesDirective?: string;
   /** Bounded and secret-redacted at write. Transcript payloads never reach it. */
   body: string;
+  /** The uncut report, present only when `body` shows less than the seat filed. */
+  complete?: BridgeReportCompleteV1;
   /** Set on the gap notice the drain synthesizes when the log outran a cursor
       (§7.12). Synthetic rows are never stored — they exist for one batch. */
   synthetic?: true;
@@ -227,6 +241,8 @@ export interface BridgeReportInput {
   correlatesDirective?: string | null;
   /** Raw candidate text; bounded and redacted before it is stored. */
   body?: string | null;
+  /** The uncut report beside a body that left items out; redacted before it is stored. */
+  complete?: BridgeReportCompleteV1 | null;
   /** Keys of further outcomes this report speaks for, scoped by `project`
       before they are stored. */
   covers?: readonly string[] | null;

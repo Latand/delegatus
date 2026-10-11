@@ -145,3 +145,42 @@ test("a failed deploy's task changes are headed as not on prod yet; hidden title
   });
   expect(renderPlain(cut)).toContain("📋 Tasks since the previous deploy (not on prod yet)\n• Done: A task title (1 hidden)");
 });
+
+test("a report the display shows whole carries no second copy", () => {
+  const { complete } = render({ summary: "Two lanes running.", sections: { inProgress: ["the board's scroll speed"], decision: ["pick the next wave"] } });
+  expect(complete).toBeNull();
+});
+
+test("what the display leaves out stays in the complete copy, in order, with the long summary uncut and private items still out", () => {
+  const long = `${"довгий пункт про перевірку звіту ".repeat(8).trim()}.`;
+  const summary = `Звіт для голосу: ${"усе, що сталося за ранок, ".repeat(6).trim()}.`;
+  const { cut, complete } = render({
+    locale: "uk",
+    summary,
+    sections: { queued: ["a", "b", "c", "d", "e", "f"], inProgress: [long, "short", "the build reads /srv/build/checkout"] },
+  });
+  const plain = renderPlain(cut);
+  expect(plain).not.toContain(long);
+  expect(plain).toContain("і ще 2");
+  expect(complete).toEqual({
+    summary,
+    sections: [{ heading: "В роботі", items: [long, "short"] }, { heading: "Далі", items: ["a", "b", "c", "d", "e", "f"] }],
+  });
+  expect(JSON.stringify(complete)).not.toContain("/srv/build");
+});
+
+test("the complete copy of a report the size budget cut keeps every item, and past its own bound counts what it left out", () => {
+  const filler = (prefix: string) => Array.from({ length: 6 }, (_, index) => `${prefix} ${index}: ${"довгий опис роботи ".repeat(9).trim()}`.slice(0, 199));
+  const sections = { prod: filler("прод"), merged: filler("змерджено"), inProgress: filler("в роботі"), queued: filler("далі").slice(0, 4), decision: ["рішення"] };
+  const { cut, complete } = render({ locale: "uk", class: "blocked", summary: "Потрібне рішення.", sections });
+  expect(Buffer.byteLength(renderPlain(cut), "utf8")).toBeLessThanOrEqual(REPORT_PLAIN_BUDGET_BYTES);
+  expect(complete!.sections.flatMap((section) => section.items)).toEqual([...sections.prod, ...sections.merged, ...sections.inProgress, ...sections.queued, ...sections.decision]);
+  expect(complete!.omitted).toBeUndefined();
+
+  const many = Array.from({ length: 32 }, (_, index) => `${index}: ${"я".repeat(190)}`);
+  const bounded = render({ locale: "uk", summary: "Багато пунктів.", sections: { inProgress: many, queued: many } }).complete!;
+  const kept = bounded.sections.flatMap((section) => section.items);
+  expect(Buffer.byteLength([bounded.summary, ...bounded.sections.flatMap((section) => [section.heading, ...section.items])].join("\n"), "utf8")).toBeLessThanOrEqual(8_192);
+  expect(kept).toEqual([...many, ...many].slice(0, kept.length));
+  expect(bounded.omitted).toBe(64 - kept.length);
+});

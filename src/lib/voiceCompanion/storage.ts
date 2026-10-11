@@ -42,6 +42,8 @@ export interface StoredProposal {
   /** What admitted the send: no confirmation asked, a tap, or the operator's spoken answer. */
   via?: "auto" | "tap" | "speech";
   reports: string[];
+  /** The correlated report that answered this request; until then it awaits its report. */
+  answered?: string;
   retargetCount?: number;
   /** Receipt publication survives the bounded event ring. */
   publishedReceipt?: { clientMessageId: string; operationId: string };
@@ -128,6 +130,7 @@ function sessionValid(key: string, session: unknown): boolean {
       || !recipientValid(held.proposal.recipient)
       || typeof held.sourceText !== "string" || !Number.isFinite(held.expiresAt) || !["pending", "cancelled", "admitted"].includes(held.state as string)
       || !Array.isArray(held.reports) || !held.reports.every(identifier)
+      || (held.answered !== undefined && (!identifier(held.answered) || !held.reports.includes(held.answered)))
       || (held.renewed !== undefined && typeof held.renewed !== "boolean")
       || (held.retargetCount !== undefined && (!Number.isSafeInteger(held.retargetCount) || (held.retargetCount as number) < 0 || (held.retargetCount as number) > 1))
       || (held.publishedReceipt !== undefined && (!record(held.publishedReceipt)

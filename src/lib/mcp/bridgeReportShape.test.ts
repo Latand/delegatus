@@ -169,6 +169,20 @@ test("a summary and sections are stored as the rendered bridge copy, with no war
   expect(row.telegram).toBeUndefined();
 });
 
+test("a voice-correlated report whose items the display copy drops or counts keeps them whole beside it, for the voice; a clean report keeps no second copy", async () => {
+  const long = `the review lane finished its second round and ${"found the same two notes in the transcript relay again, ".repeat(4).trim()}`;
+  const queued = ["one", "two", "three", "four", "five", "six"];
+  const answer = await file({ key: "voice-answer", class: "completed", correlatesDirective: "voice-fixture", summary: "Answer to the voice.", sections: { merged: [long, "short item"], queued } });
+  expect(answer.recorded).toBe(true);
+  expect(answer.warnings!.some((warning) => warning.includes("over 200 characters dropped"))).toBe(true);
+  const row = readBridgeReportLog().reports[0]!;
+  expect(row.body).not.toContain(long);
+  expect(row.correlatesDirective).toBe("voice-fixture");
+  expect(row.complete).toEqual({ summary: "Answer to the voice.", sections: [{ heading: "Merged, goes out with the next deploy", items: [long, "short item"] }, { heading: "Next", items: queued }] });
+  await file({ key: "clean", summary: "Nothing cut.", sections: { queued: ["one"] } });
+  expect(readBridgeReportLog().reports[1]!.complete).toBeUndefined();
+});
+
 test("an older caller's body is filed as in-progress items, with a warning to use summary and sections", async () => {
   const answer = await file({ key: "legacy-1", body: "deploy 1c41d361 passed\nprod answers 200" });
   expect(answer.recorded).toBe(true);

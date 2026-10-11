@@ -10,7 +10,8 @@ import {
   type ReportSectionId,
   type SeatSectionId,
 } from "./reportWords";
-import type { BridgeReportClass } from "./types";
+import { boundComplete } from "./reportComplete";
+import type { BridgeReportClass, BridgeReportCompleteV1 } from "./types";
 
 /*
  * One manager report, cut once and rendered twice
@@ -100,6 +101,8 @@ export interface RenderReportResult {
   empty: boolean;
   /** Private classes found, with how many items or titles each dropped. */
   dropped: Partial<Record<PrivateClass, number>>;
+  /** Every scrubbed item uncut, when the cut report shows less than the seat filed. */
+  complete: BridgeReportCompleteV1 | null;
 }
 
 function oneLine(text: string): string {
@@ -146,13 +149,17 @@ export function renderReport(input: RenderReportInput): RenderReportResult {
   let tooLong = 0;
   let machineIds = 0;
   const kept: Partial<Record<SeatSectionId, string[]>> = {};
+  /* The voice relays what the length rule and the limits leave out. */
+  const whole: Partial<Record<SeatSectionId, string[]>> = {};
   for (const id of SEAT_SECTION_IDS) {
+    whole[id] = [];
     kept[id] = (raw[id] ?? []).filter((item) => {
       const found = privateClasses(item, deny);
       if (found.length > 0) {
         countDrop(found);
         return false;
       }
+      whole[id]!.push(item);
       if (item.length > REPORT_ITEM_MAX_CHARS) {
         tooLong += 1;
         return false;
@@ -163,13 +170,15 @@ export function renderReport(input: RenderReportInput): RenderReportResult {
   }
 
   let summary = oneLine(input.summary ?? "");
+  /* The seat's own summary, uncut, when it is clean. */
+  let wholeSummary = "";
   if (summary) {
     const found = privateClasses(summary, deny);
     if (found.length > 0) {
       countDrop(found);
       summary = "";
       warnings.push("The summary carried private information and was replaced by the first item.");
-    } else if (summary.length > REPORT_SUMMARY_MAX_CHARS) {
+    } else if ((wholeSummary = summary).length > REPORT_SUMMARY_MAX_CHARS) {
       summary = cutAtWord(summary, REPORT_SUMMARY_MAX_CHARS);
       warnings.push(`The summary is longer than ${REPORT_SUMMARY_MAX_CHARS} characters and was cut.`);
     }
@@ -203,6 +212,8 @@ export function renderReport(input: RenderReportInput): RenderReportResult {
     sections,
   };
   const budgetCut = fitBudget(cut);
+  const complete = tooLong > 0 || limited > 0 || budgetCut > 0 || wholeSummary.length > REPORT_SUMMARY_MAX_CHARS
+    ? completeReport(wholeSummary, whole, input, deny, words) : null;
 
   for (const [found, count] of Object.entries(dropped) as [PrivateClass, number][]) {
     warnings.push(`${count} item(s) dropped: ${count === 1 ? "it" : "they"} named ${privateClassLabel(found)}. Reports can be public; leave that out.`);
@@ -214,7 +225,27 @@ export function renderReport(input: RenderReportInput): RenderReportResult {
     warnings.push("A blocked or question report puts the ask in the decision section.");
   }
   if (machineIds > 0) warnings.push(`${machineIds} item(s) carry machine ids; name work by its title and #PR, a deploy by its 8-character sha.`);
-  return { cut, warnings, empty, dropped };
+  return { cut, warnings, empty, dropped, complete };
+}
+
+/** The report as filed, in display order, held under its byte bound by
+    leaving whole items out from the end and counting them. */
+function completeReport(
+  summary: string,
+  whole: Partial<Record<SeatSectionId, string[]>>,
+  input: RenderReportInput,
+  deny: PublicDenyList,
+  words: ReturnType<typeof reportWords>,
+): BridgeReportCompleteV1 {
+  const sections: BridgeReportCompleteV1["sections"] = [];
+  for (const id of SEAT_SECTION_IDS) {
+    if (whole[id]?.length) sections.push({ heading: words.heading[id], items: [...whole[id]!] });
+    if (id === "prod" && input.deploy && input.taskChanges) {
+      const tasks = taskSection(input.taskChanges, deny, () => undefined);
+      if (tasks) sections.push({ heading: sectionHeading(tasks, input.locale), items: sectionLines(tasks, input.locale) });
+    }
+  }
+  return boundComplete({ summary, sections });
 }
 
 function taskSection(

@@ -89,7 +89,7 @@ import { isLifecycleEventType } from "@/lib/lifecycle/vocabulary";
 import { recordBridgeDirectiveAnswer, recordBridgeDirectivePendingAnswer, recordManagerReport } from "@/lib/bridge/service";
 import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/lib/bridge/directive";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
-import { isBridgeReportClass, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
+import { isBridgeReportClass, type BridgeReportCompleteV1, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { issueReportApproval, issueReportApprovalDrafts, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
@@ -3491,6 +3491,7 @@ async function bridgeReport(
   const locale = dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
   const warnings: string[] = [];
   let storedBody: string;
+  let complete: BridgeReportCompleteV1 | null = null;
   let telegramCopy: { chat: string; html: string; topicId?: number } | null = null;
   if (origin.kind === "manager") {
     /* Only a chat the operator chose for the project is posted to (§5.6). */
@@ -3524,6 +3525,8 @@ async function bridgeReport(
     const language = languageMismatchWarning("report", [summary, ...Object.values(sections).flat(), hasSections ? "" : body].join("\n"), locale);
     if (language) warnings.push(language);
     storedBody = renderPlain(rendered.cut);
+    /* The voice relays the report whole; the body stays the display copy. */
+    complete = rendered.complete;
     if (destination) {
       telegramCopy = { chat: destination.chat, html: renderTelegram(rendered.cut, knownPullRequests(project!)), ...(destination.topicId ? { topicId: destination.topicId } : {}) };
     }
@@ -3543,6 +3546,7 @@ async function bridgeReport(
     project,
     targetSeatConversationId: targetSeat?.conversationId ?? null,
     body: storedBody,
+    complete,
     correlatesDirective: text(args.correlatesDirective) || null,
     covers,
     coversOwed,

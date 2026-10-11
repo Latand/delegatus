@@ -105,6 +105,26 @@ test("reports append with monotonic seq and a body bounded and redacted at write
   expect(Buffer.byteLength(appended[1]!.body, "utf8")).toBeLessThanOrEqual(BRIDGE_REPORT_BODY_MAX_BYTES);
 });
 
+test("the complete copy beside a cut body is redacted, bounded with a count, read back whole and dropped when malformed", () => {
+  sandbox();
+  openBridgeChannel(ROOT_ID);
+  const items = Array.from({ length: 60 }, (_, index) => `${index}: ${"я".repeat(190)}`);
+  const { appended } = appendBridgeReports([
+    report("complete", { class: "completed", body: "short display copy", complete: { summary: `Підсумок; token ${SECRET_SHAPED}`, sections: [{ heading: "В роботі", items: ["перший", "другий"] }, { heading: "Далі", items }] } }),
+    report("malformed", { body: "plain", complete: { summary: 1, sections: "none" } as never }),
+  ]);
+  const [whole, malformed] = readBridgeReportLog().reports;
+  expect(whole!.complete).toEqual(appended[0]!.complete);
+  expect(whole!.complete!.summary).toContain("[redacted]");
+  expect(whole!.complete!.summary).not.toContain(SECRET_SHAPED);
+  const kept = whole!.complete!.sections.flatMap((section) => section.items);
+  expect(kept.slice(0, 2)).toEqual(["перший", "другий"]);
+  expect(kept.slice(2)).toEqual(items.slice(0, kept.length - 2));
+  expect(whole!.complete!.omitted).toBe(62 - kept.length);
+  expect(whole!.body).toBe("short display copy");
+  expect(malformed!.complete).toBeUndefined();
+});
+
 test("a manager retry under one key yields one seq and one log entry (§7.5)", () => {
   sandbox();
   openBridgeChannel(ROOT_ID);
