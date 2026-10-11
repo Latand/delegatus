@@ -36,23 +36,37 @@ export interface StoredProposal {
   sourceTurn?: number;
   /** The model judged that the operator asked again for a request raised earlier in the call. */
   renewed?: boolean;
+  /** The earlier request, still waiting or answered, that the operator explicitly asked to send once more. */
+  renews?: string;
   /** Why a waiting confirmation ended with nothing sent. */
   cancelCode?: DelegationCode;
   failureCode?: string;
   /** What admitted the send: no confirmation asked, a tap, or the operator's spoken answer. */
   via?: "auto" | "tap" | "speech";
   reports: string[];
+  /** The correlated report that answered this request; until then it awaits its report. */
+  answered?: string;
+  /** The latest correlated report that asked back or named a blocker without answering. */
+  askedBack?: string;
   retargetCount?: number;
   /** Receipt publication survives the bounded event ring. */
   publishedReceipt?: { clientMessageId: string; operationId: string };
 }
 export type SessionStarter = { memberId: string } | { operator: true };
+/** A report owed to the voice. Kept until every part is handed to the provider,
+ * committed with the scan position that found it, so a failed hand-off resumes
+ * at the first part not handed and never repeats one that was. */
+export interface ReportSpeech { reportId: string; project: string; status: string; text: string; parts?: string[]; handed: number;
+  /** The operator asked to hear a report this call already relayed once more. */
+  reread?: boolean }
 export interface StoredSession {
   backend?: "codex";
   startedBy?: SessionStarter;
   currentProject?: string | null;
   reportWatermarks?: Record<string, number>;
   spokenReports?: string[];
+  /** Reports owed to the voice, oldest first. */
+  reportSpeech?: ReportSpeech[];
   endedAt?: number;
   authority?: "live-model";
   providerId?: string;
@@ -132,6 +146,7 @@ function sessionValid(key: string, session: unknown): boolean {
       || !recipientValid(held.proposal.recipient)
       || typeof held.sourceText !== "string" || !Number.isFinite(held.expiresAt) || !["pending", "cancelled", "admitted"].includes(held.state as string)
       || !Array.isArray(held.reports) || !held.reports.every(identifier)
+      || (held.answered !== undefined && (!identifier(held.answered) || !held.reports.includes(held.answered)))
       || (held.renewed !== undefined && typeof held.renewed !== "boolean")
       || (held.retargetCount !== undefined && (!Number.isSafeInteger(held.retargetCount) || (held.retargetCount as number) < 0 || (held.retargetCount as number) > 1))
       || (held.publishedReceipt !== undefined && (!record(held.publishedReceipt)
