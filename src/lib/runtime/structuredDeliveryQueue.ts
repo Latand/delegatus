@@ -2183,11 +2183,11 @@ export class StructuredDeliveryQueue {
       }
       if (receipt.outcome === "rejected") {
         if (receipt.reason === "stale-turn") {
-          /* An interrupt-and-resend that lost a race with a new turn goes back
-             to the queue: the interrupt path is retried, nothing is dropped. */
+          /* A send that lost a race with a turn change goes back to the queue.
+             An interrupt-and-resend retries its interrupt path as well. */
           if ((effect.kind === "send" && effect.policy !== "steer-if-active") || steerByInterrupt) {
             await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-            this.noteWait(effect, "awaiting-turn", { detail: "a new turn started before the hand-over" });
+            this.noteWait(effect, "awaiting-turn", { detail: "the turn changed before the hand-over" });
             return true;
           }
           await this.transitionUnlessSettled(effect.operationId, "failed", { reason: receipt.reason });
