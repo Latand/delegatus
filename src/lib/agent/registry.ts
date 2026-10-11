@@ -1565,6 +1565,27 @@ function rearmRolledBackMigrationDeliveries(
   }
 }
 
+const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
+
+export function deliveryHasDurableClaimOwner(
+  snapshot: RegistryFile,
+  conversation: RegistryConversation,
+  delivery: HeldDelivery,
+): boolean {
+  const current = conversation.generations.at(-1);
+  if (!current || delivery.generationId !== current.id) return false;
+  if (current.host !== null && current.host !== undefined) return true;
+  if (Object.values(snapshot.entries).some((entry) =>
+    entry.key.engine === conversation.engine
+    && entry.key.sessionId === current.id
+    && entry.artifactPath === current.path
+    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
+  return Object.values(snapshot.receipts).some((receipt) =>
+    receipt.engine === conversation.engine
+    && receipt.conversationId === conversation.id
+    && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
+}
+
 function terminalizeHeldDelivery(
   file: RegistryFile,
   delivery: HeldDelivery,
@@ -8650,6 +8671,7 @@ export class AgentRegistry {
     id: ViewerConversationId,
     targetId: string,
     reconfigureOwner?: { operationId: string; revision: number },
+    profile?: Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">,
   ): RegistryConversation {
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
@@ -8664,6 +8686,9 @@ export class AgentRegistry {
       }
       const source = conversation.generations.at(-1);
       if (!source || source.accountId === null || source.accountId === targetId) return clone(conversation);
+      /* A pane's profile and reseat commit together. A refused writer or a
+         failed reseat leaves both untouched, with no separate rollback. */
+      if (profile) writeConversationLaunchProfile(file, conversation, source, profile);
       const replaced = inFlightMigration(conversation);
       if (conversation.migration
         && !["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration.phase)) {
@@ -9446,6 +9471,26 @@ export class AgentRegistry {
       const delivery = file.heldDeliveries[id];
       if (!delivery) throw new Error("held delivery is unknown");
       if (delivery.state !== "delivered") terminalizeHeldDelivery(file, delivery, reason);
+      return clone(delivery);
+    }, { deliveryOnly: true });
+  }
+
+  /** Cancel an orphan only if its operation, attempt and assignment still
+      match the selected candidate and it still has no durable owner, all
+      decided under the writer. Publication or a claim during acquisition
+      preserves the accepted payload for the next drain. */
+  terminalizeOrphanedHeldDelivery(expected: HeldDelivery, reason: string): HeldDelivery | null {
+    return this.mutate((file) => {
+      const delivery = file.heldDeliveries[expected.id];
+      if (!delivery || delivery.state !== expected.state
+        || (delivery.state !== "held" && delivery.state !== "assigned")
+        || delivery.command.operationId !== expected.command.operationId
+        || delivery.attempts !== expected.attempts || delivery.assignedAt !== expected.assignedAt
+        || delivery.generationId !== expected.generationId
+        || delivery.recoveryIntent === "reclaimed-host") return null;
+      const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      if (!conversation || conversation.migration || deliveryHasDurableClaimOwner(file, conversation, delivery)) return null;
+      terminalizeHeldDelivery(file, delivery, reason);
       return clone(delivery);
     }, { deliveryOnly: true });
   }

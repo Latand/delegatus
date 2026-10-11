@@ -32,6 +32,9 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
     its files or reports why it cannot. `paths` are the files the refused commit
     held, for the message to name. */
 export type StageCommitRefusal = { paths: string[] };
+/** A spent commit retry may recover existing work, but cannot write another
+    commit. The intent is flushed immediately before the hook can run. */
+export type StageCommitControl = { recoveryHead?: string; beforeCommit: (head: string) => void | Promise<void> };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
 async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
@@ -617,11 +620,15 @@ export async function commitPipelineStage(
   declaredOutputs: readonly string[] = [],
   protectedHead: string | null = allowCommit ? null : pipeline.lastPassedCommit,
   receiptFile?: string,
+  control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
   const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const initialHead = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (initialHead.code !== 0 || !initialHead.stdout.trim()) return failure("recording the passed stage commit", initialHead);
+  const sha = initialHead.stdout.trim();
+  const unrecoveredRetry: PipelineGitResult = { ok: false, error: "the stage's one commit retry was already started and no completed commit could be recovered; preserve the worktree for the operator" };
+  if (control?.recoveryHead === sha) return unrecoveredRetry;
   if (protectedHead !== null && initialHead.stdout.trim() !== protectedHead) {
     if (!allowCommit && receiptFile && declaredOutputs.length) {
       const recovered = await recoverStageCommit(receiptFile, protectedHead, initialHead.stdout.trim(), declaredOutputs, exec, pipeline.worktreeDir);
@@ -629,7 +636,6 @@ export async function commitPipelineStage(
     }
     return { ok: false, error: `read-only stage ${stageId} created a commit` };
   }
-  const sha = initialHead.stdout.trim();
   const settleWithoutCommit = async (): Promise<PipelineGitResult> => {
     const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
     return unstage ?? { ok: true, sha };
@@ -651,6 +657,7 @@ export async function commitPipelineStage(
   } else if (!status.stdout.trim()) {
     return settleWithoutCommit();
   }
+  if (control?.recoveryHead !== undefined) return unrecoveredRetry;
   const add = (await exec(
     "git",
     ["add", ...(allowCommit ? ["-A", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS] : ["-f", "-A", "--", ...changedOutputPaths])],
@@ -677,6 +684,7 @@ export async function commitPipelineStage(
     receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: tree.stdout.trim(), paths: changedOutputPaths };
     writeJsonDurably(receiptFile, receipt);
   }
+  await control?.beforeCommit(sha);
   const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
     ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
   if (commit.code !== 0) {

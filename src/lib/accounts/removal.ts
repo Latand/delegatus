@@ -866,7 +866,13 @@ export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemov
     try {
       spec.registry.commitRetired();
     } catch (error) {
-      registry.restoreSnapshot(retired, beforeRetirement);
+      const restored = registry.deliveryWriteNow({ label: "account.retirement-rollback", operationId: `account-removal:${engine}:${accountId}` },
+        () => registry.restoreSnapshot(retired, beforeRetirement));
+      if (!restored.acquired) {
+        /* The retirement and its path intent remain durable. Keep the archive
+           in place so a later retiring recovery can finish the removal. */
+        throw new Error("the accounts commit failed and the agent registry is busy; the journaled retirement awaits recovery", { cause: error });
+      }
       putHomeBack();
       /* If this write fails too, the journal still says `archiving` with the
          home in place, which recovery clears. */
@@ -943,10 +949,15 @@ export function recoverManagedAccountRemoval(input: {
     reach("accounts-committed");
     return scrub();
   }
-  if (!homeExists && archiveExists) {
-    if (!input.listed && !input.retiredInPlace) return null;
-    fs.renameSync(archive, home);
-    agentRegistry().rewriteAccountPaths(input.engine, [{ from: archive, to: home }]);
+  if (!homeExists && archiveExists && !input.listed && !input.retiredInPlace) return null;
+  if (homeExists || archiveExists) {
+    const restored = agentRegistry().deliveryWriteNow({ label: "account.archive-recovery", operationId: `account-removal:${input.engine}:${input.accountId}` }, () => {
+      if (!homeExists && archiveExists) fs.renameSync(archive, home);
+      /* A crash after the rename leaves the same archiving intent with the
+         home present. That later pass must still undo the registry paths. */
+      agentRegistry().rewriteAccountPaths(input.engine, [{ from: archive, to: home }]);
+    });
+    if (!restored.acquired) return null;
   }
   input.clearJournal();
   return "restored";
