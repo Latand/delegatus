@@ -206,16 +206,19 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
             </div>
           ) : null}
           {armed === account.id ? (
-            <div data-account-remove-armed={account.id} className="flex items-end gap-1">
-              <span className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-danger">
+            /* The card is narrow in the rail footer: the confirm reads at its full width, its buttons under it. */
+            <div data-account-remove-armed={account.id} className="flex flex-col gap-1">
+              <span className="min-w-0 text-[10.5px] font-semibold leading-snug text-danger">
                 {t(account.kind === "legacy" ? "accounts.removeConfirmLegacy" : "copilot.accounts.removeConfirm", { label: account.label })}
               </span>
-              <button type="button" data-account-remove-confirm={account.id} className="shrink-0 rounded bg-danger px-2 py-0.5 text-[10.5px] font-semibold text-white hover:opacity-90" onClick={() => { setArmed(null); void remove(account); }}>
-                {t("accounts.removeConfirmCta")}
-              </button>
-              <button type="button" className="shrink-0 rounded px-2 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas" onClick={() => setArmed(null)}>
-                {t("accounts.removeConfirmCancel")}
-              </button>
+              <span className="flex justify-end gap-1">
+                <button type="button" data-account-remove-confirm={account.id} className="shrink-0 rounded bg-danger px-2 py-0.5 text-[10.5px] font-semibold text-white hover:opacity-90" onClick={() => { setArmed(null); void remove(account); }}>
+                  {t("accounts.removeConfirmCta")}
+                </button>
+                <button type="button" className="shrink-0 rounded px-2 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas" onClick={() => setArmed(null)}>
+                  {t("accounts.removeConfirmCancel")}
+                </button>
+              </span>
             </div>
           ) : (
             <button type="button" data-account-remove={account.id} aria-label={t("accounts.removeAria", { label: account.label })} className="self-end rounded px-1.5 py-0.5 text-[10.5px] font-semibold text-muted hover:bg-danger-soft hover:text-danger" onClick={() => setArmed(account.id)}>
