@@ -71,7 +71,7 @@
       }
     ],
     "1440-uk-light-answered": {
-      "text": "Відповідь · 19:31\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
+      "text": "Відповідь · 20:01\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
       "delivery": "sent",
       "left": {
         "card": {
@@ -242,7 +242,7 @@
       }
     ],
     "1440-uk-dark-answered": {
-      "text": "Відповідь · 19:31\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
+      "text": "Відповідь · 20:01\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
       "delivery": "sent",
       "left": {
         "card": {
@@ -413,7 +413,7 @@
       }
     ],
     "1440-en-light-answered": {
-      "text": "Answered · 19:31\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
+      "text": "Answered · 20:02\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
       "delivery": "sent",
       "left": {
         "card": {
@@ -584,7 +584,7 @@
       }
     ],
     "1440-en-dark-answered": {
-      "text": "Answered · 19:31\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
+      "text": "Answered · 20:02\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
       "delivery": "sent",
       "left": {
         "card": {

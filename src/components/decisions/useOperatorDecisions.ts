@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { fireTasksChanged } from "@/components/tasks/taskApi";
+import { fireTasksChanged, TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
 import type { DecidePrototypeInput, OperatorDecisionView, OperatorDecisionsRead } from "@/lib/prototypeReview/types";
 
 /** How often an open «Рішення» tab reads its project's decisions. */
@@ -46,7 +46,10 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
     /* eslint-disable-next-line react-hooks/set-state-in-effect -- the read sets state when its answer arrives */
     void refresh(controller.signal);
     const timer = setInterval(() => { void refresh(controller.signal); }, DECISIONS_POLL_MS);
-    return () => { controller.abort(); clearInterval(timer); };
+    /* A decision taken elsewhere (the review window, another tab's column) leaves the list at once. */
+    const changed = () => { void refresh(controller.signal); };
+    window.addEventListener(TASKS_CHANGED_EVENT, changed);
+    return () => { controller.abort(); clearInterval(timer); window.removeEventListener(TASKS_CHANGED_EVENT, changed); };
   }, [active, initial, refresh]);
 
   const answer = useCallback(async (reviewId: string, body: DecisionAnswer): Promise<boolean> => {

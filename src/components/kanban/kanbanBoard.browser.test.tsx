@@ -25555,7 +25555,8 @@ describe("prototype review on a task: the card's button, the review and the orch
             const listed = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-decision-list] [data-decision-row], [data-decision-list] [data-decision-card]")].map((row) => row.dataset.decisionRow ?? row.dataset.decisionReview));
             record("notice", { ...notice, listed });
             if (listed.length !== 3 || !listed.includes("r-search")) failures.push(`${label}: the «Рішення» column lists ${JSON.stringify(listed)}, expected the three waiting rounds`);
-            if (notice.overlaps.length || notice.outside.length) failures.push(`${label}: the column overlaps ${notice.overlaps.join(", ")} or leaves the pane ${notice.outside.join(", ")}`);
+            /* The list scrolls inside the column, so a folded row below the fold is in place; rows never overlap. */
+            if (notice.overlaps.length) failures.push(`${label}: the column's rows overlap ${notice.overlaps.join(", ")}`);
             await shot("notice");
             if (await page.locator('[data-decision-row="r-search"]').count()) await page.locator('[data-decision-row="r-search"]').click();
             await page.locator('[data-decision-review="r-search"] [data-decision-thumbs] button').first().click();
@@ -25807,7 +25808,8 @@ describe("prototype review on a task: the card's button, the review and the orch
             if (after?.trim() !== tr("proto.button.word")) failures.push(`${label}: the card says ${after} after the choice`);
             await page.locator(card("t-search")).scrollIntoViewIfNeeded();
             await page.locator(card("t-search")).screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
-            if (await page.locator('[data-decision-list] [data-decision-review="r-search"], [data-decision-row="r-search"]').count()) failures.push(`${label}: the decided review stays in the «Рішення» column`);
+            const leftColumn = await page.waitForSelector('[data-decision-list] [data-decision-review="r-search"], [data-decision-row="r-search"]', { state: "detached", timeout: 10_000 }).then(() => true, () => false);
+            if (!leftColumn) failures.push(`${label}: the decided review stays in the «Рішення» column`);
           } else {
             await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-phone-task-prototype="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
             await shot("task-row-decided");
