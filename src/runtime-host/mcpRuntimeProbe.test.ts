@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -126,7 +127,7 @@ test("host-admitted managed MCP probes discover the complete surface, call requi
   }
 }, 20_000);
 
-test("a missing published runtime cannot initialize from a bundled revision", async () => {
+test("a missing published runtime is refused within the configured probe timeout", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-missing-"));
   const socketPath = path.join(sandbox, "runtime.sock");
   const journal = new RuntimeJournal(path.join(sandbox, "runtime.sqlite"));
@@ -168,30 +169,130 @@ test("a missing published runtime cannot initialize from a bundled revision", as
   const control = candidateControl();
   environment[VIEWER_CONTROL_URL_ENV] = control.url.origin;
 
-  const transport = new McpProbeStdioTransport({
-    command: "node",
-    args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
-    cwd: process.cwd(),
-    env: environment,
-    healthAdmissions: admissions,
+  let processId: number | null = null;
+  const startTransport = McpProbeStdioTransport.prototype.start;
+  const started = spyOn(McpProbeStdioTransport.prototype, "start").mockImplementation(async function (this: McpProbeStdioTransport) {
+    await startTransport.call(this);
+    processId = this.pid;
   });
-  const client = new Client({ name: "missing-release-fixture", version: "1.0.0" });
-  // The SDK starts closing without awaiting it on initialization failure.
-  // Keep that first close promise so teardown awaits the owned launcher.
-  const closeTransport = transport.close.bind(transport);
-  let closing: Promise<void> | undefined;
-  transport.close = () => closing ??= closeTransport();
   try {
-    await expect(client.connect(transport, { timeout: 1_000 })).rejects.toThrow("Request timed out");
+    const startedAt = performance.now();
+    const evidence = await probeMcpRuntime({
+      command: "node",
+      args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
+      cwd: process.cwd(),
+      env: environment,
+      runtime,
+      healthProbeCapability: admissions.issue(),
+      healthProbeAdmissions: admissions,
+      timeoutMs: 500,
+    });
+    expect(evidence).toMatchObject({ ok: false, processReady: false,
+      calls: { deploymentStatus: false, boardSnapshot: false }, tools: [] });
+    expect(evidence.detail).toContain("timed out");
+    expect(performance.now() - startedAt).toBeLessThan(5_000);
+    expect(processId).not.toBeNull();
+    expect(() => process.kill(processId!, 0)).toThrow();
   } finally {
-    await client.close();
-    await transport.close();
+    started.mockRestore();
     control.stop(true);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     journal.close();
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
 }, 20_000);
+
+for (const scenario of ["termination", "inherited pipes", "cleanup deadline"] as const) {
+  test(scenario === "termination"
+    ? "a timed-out probe awaits SIGKILL termination through every shared close"
+    : `a timed-out probe handles ${scenario} through every shared close`, async () => {
+    let processId: number | null = null;
+    let descendantId: number | null = null;
+    let closeStartedTransport: (() => Promise<void>) | undefined;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => { unhandled.push(error); };
+    process.on("unhandledRejection", onUnhandled);
+    const childIsRunning = () => {
+      if (processId === null) throw new Error("probe did not spawn its child");
+      try { process.kill(processId, 0); return true; } catch { return false; }
+    };
+    const startTransport = McpProbeStdioTransport.prototype.start;
+    const closeTransport = McpProbeStdioTransport.prototype.close;
+    const closeObservations: boolean[] = [];
+    const started = spyOn(McpProbeStdioTransport.prototype, "start").mockImplementation(async function (this: McpProbeStdioTransport) {
+      closeStartedTransport = () => closeTransport.call(this);
+      // The child announces readiness after installing its TERM handler, so
+      // even a slow launcher must exercise escalation rather than an early exit.
+      const ready = new Promise<void>((resolve) => this.stderr.once("data", (chunk: Buffer) => {
+        if (scenario === "inherited pipes") descendantId = Number(chunk.toString().trim());
+        resolve();
+      }));
+      await startTransport.call(this);
+      processId = this.pid;
+      await ready;
+    });
+    const closed = spyOn(McpProbeStdioTransport.prototype, "close").mockImplementation(function (this: McpProbeStdioTransport) {
+      return closeTransport.call(this).then(() => { closeObservations.push(childIsRunning()); });
+    });
+    const killChild = ChildProcess.prototype.kill;
+    const killed = spyOn(ChildProcess.prototype, "kill").mockImplementation(function (this: ChildProcess, signal) {
+      // Windows terminates on SIGTERM even with a handler installed. Refuse
+      // both termination attempts to exercise the deadline on every platform.
+      if (scenario === "cleanup deadline" && this.pid === processId
+        && (signal === "SIGTERM" || signal === "SIGKILL")) return false;
+      return killChild.call(this, signal);
+    });
+    try {
+      const startedAt = performance.now();
+      const evidence = await probeMcpRuntime({
+        command: "node",
+        args: ["-e", "process.on('SIGTERM',()=>{});process.stdin.on('data',()=>{});setInterval(()=>{},1000);"
+          + (scenario === "inherited pipes"
+            ? "const child=require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},12000)'],{stdio:['ignore',1,2]});child.once('spawn',()=>process.stderr.write(child.pid+'\\n'));"
+            : "process.stderr.write('ready\\n');")],
+        cwd: process.cwd(),
+        env: { [VIEWER_CONTROL_URL_ENV]: "http://127.0.0.1:1" },
+        runtime: {
+          source: "managed",
+          revision: "7".repeat(40),
+          releaseId: "deploy-unresponsive",
+          artifactDigest: "a".repeat(64),
+          stagedAt: "2026-07-23T08:00:00.000Z",
+        },
+        timeoutMs: 500,
+      });
+      expect(evidence.ok).toBe(false);
+      expect(evidence.detail).toContain("timed out");
+      expect(childIsRunning()).toBe(scenario === "cleanup deadline");
+      expect(closeObservations.length).toBeGreaterThanOrEqual(2);
+      expect(closeObservations.every((running) => running === (scenario === "cleanup deadline"))).toBe(true);
+      if (scenario === "inherited pipes") {
+        expect(descendantId).not.toBeNull();
+        expect(() => process.kill(descendantId!, 0)).not.toThrow();
+      }
+      if (scenario === "cleanup deadline") {
+        expect(evidence.detail).toContain("MCP probe child did not exit after SIGKILL");
+      }
+      expect(performance.now() - startedAt).toBeLessThan(8_000);
+      await Bun.sleep(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      started.mockRestore();
+      closed.mockRestore();
+      killed.mockRestore();
+      await closeStartedTransport?.().catch(() => {});
+      if (descendantId !== null) {
+        try { process.kill(descendantId, "SIGKILL"); } catch { /* already exited */ }
+      }
+      if (processId !== null && childIsRunning()) {
+        process.kill(processId, "SIGKILL");
+        const until = performance.now() + 2_000;
+        while (childIsRunning() && performance.now() < until) await Bun.sleep(10);
+      }
+      process.off("unhandledRejection", onUnhandled);
+    }
+  }, 20_000);
+}
 
 test("only an admitted health probe is limited to the two health reads", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-probe-adversarial-"));

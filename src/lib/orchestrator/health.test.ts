@@ -63,7 +63,7 @@ test("the reference case is explicit policy: Opus-class window 1,000,000 tokens,
 test("supported Claude launch aliases resolve to their current registry windows", () => {
   expect(contextWindowPolicyFor("claude", "fable")).toMatchObject({ windowTokens: 1_000_000, policy: "claude-fable-1m" });
   expect(contextWindowPolicyFor("claude", "sonnet")).toMatchObject({ windowTokens: 1_000_000, policy: "claude-sonnet-1m" });
-  expect(contextWindowPolicyFor("claude", "haiku")).toMatchObject({ windowTokens: 200_000, policy: "claude-haiku-200k" });
+  expect(contextWindowPolicyFor("claude", "haiku")).toMatchObject({ windowTokens: 1_000_000, policy: "claude-haiku-1m" });
 });
 
 test("Sonnet 5 keeps its 1M registry window", () => {
@@ -79,6 +79,14 @@ test("Haiku 4.5 keeps its 200k registry window", () => {
     windowTokens: 200_000,
     rotationThresholdTokens: 100_000,
     policy: "registry:haiku-4-5:200k",
+  });
+});
+
+test("Haiku 5.5 rotates at half of its native 1M window", () => {
+  expect(contextWindowPolicyFor("claude", "claude-haiku-5-5")).toEqual({
+    windowTokens: 1_000_000,
+    rotationThresholdTokens: 500_000,
+    policy: "registry:haiku-5-5:1m",
   });
 });
 

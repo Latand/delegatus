@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -183,13 +183,6 @@ const unitLookingRealAddresses = [
   ["probe", "b.service.xn--p1ai"].join("@"),
   ["probe", "b.service.xn--j1amh.com"].join("@"),
 ];
-
-// Concurrent CLI tests retain their own fixtures until every child has exited.
-afterAll(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { force: true, recursive: true });
-  }
-});
 
 function crc32(input: Buffer): number {
   let crc = 0xffffffff;
@@ -5434,3 +5427,13 @@ describe("mergeBoundaryReview", () => {
     expect(review.notices[0]).not.toContain(personal);
   });
 });
+
+// A final serial test runs after the concurrent CLI checks have returned.
+// Deleting hundreds of Git fixtures exceeded Bun's default five-second hook
+// timeout on hosted runners. Give cleanup a named failure and a 30-second
+// budget, inside the workflow's unchanged 130-second suite deadline.
+test.serial("releases privacy fixtures after all concurrent CLI checks", () => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}, 30_000);

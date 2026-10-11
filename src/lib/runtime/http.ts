@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { ownedDeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
+import { ownedDeliveryProgressStore, readDeliveryProgress, recordDeliveryIngress, type DeliveryProgressRecord } from "./deliveryProgress";
 import { admissionRecordStanding, recordAdmissionWait, recordDirectWait, recordRearm, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
@@ -193,6 +193,7 @@ async function dispatchRuntimeCommand(
   kind: RuntimeOperationKind,
   dependencies: RuntimeHttpDependencies,
   attachments: CommandAttachments,
+  ingressAt: string,
 ): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
@@ -381,6 +382,7 @@ async function dispatchRuntimeCommand(
         kick: dependencies.kick ?? kickStructuredDeliveryQueue,
       });
       if (admitted) {
+        recordDeliveryIngress(admitted.operationId, ingressAt);
         attachments.outcome = structuredAttachmentOutcome(admitted);
         if (!admitted.ok) {
           return NextResponse.json({
@@ -442,6 +444,7 @@ async function dispatchRuntimeCommand(
     if (result.receipt.status === "pending" || result.receipt.status === "queued") {
       dependencies.kick?.();
     }
+    if (command.kind === "send" || command.kind === "steer" || command.kind === "inject") recordDeliveryIngress(result.operationId, ingressAt);
     const status = result.receipt.status === "pending" || result.receipt.status === "queued" ? 202 : 200;
     return NextResponse.json({ operationId: result.operationId, receipt: result.receipt }, { status });
   } catch (error) {
@@ -478,9 +481,10 @@ export async function handleRuntimeCommand(
   kind: RuntimeOperationKind,
   dependencies: RuntimeHttpDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<NextResponse> {
+  const ingressAt = new Date().toISOString();
   const attachments: CommandAttachments = { files: [], batch: "", staged: null, leave: null, outcome: "refused", releaseAdmission: null };
   try {
-    return await dispatchRuntimeCommand(request, kind, dependencies, attachments);
+    return await dispatchRuntimeCommand(request, kind, dependencies, attachments, ingressAt);
   } finally {
     /* Only what this request created, and only while no other request has
        staged it since, is released; the turn ends after that. */

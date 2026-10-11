@@ -45,3 +45,10 @@ test("privacy failures identify the required authority and suppress arbitrary ex
   expect(companionFailure(new Error("MEMBER_REQUIRED")).status).toBe(401);
   expect(await companionFailure(new Error("private provider detail")).json()).toEqual({ code: "COMPANION_UNAVAILABLE" });
 });
+
+test("subscription refusals expose only their code and a limit reset time", async () => {
+  const { CodexVoiceError } = await import("./codexProvider");
+  for (const code of ["CODEX_AUTH_REQUIRED", "NO_CODEX_ACCOUNT", "CODEX_UNSUPPORTED"] as const)
+    expect(await companionFailure(new CodexVoiceError(code)).json()).toEqual({ code });
+  expect(await companionFailure(new CodexVoiceError("CODEX_LIMIT_REACHED", 2000000000)).json()).toEqual({ code: "CODEX_LIMIT_REACHED", resetsAt: 2000000000 });
+});
