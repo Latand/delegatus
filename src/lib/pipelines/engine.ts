@@ -398,6 +398,9 @@ export interface PipelinePorts {
   invalidateProviderContinuation?(conversationId: string): Promise<void>;
   /** A fresh live quota reading after the limit proves the source recovered. */
   claudeAccountRecovered?(accountId: string, limitedAt: number, model: string | null): boolean;
+  /** Fresh provider proof after a cut, including a successful sign-in. */
+  accountRecovered?(engine: FlowEngine, accountId: string, cutAt: number, model: string | null,
+    condition: "usage_limit" | "auth_required"): boolean;
   /** Confirmed reset of the source account's governing exhausted quota window. */
   claudeAccountReset?(accountId: string, model: string | null): number | null;
   sleep?(milliseconds: number): Promise<void>;
@@ -1790,6 +1793,22 @@ export function defaultPipelinePorts(
       );
       return selection.kind === "exhausted" ? selection.resetsAt : null;
     },
+    accountRecovered: (engine, accountId, cutAt, model, condition) => {
+      const observation = registry.quotaObservations(engine).find(item => item.accountId === accountId);
+      if (!observation || Date.parse(observation.observedAt) <= cutAt) return false;
+      const now = Date.now();
+      const authAge = now - Date.parse(observation.authCheckedAt);
+      const observationAge = now - Date.parse(observation.observedAt);
+      if (!observation.authenticated || Date.parse(observation.authCheckedAt) <= cutAt
+        || !Number.isFinite(authAge) || authAge < 0 || authAge > 5 * 60_000
+        || !Number.isFinite(observationAge) || observationAge < 0 || observationAge > 5 * 60_000) return false;
+      // Quota provenance can be unavailable after a successful live sign-in.
+      if (condition === "auth_required" && observation.limits === null)
+        return observation.provenance.source === "live" || observation.provenance.source === "unavailable";
+      const remaining = effectiveRemaining({ ...observation, observedAt: Date.parse(observation.observedAt),
+        authCheckedAt: Date.parse(observation.authCheckedAt) }, now, { model });
+      return remaining !== null && remaining.percent > 0;
+    },
     sleep: (milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     durableTurnEvidence: durableStageTurnEvidence,
     headCwd: (transcriptPath) => headCwd(transcriptPath),
@@ -2239,8 +2258,10 @@ function providerAccountRecovered(pipeline: Pipeline, attempt: PipelineStageAtte
     if (allowed && !allowed.includes(accountId)) return false;
   } catch { return false; }
   return resetsAt !== null && resetsAt * 1_000 + 60_000 <= unixMs(ports.now())
-    || attempt.effectiveRole.engine === "claude" && limitedAt !== null
-      && ports.claudeAccountRecovered?.(accountId, limitedAt, attempt.effectiveRole.model) === true;
+    || limitedAt !== null && (ports.accountRecovered?.(attempt.effectiveRole.engine, accountId, limitedAt,
+      attempt.effectiveRole.model, "usage_limit") === true
+      || attempt.effectiveRole.engine === "claude"
+        && ports.claudeAccountRecovered?.(accountId, limitedAt, attempt.effectiveRole.model) === true);
 }
 
 function reportTurnFinished(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
@@ -5743,6 +5764,19 @@ async function spawnRunStage(
         } catch { /* Unavailable selection evidence keeps the durable reset obligation. */ }
       }
       parkProviderUsageLimit(pipeline, attempt, `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`, ports);
+    } else if (wait?.condition.kind === "auth_required" && wait.turnTs === 0 && wait.switchedAccountId
+      && !attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
+      && (error instanceof ProjectAccountRefusedError || error instanceof AccountAuthenticationRequiredError)) {
+      // A target that signed out before reservation must not strand the cut,
+      // nor may its earlier positive probe immediately retry that same target.
+      wait.accountId = wait.switchedAccountId;
+      wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.switchedAccountId])];
+      delete wait.switchedAccountId;
+      wait.turnTs = unixMs(ports.now());
+      const reason = `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`;
+      recordProviderRecovery(attempt, "park", wait.condition, reason, ports.now());
+      attempt.completedAt = ports.now();
+      park(pipeline, reason, attempt);
     } else park(pipeline, detail, attempt);
   } finally {
     /* The key only means "this spawn is in flight in this process". */
@@ -7860,13 +7894,94 @@ async function reconcileParkedRestartCut(pipeline: Pipeline, stage: PipelineStag
   return true;
 }
 
-/** A persisted quota park remains a scheduled engine obligation after restart. */
+/** Re-read account admission on every parked tick. Old cuts and failed targets
+    stay excluded until fresh provider evidence proves that account recovered. */
+function availableProviderRetryAccount(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+  const wait = attempt.providerWait;
+  const condition = wait?.condition.kind;
+  if (!wait || condition !== "usage_limit" && condition !== "auth_required") return null;
+  const engine = attempt.effectiveRole.engine;
+  try {
+    const recovered = (id: string) => {
+      const limit = usageLimitsOn(attempt, engine).find(item => item.accountId === id);
+      return ports.accountRecovered?.(engine, id, Math.max(wait.turnTs, limit?.limitedAt ?? 0),
+        attempt.effectiveRole.model, limit ? "usage_limit" : condition) === true;
+    };
+    const unavailableIds = [...new Set([
+      ...usageLimitsOn(attempt, engine).filter(item => !providerAccountRecovered(pipeline, attempt,
+        item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId),
+      ...providerSpentAccountsOn(pipeline, attempt, engine, ports), ...(wait.failedAccounts ?? []),
+      // A source reset follows the existing scheduled retry. Only fresh proof
+      // can select that source early and carry a switched-account obligation.
+      ...(wait.accountId ? [wait.accountId] : []),
+    ])].filter(id => !recovered(id));
+    const pinned = attemptAccountPin(stage, attempt)?.trim();
+    if (pinned && unavailableIds.includes(pinned)) return null;
+    const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
+      project: pipeline.project, model: attempt.effectiveRole.model, requestedId: pinned, unavailableIds,
+    });
+    const allowed = ports.allowedAccountIds?.(pipeline.project, engine);
+    return resolution.kind === "available" && !unavailableIds.includes(resolution.account.accountId)
+      && (!allowed || allowed.includes(resolution.account.accountId))
+      && (!pinned || pinned === resolution.account.accountId)
+      && !(condition === "usage_limit" && resolution.account.accountId === wait.accountId
+        && wait.resetsAt !== null && wait.resetsAt * 1_000 + 60_000 <= unixMs(ports.now())) ? resolution.account.accountId : null;
+  } catch { return null; }
+}
+
+/** A provider park re-admits on a reset or newly usable allowed account. */
 async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): Promise<boolean> {
   if (pipeline.state !== "needs_decision" || pipeline.closedAt || pipeline.hiddenAt || pipeline.remoteAction?.state === "pending") return false;
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   const wait = attempt?.providerWait;
   const lastRecovery = attempt?.providerRecoveries?.at(-1);
+  // Older admission refusals reserved no launch and saved no provider wait.
+  // Re-admit that same attempt; a receipt or operator control keeps it parked.
+  if (stage?.kind === "run" && attempt && !wait && attempt.state === "needs_decision"
+    && !attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
+    && !attempt.report && !attempt.verdict && !attempt.historical && !attempt.activation
+    && attempt.error && pipeline.stateDetail === attempt.error) {
+    const engine = attempt.effectiveRole.engine;
+    const role = attempt.effectiveRole.roleId;
+    const authRefusal = attempt.error === `${engine} account requires authentication`;
+    const capacityRefusal = attempt.error.startsWith(`no allowed ${engine} account has capacity for project ${pipeline.project} (`);
+    const priorPool = capacityRefusal ? attempt.error.split(`(allowed ${engine} accounts: `)[1]?.split(")")[0]?.split(", ") ?? [] : [];
+    const accountRefusal = authRefusal
+      || capacityRefusal
+      || attempt.error.startsWith(`no allowed ${engine} account is available for project ${pipeline.project} (`)
+      || attempt.error === engineNotConnectedMessage({ stageId: stage.id, role, engine, reason: "signed-out" });
+    const controlledAt = Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? ""));
+    if (accountRefusal && controlledAt < unixMs(attempt.startedAt ?? pipeline.createdAt)
+      && (!pipeline.controlGeneration || controlledAt > 0)) {
+      let admitted = false;
+      try {
+        if (pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks())) return false;
+        const pinned = attemptAccountPin(stage, attempt)?.trim();
+        const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
+          project: pipeline.project, model: attempt.effectiveRole.model, requestedId: pinned,
+        });
+        const allowed = ports.allowedAccountIds?.(pipeline.project, engine);
+        admitted = resolution.kind === "available" && (!allowed || allowed.includes(resolution.account.accountId))
+          && (!pinned || pinned === resolution.account.accountId) && (ports.engineReadiness?.(engine, pipeline.project) ?? "connected") === "connected"
+          && (!priorPool.includes(resolution.account.accountId) || ports.accountRecovered?.(engine, resolution.account.accountId,
+            unixMs(attempt.startedAt ?? pipeline.createdAt), attempt.effectiveRole.model, "usage_limit") === true)
+          && (!authRefusal || ports.accountRecovered?.(engine, resolution.account.accountId,
+            unixMs(attempt.startedAt ?? pipeline.createdAt), attempt.effectiveRole.model, "auth_required") === true);
+      } catch { /* Unavailable admission evidence keeps the recorded refusal. */ }
+      if (admitted) {
+        attempt.state = "pending";
+        attempt.error = null;
+        attempt.completedAt = null;
+        delete attempt.controllerWait;
+        resetStageForRetry(pipeline, stage);
+        clearEngineTaskNote(pipeline);
+        persist();
+        ports.scheduleTick?.(0);
+        return true;
+      }
+    }
+  }
   if (stage?.kind === "run" && attempt?.report && wait && restartCutOf(attempt, null, ports)) {
     await settleOnRecordedReport(pipeline, stage, attempt, ports, persist);
     return true;
@@ -7875,11 +7990,16 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   if (attempt && wait && !wait.retryCancelled
     && await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   if (stage && attempt && await reconcileParkedRestartCut(pipeline, stage, attempt, ports, persist)) return true;
-  // Upgrade only the engine's unchanged quota park. Pauses, answers and other
+  // Upgrade only the engine's unchanged account park. Pauses, answers and other
   // park causes have no authority to create an automatic retry obligation.
-  if (stage?.kind === "run" && attempt && wait?.condition.kind === "usage_limit" && !wait.stageRetry && !wait.retryCancelled
+  const exhaustedFallback = !!wait?.retryCancelled && lastRecovery?.action === "park"
+    && attempt?.error === `${lastRecovery.summary}; automatic ${wait.resetsAt === null ? "unknown-reset" : "elapsed-reset"} retry exhausted; waiting for operator decision`;
+  if (stage?.kind === "run" && attempt && wait && ["usage_limit", "auth_required"].includes(wait.condition.kind)
+    && !wait.stageRetry && (!wait.retryCancelled || exhaustedFallback)
     && attempt.state === "needs_decision" && !attempt.report && !attempt.verdict && attempt.completedAt
+    && !attempt.historical && !attempt.activation
     && lastRecovery?.action === "park" && (lastRecovery.summary === attempt.error
+      || exhaustedFallback
       || lastRecovery.summary === "account capacity recovery exhausted"
         && attempt.error === `stage cut by ${wait.condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`)
     && pipeline.stateDetail === attempt.error && attempt.error?.startsWith(`stage cut by ${wait.condition.label}`)) {
@@ -7895,9 +8015,12 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       boundary = durable.firstProviderCutAt ?? unixMs(attempt.startedAt);
     }
     if (controlledAt > 0 && controlledAt >= boundary) return false;
+    const target = availableProviderRetryAccount(pipeline, stage, attempt, ports);
+    if (!target && (wait.condition.kind === "auth_required" || exhaustedFallback)) return false;
     const retryAt = new Date(wait.resetsAt !== null ? wait.resetsAt * 1_000 + 60_000
       : unixMs(attempt.completedAt) + 30 * 60_000).toISOString();
-    parkProviderUsageLimit(pipeline, attempt, attempt.error, ports, retryAt);
+    if (target) delete wait.retryCancelled;
+    parkProviderUsageLimit(pipeline, attempt, attempt.error, ports, retryAt, target ? false : undefined);
     persist();
   }
   const retry = wait?.stageRetry;
@@ -7938,8 +8061,10 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     return true;
   }
   if (attempt.providerWait !== wait || !wait.stageRetry) return true;
+  let target = availableProviderRetryAccount(pipeline, stage, attempt, ports);
+  if (wait.condition.kind === "auth_required" && !target) return false;
   const remaining = unixMs(wait.resumeAt) - unixMs(ports.now());
-  if (remaining > 0) { scheduleProviderWake(ports, wait.resumeAt); return false; }
+  if (remaining > 0 && !target) { scheduleProviderWake(ports, wait.resumeAt); return false; }
   const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
   if (elsewhere) {
     cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled because the task runs elsewhere; waiting for operator decision");
@@ -7967,13 +8092,16 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   // Termination yields to the native host; a reply can become durable there.
   if (!await confirmUnchangedCut()) return true;
   // A harness turn delivered during termination may name a later reset.
-  if (unixMs(wait.resumeAt) > unixMs(ports.now())) return true;
+  if (target) {
+    target = availableProviderRetryAccount(pipeline, stage, attempt, ports);
+    if (!target) { scheduleProviderWake(ports, wait.resumeAt); return true; }
+  } else if (unixMs(wait.resumeAt) > unixMs(ports.now())) return true;
   delete wait.stageRetry;
   delete attempt.controllerWait;
   resetStageForRetry(pipeline, stage);
   const next = newAttempt(pipeline, stage);
   if (next) {
-    const fallback = retry.fallback ?? (wait.resetsAt === null);
+    const fallback = !target && (retry.fallback ?? (wait.resetsAt === null));
     next.providerFallbackRetries = (attempt.providerFallbackRetries ?? 0) + (fallback ? 1 : 0);
     if (!fallback) {
       // A new reset replenishes the stage retry budget. Keep account-window
@@ -7982,7 +8110,12 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       next.usageLimitedAccounts = attempt.usageLimitedAccounts;
       next.providerRecoveryBudget = { tries: 0, startedAt: ports.now(), engine: attempt.effectiveRole.engine,
         triedAccounts: [...providerTriedAccountsOn(attempt, attempt.effectiveRole.engine)],
-        failedAccounts: [...providerFailedAccountsOn(attempt, attempt.effectiveRole.engine)] };
+        failedAccounts: [...providerFailedAccountsOn(attempt, attempt.effectiveRole.engine)].filter(id => id !== target) };
+      if (target) {
+        next.accountId = target;
+        next.providerWait = { ...wait, switchedAccountId: target, failedAccounts: wait.failedAccounts?.filter(id => id !== target),
+          turnTs: 0, tries: 0, startedAt: ports.now(), resumeAt: ports.now(), actionAt: ports.now() };
+      }
     }
   }
   clearEngineTaskNote(pipeline);
