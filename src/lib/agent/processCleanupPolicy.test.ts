@@ -87,6 +87,22 @@ const shellBoundaries: [string, number][] = [
   ["values=(`pkill fixture-server`)", 2],
   ["values=('$(pkill fixture-server)')", 0],
   ["values=(pkill fixture-server); pkill fixture-server", 2],
+  ["echo > >(pkill fixture-server)", 2],
+  ["cat <(killall fixture-server)", 2],
+  ["values=(>(pkill fixture-server))", 2],
+  ["values=(<(killall fixture-server))", 2],
+  ["values=('>(pkill fixture-server)')", 0],
+  ["cat <<EOF\n>(pkill fixture-server)\nEOF", 0],
+  ["bash > >(cat) <<'EOF'\npkill fixture-server\nEOF", 2],
+  ["lsof -ti :12345 | bash -c 'xargs kill'", 2],
+  ["lsof -ti :12345 | (bash -c 'xargs kill')", 2],
+  ["lsof -ti :12345 | (echo $(xargs kill))", 2],
+  ["lsof -ti :12345 | bash -c 'echo ready; xargs kill'", 2],
+  ['lsof -ti :12345 | (cat); bash -c \'kill "$recorded_pid"\'', 0],
+  ["values=($((pkill)))", 0],
+  ["values=($((killall)))", 0],
+  ["echo $((killall))", 0],
+  ["values=($(( $(pkill fixture-server) )))", 2],
 ];
 
 // Feed both engine payload shapes to the installed hook; never execute the input.

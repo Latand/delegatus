@@ -8,7 +8,7 @@ export const PROCESS_CLEANUP_DENY_MESSAGE = "PID-only process cleanup: stop only
 
 /** Recognizes common process cleanup commands at the hook boundary.
  * Kept self-contained so the installed hook needs no repository or packages. */
-export function forbiddenProcessCleanup(command: string, expansionsOnly = false): boolean {
+export function forbiddenProcessCleanup(command: string, expansionsOnly = false, stdinLookup = false): boolean {
   type Word = { value: string; substituted: boolean; redirected: boolean };
   const words: Word[] = [];
   const groupLookups: boolean[] = [];
@@ -17,6 +17,7 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
   let pipelineContinuation = false, pipelineHeredocStart = 0;
   let word = "", started = false, substituted = false, quote = "", pipelineLookup = false;
   let redirected = false, quotedWord = false, inArray = false;
+  const lookupInput = () => stdinLookup || pipelineLookup || groupLookups.some(Boolean);
   const basename = (value: string) => value.split("/").pop() ?? value;
   const flush = () => {
     if (started) {
@@ -34,7 +35,7 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
     if (["pkill", "killall"].includes(executable)) return true;
     if (executable === "fuser") return args.some(({ value }) => value === "--kill" || /^-[^-]*k/.test(value));
     if (["lsof", "pgrep"].includes(executable)) pipelineLookup = true;
-    if (executable === "kill") return pipelineLookup || groupLookups.some(Boolean) || args.some((arg) => arg.substituted);
+    if (executable === "kill") return lookupInput() || args.some((arg) => arg.substituted);
     if (["sh", "bash", "zsh", "dash", "ksh"].includes(executable)) {
       const index = args.findIndex(({ value }) => /^-[^-]*c/.test(value));
       // A shell reading stdin executes even a quoted heredoc, including one
@@ -52,7 +53,7 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
         if (pipelineBodies.some(body => forbiddenProcessCleanup(body))) return true;
         for (const document of heredocs.slice(pipelineHeredocStart)) document.executable = true;
       }
-      return index >= 0 && forbiddenProcessCleanup(args[index + 1]?.value ?? "");
+      return index >= 0 && forbiddenProcessCleanup(args[index + 1]?.value ?? "", false, lookupInput());
     }
     if (["command", "builtin", "exec", "nohup", "sudo", "pkexec", "env", "rtk", "xargs", "timeout"].includes(executable)) {
       if (executable === "command" && args.some(arg => ["-v", "-V"].includes(arg.value))) return false;
@@ -84,7 +85,7 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
       const descriptor = command.slice(i).match(/^\{[A-Za-z_][A-Za-z0-9_]*\}(?=[<>])/);
       if (descriptor) { i += descriptor[0].length - 1; continue; }
     }
-    if (!expansionsOnly && !quote && !inArray && (char === "<" || char === ">" || (char === "&" && command[i + 1] === ">"))) {
+    if (!expansionsOnly && !quote && !inArray && (char === "<" || char === ">" || (char === "&" && command[i + 1] === ">")) && command[i + 1] !== "(") {
       // A contiguous, unquoted descriptor belongs to the redirect, not argv.
       // Its operand still passes through expansion scanning below.
       if (started && !quotedWord && /^\d+$/.test(word)) { word = ""; started = false; }
@@ -121,7 +122,8 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
       i = end - 1;
       continue;
     }
-    if (quote !== "'" && (char === "`" || (char === "$" && command[i + 1] === "("))) {
+    const processSubstitution = !expansionsOnly && !quote && (char === "<" || char === ">") && command[i + 1] === "(";
+    if (quote !== "'" && (char === "`" || (char === "$" && command[i + 1] === "(") || processSubstitution)) {
       const backtick = char === "`";
       const start = i + (backtick ? 1 : 2);
       let depth = 1, end = start, innerQuote = "";
@@ -134,7 +136,9 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
         if (!innerQuote && current === "(") depth++;
         if (!innerQuote && current === ")" && --depth === 0) break;
       }
-      if (forbiddenProcessCleanup(command.slice(start, end))) return true;
+      // Arithmetic names are data; nested substitutions still execute.
+      const arithmetic = char === "$" && command[i + 2] === "(";
+      if (forbiddenProcessCleanup(command.slice(start, end), arithmetic, lookupInput())) return true;
       word += command.slice(i, end + 1); started = true; substituted = true; i = end;
       continue;
     }
@@ -157,7 +161,7 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
       const hadWords = words.length > 0;
       if (inspect(words.splice(0))) return true;
       if (command[i] === "(" || command[i] === "{") {
-        groupLookups.push(pipelineLookup || groupLookups.some(Boolean));
+        groupLookups.push(lookupInput());
         pipelineContinuation = false;
       } else if (command[i] === ")" || command[i] === "}") {
         pipelineLookup = (groupLookups.pop() ?? false) || pipelineLookup;
