@@ -1454,12 +1454,13 @@ async function check(
         // Accept only this recovery's verified cleanup. A new epoch, receipt
         // or composer claim cannot become the evidence for this admission.
         const cleaned = observed?.cleanups.get(`${reconciledDeadHost.engine}:${reconciledDeadHost.sessionId}`);
-        if (!deadHost || !cleaned || identity !== observed?.identity
+        if (!cleaned || identity !== observed?.identity
           || recoveryIdentity(seat.conversationId)?.identity !== cleaned)
           throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
         identity = cleaned;
+        deadHost = true;
       }
-      if ((requireDeadHost || mcpHealthFor(current, sources.now()).status === "dead")
+      if ((deadHost || requireDeadHost || mcpHealthFor(current, sources.now()).status === "dead")
         && (!deadHost || identity === null || recoveryIdentity(seat.conversationId)?.identity !== identity))
         throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
     };

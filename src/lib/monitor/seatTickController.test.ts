@@ -706,7 +706,10 @@ test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick 
   expect(rig.written.at(-1)?.lastWakeAt).toBe(OVERDUE.lastWakeAt);
 });
 
-test.each(["cleared", "retained dead claim", "terminal failure", "unsettled failure", "composer after cleanup", "rotation after cleanup"] as const)("a deploy-settled wake runs shared composer recovery with %s", async scenario => {
+test.each([
+  "cleared", "retained dead claim", "retained during MCP grace", "terminal failure", "unsettled failure",
+  "composer after cleanup", "composer during MCP grace", "rotation after cleanup",
+] as const)("a deploy-settled wake runs shared composer recovery with %s", async scenario => {
   const { recoverDeadStructuredConversation } = await import("@/lib/runtime/structuredRecovery");
   const f = childFixture("composer-deploy-recovery", false, "off");
   setAgentRegistryForTests(f.registry);
@@ -720,7 +723,9 @@ test.each(["cleared", "retained dead claim", "terminal failure", "unsettled fail
     spawnCapabilityDigest: "a".repeat(64) });
   f.registry.completeSpawn(old.receipt.launchId, entry);
   f.registry.setReceiptViewerMcpTransport(old.receipt.launchId, "stdio");
-  const retainedClaim = scenario === "retained dead claim" || scenario === "composer after cleanup" || scenario === "rotation after cleanup";
+  const composerRace = scenario === "composer after cleanup" || scenario === "composer during MCP grace";
+  const mcpGrace = scenario === "retained during MCP grace" || scenario === "composer during MCP grace";
+  const retainedClaim = scenario === "retained dead claim" || mcpGrace || composerRace || scenario === "rotation after cleanup";
   if (retainedClaim) f.registry.upsert({ ...entry, status: "idle", claimOwner: "structured-host:predecessor",
     structuredHost: { kind: "claude-broker", endpoint: "stdio:predecessor", process: { pid: 2_000_000_000, startIdentity: "gone" },
       eventCursor: 0, protocolVersion: "v1", writerClaimEpoch: entry.claimEpoch, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
@@ -735,7 +740,7 @@ test.each(["cleared", "retained dead claim", "terminal failure", "unsettled fail
       recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: {} as RuntimeHostClient,
         transport: () => "structured", park: () => null,
         resolveAccount: () => {
-          if (scenario === "composer after cleanup") f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
+          if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
           if (scenario === "rotation after cleanup") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
           return { engine: "claude", accountId: "default", kind: "legacy", home: f.dir, transcriptRoot: f.dir, env: { NODE_ENV: "test" } };
         },
@@ -770,7 +775,8 @@ test.each(["cleared", "retained dead claim", "terminal failure", "unsettled fail
   rig.deps.sources!.deployment = () => ({ state: "ok", value: { deploymentId: "composer-deploy", phase: "succeeded",
     terminal: true, revision: "abcdef1234", error: null, updatedAt: ago(f, 2) } }) as never;
   rig.deps.mcpHealth = () => f.registry.seatMcpReceipt(f.seat.conversationId)?.spawnCapabilityDigest === oldDigest
-    ? { status: "dead", detail: "predecessor MCP absent" } : { status: "untracked", detail: "fresh stdio MCP starting" };
+    ? { status: mcpGrace ? "untracked" : "dead", detail: "predecessor MCP absent" }
+    : { status: "untracked", detail: "fresh stdio MCP starting" };
   let rotations = 0;
   rig.deps.seatRecovery = { rotate: async body => {
     expect(body.expectedIncumbentSeatEpoch).toBe(f.seat.seatEpoch);
@@ -778,7 +784,7 @@ test.each(["cleared", "retained dead claim", "terminal failure", "unsettled fail
     return { status: 503, body: { error: "replacement unavailable" } };
   } };
   if (retainedClaim) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process?.pid).toBe(2_000_000_000);
-  if (scenario === "composer after cleanup" || scenario === "rotation after cleanup") {
+  if (composerRace || scenario === "rotation after cleanup") {
     await runSeatTickCheck(f.project, rig.deps);
     expect(spawns).toBe(0);
     expect(rotations).toBe(0);

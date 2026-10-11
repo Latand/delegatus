@@ -823,7 +823,9 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           path: recovered.path,
           conversationId: recovered.conversationId,
           clientMessageId: message.clientMessageId,
-          admissionGuard: message.admissionGuard,
+          // Our admitted successor changes the receipt and host identity. Seat
+          // authority still applies when reserving its original-key message.
+          admissionGuard: recovered.spawned ? message.recoveryAuthorityGuard ?? message.admissionGuard : message.admissionGuard,
           recoveryAuthorityGuard: message.recoveryAuthorityGuard,
           text,
           hasImages: images.length > 0,

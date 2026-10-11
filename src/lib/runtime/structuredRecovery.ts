@@ -126,9 +126,8 @@ export interface StructuredRecoveryDependencies {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** A resume that could not publish its host within its bound (#2046). The
-    attempt is settled failed and its host retired before this is thrown, so
-    the conversation reads `reclaimed` again and the reason is the answer. */
+/** A resume whose publication ended in failure (#2046), including an immediate
+    terminal exit or a staged attempt that exhausted its publication bound. */
 export class StructuredResumeUnpublishedError extends Error {
   constructor(reason: string) {
     super(reason);
