@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFileSync, spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { procBackend } from "@/lib/proc";
+import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { linuxBackend } from "@/lib/proc/linux";
 import { descendantPids, parsePsMemory } from "@/lib/proc/memory";
 
@@ -102,6 +103,7 @@ function cpuOnlyPlan(input: { engine: string; sessionKey: string; cpu?: AgentCpu
 }
 /** `input.cpu` comes from planAgentCpu; CPU placement is independent of the memory mode. */
 export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null }, env = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): AgentMemoryPlan | null {
+  assertSpawnMemoryAvailable();
   const raw = env.DELEGATUS_AGENT_MEMORY ?? env.LLV_AGENT_MEMORY ?? "auto";
   const mode: MemoryMode = ["auto", "scope", "watchdog", "off"].includes(raw) ? raw as MemoryMode : "auto";
   if (raw !== mode) diagnostic("mode", "Invalid agent memory mode; using auto.");
