@@ -17,8 +17,9 @@ The worker retires after 60 seconds idle or a reply reporting RSS above 512 MiB.
 Retirement closes the guardian's lease pipe. Windows terminates a process on
 `SIGTERM` without running its JavaScript cleanup, so signaling the guardian
 could leave a busy query holding stdout open. Windows cleanup now runs inside
-the guardian, takes a fresh descendant snapshot and retains process handles
-while ending descendants before the owned helper. Replacement still waits for
+the guardian, takes a fresh descendant snapshot and retains process handles,
+verifying each current parent link before ending descendants and the owned
+helper. Replacement still waits for
 confirmed closure. A caller's five-second retirement deadline leaves the shared
 exit barrier pending, allowing a later confirmed exit to unblock the lane.
 

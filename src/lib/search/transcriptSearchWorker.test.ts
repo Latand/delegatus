@@ -102,6 +102,53 @@ async function ready(): Promise<void> {
   }
 }
 
+const powershell = process.env.LLV_TEST_POWERSHELL ?? (process.platform === "win32" ? "powershell.exe" : undefined);
+test.skipIf(!powershell)("Windows retirement rejects a stale descendant row after PID reuse", async () => {
+  // Exercise the guardian's actual script with a retained-handle model and
+  // a stale CIM row: the new process has another parent, within the same ms.
+  const template = fs.readFileSync(path.resolve("bin/helper-lease.mjs"), "utf8").match(/const script = `([\s\S]*?)`;/)?.[1];
+  expect(template).toBeDefined();
+  const rootTime = BigInt(Date.UTC(2026, 0, 1)) * 10_000n + 116_444_736_000_000_000n;
+  const script = template!.replaceAll("${group}", "10").replaceAll("${process.pid}", "99")
+    .replaceAll("${windowsIdentity}", `10:${rootTime}`).replaceAll("System.Diagnostics.Process", "LeaseOwnershipProbe.Process");
+  const log = path.join(root, "terminated");
+  const setup = `Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+namespace LeaseOwnershipProbe {
+  public class Process {
+    public static string Log;
+    public static Process Root = new Process(10, "owned", new DateTime(2026,1,1,0,0,0,DateTimeKind.Utc));
+    public static Process Peer = new Process(42, "unrelated", Root.StartTime.AddMilliseconds(10).AddTicks(5000));
+    public int Id; public string Name; public DateTime StartTime; public bool HasExited;
+    public IntPtr Handle { get { return new IntPtr(Id); } }
+    public Process(int id, string name, DateTime start) { Id=id; Name=name; StartTime=start; }
+    public static Process GetProcessById(int id) { return id==10 ? Root : Peer; }
+    public void Kill() { File.AppendAllText(Log, Name + "\\n"); HasExited=true; }
+    public bool WaitForExit(int timeout) { return HasExited; }
+    public void Dispose() { }
+  }
+}
+'@
+[LeaseOwnershipProbe.Process]::Log=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(log).toString("base64")}'));
+function Get-CimInstance {
+  param($ClassName, $Property, $Filter)
+  if ($Filter) { return [pscustomobject]@{ ProcessId=42; ParentProcessId=777 } }
+  @([pscustomobject]@{ ProcessId=10; ParentProcessId=99; CreationDate=[LeaseOwnershipProbe.Process]::Root.StartTime },
+    [pscustomobject]@{ ProcessId=42; ParentProcessId=10; CreationDate=[LeaseOwnershipProbe.Process]::Peer.StartTime.AddTicks(-1) })
+}
+`;
+  const probe = spawn(powershell!, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(setup + script, "utf16le").toString("base64")],
+    { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+  let diagnostics = "";
+  probe.stderr!.setEncoding("utf8").on("data", chunk => { diagnostics += chunk; });
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => { probe.once("close", resolve); probe.once("error", reject); });
+    expect({ code, diagnostics }).toEqual({ code: 0, diagnostics: "" });
+    expect(fs.readFileSync(log, "utf8").trim().split(/\r?\n/)).toEqual(["owned"]);
+  } finally { await stopFixtureProcess(probe); }
+}, 20_000);
+
 for (const reason of ["cancellation", "timeout", "shutdown"] as const) {
   test(`lease retirement after ${reason} reaps a busy query and descendant before replacement`, async () => {
     const launch = stub(`

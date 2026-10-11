@@ -159,6 +159,12 @@ async function endWindowsTree() {
                 $member.StartTime.ToUniversalTime().ToString('yyyyMMddHHmmssfff') -ne $row.CreationDate.ToUniversalTime().ToString('yyyyMMddHHmmssfff')) {
               $member.Dispose(); continue
             }
+            # Retain this handle while proving the member's current parent.
+            # The snapshot's rounded CreationDate cannot prove that link.
+            $current=Get-CimInstance Win32_Process -Filter ('ProcessId=' + $member.Id) -Property ParentProcessId;
+            if ($member.HasExited -or $parent.HasExited -or -not $current -or $current.ParentProcessId -ne $parent.Id) {
+              $member.Dispose(); continue
+            }
           } catch { if ($member) { $member.Dispose() }; continue }
           Collect $member; $handles.Add($member)
         }
