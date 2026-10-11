@@ -1,4 +1,7 @@
 import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
+import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
+import { seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
 import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
@@ -118,6 +121,7 @@ import type {
  */
 
 export interface SeatTickControllerDependencies {
+  seatRecovery?: SeatHostRecoveryPorts;
   seatAuth?: SeatAuthRecoveryPorts;
   seatAutoRotation?: SeatAutoRotationPorts;
   maintenance?: BoardMaintenanceController | null;
@@ -237,13 +241,13 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 }
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
-  if (card.kind === "auto-rotation") return redactBounded(card.detail, CARD_TEXT_LIMIT);
+  if (card.kind === "auto-rotation" || card.kind === "host-recovery") return redactBounded(card.detail, CARD_TEXT_LIMIT);
   if (card.kind === "auth-failed") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
     "",
-    `${card.detail}. Routine wakes are withheld. A newly confirmed lane stall may send one recovery wake. Rotate the seat if its Viewer tools remain unavailable.`,
+    `${card.detail}. A proven dead host is recovered through ordinary delivery. Wakes to a live host with broken MCP remain withheld.`,
     `Project ${project}.`,
     "",
     `${MONITOR_REF_PREFIX} ${card.ref}`,
@@ -274,10 +278,10 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
 }
 
 /** The card's agent-facing details, or undefined for a kind that keeps its
-    `monitor-ref:` line in the text. An automatic rotation's card is read by the
-    operator as a title and one sentence; its ids, figures and marker go here. */
+    `monitor-ref:` line in the text. Rotation and host-recovery cards are read by
+    the operator as a title and one sentence; their records and markers go here. */
 function cardDetails(card: SeatTickCard): string | undefined {
-  if (card.kind !== "auto-rotation") return undefined;
+  if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return undefined;
   const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
   return card.record ? `${redactBounded(card.record, CARD_TEXT_LIMIT)}\n\n${marker}` : marker;
 }
@@ -307,7 +311,7 @@ function cardDetails(card: SeatTickCard): string | undefined {
 function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
   // Authentication and automatic rotation notices are separate occurrences. An older owed card can
   // finish beside a newer incident without rewriting or closing its notice.
-  if ((card.kind === "auth-failed" || card.kind === "auto-rotation") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
+  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
   /* The board file is resolved HERE, per call, rather than taken from the
      module-load default `mutateTasksFile` would otherwise use. That default is
      frozen the first time `@/lib/tasks/store` is imported anywhere in the
@@ -354,10 +358,10 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         /* The condition is on the board either way; only its wording is stale. */
         : unchanged;
     }
-    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation") && card.state === "open") {
-      /* A recovered outage has a completed card and a durable create receipt.
-         Reopen that project's card on a later outage of the same seat: creating
-         with the old receipt would replay the completed task instead. */
+    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation" || card.kind === "host-recovery") && card.state === "open") {
+      /* Reopen the same card after a later outage or when a recovery's terminal
+         outcome follows a closed intermediate notice. Creating with its durable
+         receipt would replay the completed task without updating the notice. */
       const completed = state.tasks.findLast((task) =>
         canonicalOrchestratorProject(task.project) === project
         && task.status === "done"
@@ -1396,7 +1400,8 @@ async function check(
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
   const ensureCard = dependencies.ensureCard ?? ensureSeatTickCard;
-  const mcpHealthFor = (seat: { conversationId: string; designatedAt?: string | null }, now: number): SeatMcpHealth & { transport?: "stdio" | "http" } => {
+  const mcpHealthFor = (seat: { conversationId: string | null; designatedAt?: string | null }, now: number): SeatMcpHealth & { transport?: "stdio" | "http" } => {
+    if (!seat.conversationId) return { status: "untracked", detail: "no seat conversation" };
     try {
       const receipt = sources.registry().seatMcpReceipt?.(seat.conversationId) ?? null;
       const health = dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
@@ -1404,6 +1409,148 @@ async function check(
           path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio");
       return { ...health, ...(receipt?.viewerMcpTransport ? { transport: receipt.viewerMcpTransport } : {}) };
     } catch { return { status: "untracked", detail: "MCP liveness could not be read" }; }
+  };
+  // A missing MCP heartbeat cannot distinguish a finished dead host from a
+  // live host with a broken pipe. Only the liveness plane can admit recovery.
+  const recoveryIdentity = (conversationId: string) => {
+    try {
+      const registry = sources.registry();
+      const snapshot = registry.conversationDeliverySnapshot?.({ conversationId });
+      const entries = snapshot ? Object.values(snapshot.entries) : null;
+      const rows = entries?.map(entry => [entry.key, entry.status,
+        entry.claimEpoch, entry.claimOwner, entry.host, entry.structuredHost, entry.pendingAction]) ?? null;
+      const receipt = registry.seatMcpReceipt?.(conversationId) ?? null;
+      const identity = JSON.stringify([rows, receipt]);
+      const cleanups = new Map<string, string>();
+      for (const [index, entry] of entries?.entries() ?? []) {
+        if (entry.host || !entry.structuredHost?.process) continue;
+        cleanups.set(`${entry.key.engine}:${entry.key.sessionId}`, JSON.stringify([rows!.map((row, i) => i === index
+          ? [entry.key, "dead", entry.claimEpoch, null, null, null, null] : row), receipt]));
+      }
+      return { identity, cleanups };
+    } catch { return null; } // Unreadable ownership cannot license recovery.
+  };
+  const admissionFor = async (seat: { conversationId: string; seatEpoch: number; designatedAt?: string | null }, requireDeadHost = false) => {
+    const observed = recoveryIdentity(seat.conversationId);
+    let identity = observed?.identity ?? null;
+    let deadHost = false;
+    if (requireDeadHost || mcpHealthFor(seat, sources.now()).status === "dead") {
+      try {
+        const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
+        deadHost = rows.some(row => row.conversationId === seat.conversationId && row.host?.state === "gone"
+          && (row.reason === "host_gone_turn_settled" || row.reason === "host_gone_turn_open"));
+      } catch { /* Unknown liveness never licenses a replacement. */ }
+    }
+    const currentSeat = () => {
+      const current = sources.seatFor(canonical).active;
+      if (activeDrain()) throw new DeliveryAdmissionRefusedError("AUTO_UPDATE_DRAIN");
+      if (!current || current.seatEpoch !== seat.seatEpoch || current.conversationId !== seat.conversationId)
+        throw new DeliveryAdmissionRefusedError("seat-rotated");
+      return current;
+    };
+    const guard: DeliveryAdmissionGuard = reconciledDeadHost => {
+      const current = currentSeat();
+      if (reconciledDeadHost) {
+        // Accept only this recovery's verified cleanup. A new epoch, receipt
+        // or composer claim cannot become the evidence for this admission.
+        const cleaned = observed?.cleanups.get(`${reconciledDeadHost.engine}:${reconciledDeadHost.sessionId}`);
+        if (!cleaned || identity !== observed?.identity
+          || recoveryIdentity(seat.conversationId)?.identity !== cleaned)
+          throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
+        identity = cleaned;
+        deadHost = true;
+      }
+      if ((deadHost || requireDeadHost || mcpHealthFor(current, sources.now()).status === "dead")
+        && (!deadHost || identity === null || recoveryIdentity(seat.conversationId)?.identity !== identity))
+        throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
+    };
+    try { guard(); return { guard, authorityGuard: () => { currentSeat(); } }; } catch { return null; }
+  };
+  let retryAdmission: Awaited<ReturnType<typeof admissionFor>> = null;
+  let recoveryDetail: string | null = null;
+  const persistRecovery = (record: SeatHostRecovery) => {
+    const fresh = readState(canonical);
+    writeState(canonical, { ...fresh, hostRecovery: record });
+  };
+  const tellRecovery = (record: SeatHostRecovery) => {
+    if (record.told) return;
+    try {
+      if (ensureCard(canonical, seatHostRecoveryCard(record, operatorLocale() === "en" ? "en" : "uk"), record.at))
+        persistRecovery({ ...record, told: true });
+    } catch { /* The durable notice is retried by the next ordinary check. */ }
+  };
+  const owedNotice = readState(canonical).hostRecovery;
+  if (owedNotice) tellRecovery(owedNotice);
+  const deliverWake: typeof deliverConversationMessage = async message => {
+    const activeSeat = sources.seatFor(canonical).active;
+    const seat = activeSeat?.conversationId ? { ...activeSeat, conversationId: activeSeat.conversationId } : null;
+    try { message.admissionGuard?.(); }
+    catch (error) {
+      if (!(error instanceof DeliveryAdmissionRefusedError)) throw error;
+      return { ok: false, outcome: "failed", status: 409, error: error.message, code: error.code, admission: "refused" };
+    }
+    const outcome = await deliver(message);
+    if (!seat || seat.conversationId !== message.conversationId) return outcome;
+    const at = new Date(sources.now()).toISOString();
+    if (outcome.ok && outcome.spawned) {
+      const record: SeatHostRecovery = { id: seatHostRecoveryKey(canonical, seat.seatEpoch, message.clientMessageId ?? seat.conversationId), conversationId: seat.conversationId,
+        seatEpoch: seat.seatEpoch, at, state: "revived", detail: "shared composer recovery started a fresh host", told: false };
+      persistRecovery(record); tellRecovery(record);
+      // Recovery changed the launch capability. Never close the old outage
+      // from its old receipt or infer that a successful send proves MCP health.
+      const fresh = sources.seatFor(canonical).active;
+      if (fresh?.conversationId === seat.conversationId && fresh.seatEpoch === seat.seatEpoch) {
+        const health = mcpHealthFor(fresh, sources.now());
+        if (health.status === "healthy" || health.transport === "http") {
+          try { ensureCard(canonical, {
+            ref: "seat-viewer-mcp-unavailable", kind: "mcp-unavailable", instance: String(seat.seatEpoch),
+            detail: health.detail, state: "resolved",
+          }, at); } catch { /* The next health check retries this card. */ }
+        }
+      }
+      recoveryDetail = `seat host recovery: revived; MCP ${mcpHealthFor(seat, sources.now()).status}`;
+      return outcome;
+    }
+    if (outcome.ok || outcome.code !== "structured_revival_impossible" || outcome.actuation === "started" || outcome.resend === "verify-first") return outcome;
+    const row = readState(canonical);
+    const wake = row.outstandingWake;
+    if (!wake || wake.clientMessageId !== message.clientMessageId) return outcome;
+    // An operation may still be held or uncertain after a failed resume. Only
+    // its holder's proven non-delivery allows rotation to take over the work.
+    if (outcome.operationId) {
+      try {
+        const evidence = await sources.wakeState?.({ ...wake, operationId: outcome.operationId });
+        if (evidence !== "dropped" && !(typeof evidence === "object" && evidence?.state === "dropped")) return outcome;
+      } catch { return outcome; } // Keep the operation when its holder is unreachable.
+    }
+    // The failed successor may have a fresh receipt inside MCP startup grace.
+    // Rotation still requires a gone host and holds that identity even if a
+    // composer replacement later publishes a healthy MCP.
+    const admission = await admissionFor(seat, true);
+    if (!admission) return outcome;
+    const id = seatHostRecoveryKey(canonical, seat.seatEpoch, seat.conversationId);
+    const previous = readState(canonical).hostRecovery;
+    if (previous?.id === id && previous.state !== "pending") return outcome;
+    const record: SeatHostRecovery = { id, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch,
+      at, state: "pending", detail: redactMonitorText(outcome.error).slice(0, 500), told: false };
+    persistRecovery(record);
+    try {
+      const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
+      const replacementHold = (): SeatCommandResult | null => {
+        try { admission.guard(); return null; }
+        catch { return { status: 409, body: { code: "incumbent_changed", error: "seat recovery evidence changed" } }; }
+      };
+      const hold = replacementHold();
+      const result = hold ?? await rotate({ project: canonical, clientRequestId: id, expectedIncumbentSeatEpoch: seat.seatEpoch,
+        handoffNotes: "The designated session could not publish a replacement host. Undelivered wakes remain owed." }, undefined, null,
+      { autonomous: true, automaticReplacement: { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch }, replacementHold });
+      record.state = result.body.code === "incumbent_changed" ? "superseded"
+        : result.status >= 200 && result.status < 300 && result.body.ok !== false ? "rotated" : "failed";
+      record.detail = redactMonitorText(String(result.body.error ?? record.detail)).slice(0, 500);
+    } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
+    persistRecovery(record); tellRecovery(record);
+    recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
+    return outcome;
   };
 
   /* BEFORE A SEAT IS READ AT ALL (#1757): converge the active seat with the
@@ -1459,7 +1606,8 @@ async function check(
     appendRecord,
     writeState,
     unresolved,
-    deliver,
+    deliver: message => deliverWake({ ...message, admissionGuard: retryAdmission?.guard,
+      recoveryAuthorityGuard: retryAdmission?.authorityGuard }),
     refreshWake: async (state, wake) => {
       let input = await refreshSeatTickEvidence(await gatherSeatTickInput(canonical, state, policy, sources), sources);
       let issues: readonly ProposalIssue[] = [];
@@ -1479,7 +1627,8 @@ async function check(
         const outcome = await sources.seatTurnOutcome?.(seat.conversationId) ?? null;
         if (outcome && openSeatAuthIncident(canonical, seat, outcome, opened.authRecoveredThrough)) return false;
       }
-      return !activeDrain() && (!seat || mcpHealthFor(seat, sources.now()).status !== "dead");
+      retryAdmission = seat?.conversationId ? await admissionFor({ ...seat, conversationId: seat.conversationId }) : null;
+      return retryAdmission !== null;
     },
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
@@ -1634,9 +1783,8 @@ async function check(
        permanent refusal. A seat that cannot take a wake is not sent another
        until something that could change that has happened. */
     const refusals = seatTickActiveRefusalRun(state, refusalBasis(input.seat.seatEpoch, state, input.settings.updatedAt));
-    // A restored seat may start its MCP only when its next turn starts.
-    // A new confirmed stall gets one ordinary delivery; arrival records its
-    // token, and the existing pending-delivery fence still prevents duplicates.
+    // A gone seat starts its replacement host and MCP through delivery.
+    // The prepared wake keeps its key until the holder proves its outcome.
     if (rotated) {
       delivery = { clientMessageId, outcome: "seat-rotated" };
     } else if (activeDrain()) {
@@ -1648,15 +1796,7 @@ async function check(
       || state.authIncident.seatEpoch !== input.seat?.seatEpoch)) {
       delivery = { clientMessageId, outcome: "seat-auth-failed" };
       fenceDetail = authDetail;
-    } else if (mcpHealth?.status === "dead" && !(
-      verdict.kind === "wake" && verdict.reasons.some((reason) => reason.kind === "stalled")
-      && verdict.items.some((item) => (item.kind === "pipeline" || item.kind === "provisioning") && item.stallToken
-        && (!(state.reportedStalls ?? []).includes(item.stallToken)
-          // Parking is new news even if the interrupted turn never wrote a
-          // newer record. Its own-lane announcement has independent dedupe.
-          || (item.laneAnnouncement === `${item.id}:needs_decision`
-            && !(state.announcedLanes ?? []).includes(item.laneAnnouncement))))
-    )) {
+    } else if (mcpHealth?.status === "dead" && !await admissionFor(input.seat)) {
       delivery = { clientMessageId, outcome: "seat-mcp-unavailable" };
       fenceDetail = `${mcpHealth.detail}; rotate the seat`;
     } else if (withheld) {
@@ -1716,14 +1856,20 @@ async function check(
           let outcome: DeliveryOutcome | null = null;
           try {
             if (accounting && !token) throw new Error("wake dispatch already claimed");
+            const admission = await admissionFor(input.seat);
+            if (!admission) throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
             /* A wake waits for the seat to go idle: the default policy would
                interrupt a turn the seat or the operator has running. */
-            outcome = await deliver({ pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
-              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "queue" });
+            outcome = await deliverWake({ pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
+              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "queue",
+              admissionGuard: admission.guard, recoveryAuthorityGuard: admission.authorityGuard });
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };
             sendDetail = sendRefusalDetail(outcome);
           } catch (error) {
-            delivery = { clientMessageId, outcome: "unreturned" };
+            if (error instanceof DeliveryAdmissionRefusedError) {
+              outcome = { ok: false, outcome: "failed", status: 409, code: error.code, error: error.message, admission: "refused" };
+              delivery = { clientMessageId, outcome: error.code };
+            } else delivery = { clientMessageId, outcome: "unreturned" };
             // Missing receipts do not authorize forgetting a prepared attempt.
             sendDetail = `the transport call for the wake did not return: ${redactBounded(error instanceof Error ? error.message : "unknown error", REASON_LIMIT)}`;
           }
@@ -1781,7 +1927,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, authDetail, autoRotateDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, authDetail, autoRotateDetail, recoveryDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;

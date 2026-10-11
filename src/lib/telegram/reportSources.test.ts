@@ -10,7 +10,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 /* A port nothing listens on. The production port's refusals are asserted by
    the sentence they throw, and this is what guarantees a REGRESSION in one of
    them cannot reach the connector actually serving this machine. */
-process.env.LLV_TELEGRAM_MCP_PORT = "59809";
+process.env.LLV_TELEGRAM_MCP_PORT = "1";
 
 const {
   CHAT_PAGE_LIMIT,
@@ -67,14 +67,14 @@ class FakeTelegram implements TelegramReadPort {
     this.calls.push("getMe");
     return { name: "Account A", username: "account_a", id: "770000001" };
   }
-  async feedDialogs(input: { sinceMs: number }): Promise<{ dialogs: FeedDialog[]; coveredSinceMs: number | null }> {
+  async feedDialogs(input: { sinceMs: number; untilMs?: number }): Promise<{ dialogs: FeedDialog[]; coveredSinceMs: number | null }> {
     this.calls.push(`feedDialogs:${input.sinceMs}`);
     return this.track(() => {
       /* The production port throws when the connector is running no feed at
          all, or when its file cannot be read safely (#1091). */
       if (this.feedFailure) throw this.feedFailure;
       return {
-        dialogs: this.feed.filter((row) => Date.parse(row.lastMessageAt) >= input.sinceMs),
+        dialogs: this.feed.filter((row) => Date.parse(row.lastMessageAt) >= input.sinceMs && Date.parse(row.lastMessageAt) <= (input.untilMs ?? Infinity)),
         coveredSinceMs: this.feedCoveredSinceMs,
       };
     });
@@ -105,6 +105,43 @@ class FakeTelegram implements TelegramReadPort {
 }
 
 const WINDOW = { windowStart: "2026-08-20T07:00:00.000Z", windowEnd: "2026-08-21T07:00:00.000Z" };
+
+test("a feed starting after the entire owed window refuses planning before dialog reads", async () => {
+  const port = new FakeTelegram([dialog("801", "Dialog A")], { "801": "2026-08-22T06:00:00.000Z" });
+  port.feedCoveredSinceMs = Date.parse("2026-08-22T06:00:00.000Z");
+  await expect(planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" }))
+    .rejects.toThrow("Telegram report feed coverage starts after this window");
+  expect(port.calls).toEqual([`feedDialogs:${Date.parse(WINDOW.windowStart)}`]);
+});
+
+test("an accepted plan starts at or after coverage when the feed begins at the window end", async () => {
+  const port = new FakeTelegram([], {});
+  port.feedCoveredSinceMs = Date.parse(WINDOW.windowEnd);
+  const plan = await planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" });
+  expect(Date.parse(plan.windowStart)).toBeGreaterThanOrEqual(port.feedCoveredSinceMs);
+  expect(plan.windowStart).toBe(WINDOW.windowEnd);
+  expect(plan.windowEnd).toBe(WINDOW.windowEnd);
+});
+
+test("a young feed caps the report window and reaches dialogs past the old probe budget", async () => {
+  const chats = Array.from({ length: MAX_PROBES + 20 }, (_, index) => dialog(String(8000 + index), `Dialog ${index}`));
+  const port = new FakeTelegram(chats, { [chats.at(-1)!.id]: "2026-08-21T06:00:00.000Z" });
+  port.feedCoveredSinceMs = Date.parse("2026-08-21T05:00:00.000Z");
+  const plan = await planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" });
+  expect(plan.windowStart).toBe("2026-08-21T05:00:00.000Z");
+  expect(plan.windowEnd).toBe(WINDOW.windowEnd);
+  expect(plan.privateDialogs.map((row) => row.id)).toEqual([chats.at(-1)!.id]);
+  expect(plan.probes).toBe(chats.length);
+  expect(plan.probeBudgetExhausted).toBe(false);
+  expect(port.maxConcurrent).toBe(1);
+});
+
+test("a later message keeps a dialog as a candidate for a historical retry", async () => {
+  const port = new FakeTelegram([dialog("801", "Dialog A")], { "801": "2026-08-22T06:00:00.000Z" });
+  const plan = await planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" });
+  expect(plan.privateDialogs.map((row) => row.id)).toEqual(["801"]);
+  expect(plan.windowEnd).toBe(WINDOW.windowEnd);
+});
 
 function dialog(id: string, title: string, username: string | null = null): TelegramChatSummary {
   return { id, kind: "user", title, username, unread: 0 };
@@ -200,15 +237,20 @@ test("a dialog active after a long run of cold ones is still a source", async ()
   expect(plan.probeBudgetExhausted).toBe(false);
 });
 
-test("a partial feed stops at the ordinary probe ceiling and fails closed", async () => {
+test("a partial feed caps the window and returns bounded enumeration coverage", async () => {
   const many: TelegramChatSummary[] = Array.from({ length: 400 }, (_, index) => dialog(String(5000 + index), `Dialog ${index}`));
   const dates: Record<string, string> = { "5000": "2026-08-20T15:00:00.000Z" };
   for (let index = 1; index < many.length; index += 1) dates[String(5000 + index)] = "2026-01-01T00:00:00.000Z";
   const port = new FakeTelegram(many, dates);
   port.feedCoveredSinceMs = Date.parse("2026-08-21T05:00:00.000Z");
 
-  await expect(planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" })).rejects.toThrow(/cover/i);
-  expect(port.calls.filter((call) => call.startsWith("lastMessageAt"))).toHaveLength(MAX_PROBES);
+  const plan = await planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" });
+  expect(plan.windowStart).toBe("2026-08-21T05:00:00.000Z");
+  expect(plan.privateDialogs).toEqual([]);
+  expect(plan.coverage).toEqual({
+    requestedWindowStart: WINDOW.windowStart, enumerationTruncated: true, outgoingComplete: false,
+  });
+  expect(port.calls.filter((call) => call.startsWith("lastMessageAt"))).toHaveLength(MAX_MATURE_FEED_PROBES);
   expect(port.maxConcurrent).toBe(1);
 });
 
@@ -331,22 +373,20 @@ test("a connector with no feed fails the plan instead of walking alone", async (
   expect((await listReportGroups(port)).length).toBe(0);
 });
 
-test("a feed younger than the window cannot stand in for a walk that ran out of budget", async () => {
-  /* The tail's second regression (#1091). The feed is RUNNING — so the pass
-     does not fail on the missing-feed rule — but it started this morning,
-     while the window opened yesterday. Everything before the listener began is
-     the walk's problem alone, and on this account the walk stops at the probe
-     budget over a list ordered by pins: whatever sat past it would be missing
-     from a plan that reported success. It fails instead. */
+test("a young feed can plan an empty capped window beyond the old probe budget", async () => {
   const many = Array.from({ length: MAX_PROBES + 20 }, (_, index) => dialog(String(9000 + index), `Dialog ${index}`));
   const dates = Object.fromEntries(many.map((chat) => [chat.id, "2026-07-01T09:00:00.000Z"]));
   const port = new FakeTelegram(many, dates);
   port.feedCoveredSinceMs = Date.parse("2026-08-21T05:00:00.000Z");
 
-  await expect(planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" })).rejects.toThrow(/cover/i);
+  const plan = await planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" });
+  expect(plan.windowStart).toBe("2026-08-21T05:00:00.000Z");
+  expect(plan.privateDialogs).toEqual([]);
+  expect(plan.probes).toBe(many.length);
+  expect(plan.coverage.outgoingComplete).toBe(true);
 });
 
-test("a feed that cannot vouch for anything is the same answer as a feed that started late", async () => {
+test("a feed with unknown coverage fails before enumeration", async () => {
   /* No coverage evidence at all — a connector record from before the stamp
      existed. Unknown is not "covered": the same bar applies. */
   const many = Array.from({ length: MAX_PROBES + 20 }, (_, index) => dialog(String(9500 + index), `Dialog ${index}`));
@@ -355,13 +395,10 @@ test("a feed that cannot vouch for anything is the same answer as a feed that st
   port.feedCoveredSinceMs = null;
 
   await expect(planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" })).rejects.toThrow(/cover/i);
+  expect(port.calls).toEqual([`feedDialogs:${Date.parse(WINDOW.windowStart)}`]);
 });
 
-test("a young feed still plans the window when the walk reached every candidate", async () => {
-  /* The rule is about what could be MISSED, not about the feed's age: an
-     account whose whole dialog list fits inside the budget was judged dialog
-     by dialog, on last message date, so nothing could hide past a bound. A run
-     on the first day after a connect is an ordinary run here. */
+test("a young feed excludes activity before its capped start", async () => {
   const port = new FakeTelegram(
     [dialog("901", "Dialog A"), dialog("902", "Dialog B")],
     { "901": "2026-08-20T15:00:00.000Z", "902": "2026-06-01T09:00:00.000Z" },
@@ -370,11 +407,12 @@ test("a young feed still plans the window when the walk reached every candidate"
 
   const plan = await planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" });
 
-  expect(plan.privateDialogs.map((row) => row.id)).toEqual(["901"]);
+  expect(plan.windowStart).toBe("2026-08-21T05:00:00.000Z");
+  expect(plan.privateDialogs).toEqual([]);
   expect(plan.probeBudgetExhausted).toBe(false);
 });
 
-test("a truncated enumeration fails for partial and mature feeds", async () => {
+test("a full last enumeration page returns an explicit coverage limit for young and mature feeds", async () => {
   /* The paged enumeration stopped on a FULL page, so the list did not end
      where the walk did. Whatever sits below it was never even a candidate,
      including any outgoing-only private dialog. */
@@ -388,12 +426,17 @@ test("a truncated enumeration fails for partial and mature feeds", async () => {
   const port = new FakeTelegram(rooms, {});
   port.feedCoveredSinceMs = Date.parse("2026-08-21T05:00:00.000Z");
 
-  await expect(planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" })).rejects.toThrow(/cover/i);
+  const partial = await planReportSources(port, { ...WINDOW, groups: [], promptVersion: "v1" });
+  expect(partial.coverage.enumerationTruncated).toBe(true);
+  expect(partial.coverage.outgoingComplete).toBe(false);
+  expect(partial.windowStart).toBe("2026-08-21T05:00:00.000Z");
 
   /* Mature feed coverage vouches for incoming bursts only. Outgoing activity
-     beyond the bounded enumeration remains unknown and keeps the same fence. */
+     beyond the bounded enumeration remains an explicit coverage limit. */
   const covered = new FakeTelegram(rooms, {});
-  await expect(planReportSources(covered, { ...WINDOW, groups: [], promptVersion: "v1" })).rejects.toThrow(/cover/i);
+  const mature = await planReportSources(covered, { ...WINDOW, groups: [], promptVersion: "v1" });
+  expect(mature.coverage.enumerationTruncated).toBe(true);
+  expect(mature.coverage.outgoingComplete).toBe(false);
 });
 
 test("one read port answers for exactly one credential generation (#1091)", async () => {
@@ -421,6 +464,49 @@ test("one read port answers for exactly one credential generation (#1091)", asyn
   await expect(unpinned.listChats({ kind: "user", limit: 10 })).rejects.toThrow();
   saveTelegramSession("1CpWapzMBu4placeholder-a-third-session");
   await expect(unpinned.listChats({ kind: "user", limit: 10 })).rejects.toThrow(/generation changed/);
+});
+
+test("a read pass reports a connector respawn instead of accepting a different feed generation", async () => {
+  const session: StoredTelegramSession = {
+    version: 1, credentialRef: "credential-placeholder", connectorToken: "A".repeat(43),
+    sessionString: "1ApWapzMBu4placeholder-not-a-real-session", savedAt: WINDOW.windowStart,
+  };
+  let generation = 1;
+  const port = connectorReadPort(session.credentialRef, {
+    readSession: () => session,
+    callTool: async () => {
+      generation = 2;
+      return { content: [{ type: "text", text: "{\"results\":[]}" }] };
+    },
+    ensureConnector: async () => ({ ok: true, url: "http://127.0.0.1:1/mcp" }),
+    sleep: async () => {}, now: () => 0,
+    feedCoverageSince: () => generation,
+  });
+  await expect(port.listChats({ kind: "user", limit: 1 })).rejects.toThrow(/connector restarted/i);
+});
+
+test("feed status preserves the caller-visible respawn after transport recovery", async () => {
+  const session: StoredTelegramSession = {
+    version: 1, credentialRef: "credential-placeholder", connectorToken: "A".repeat(43),
+    sessionString: "invented-local-session", savedAt: WINDOW.windowStart,
+  };
+  let generation = 1;
+  let calls = 0;
+  const port = connectorReadPort(session.credentialRef, {
+    readSession: () => session,
+    callTool: async () => {
+      if (++calls === 1) throw new Error("transport closed");
+      return { content: [{ type: "text", text: "{}" }] };
+    },
+    ensureConnector: async () => {
+      generation = 2;
+      return { ok: true, url: "http://127.0.0.1:1/mcp" };
+    },
+    sleep: async () => {}, now: () => 0,
+    feedCoverageSince: () => generation,
+  });
+  await expect(port.feedDialogs({ sinceMs: Date.parse(WINDOW.windowStart) })).rejects.toThrow(/connector restarted/i);
+  expect(calls).toBe(2);
 });
 
 test("a connector read awaits one bounded readiness recovery before retrying", async () => {

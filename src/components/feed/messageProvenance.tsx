@@ -564,11 +564,11 @@ export function useDeliveredMessageProvenance(
     // eslint-disable-next-line react-hooks/set-state-in-effect -- a read of this path starts here
     setResolving(true);
     const attempt = async (retry: number): Promise<void> => {
-      let revalidating = false;
       try {
         const res = await fetch(`/api/log/provenance?path=${encodeURIComponent(path)}`);
         if (!res.ok) return;
         const json = (await res.json()) as { messages?: unknown; occurrences?: unknown; submissions?: unknown; senders?: unknown; memoryOffers?: unknown; memoryPaths?: unknown; memoryNone?: unknown };
+        if (!alive) return;
         const previous = provenanceCache.get(path);
         const merged: PathProvenance = {
           messages: { ...(previous?.messages ?? {}), ...parseProvenanceMessages(json.messages) },
@@ -586,12 +586,6 @@ export function useDeliveredMessageProvenance(
             .filter(m => retry >= retryDelaysMs.length || !(Date.now() - m.tsMs < RECENT_ROW_MS)).map(m => m.key)])].slice(-1000),
         };
         provenanceCache.set(path, merged);
-        if (!alive) return;
-        setData(merged);
-        if (retry < retryDelaysMs.length && unresolvedDrivers(wanted, merged, true, Date.now())) {
-          revalidating = true;
-          timer = setTimeout(() => void attempt(retry + 1), retryDelaysMs[retry]);
-        }
       } catch {
         /* quiet: absence renders as today's row */
       } finally {
@@ -599,7 +593,16 @@ export function useDeliveredMessageProvenance(
           setResolving(false);
           markMessagesRead(wanted);
         }
-        if (alive && !revalidating) settleMessages(wanted);
+        if (alive) {
+          /* A failed read adopts cached evidence and uses the same relevance and
+             retry bounds as an empty answer. Cleanup retires this attempt. */
+          const cached = provenanceCache.get(path);
+          if (cached) setData(cached);
+          const current = cached ?? { messages: {}, occurrences: [], submissions: {}, senders: {} };
+          if (retry < retryDelaysMs.length && unresolvedDrivers(wanted, current, true, Date.now())) {
+            timer = setTimeout(() => void attempt(retry + 1), retryDelaysMs[retry]);
+          } else settleMessages(wanted);
+        }
       }
     };
     void attempt(0);

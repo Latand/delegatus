@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { hiddenAccountsOf, removalRefusalOf, type AccountRemovalRefusal as Refusal, type HiddenAccount } from "@/hooks/useEngineAccounts";
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useLocale } from "@/lib/i18n";
 import type { EngineLimits } from "@/lib/types";
 
+import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
+import { HiddenAccountOffer } from "./AccountRemovalSummary";
 import { engineTintOf } from "./utils";
 import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
 import { LINE_EDGE, ReserveBar, type SidebarFooterDensity } from "./railFooterDensity";
@@ -28,6 +31,8 @@ export interface CopilotAccountsBody {
   cli: { present: boolean; reason: string | null };
   active: string;
   accounts: CopilotAccountRow[];
+  /** The default home the operator removed, offered back in account setup. */
+  hidden?: HiddenAccount[];
   error?: string;
 }
 
@@ -45,6 +50,7 @@ export function useCopilotAccounts({ polling, onChanged }: { polling: boolean; o
   const [body, setBody] = useState<CopilotAccountsBody | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -84,6 +90,34 @@ export function useCopilotAccounts({ polling, onChanged }: { polling: boolean; o
     }
   };
 
+  /* The remove control every engine shares: a refusal names what to end first,
+     a removal answers with the list as it now stands. */
+  const remove = async (account: CopilotAccountRow) => {
+    setError(null);
+    setRefusal(null);
+    let response: Response;
+    try {
+      response = await fetch("/api/accounts/copilot", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: account.id }),
+      });
+    } catch {
+      setRefusal(removalRefusalOf(account.id, account.label, null, null));
+      return;
+    }
+    const next: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      setRefusal(removalRefusalOf(account.id, account.label, response.status, next));
+      void load();
+      return;
+    }
+    if (isBody(next)) {
+      setBody(next);
+      onChanged?.();
+    }
+  };
+
   const copy = async (account: CopilotAccountRow) => {
     if (!account.loginCommand) return;
     try {
@@ -94,7 +128,7 @@ export function useCopilotAccounts({ polling, onChanged }: { polling: boolean; o
     }
   };
 
-  return { body, error, copied, load, post, copy };
+  return { body, error, copied, refusal, load, post, copy, remove, dismissRefusal: () => setRefusal(null) };
 }
 
 export type CopilotAccounts = ReturnType<typeof useCopilotAccounts>;
@@ -108,8 +142,12 @@ export function copilotSignedIn(body: CopilotAccountsBody | null): CopilotAccoun
 /** Every Copilot account with its sign-in, then the add row. */
 export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) {
   const { t } = useLocale();
-  const { body, error, copied, post, copy } = accounts;
+  const { body, error, copied, refusal, load, post, copy, remove, dismissRefusal } = accounts;
+  const [restoring, setRestoring] = useState(false);
   const [label, setLabel] = useState("");
+  /* Removal arms on the first click and runs on the confirm, as in the
+     Claude and Codex lists. */
+  const [armed, setArmed] = useState<string | null>(null);
   if (!body) return null;
   return (
     <>
@@ -118,10 +156,12 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
       {body.accounts.map((account) => (
         <div key={account.id} data-copilot-account={account.id} className="flex flex-col gap-1 rounded-md border border-border bg-card px-2 py-1.5">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate font-semibold text-primary">{account.label}</span>
-            <span className="shrink-0 text-[10px] text-muted">
-              {account.auth === "signed_in" ? t("copilot.accounts.signedIn", { user: account.user ?? "" }) : account.auth === "signed_out" ? t("copilot.accounts.signedOut") : t("copilot.accounts.unknown")}
-            </span>
+            {/* The name keeps its width; a long sign-in line gives way and truncates (its full text in the title). */}
+            <span className="min-w-0 max-w-[60%] shrink-0 truncate font-semibold text-primary" title={account.label}>{account.label}</span>
+            {(() => {
+              const status = account.auth === "signed_in" ? t("copilot.accounts.signedIn", { user: account.user ?? "" }) : account.auth === "signed_out" ? t("copilot.accounts.signedOut") : t("copilot.accounts.unknown");
+              return <span data-copilot-account-status="" className="min-w-0 flex-1 truncate text-right text-[10px] text-muted" title={status}>{status}</span>;
+            })()}
             {account.active ? (
               <span className="shrink-0 text-[10px] font-semibold text-muted">{t("copilot.accounts.active")}</span>
             ) : (
@@ -165,6 +205,29 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
               </button>
             </div>
           ) : null}
+          {armed === account.id ? (
+            /* The card is narrow in the rail footer: the confirm reads at its full width, its buttons under it. */
+            <div data-account-remove-armed={account.id} className="flex flex-col gap-1">
+              <span className="min-w-0 text-[10.5px] font-semibold leading-snug text-danger">
+                {t(account.kind === "legacy" ? "accounts.removeConfirmLegacy" : "copilot.accounts.removeConfirm", { label: account.label })}
+              </span>
+              <span className="flex justify-end gap-1">
+                <button type="button" data-account-remove-confirm={account.id} className="shrink-0 rounded bg-danger px-2 py-0.5 text-[10.5px] font-semibold text-white hover:opacity-90" onClick={() => { setArmed(null); void remove(account); }}>
+                  {t("accounts.removeConfirmCta")}
+                </button>
+                <button type="button" className="shrink-0 rounded px-2 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas" onClick={() => setArmed(null)}>
+                  {t("accounts.removeConfirmCancel")}
+                </button>
+              </span>
+            </div>
+          ) : (
+            <button type="button" data-account-remove={account.id} aria-label={t("accounts.removeAria", { label: account.label })} className="self-end rounded px-1.5 py-0.5 text-[10.5px] font-semibold text-muted hover:bg-danger-soft hover:text-danger" onClick={() => setArmed(account.id)}>
+              {t("accounts.remove")}
+            </button>
+          )}
+          {refusal?.accountId === account.id ? (
+            <AccountRemovalRefusal refusal={refusal} inset={false} disabled={false} onDismiss={dismissRefusal} onRetry={() => void remove(account)} onRefresh={() => void load()} />
+          ) : null}
         </div>
       ))}
       <form
@@ -186,6 +249,17 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
           {t("copilot.accounts.add")}
         </button>
       </form>
+      {hiddenAccountsOf(body.hidden).map((account) => (
+        <HiddenAccountOffer
+          key={account.id}
+          account={account}
+          busy={restoring}
+          onRestore={() => {
+            setRestoring(true);
+            void post({ action: "restore", id: account.id }).finally(() => setRestoring(false));
+          }}
+        />
+      ))}
       {error ? <p role="alert" className="text-danger">{error}</p> : null}
     </>
   );

@@ -24,9 +24,9 @@ function account(over: Partial<AccountOption> & { id: string; label: string }): 
 
 function engineState(engine: "claude" | "codex", accounts: AccountOption[], active: string): EngineAccountsState {
   return {
-    engine, accounts, active, identityVersion: 0, status: "ready", notice: null, challenge: null, mutation: null, migration: null, autoBalance: null,
+    engine, accounts, hidden: [], active, identityVersion: 0, status: "ready", notice: null, challenge: null, mutation: null, migration: null, autoBalance: null,
     refresh: async () => true, add: async () => true, retryNotice: async () => true, select: async () => true, submitLoginCode: async () => true,
-    cancelLogin: async () => true, retryLogin: async () => true, remove: async () => true, cleanupOrphans: async () => true, copyTerminalCommand: async () => true,
+    cancelLogin: async () => true, retryLogin: async () => true, remove: async () => true, restore: async () => true, cleanupOrphans: async () => true, copyTerminalCommand: async () => true,
     refreshLimits: async () => true, useResetCredit: async () => true, limitsBusy: null, limitsVersion: 0, removing: null, removal: null, dismissRemoval: () => {},
   } as EngineAccountsState;
 }

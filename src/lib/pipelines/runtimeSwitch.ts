@@ -12,7 +12,6 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { StructuredControlResult } from "@/lib/runtime/structuredControls";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineRuntimeSeat, PipelineRuntimeSwitch, EffectivePipelineRole } from "./types";
-import { learnedRulesReserve } from "@/lib/memory/roleLaunch";
 import { withoutStoredLessons } from "@/lib/memory/roleStore";
 
 export class RuntimeSwitchSuperseded extends Error {
@@ -315,7 +314,7 @@ export async function driveRuntimeSwitch(
         const suffix = `\nContinuing on a new runtime. Read the complete handoff: ${file}\n${content.slice(0,4000)}`;
         // Externalize the bound brief if its framing and the handoff exceed the transport limit.
         let brief = input.prompt;
-        if (Buffer.byteLength(brief + suffix) > 32000 - learnedRulesReserve(input.learnedRules)) {
+        if (Buffer.byteLength(brief + suffix) > 32000) {
           const briefFile = path.join(directory, `runtime-brief-${crypto.createHash("sha256").update(brief).digest("hex")}.md`);
           writeArtifact(briefFile, brief); brief = `Read the complete stage brief: ${briefFile}`;
         }

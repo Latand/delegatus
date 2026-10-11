@@ -29,6 +29,12 @@ test("HTTP MCP sessions are outside the stdio launcher heartbeat rule", () => {
   expect(seatMcpHealth(receipt, null, root, now, "http").status).toBe("untracked");
 });
 
+test("a fresh recovery receipt gets startup grace on an old seat epoch", () => {
+  const fresh = { spawnCapabilityDigest: "b".repeat(64), createdAt: new Date(now - 1_000).toISOString() };
+  expect(seatMcpHealth(fresh, receipt.createdAt, root, now).status).toBe("untracked");
+  expect(seatMcpHealth(fresh, receipt.createdAt, root, now + 11 * 60_000).status).toBe("dead");
+});
+
 test("three transport failures block an old seat and a successful call clears the condition", () => {
   const filename = path.join(root, "mcp-runtime", "sessions", `${digest}.json`);
   fs.mkdirSync(path.dirname(filename), { recursive: true });

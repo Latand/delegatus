@@ -207,3 +207,39 @@ test("a restart record is a proposal only while its row is unclaimed and nothing
   expect(restartCutProposal(store.update(owed.id, { state: "discharged", resolution: "a newer message already resumed the conversation" })!, row)).toBe(false);
   expect(restartCutProposal(store.record(releaseCut).obligation, { hostKey: releaseCut.hostKey, claimEpoch: 3 })).toBe(false);
 });
+
+test("withdrawal sees a fresh import claim and its importer preserves the other records", () => {
+  const obligations = path.join(directory, "obligations");
+  const scratch = interruptionObligationStore(path.join(directory, "scratch"));
+  const first = scratch.record(releaseCut).obligation;
+  const kept = scratch.record({ ...releaseCut, turnRef: "another-turn" }).obligation;
+  fs.writeFileSync(`${obligations}.pending.jsonl`, [first, kept].map((record) => JSON.stringify(record)).join("\n") + "\n");
+  const observer = interruptionObligationStore(obligations);
+  const importer = interruptionObligationStore(obligations, {
+    afterPendingRead() {
+      expect(observer.list().map((record) => record.id).sort()).toEqual([first.id, kept.id].sort());
+      expect(observer.withdraw(first.id)).toBe(true);
+      expect(observer.list().map((record) => record.id)).toEqual([kept.id]);
+    },
+  });
+  expect(importer.list().map((record) => record.id)).toEqual([kept.id]);
+  expect(interruptionObligationStore(obligations).list().map((record) => record.id)).toEqual([kept.id]);
+  /* An explicit new observation can record the cut again; an older import
+     cannot restore the withdrawn copy over it. */
+  expect(observer.record(releaseCut).created).toBe(true);
+});
+
+test("a fresh import claim keeps a discharge recorded before publication", () => {
+  const obligations = path.join(directory, "obligations");
+  const record = interruptionObligationStore(path.join(directory, "scratch")).record(releaseCut).obligation;
+  fs.writeFileSync(`${obligations}.pending.jsonl`, JSON.stringify(record) + "\n");
+  const observer = interruptionObligationStore(obligations);
+  const importer = interruptionObligationStore(obligations, {
+    afterPendingRead() {
+      expect(observer.update(record.id, { state: "discharged", resolution: "the turn already ended" }))
+        .toMatchObject({ state: "discharged" });
+    },
+  });
+  expect(importer.list()).toEqual([{ ...record, state: "discharged", resolution: "the turn already ended" }]);
+  expect(observer.list()).toEqual(importer.list());
+});

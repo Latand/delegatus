@@ -181,6 +181,29 @@ function spawnArgs(clientRequestId: string, cwd: string): Record<string, unknown
   };
 }
 
+test("a prompt-only MCP launch skips leading Markdown and reserves one named, described task", async () => {
+  saveTasks([]);
+  const cwd = path.join(sandbox, "formatted-prompt");
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const dispatches = { count: 0 };
+  const live = service(registry, new MemoryMcpReceiptStore(), routeControl(spawnDependencies(registry, cwd), dispatches), domainDependencies(registry));
+  const args = { clientRequestId: "formatted-prompt-mcp", engine: "codex", cwd,
+    ["prompt"]: "---\nInspect export retry ownership.\nReport the unsafe transitions." };
+  const answer = await live.callTool("spawn_agent", args);
+  expect(answer).toMatchObject({ ok: true });
+  if (!answer.ok) throw new Error(answer.error);
+  expect(loadTasks()).toHaveLength(1);
+  expect(loadTasks()[0]!.text).toBe("codex · Inspect export retry ownership.\nInspect export retry ownership.");
+  expect(loadTasks()[0]!.origin?.refinement).toBe("titled");
+  expect(loadTasks()[0]!.assignments).toHaveLength(1);
+  expect(await live.callTool("spawn_agent", args)).toMatchObject({ ok: true, replayed: true, launchId: answer.launchId });
+  expect(dispatches.count).toBe(1);
+  expect(loadTasks()).toHaveLength(1);
+  expect(loadTasks()[0]!.assignments).toHaveLength(1);
+  registry.close();
+});
+
 test("a foreign task refuses before the MCP claim and dispatch, and a corrected task can reuse the request id", async () => {
   const cwd = path.join(sandbox, "task-project-target");
   fs.mkdirSync(cwd, { recursive: true });

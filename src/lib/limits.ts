@@ -3,8 +3,8 @@ import { claudeTierDisplayName, normalizeClaudeLaunchModel } from "@/lib/agent/m
 import fs from "node:fs";
 import path from "node:path";
 
-import { accountForSpawn, type CodexAccount } from "@/lib/accounts/codex";
-import { claudeAccountForSpawn, type ClaudeAccount } from "@/lib/accounts/claude";
+import { accountForSpawn, UnknownAccountError, type CodexAccount } from "@/lib/accounts/codex";
+import { claudeAccountForSpawn, UnknownClaudeAccountError, type ClaudeAccount } from "@/lib/accounts/claude";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
@@ -419,26 +419,46 @@ function resolveEngineRead(engine: EngineName, accountId: string, now: number, c
   return pending;
 }
 
+/** The engine's account to read, or null when none is listed: with Main
+    removed and no other account left (task d7759de2) the engine has nothing
+    to read, which is an answer for the footer rather than a failure. */
+function listedAccount<T>(resolve: () => T): T | null {
+  try {
+    return resolve();
+  } catch (error) {
+    if (error instanceof UnknownAccountError || error instanceof UnknownClaudeAccountError) return null;
+    throw error;
+  }
+}
+
+function noAccountRead(engine: string): Pick<ResolvedRead, "data" | "meta"> {
+  return { data: null, meta: { source: "unavailable", reason: `no ${engine} account`, staleSince: null } };
+}
+
 /** Claude Code + Codex plan limits, cached briefly so UI polling stays cheap. */
 export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsReader; now?: () => number } = {}): Promise<LimitsPayload> {
   const clock = options.now ?? Date.now;
   const now = clock();
-  const claudeAccount = claudeAccountForSpawn();
-  const codexAccount = accountForSpawn();
+  const claudeAccount = listedAccount(() => claudeAccountForSpawn());
+  const codexAccount = listedAccount(() => accountForSpawn());
   const copilotAccountId = activeCopilotAccountId();
   const copilotAccount = listCopilotAccounts().find((account) => account.id === copilotAccountId) ?? null;
   const copilotRead = copilotAccount ? readCopilotTranscriptLimits(copilotAccount.sessionStateDir) : null;
   const [resolvedClaude, resolvedCodex] = await Promise.all([
-    claudeAccount.provider
+    !claudeAccount
+      ? Promise.resolve(noAccountRead("Claude"))
+      : claudeAccount.provider
       ? Promise.resolve({ data: null, meta: { source: "unavailable" as const, reason: "provider limits unknown", staleSince: null } })
       : resolveClaudeRead(claudeAccount, now, clock),
-    resolveEngineRead("codex", codexAccount.id, now, clock, () => readCodexLimits({ account: codexAccount, liveReader: options.codexLiveReader, now: clock })),
+    codexAccount
+      ? resolveEngineRead("codex", codexAccount.id, now, clock, () => readCodexLimits({ account: codexAccount, liveReader: options.codexLiveReader, now: clock }))
+      : Promise.resolve(noAccountRead("Codex")),
   ]);
   return {
     claude: resolvedClaude.data,
     codex: resolvedCodex.data,
-    claudeAccountId: claudeAccount.id,
-    codexAccountId: codexAccount.id,
+    claudeAccountId: claudeAccount?.id ?? null,
+    codexAccountId: codexAccount?.id ?? null,
     copilot: copilotRead?.data ?? null,
     copilotAccountId: copilotAccount?.id ?? null,
     provenance: {
@@ -1303,8 +1323,9 @@ export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsR
     ? buildEngineBurndown("claude", payload.claudeAccountId, payload.claude, now, null)
     : null;
   let codex: EngineBurndown | null = null;
-  if (payload.codexAccountId) {
-    const backfill = collectCodexRateLimitSeries(accountForSpawn().sessionsDir, since);
+  const codexAccount = payload.codexAccountId ? listedAccount(() => accountForSpawn(payload.codexAccountId)) : null;
+  if (payload.codexAccountId && codexAccount) {
+    const backfill = collectCodexRateLimitSeries(codexAccount.sessionsDir, since);
     codex = buildEngineBurndown("codex", payload.codexAccountId, payload.codex, now, backfill);
   }
   return {
