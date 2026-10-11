@@ -99,7 +99,7 @@ transcript touched inside the window. Three things get told apart:
    of imperative language and would otherwise read as requests.
 2. **Operator text vs. the harness** — injected context, caveats and interrupt
    notices arrive on the same `user` records. `taskTextFromPrompt`
-   (`src/lib/tasks/inboxScanner.ts`) already recognizes those shapes and doubles
+   (`src/lib/taskTextFromPrompt.ts`) already recognizes those shapes and doubles
    as the concrete-request test: it answers with a title only for a prompt that
    is neither harness noise nor conversational chatter.
 3. **Operator text vs. the monitor** — every delivered report opens with

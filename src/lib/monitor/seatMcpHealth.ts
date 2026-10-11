@@ -23,7 +23,7 @@ export function seatMcpHealth(
   if (transport === "http") return { status: "untracked", detail: "shared HTTP MCP transport" };
   const digest = receipt?.spawnCapabilityDigest;
   if (!digest || !/^[0-9a-f]{64}$/.test(digest)) return { status: "untracked", detail: "no current MCP launch capability" };
-  const born = Date.parse(designatedAt ?? receipt.createdAt);
+  const born = Math.max(Date.parse(designatedAt ?? receipt.createdAt), Date.parse(receipt.createdAt));
   const inGrace = !Number.isFinite(born) || now - born < SEAT_MCP_START_GRACE_MS;
   let record: unknown;
   try {

@@ -103,6 +103,19 @@ function valueAtPath(target: Record<string, unknown>, path: readonly string[]): 
   return value;
 }
 
+test("spawn_agent advertises an optional account pin with project binding semantics", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const tool = (await client.listTools()).tools.find((candidate) => candidate.name === "spawn_agent")!;
+    expect(tool.inputSchema.properties).toHaveProperty("account");
+    expect(tool.inputSchema.required ?? []).not.toContain("account");
+    const account = tool.inputSchema.properties!.account as { anyOf: { type: string }[]; description: string };
+    expect(account.anyOf.map((choice) => choice.type)).toEqual(["string", "null"]);
+    expect(account.description).toContain("allowed");
+    expect(account.description).toContain("null");
+    expect(account.description).toContain("role");
+  });
+});
+
 test("agent_activity preserves additive provider throttle fields through the MCP protocol", async () => {
   const retryAt = "2026-08-23T09:12:00.000Z";
   await withProtocolClient(inertBindings({
