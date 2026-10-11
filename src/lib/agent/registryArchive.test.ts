@@ -96,6 +96,94 @@ function archiveAll(store: SqliteAgentRegistryStore) {
   throw new Error("archive pass did not converge");
 }
 
+for (const archived of [false,true]) {
+  for (const external of [false,true]) {
+    test(`detached reads preserve shared deltas after ${external ? "external" : "local"} ${archived ? "cold promotion" : "hot update"}`, () => {
+      const { open } = fixture();
+      const metrics = { reads: 0,loads: 0 };
+      const reader = open(metrics);
+      if (archived) archiveAll(reader);
+      const held = reader.readOnlySnapshot().file;
+      expect(held.receipts["archive-launch-0"]!.error).toBeNull();
+      const writer = external ? open() : reader;
+      writer.mutate(file => { file.receipts["archive-launch-0"]!.error = "updated receipt"; });
+      expect(reader.snapshot().file.receipts["archive-launch-0"]!.error).toBe("updated receipt");
+      metrics.reads = metrics.loads = 0;
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(reader.readOnlySnapshot().file.receipts["archive-launch-0"]!.error).toBe("updated receipt");
+      }
+      expect(held.receipts["archive-launch-0"]!.error).toBeNull();
+      expect(metrics.loads).toBe(0);
+      expect(metrics.reads).toBeLessThanOrEqual(1);
+    });
+  }
+}
+
+for (const archived of [false,true]) {
+  test(`incremental delivery refresh normalizes its ${archived ? "cold" : "hot"} owner`, () => {
+    const { open,filename,initial } = fixture();
+    if (!archived) {
+      initial.heldDeliveries["archive-delivery-0"]!.state = "held";
+      initial.deliveryOperationOwners["archive-operation-0"]!.terminalState = null;
+    }
+    const metrics = { reads: 0,loads: 0 };
+    const reader = open(metrics);
+    if (archived) archiveAll(reader);
+    const held = reader.readOnlySnapshot().file;
+    const before = held.deliveryOperationOwners["archive-operation-0"];
+    const db = new Database(filename);
+    try {
+      db.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.state','failed','$.error','delivery failed') WHERE collection='heldDeliveries' AND row_key='archive-delivery-0'");
+    } finally { db.close(); }
+    metrics.reads = metrics.loads = 0;
+    const shared = reader.readOnlySnapshot().file;
+    expect(shared.deliveryOperationOwners["archive-operation-0"]!.terminalState).toBe("failed");
+    expect(metrics.loads).toBe(0);
+    expect(metrics.reads).toBeLessThanOrEqual(3);
+    expect(shared.deliveryOperationOwners["archive-operation-0"]).toEqual(reader.snapshot().file.deliveryOperationOwners["archive-operation-0"]);
+    expect(held.deliveryOperationOwners["archive-operation-0"]).toEqual(before);
+  });
+
+  test(`incremental legacy owner refresh uses its ${archived ? "cold" : "hot"} reservation`, () => {
+    const { open,filename } = fixture();
+    const reader = open();
+    if (archived) archiveAll(reader);
+    reader.readOnlySnapshot();
+    const db = new Database(filename);
+    try {
+      db.run(`UPDATE registry_rows SET value_json=json_remove(value_json,'$.terminalState','$.contentDigest','$.targetGenerationId','$.evidenceText','$.runtimeConversationId','$.createdAt') WHERE collection='deliveryOperationOwners' AND row_key='archive-operation-0'`);
+    } finally { db.close(); }
+    const shared = reader.readOnlySnapshot().file;
+    expect(shared.deliveryOperationOwners["archive-operation-0"]!.terminalState).toBe("delivered");
+    expect(shared.deliveryOperationOwners["archive-operation-0"]).toEqual(reader.snapshot().file.deliveryOperationOwners["archive-operation-0"]);
+  });
+
+  test(`incremental owner deletion preserves ${archived ? "cold" : "hot"} reservation ownership`, () => {
+    const { open,filename } = fixture();
+    const reader = open();
+    if (archived) archiveAll(reader);
+    reader.readOnlySnapshot();
+    const db = new Database(filename);
+    try { db.run("DELETE FROM registry_rows WHERE collection='deliveryOperationOwners' AND row_key='archive-operation-0'"); }
+    finally { db.close(); }
+    const shared = reader.readOnlySnapshot().file;
+    expect(shared.deliveryOperationOwners["archive-operation-0"]).toEqual(reader.snapshot().file.deliveryOperationOwners["archive-operation-0"]);
+    expect(shared.deliveryOperationOwners["archive-operation-0"]!.terminalState).toBe("delivered");
+  });
+}
+
+test("cold reservation ownership is synthesized on a fresh shared load", () => {
+  const { open,filename } = fixture();
+  const writer = open();
+  archiveAll(writer);
+  const db = new Database(filename);
+  try { db.run("DELETE FROM registry_rows WHERE collection='deliveryOperationOwners' AND row_key='archive-operation-0'"); }
+  finally { db.close(); }
+  const reader = open();
+  expect(reader.readOnlySnapshot().file.deliveryOperationOwners["archive-operation-0"])
+    .toEqual(reader.snapshot().file.deliveryOperationOwners["archive-operation-0"]);
+});
+
 test("cold resume, path ownership, capability and exact launch replay survive reopen, promotion and deletion", () => {
   const { open,filename,initial,conversationId,directory } = fixture();
   const store = open();
@@ -259,6 +347,53 @@ test("external receipt proof changes revoke and restore a hot child's grant besi
         .toEqual(allowed ? ["viewer","telegram"] : ["viewer"]);
     }
   } finally { db.close(); }
+});
+
+test("held cold grants pin their decision before first access and after payload eviction", () => {
+  const { open,initial,conversationId } = fixture();
+  const root = initial.conversations[conversationId(1)]!;
+  root.delegationDepth = 0;
+  const receipt = initial.receipts["archive-launch-0"]!;
+  receipt.conversationId = root.id;
+  receipt.key = null;
+  receipt.delegationDepth = 0;
+  receipt.launchProfile.mcpServers = ["viewer","telegram"];
+  const forged = structuredClone(receipt);
+  // Baseline cold payloads fill and then evict the bounded reader cache.
+  for (let index = 0; index < 140; index++) {
+    const launchId = `eviction-launch-${index}`;
+    initial.receipts[launchId] = { ...structuredClone(initial.receipts["archive-launch-1"]!),launchId,key: null };
+  }
+  const reader = open();
+  archiveAll(reader);
+  // An older writer can persist a claim without the assembled grant decision.
+  const db = new Database(reader.filename);
+  try {
+    db.run("UPDATE registry_rows SET value_json=? WHERE collection='conversations' AND row_key=?",[JSON.stringify(root),root.id]);
+    db.run("UPDATE registry_rows SET value_json=? WHERE collection='receipts' AND row_key=?",[JSON.stringify(forged),forged.launchId]);
+  } finally { db.close(); }
+  archiveAll(reader);
+  const held = reader.readOnlySnapshot().file;
+  const writer = open();
+  const edge = structuredClone(initial.lineageEdges[conversationId(0)]!);
+  writer.mutate(file => {
+    delete file.lineageEdges[conversationId(0)];
+    file.heldDeliveries["archive-delivery-0"]!.state = "failed";
+  },false);
+  const restored = reader.readOnlySnapshot().file;
+  expect(restored.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer","telegram"]);
+  expect(held.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer"]);
+  expect(restored.deliveryOperationOwners["archive-operation-0"]!.terminalState).toBe("failed");
+  expect(held.deliveryOperationOwners["archive-operation-0"]!.terminalState).toBe("delivered");
+  for (let index = 0; index < 140; index++) expect(held.receipts[`eviction-launch-${index}`]).toBeDefined();
+  expect(held.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer"]);
+  expect(held.deliveryOperationOwners["archive-operation-0"]!.terminalState).toBe("delivered");
+  writer.mutate(file => { file.lineageEdges[conversationId(0)] = edge; },false);
+  expect(reader.readOnlySnapshot().file.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer"]);
+  for (let index = 0; index < 140; index++) expect(restored.receipts[`eviction-launch-${index}`]).toBeDefined();
+  expect(restored.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer","telegram"]);
+  const cache = reader as unknown as { coldReaderRows: Map<unknown,unknown> };
+  expect(cache.coldReaderRows.size).toBeLessThanOrEqual(128);
 });
 
 test("a 26,952-row registry retains all history while bounding payload caches and external refresh reads", () => {
