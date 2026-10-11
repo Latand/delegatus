@@ -893,6 +893,72 @@ describe("a saved decision answers at once", () => {
     expect(document.querySelector<HTMLElement>("[data-prototype-delivery]")!.dataset.prototypeDeliveryPhase).toBe("delivering");
   });
 
+  /* Two waiting rounds of one task: the earlier one is saved, the later one may still hold the operator's words. */
+  const earlier = `pr_${"a".repeat(32)}`;
+  const later = `pr_${"b".repeat(32)}`;
+  function twoRoundServer() {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let decided: { chosen: number[]; comment: string } | null = null;
+    const posted: unknown[] = [];
+    const read = (): PrototypeReviewRead => {
+      const first = reviewRead(decided ?? undefined).rounds[0]!;
+      if (first.decision) first.decision.delivery = { state: "pending", retryable: true, phase: "saved" };
+      return { taskId: "task-1", waitingReviewId: later, rounds: [first, { ...reviewRead().rounds[0]!, id: later, title: "Spacing", createdAt: "2026-10-06T12:00:00.000Z" }] };
+    };
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      if (init?.method !== "POST") return new Response(JSON.stringify(read()), { status: 200 });
+      const body = JSON.parse(String(init.body));
+      posted.push(body);
+      await held;
+      decided = { chosen: body.chosen, comment: body.comment };
+      return new Response(JSON.stringify(read()), { status: 200 });
+    }) as typeof fetch;
+    return { release, posted };
+  }
+  /* Opens the later round, writes its words if any, then saves the earlier round's choice and presses Close while the server holds the save. */
+  async function saveEarlierAndClose(laterWords: string) {
+    const server = twoRoundServer();
+    await mountHost();
+    await act(async () => { openPrototypeReview({ kind: "prototype-review", taskId: "task-1", reviewId: later, from: "card" }); });
+    await settle();
+    if (laterWords) await typeComment(laterWords);
+    await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${earlier}"]`)!.click(); });
+    await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.click(); });
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); });
+    await settle();
+    await pressClose();
+    expect(reviewOf()).not.toBeNull();
+    await act(async () => { server.release(); });
+    await settle();
+    expect(server.posted).toEqual([{ reviewId: earlier, chosen: [2], comment: "" }]);
+  }
+
+  test("a written save asked to close keeps the review and asks when another round still holds unsaved words; keeping leaves them exact, discarding closes", async () => {
+    await saveEarlierAndClose("  Tighter,\nplease. ");
+    expect(reviewOf()).not.toBeNull();
+    expect(document.querySelector("[data-prototype-guard]")).not.toBeNull();
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-keep]")!.click(); });
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+    // The earlier round is decided; the later one still waits with its words as they were written.
+    await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${later}"]`)!.click(); });
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("  Tighter,\nplease. ");
+    await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${earlier}"]`)!.click(); });
+    expect(document.querySelector("[data-prototype-comment-field]")).toBeNull();
+    expect(document.querySelector<HTMLElement>("[data-prototype-delivery]")!.dataset.prototypeDeliveryPhase).toBe("saved");
+    // A close now asks again, and only the discard closes.
+    await pressClose();
+    expect(document.querySelector("[data-prototype-guard]")).not.toBeNull();
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-discard]")!.click(); });
+    expect(reviewOf()).toBeNull();
+  });
+
+  test("a written save asked to close closes at once when no other round holds unsaved words, before the seat has the message", async () => {
+    await saveEarlierAndClose("");
+    expect(reviewOf()).toBeNull();
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+  });
+
   for (const [phase, words, retry] of [
     ["saved", "Decision saved", false],
     ["delivering", "Decision saved · delivering to the orchestrator", false],

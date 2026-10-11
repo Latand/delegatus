@@ -43,6 +43,11 @@ const initialDraft = (round: PrototypeRoundView | null): Draft => ({ chosen: [],
    choice and the exact words wait here, with the reason, for the task's
    review to open again. */
 const refusedSaves = new Map<string, { drafts: Record<string, Draft>; error: string }>();
+/* What a close would lose in the waiting rounds: answers changed from the recommended ones, and comments. */
+const unsavedOf = (rounds: readonly PrototypeRoundView[], drafts: Record<string, Draft>) => ({
+  answers: rounds.some((entry) => !entry.decision && Boolean(entry.questions?.length) && drafts[entry.id] !== undefined && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions!))),
+  comment: rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== ""),
+});
 
 /** A moment as the product writes one: day, month and a 24-hour clock, no seconds. */
 const when = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(at));
@@ -280,8 +285,12 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
      the tap on the microphone to the last word landing in the field: while it
      is transcribed the field may be empty, and closing then would unmount the
      review before the answer has anywhere to go. */
-  const answersChanged = rounds.some((entry) => !entry.decision && Boolean(entry.questions?.length) && drafts[entry.id] !== undefined && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions!)));
-  const unsaved = answersChanged || rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "") || Boolean(dictation.liveText) || dictation.phase !== "idle";
+  const lost = unsavedOf(rounds, drafts);
+  const answersChanged = lost.answers;
+  const unsaved = answersChanged || lost.comment || speaking;
+  /* A save answers after the render that sent it: a close waiting for it reads the rounds, the drafts and the speech as they are then. */
+  const latest = useRef({ rounds, drafts, speaking });
+  useEffect(() => { latest.current = { rounds, drafts, speaking }; }, [rounds, drafts, speaking]);
   /* The guard names what is lost: changed answers, else the comment. */
   const guardKind = answersChanged ? "answers" : "comment";
   /* A held key repeats before the first request has redrawn anything. */
@@ -393,7 +402,14 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         if (!result.ok) refusedSaves.set(taskId, { drafts: { ...drafts, [round.id]: sent }, error: result.error });
       } else if (result.ok) {
         setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
-        if (closing) onClose();
+        /* The waited-for close leaves only this round's words behind: another
+           round's unsaved words, answers or speech still ask first. */
+        if (closing) {
+          const now = latest.current;
+          const left = unsavedOf(now.rounds, Object.fromEntries(Object.entries(now.drafts).filter(([id]) => id !== round.id)));
+          if (left.answers || left.comment || now.speaking) setGuard(true);
+          else onClose();
+        }
       }
     } finally {
       saveInFlight.current = false;
