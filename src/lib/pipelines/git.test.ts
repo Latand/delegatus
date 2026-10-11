@@ -979,19 +979,25 @@ test("worktree provision recovers an existing branch only at the persisted exact
   });
 });
 test("pass commits a dirty stage and retry resets plus cleans", async () => {
+  const box = await isolatedIdentityRepo();
   const calls: string[] = [];
-  const exec: ExecPort = (command, args) => {
+  const exec: ExecPort = (command, args, cwd, env) => {
     calls.push(`${command} ${args.join(" ")}`);
-    if (args[0] === "status") return { code: 0, stdout: " M src/x.ts\n", stderr: "" };
-    if (args[0] === "rev-parse") return { code: 0, stdout: "stage-sha\n", stderr: "" };
-    return { code: 0, stdout: "", stderr: "" };
+    return box.exec(command, args, cwd, env);
   };
-  expect((await commitPipelineStage(pipeline(), "build", true, exec))).toEqual({ ok: true, sha: "stage-sha" });
-  expect((await resetPipelineStage(pipeline(), exec))).toEqual({ ok: true, sha: "base" });
-  expect(calls).toContain(`git reset --quiet HEAD -- ${CONTROLLER_ARTIFACT_GIT_PATHS.join(" ")}`);
-  expect(calls).toContain(`git add -A -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
-  expect(calls).toContain("git reset --hard base");
-  expect(calls).toContain("git clean -fd");
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    expect(await commitPipelineStage(subject, "build", true, exec)).toMatchObject({ ok: true });
+    expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 2;");
+    expect(await resetPipelineStage(subject, exec)).toEqual({ ok: true, sha: subject.lastPassedCommit });
+    expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 1;");
+    expect(calls).toContain(`git reset --quiet HEAD -- ${CONTROLLER_ARTIFACT_GIT_PATHS.join(" ")}`);
+    expect(calls).toContain(`git add -A -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
+    expect(calls).toContain(`git reset --hard ${subject.lastPassedCommit}`);
+    expect(calls).toContain("git clean -fd");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
 test.each([false, true])("controller settlement refuses a stale main snapshot and a later stage can commit fresh work (stage edit: %s)", async (stageEdit) => {
@@ -1068,6 +1074,170 @@ test.each(["index", "head"])("stage index custody defers a concurrent %s change 
     expect(await commitPipelineStage(subject, "later", true, box.exec)).toMatchObject({ ok: true });
     expect(await box.run("show", "HEAD:report.md")).toBe("newer stage output");
     expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 2;");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["index", "head"])("controller settlement fences a %s change after the final tree read", async (change) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.baseBranch = "main";
+    subject.baseRef = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    expect((await box.exec("git", ["commit", "-m", "new main content"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const accepted = await box.run("rev-parse", "HEAD");
+    await box.run("update-ref", "refs/remotes/origin/main", accepted);
+    fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
+    let reads = 0; let moved = accepted;
+    const racingExec: ExecPort = async (command, args, cwd, env) => {
+      const result = await box.exec(command, args, cwd, env);
+      if (args[0] === "write-tree" && ++reads === 2) {
+        if (change === "index") await box.run("restore", `--source=${subject.baseRef}`, "--staged", "--worktree", "--", "source.ts");
+        else {
+          expect((await box.exec("git", ["commit", "-m", "concurrent writer"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+          moved = await box.run("rev-parse", "HEAD");
+        }
+      }
+      return result;
+    };
+    expect(await commitPipelineStage(subject, "build", true, racingExec)).toMatchObject({ ok: false, deferred: true });
+    expect(await box.run("rev-parse", "HEAD")).toBe(moved);
+    expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 2;");
+    if (change === "index") expect(await box.run("show", ":source.ts")).toBe("export const value = 1;");
+    expect(fs.existsSync(path.join(box.repo, ".git", "index.lock"))).toBe(false);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("declared output settlement refuses a stale report and accepts its repaired successor", async () => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.baseBranch = "main";
+    fs.writeFileSync(path.join(box.repo, "report.md"), "old report\n");
+    await box.run("add", "report.md");
+    expect((await box.exec("git", ["commit", "-m", "base report"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    subject.baseRef = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "report.md"), "new main report\n");
+    await box.run("add", "report.md");
+    expect((await box.exec("git", ["commit", "-m", "updated main report"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const accepted = await box.run("rev-parse", "HEAD"); subject.lastPassedCommit = accepted;
+    await box.run("update-ref", "refs/remotes/origin/main", accepted);
+    await box.run("restore", `--source=${subject.baseRef}`, "--staged", "--worktree", "--", "report.md");
+    const receipt = path.join(box.root, "receipt.json");
+    expect(await commitPipelineStage(subject, "audit", false, box.exec, ["report.md"], accepted, receipt))
+      .toMatchObject({ ok: false, commitRefusal: { paths: ["report.md"] } });
+    expect(await box.run("rev-parse", "HEAD")).toBe(accepted);
+    expect(await box.run("show", ":report.md")).toBe("old report");
+    expect(fs.readFileSync(path.join(box.repo, "report.md"), "utf8")).toBe("old report\n");
+    expect(fs.existsSync(receipt)).toBe(false);
+    fs.writeFileSync(path.join(box.repo, "report.md"), "repaired report\n");
+    expect(await commitPipelineStage(subject, "audit", false, box.exec, ["report.md"], accepted, receipt)).toMatchObject({ ok: true });
+    expect(await box.run("show", "HEAD:report.md")).toBe("repaired report");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("declared output custody refuses an undeclared path staged after its initial path read", async () => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
+    let injected = false;
+    const exec: ExecPort = async (command, args, cwd, env) => {
+      const result = await box.exec(command, args, cwd, env);
+      if (args[0] === "reset" && !injected) {
+        injected = true;
+        fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 4;\n");
+        await box.run("add", "source.ts");
+      }
+      return result;
+    };
+    expect(await commitPipelineStage(subject, "audit", false, exec, ["report.md"], subject.lastPassedCommit, path.join(box.root, "receipt.json")))
+      .toMatchObject({ ok: false });
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
+    expect(await box.run("show", ":source.ts")).toBe("export const value = 4;");
+    expect(fs.readFileSync(path.join(box.repo, "report.md"), "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each([true, false])("controller commit retains foreign index custody acquired after validation (read-write: %s)", async (allowCommit) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
+    const lock = path.join(box.repo, ".git", "index.lock");
+    let reads = 0;
+    const exec: ExecPort = async (command, args, cwd, env) => {
+      const result = await box.exec(command, args, cwd, env);
+      if (args[0] === "write-tree" && ++reads === 2) fs.writeFileSync(lock, "foreign writer custody\n", { flag: "wx" });
+      return result;
+    };
+    expect(await commitPipelineStage(subject, "audit", allowCommit, exec, ["report.md"], subject.lastPassedCommit))
+      .toMatchObject({ ok: false, deferred: true });
+    expect(fs.readFileSync(lock, "utf8")).toBe("foreign writer custody\n");
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
+    fs.unlinkSync(lock); // Only this fixture's writer releases its custody.
+    expect(await commitPipelineStage(subject, "audit", allowCommit, box.exec, ["report.md"], subject.lastPassedCommit))
+      .toMatchObject({ ok: true });
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each([true, false])("controller commit fences hook tree changes and runs every commit hook (read-write: %s)", async (allowCommit) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.baseBranch = "main";
+    subject.baseRef = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    expect((await box.exec("git", ["commit", "-m", "new main content"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    await box.run("update-ref", "refs/remotes/origin/main", subject.lastPassedCommit);
+    fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
+    const hooks = path.join(box.repo, ".git", "hooks");
+    const marker = path.join(box.repo, "hook-order");
+    await box.run("config", "core.hooksPath", hooks);
+    for (const hook of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      fs.writeFileSync(path.join(hooks, hook), `#!/bin/sh\necho ${hook} >> hook-order\n`
+        + (hook === "pre-commit" ? `git restore --source=${subject.baseRef} --staged --worktree -- source.ts\n` : ""), { mode: 0o755 });
+    }
+    expect(await commitPipelineStage(subject, "audit", allowCommit, box.exec, ["report.md"], subject.lastPassedCommit))
+      .toMatchObject({ ok: false, deferred: true });
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
+    expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 2;");
+    expect(await box.run("show", ":source.ts")).toBe("export const value = 2;");
+    expect(fs.readFileSync(marker, "utf8")).toBe("pre-commit\nprepare-commit-msg\ncommit-msg\n");
+    expect(fs.existsSync(path.join(box.repo, ".git", "index.lock"))).toBe(false);
+    await box.run("restore", "--source=HEAD", "--worktree", "--", "source.ts");
+    fs.unlinkSync(marker);
+    fs.writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\necho pre-commit >> hook-order\n", { mode: 0o755 });
+    // The markers are hook evidence, rather than declared stage output.
+    fs.appendFileSync(path.join(box.repo, ".git", "info", "exclude"), "\nhook-order\n");
+    expect(await commitPipelineStage(subject, "audit", allowCommit, box.exec, ["report.md"], subject.lastPassedCommit))
+      .toMatchObject({ ok: true });
+    expect(fs.readFileSync(marker, "utf8")).toBe("pre-commit\nprepare-commit-msg\ncommit-msg\npost-commit\n");
+    expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 2;");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("controller commit refuses a branch movement while its immutable commit object is written", async () => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const concurrent = await box.exec("git", ["commit-tree", await box.run("rev-parse", "HEAD^{tree}"),
+      "-p", subject.lastPassedCommit, "-m", "concurrent writer"], box.repo, controllerCommitIdentityEnv());
+    expect(concurrent.code).toBe(0);
+    const moved = concurrent.stdout.trim();
+    fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
+    const exec: ExecPort = async (command, args, cwd, env) => {
+      if (args[0] === "commit-tree" || args[0] === "commit") await box.run("update-ref", "refs/heads/main", moved, subject.lastPassedCommit);
+      return box.exec(command, args, cwd, env);
+    };
+    expect(await commitPipelineStage(subject, "build", true, exec)).toMatchObject({ ok: false, deferred: true });
+    expect(await box.run("rev-parse", "HEAD")).toBe(moved);
+    expect(await box.run("show", ":report.md")).toBe("stage output");
+    expect(fs.readFileSync(path.join(box.repo, "report.md"), "utf8")).toBe("stage output\n");
+    expect(fs.existsSync(path.join(box.repo, ".git", "index.lock"))).toBe(false);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
@@ -2024,6 +2194,36 @@ test("stage reconciliation accepts squashed content, preserves the tree, and use
       .toBe(`${identity.GIT_AUTHOR_NAME}|${identity.GIT_AUTHOR_EMAIL}|${identity.GIT_COMMITTER_NAME}|${identity.GIT_COMMITTER_EMAIL}`);
     expect((await git(box.subject.worktreeDir, "status", "--porcelain"))).toBe("");
     expect((await box.originHead())).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["noreply", "no-reply", "forge-account", "forge-role"])("stage reconciliation preserves an admitted configured %s identity", async (role) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.branch = "main";
+    const base = await box.run("rev-parse", "HEAD");
+    const address = role === "forge-account" ? ["fixture-tool", "users.noreply.github.com"].join("@")
+      : role === "forge-role" ? ["support", "github.com"].join("@") : [role, "example.invalid"].join("@");
+    const configured = { GIT_AUTHOR_NAME: "Fixture Builder", GIT_AUTHOR_EMAIL: address,
+      GIT_COMMITTER_NAME: "Fixture Publisher", GIT_COMMITTER_EMAIL: address };
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    expect((await box.exec("git", ["commit", "-m", "configured machine work"], box.repo, configured)).code).toBe(0);
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const publication = () => box.exec(process.execPath, [path.resolve("scripts/privacy-publication-gate.ts"),
+      "--repository", box.repo, "--base", base, "--check-commits"], box.repo);
+    expect((await publication()).code).toBe(0);
+    await box.run("reset", "--soft", base);
+    expect((await box.exec("git", ["commit", "-m", "equivalent controller work"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const head = await box.run("rev-parse", "HEAD");
+    const tree = await box.run("rev-parse", "HEAD^{tree}");
+
+    expect(await reconcilePipelineStageHead(subject, head, box.exec)).toMatchObject({ ok: true });
+    expect(await box.run("rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect((await box.exec("git", ["merge-base", "--is-ancestor", subject.lastPassedCommit, "HEAD"], box.repo)).code).toBe(0);
+    expect(await box.run("show", "-s", "--format=%an|%ae|%cn|%ce", subject.lastPassedCommit))
+      .toBe(Object.values(configured).join("|"));
+    expect((await publication()).code).toBe(0);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 

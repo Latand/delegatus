@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
+import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
+import { mailboxPattern } from "@/lib/privacy/mailbox";
+import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
@@ -677,6 +681,91 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
+/** Keep the shared index under Git's own lock convention while hooks
+    inspect a private index. Commit-tree consumes the verified tree and parent
+    directly; update-ref compares the parent atomically. No second index read
+    by porcelain can turn a validated stage into an unverified revert. */
+async function commitStageTree(pipeline: Pipeline, parent: string, tree: string, messages: string[], exec: ExecPort,
+  outputPaths?: readonly string[]): Promise<PipelineGitResult> {
+  const cwd = pipeline.worktreeDir;
+  const locations = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], cwd);
+  if (locations.code !== 0) return failure("locating stage index custody", locations);
+  const index = locations.stdout.trim();
+  if (!index || !path.isAbsolute(index)) return { ok: false, error: "stage index custody paths could not be verified" };
+  let lock: { file: string; fd: number; ino: number; dev: number } | undefined;
+  let scratch: string | undefined;
+  const changed = (): PipelineGitResult => ({ ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" });
+  try {
+    const file = `${index}.lock`;
+    const fd = fs.openSync(file, "wx", 0o600);
+    const { ino, dev } = fs.fstatSync(fd);
+    lock = { file, fd, ino, dev };
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-commit-"));
+    const privateIndex = path.join(scratch, "index");
+    fs.copyFileSync(index, privateIndex);
+    const env = pipelineLiteralGitEnv({ ...controllerCommitIdentityEnv(), GIT_INDEX_FILE: privateIndex, GIT_EDITOR: ":" });
+    const pinned = await exec("git", ["write-tree"], cwd, env);
+    const current = await exec("git", ["rev-parse", "HEAD"], cwd);
+    if (pinned.code !== 0 || current.code !== 0) return failure("rechecking stage index custody", pinned.code !== 0 ? pinned : current);
+    if (pinned.stdout.trim() !== tree || current.stdout.trim() !== parent) return changed();
+    const branch = await exec("git", ["symbolic-ref", "HEAD"], cwd);
+    if (branch.code !== 0 || !branch.stdout.trim().startsWith("refs/heads/")) return failure("pinning the stage commit branch", branch);
+    if (outputPaths) {
+      const changedPaths = await exec("git", ["diff", "--name-only", "--no-renames", "-z", parent, tree, "--"], cwd, env);
+      if (changedPaths.code !== 0) return failure("verifying the stage commit output tree", changedPaths);
+      const paths = changedPaths.stdout.split("\0").filter(Boolean);
+      if (paths.length !== outputPaths.length || paths.some((file) => !outputPaths.includes(file))) {
+        return { ok: false, error: "the stage commit tree differs from its declared output paths; preserve the index and worktree" };
+      }
+    }
+    const message = path.join(scratch, "COMMIT_EDITMSG");
+    fs.writeFileSync(message, `${messages.join("\n\n")}\n`);
+    // These are the hooks git commit -m runs, in its order. A refusal retains
+    // its diagnostic so the existing stage repair path can act on it.
+    for (const args of [
+      ["hook", "run", "--ignore-missing", "pre-commit"],
+      ["hook", "run", "--ignore-missing", "prepare-commit-msg", "--", message, "message"],
+      ["hook", "run", "--ignore-missing", "commit-msg", "--", message],
+    ]) {
+      const hook = await exec("git", args, cwd, env);
+      if (hook.code !== 0) return failure("committing the passed stage", hook);
+    }
+    const hookTree = await exec("git", ["write-tree"], cwd, env);
+    if (hookTree.code !== 0) return failure("verifying the stage commit hooks", hookTree);
+    if (hookTree.stdout.trim() !== tree) return changed();
+    const signing = await exec("git", ["config", "--bool", "--get", "commit.gpgSign"], cwd);
+    if (signing.code !== 0 && signing.code !== 1) return failure("reading stage commit signing policy", signing);
+    const commit = await exec("git", ["commit-tree", tree, "-p", parent, "-F", message,
+      ...(signing.stdout.trim() === "true" ? ["-S"] : [])], cwd, env);
+    if (commit.code !== 0) return failure("committing the passed stage", commit);
+    const sha = commit.stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(sha)) return { ok: false, error: "the stage commit object could not be verified" };
+    const publish = await exec("git", ["update-ref", "-m", messages[0], branch.stdout.trim(), sha, parent], cwd, env);
+    if (publish.code !== 0) {
+      const current = await exec("git", ["rev-parse", "HEAD"], cwd);
+      if (current.code === 0 && current.stdout.trim() !== parent) return changed();
+      return failure("committing the passed stage", publish);
+    }
+    // Git does not let a post-commit hook undo a successful commit.
+    await exec("git", ["hook", "run", "--ignore-missing", "post-commit"], cwd, env);
+    return { ok: true, sha };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return { ok: false, deferred: true, error: "stage index custody is held by another Git writer; retrying later" };
+    return { ok: false, error: "stage index custody could not be acquired; preserve the index and worktree" };
+  } finally {
+    if (lock) {
+      // Release only the inode acquired here, even if an external recovery
+      // replaced the path while we awaited a hook or Git command.
+      try {
+        const current = fs.lstatSync(lock.file);
+        if (current.ino === lock.ino && current.dev === lock.dev) fs.unlinkSync(lock.file);
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      finally { fs.closeSync(lock.fd); }
+    }
+    if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 export async function commitPipelineStage(
   pipeline: Pipeline,
   stageId: string,
@@ -738,45 +827,39 @@ export async function commitPipelineStage(
   }
   const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
   if (unstage) return unstage;
-  let custodyTree: string | undefined;
-  if (allowCommit && /^[0-9a-f]{40}$/i.test(pipeline.baseRef)) {
-    const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
-    if (tree.code !== 0 || !/^[0-9a-f]{40}$/i.test(tree.stdout.trim())) return failure("pinning stage index custody", tree);
-    custodyTree = tree.stdout.trim();
+  const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
+  if (tree.code !== 0 || !/^[0-9a-f]{40}$/i.test(tree.stdout.trim())) return failure("pinning stage index custody", tree);
+  const custodyTree = tree.stdout.trim();
+  if (/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) {
     const stale = await staleStageIndex(pipeline, sha, exec);
     if (stale) return stale;
   }
   let receipt: StageCommitReceipt | undefined;
   if (!allowCommit && receiptFile && protectedHead && /^[0-9a-f]{40}$/.test(protectedHead)) {
-    const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
-    if (tree.code !== 0 || !/^[0-9a-f]{40}$/.test(tree.stdout.trim())) return failure("recording the stage commit tree", tree);
-    receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: tree.stdout.trim(), paths: changedOutputPaths };
+    receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
     writeJsonDurably(receiptFile, receipt);
   }
-  if (custodyTree) {
-    const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
-    const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
-    if (head.code !== 0 || tree.code !== 0) return failure("rechecking stage index custody", head.code !== 0 ? head : tree);
-    if (head.stdout.trim() !== sha || tree.stdout.trim() !== custodyTree) {
-      return { ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" };
-    }
+  const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+  const recheckedTree = await exec("git", ["write-tree"], pipeline.worktreeDir);
+  if (head.code !== 0 || recheckedTree.code !== 0) return failure("rechecking stage index custody", head.code !== 0 ? head : recheckedTree);
+  if (head.stdout.trim() !== sha || recheckedTree.stdout.trim() !== custodyTree) {
+    return { ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" };
   }
-  const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
-    ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
-  if (commit.code !== 0) {
-    return { ...failure("committing the passed stage", commit),
+  const commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
+    ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths);
+  if (!commit.ok) {
+    if (commit.deferred) return commit;
+    return { ...commit,
       commitRefusal: await stageCommitRefusal(allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
   }
-  const head = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
-  if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);
   if (receipt && receiptFile) {
-    return await recoverStageCommit(receiptFile, receipt.parent, head.stdout.trim(), declaredOutputs, exec, pipeline.worktreeDir)
+    return await recoverStageCommit(receiptFile, receipt.parent, commit.sha, declaredOutputs, exec, pipeline.worktreeDir)
       ?? { ok: false, error: "the stage commit differs from its durable ownership receipt; preserve the checkout and receipt" };
   }
   if (!allowCommit) {
     const committed = (await exec(
       "git",
-      ["diff", "--name-only", "--no-renames", "-z", initialHead.stdout.trim(), head.stdout.trim(), "--", ...declaredOutputs],
+      ["diff", "--name-only", "--no-renames", "-z", initialHead.stdout.trim(), commit.sha, "--", ...declaredOutputs],
       pipeline.worktreeDir,
     ));
     if (committed.code !== 0) return failure("verifying committed declared output paths", committed);
@@ -784,7 +867,7 @@ export async function commitPipelineStage(
     const missing = changedOutputPaths.find((candidate) => !committedPaths.has(candidate));
     if (missing) return { ok: false, error: `declared output ${missing} was not committed` };
   }
-  return { ok: true, sha: head.stdout.trim() };
+  return { ok: true, sha: commit.sha };
 }
 
 async function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string): Promise<PipelineGitResult | null> {
@@ -1050,10 +1133,40 @@ export async function mapReplayPatchLocation(
   return location.start + delta;
 }
 
+/** Admit the literal attribution mailboxes the publication boundary allows.
+    Names also pass the publication detectors and the trusted fingerprint
+    catalog: a role mailbox alone cannot make a private name publishable. */
+function admittedPublicationIdentity(name: string, email: string, field: "author" | "committer", parentCount: number): boolean {
+  if (!name.trim() || /[\x00-\x1f\x7f]/.test(name)) return false;
+  const mailbox = /^([a-z0-9.!#$%&'*+/=?^_`{|}~-]+)@((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63})$/i.exec(email);
+  if (!mailbox) return false;
+  const local = mailbox[1].toLowerCase(), domain = mailbox[2].toLowerCase();
+  if (local !== "noreply" && local !== "no-reply" && domain !== "users.noreply.github.com"
+    && !(local === "support" && domain === "github.com")) return false;
+  // The forge's committer mailbox needs the same merge-graph proof as the
+  // publication gate. An author's forge account remains independently read.
+  if (local === "noreply" && domain === "github.com" && field === "committer" && parentCount < 2) return false;
+  const decoded = canonicalSensitiveText(`${name} ${email}`, true);
+  if (decoded.error) return false;
+  const normalized = decoded.text.normalize("NFKC").toLocaleLowerCase("en-US");
+  const decodedName = canonicalSensitiveText(name, true);
+  if (decodedName.error || mailboxPattern(true).test(decodedName.text)) return false;
+  const findings = staticSensitiveClasses(normalized);
+  if (findings.has("credential") || findings.has("home_path")) return false;
+  const compact = compactSensitiveText(normalized);
+  for (const fingerprint of publicationFingerprints.fingerprints) {
+    const text = "exactOnly" in fingerprint && fingerprint.exactOnly ? normalized : compact;
+    for (let offset = 0; offset + fingerprint.length <= text.length; offset++) {
+      if (crypto.createHash("sha256").update(text.slice(offset, offset + fingerprint.length)).digest("hex") === fingerprint.sha256) return false;
+    }
+  }
+  return true;
+}
+
 /** Retained patch history admits subsequent builder edits just as ordinary
     ancestry does. Merge commits have no cherry patch-id; unique merge content
     therefore needs the controlled tree proof. Record the builder's unchanged
-    tree with both parents only when restored identities are canonical. A clean
+    tree with both parents only when restored identities are admitted. A clean
     recommit must never regain a rejected identity through its second parent.
     Then CAS the ref; delivery still owns publication. */
 export async function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort,
@@ -1067,19 +1180,18 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   if (!local.ok) return local;
   if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
   // Check every commit this parent would reintroduce, including an unsafe
-  // ancestor behind a canonical accepted tip. Unknown identities are refused
+  // ancestor behind an admitted accepted tip. Unknown identities are refused
   // conservatively; values and partial metadata reads never enter the reason.
-  const restored = await exec("git", ["log", "--no-use-mailmap", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce", `${head}..${accepted}`], pipeline.worktreeDir);
+  const restored = await exec("git", ["log", "--no-use-mailmap", "--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce", `${head}..${accepted}`], pipeline.worktreeDir);
   const unreadableIdentity = { ok: false as const, error: "accepted commit identities could not be verified; history reconciliation refused (values withheld)" };
   if (restored.code !== 0) return unreadableIdentity;
-  const identity = controllerCommitIdentityEnv();
-  const canonical = [identity.GIT_AUTHOR_NAME, identity.GIT_AUTHOR_EMAIL, identity.GIT_COMMITTER_NAME, identity.GIT_COMMITTER_EMAIL];
   for (const line of restored.stdout.split("\n").filter(Boolean)) {
-    const [commit, ...fields] = line.split("\0");
-    if (!/^[0-9a-f]{40}$/.test(commit) || fields.length !== canonical.length) return unreadableIdentity;
-    const refused = fields.findIndex((value, index) => value !== canonical[index]);
-    if (refused !== -1) return { ok: false,
-      error: `history reconciliation refused to restore ${commit.slice(0, 12)} ${refused < 2 ? "author" : "committer"} identity; restored commits must use the canonical no-reply machine identity (values withheld)` };
+    const [commit, parents, ...fields] = line.split("\0");
+    if (!/^[0-9a-f]{40}$/.test(commit) || !/^(?:[0-9a-f]{40}(?: [0-9a-f]{40})*)?$/.test(parents) || fields.length !== 4) return unreadableIdentity;
+    for (const offset of [0, 2]) {
+      if (!admittedPublicationIdentity(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0)) return { ok: false,
+        error: `history reconciliation refused to restore ${commit.slice(0, 12)} ${offset === 0 ? "author" : "committer"} identity; restored commits require publication-safe attribution (values withheld)` };
+    }
   }
   const branch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
   if (branch.code !== 0) return failure("pinning the reconciliation branch", branch);
