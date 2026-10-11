@@ -17,7 +17,8 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
-import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 
 import {
   claudeCliAuthStatus,
@@ -46,6 +47,28 @@ import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
    configuration pinned for it because it no longer inherits XDG_CONFIG_HOME.
    Built from the same inputs the boundary uses, never from its code. */
+test("fresh and resumed Claude carry learned rules once in the append channel", async () => {
+  clearTelegramConnection();
+  for (const resume of [false, true]) for (const cleanMemory of [false, true]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-rule-channel-"));
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const options = {
+      cwd: directory, appendSystemPrompt: "Synthetic rules kept in the engine instruction channel.",
+      cleanMemory, mcpServers: ["viewer", "telegram"], eventStore: new MemoryEventStore(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+    };
+    const host = resume ? await ClaudeStreamBrokerHost.adopt(crypto.randomUUID(), options) : await ClaudeStreamBrokerHost.start(options);
+    try {
+      expect(captured.args!.filter(arg => arg === "--append-system-prompt")).toHaveLength(1);
+      expect(captured.args![captured.args!.indexOf("--append-system-prompt") + 1]).toBe(
+        cleanMemory ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : `${options.appendSystemPrompt}\n\n${TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE}`,
+      );
+      expect(captured.args).not.toContain("--system-prompt");
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
 function agentSandboxEnv(home?: string): Record<string, string> {
   const key = home ? path.basename(home) : "default";
   const config = path.join(os.tmpdir(), "llv-spawn-sandbox", key, "config");

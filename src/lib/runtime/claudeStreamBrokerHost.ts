@@ -245,6 +245,7 @@ export interface ClaudeStreamBrokerHostOptions {
   allowSubagents?: boolean;
   /** No automatic memory: no shared-memory hook and Claude's auto memory off. */
   cleanMemory?: boolean;
+  appendSystemPrompt?: string;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   mcpStatePath?: string;
@@ -861,7 +862,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (options.model) args.push("--model", options.model);
     if (options.effort) args.push("--effort", options.effort);
     if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
-    if (telegram.unavailable) args.push("--append-system-prompt", TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+    const appended = [options.cleanMemory ? "" : options.appendSystemPrompt, telegram.unavailable ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : ""].filter(Boolean).join("\n\n");
+    if (appended) args.push("--append-system-prompt", appended);
     if (options.tools) args.push("--tools", options.tools.join(","));
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
       spawn(command, childArgs, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));

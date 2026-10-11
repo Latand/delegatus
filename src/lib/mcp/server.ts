@@ -32,8 +32,7 @@ import {
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
-import { lessonTextLength, MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
-import { LESSON_MATCH_MIN_CHARS } from "@/lib/memory/roleConsolidate";
+import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -3327,10 +3326,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
   ].join(" "),
   leave_lesson: [
-    "Leave what this pipeline stage taught you as learned rules (role memory) for the agents who come after you; the answer to an accepted stage_report asks for it.",
-    "Give one to three lessons, each an abstract rule (a class of mistake or situation and what to do about it) with a one-line why and a scope: role (the next agent of your role on this project, or of the role you name), project (every role on this project) or machine (every project on this machine). Or give none with one line saying why.",
-    "The server resolves the calling conversation to its own attempt and records every piece of provenance itself. Reviewers, verifiers, the issue reporter and review-gate stages leave no lessons, and no rule may be addressed to them. A project with learned rules switched off refuses the call.",
-    "Rules are kept on this machine only. Write no names of people, accounts, emails, tokens, ids or absolute paths; the answer names any such text it sees as a hint and stores the rule.",
+    "Answer the lesson request after stage_report exactly once with none (the default), rewrite {id, rule, why}, or lesson {scope, role?, rule, why}.",
+    "A new lesson must change what this role does on a different task and use the narrowest true level: own-role work here; every role in this project; or every role in every project on this machine. The curator alone widens role rules across projects.",
+    "Rewrite an active rule this stage reads, keeping its id and level and a reversible version. A lesson is active immediately. Task narration belongs only in the stage report: a fixed identifier check refuses it and stores nothing.",
+    "The server resolves the conversation's attempt. Clean roles and review gates leave no lessons. Every accepted answer consumes the request; refusals leave it open. Why stays on the record and out of startup instructions. Privacy detectors give hints; they do not refuse lessons.",
   ].join(" "),
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
@@ -3884,14 +3883,19 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   leave_lesson: z.object({
     clientRequestId: clientRequestIdSchema,
-    lessons: z.array(z.object({
-      scope: z.enum(["role", "project", "machine"]).describe("role: the next agent of a role on this project (yours unless role names another); project: every role on this project; machine: every project on this machine."),
-      role: z.enum(ROLE_IDS).optional().describe("With scope role only: the role the rule is for, when another role would have prevented or caught the problem earlier."),
-      rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS).describe(`One or two imperative sentences, true beyond this task: a class of mistake or situation and what to do about it. ${RULE_MIN_CHARS}–${RULE_MAX_CHARS} characters.`),
-      why: lessonTextSchema(1, WHY_MAX_CHARS).describe(`One line: what went wrong here, or what it cost. At most ${WHY_MAX_CHARS} characters; at least ${LESSON_MATCH_MIN_CHARS} letters or digits, as the rule needs too.`),
-    })).max(MAX_LESSONS_PER_ATTEMPT).optional(),
-    none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe(`When this stage taught nothing new: one line saying why, at most ${WHY_MAX_CHARS} characters.`),
-  }),
+    lesson: z.object({
+      scope: z.enum(["role", "project", "machine"]).describe("The narrowest true level: this role here, every role here, or every role in every project."),
+      role: z.enum(ROLE_IDS).optional().describe("With scope role only: another role that acts on this rule."),
+      rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS).describe("An imperative rule useful on a different task; no task identifiers."),
+      why: lessonTextSchema(1, WHY_MAX_CHARS).describe("One line of provenance, kept out of startup instructions; at least 16 letters or digits."),
+    }).strict().optional(),
+    rewrite: z.object({
+      id: z.string().trim().min(1).max(128).describe("An active rule this stage reads; its id and scope stay."),
+      rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS),
+      why: lessonTextSchema(1, WHY_MAX_CHARS),
+    }).strict().optional(),
+    none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe("Default: existing guidance covers the stage; one line saying why."),
+  }).strict().refine(args => [args.none, args.rewrite, args.lesson].filter(value => value !== undefined).length === 1, "give exactly one of none, rewrite or lesson"),
   link_task_to_pipeline: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
