@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { decodeHTML } from "entities";
 import { TelegramBotService, productionTelegramBotDependencies } from "@/lib/telegram/bot/service";
 import { TelegramBotStore } from "@/lib/telegram/bot/store";
 import { FakeBotTransport, fakeBotToken, ok } from "@/lib/telegram/bot/fakeTransport";
@@ -22,7 +23,6 @@ import { relayCall } from "./client";
 test("owner private loop captures real claim, Telegram publish, copied answer and completion", async () => {
   const round = telegramRound("owner-private");
   saveTasks([telegramTask([round])]);
-  const copied = prototypeCopyLine(round, 2);
   const wire: Record<string, unknown> = { claim: null, publish: null, copied_answer: null, completion: null };
   let claimed: ExternalRelayRequest | undefined;
   let completeCount = 0, publishes = 0;
@@ -67,18 +67,24 @@ test("owner private loop captures real claim, Telegram publish, copied answer an
     transport.script("sendRichMessage", ok({ message_id: 17, date: 1791724800, chat: { id: 41 } }));
     const rich = renderPrototypeTelegram(round, [], "Review layout");
     await service.sendRichMessage({ chat: "owner-chat", clientRequestId: round.id, message: rich });
+    const sentMarkdown = (transport.callsOf("sendRichMessage")[0]!.params.rich_message as { markdown: string }).markdown;
+    const copyButton = sentMarkdown.match(/<tg-button type="copy_text"[^>]* text="([^"]*)">Варіант 2<\/tg-button>/);
+    expect(copyButton).not.toBeNull();
+    const copied = decodeHTML(copyButton![1]!);
+    expect(copied).toBe(prototypeCopyLine(round, 2));
     expect(await published).toBe("published");
     expect((wire.publish as { text: string }).text).toBe(rich.plainText!);
     expect((wire.publish as { text: string }).text).not.toContain("<tg-");
     await service.sendRichMessage({ chat: "owner-chat", clientRequestId: round.id, message: rich });
     expect(publishes).toBe(1);
     wire.copied_answer = copied;
-    const request: ExternalRelayRequest = requestSchema.parse({ ...sampleRequest, request_id: "owner_private", chat: { key: "private_chat" },
+    const request: ExternalRelayRequest = requestSchema.parse({ ...sampleRequest, request_id: "owner_private", chat: { key: "private_chat_fixture" },
       answer: { max_chars: 4000, progress: "notes" }, input: { ...sampleRequest.input,
         requester: { key: "owner", is_owner: true, is_admin: false, is_anonymous_admin: false, can_restrict_members: false, can_delete_messages: false },
         tools: [{ name: "owner_get_clone", summary: "Owner read", mode: "handoff" }],
         conversation: [{ id: "m_review", author: { key: "bot", name: "Clone", self: true }, sent_at: (wire.publish as { sent_at: string }).sent_at, text: rich.plainText!, reply_to: null },
           { id: "m_answer", author: { key: "owner", name: "Owner", self: false }, sent_at: "2026-10-11T13:21:00Z", text: copied, reply_to: "m_review" }], respond_to: "m_answer" } });
+    expect(request.chat).toEqual({ key: "private_chat_fixture" });
     expect(ownerTierFor(paired.targets[0]!, request)?.text).toBe(copied);
     expect(callableTools(request)).toEqual([]);
     const loop = createToolLoop(paired, request, { signal: new AbortController().signal, lose: () => {}, ack: async () => true });
