@@ -44,6 +44,9 @@ test("fresh and resumed terminal launches deny all native agent routes and futur
     for (const spec of [freshSpecFor("codex", SANDBOX, { codexHome: home, allowSubagents: allowed }), resumeSpecFor("codex-sessions", transcript, { allowSubagents: allowed })]) {
       expect(spec?.command).toContain("--no-daemon");
       expect(spec?.command).toContain(`agents.enabled=${allowed}`);
+      expect(spec?.command).toContain("features.hooks=true");
+      expect(spec?.command).toContain("hooks.PreToolUse=");
+      expect(spec?.command).toContain("LLV_MANAGED_PROCESS_CLEANUP_DENY=1");
       expect(spec?.command.includes('approvals_reviewer="user"')).toBe(!allowed);
       for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) {
         const normalized = spec?.command.replace(/'/g, "");
@@ -688,7 +691,7 @@ test("legacy Claude fresh and resumed commands pin the same store as browser log
   }
 });
 
-test("allowSubagents leaves a managed Claude fresh spawn without the Viewer hook", () => {
+test("allowSubagents retains process cleanup on managed Claude fresh and resumed spawns", () => {
   const account = createManagedClaudeAccount("Claude Orchestrator");
 
   const fresh = freshSpecFor("claude", "/repo", {
@@ -701,7 +704,6 @@ test("allowSubagents leaves a managed Claude fresh spawn without the Viewer hook
     hooks: { PreToolUse: unknown[] };
   };
 
-  expect(settings.hooks.PreToolUse).toEqual([]);
   fs.mkdirSync(path.dirname(fresh.transcript!), { recursive: true });
   fs.writeFileSync(fresh.transcript!, JSON.stringify({ cwd: "/repo" }) + "\n");
   resumeSpecFor("claude-projects", fresh.transcript!, { allowSubagents: true });
@@ -709,7 +711,11 @@ test("allowSubagents leaves a managed Claude fresh spawn without the Viewer hook
     path.join(account.home, ".llv", "spawn-settings", `resume-${sid}.json`),
     "utf8",
   )) as { hooks: { PreToolUse: unknown[] } };
-  expect(resumedSettings.hooks.PreToolUse).toEqual([]);
+  for (const profile of [settings, resumedSettings]) {
+    expect(profile.hooks.PreToolUse).toEqual([{ matcher: "Bash", hooks: [{
+      type: "command", command: expect.stringContaining("LLV_MANAGED_PROCESS_CLEANUP_DENY=1 "),
+    }] }]);
+  }
 });
 
 test("deferred Claude policy planning leaves disk unchanged before route admission", () => {

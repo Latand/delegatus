@@ -600,6 +600,15 @@ export interface RuntimeHostDiagnostics {
       and an admitted one is refused rather than delivered as a steer. */
   injectCapability: "unknown" | "supported" | "unsupported";
   authRecovery: "unknown" | "started" | "completed-unverified";
+  protocol?: {
+    schemaVersion: string;
+    schemaDigest: string;
+    experimentalApi: boolean;
+    provider: { webSearch: boolean; imageGeneration: boolean } | null;
+    models: Array<{ id: string; inputModalities: string[] }>;
+    modelsTruncated?: boolean;
+    anomalies: number;
+  };
 }
 
 export interface RuntimeInjectionBinding {

@@ -176,6 +176,7 @@ class InjectAppServer extends EventEmitter {
     if (method === "model/list") {
       return this.respond(message.id, { data: [{ id: "gpt-6-astra", isDefault: true, inputModalities: ["text"] }] });
     }
+    if (method === "modelProvider/capabilities/read") return this.respond(message.id, { webSearch: false, imageGeneration: false });
     if (method === "config/read") return this.respond(message.id, { config: { mcp_servers: {}, developer_instructions: this.accountInstructions } });
     if (method === "thread/start" || method === "thread/resume") {
       return this.respond(message.id, { thread: { id: this.threadId, path: this.rolloutPath, turns: [] } });
@@ -215,6 +216,7 @@ class InjectAppServer extends EventEmitter {
 function startHost(server: InjectAppServer, options: Record<string, unknown> = {}, resume = false) {
   const launch = {
     cwd: "/repo",
+    readProtocolVersion: () => server.protocol,
     requestTimeoutMs: 500,
     injectObservationTimeoutMs: 400,
     eventStore: new MemoryEventStore(),
@@ -475,15 +477,10 @@ test("an engine without the method refuses explicitly and never falls back to st
   await host.release();
 });
 
-test("a host on a protocol without injection advertises no capability", async () => {
+test("an executable without a reviewed protocol is refused before spawning", async () => {
   const server = new InjectAppServer(scratchRoot(), INVENTED_THREAD_ID, "0.150.0");
-  const host = await startHost(server);
-  await Bun.sleep(10);
-
-  const health = await host.health();
-  expect(health.activeFlags).not.toContain("native-inject");
-  expect(health.diagnostics?.injectCapability).toBe("unsupported");
-  await host.release();
+  await expect(startHost(server)).rejects.toThrow("CLI 0.150.0 has no pinned schema");
+  expect(server.requests).toEqual([]);
 });
 
 test("a supporting host advertises the capability", async () => {
@@ -780,6 +777,7 @@ async function resumeGrantedThread(protocol: string) {
   const server = new InjectAppServer(scratchRoot(), INVENTED_THREAD_ID, protocol);
   const host = await CodexAppServerHost.adopt(server.threadId, {
     cwd: "/repo",
+    readProtocolVersion: () => server.protocol,
     requestTimeoutMs: 500,
     deliveryConfirmationTimeoutMs: 50,
     eventStore: new MemoryEventStore(),
@@ -804,7 +802,7 @@ async function resumeGrantedThread(protocol: string) {
 
 test("a resumed thread reads that Telegram is unavailable from its history, once, before the first turn of the run", async () => {
   clearTelegramConnection();
-  const run = await resumeGrantedThread("0.159.3");
+  const run = await resumeGrantedThread("0.159.0");
   /* A resumed thread sends the model only what changed since its last turn, so
      developer instructions given at resume never reach it. */
   expect(run.resume.developerInstructions).toBeUndefined();
@@ -816,12 +814,9 @@ test("a resumed thread reads that Telegram is unavailable from its history, once
   expect(run.mentions).toBe(1);
 });
 
-test("an engine that cannot take a history item is still told at resume that Telegram is unavailable", async () => {
+test("an unreviewed old engine cannot resume a thread through an assumed capability", async () => {
   clearTelegramConnection();
-  const run = await resumeGrantedThread("0.152.0");
-  expect(run.resume.developerInstructions).toBe(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
-  expect(run.injected).toEqual([]);
-  expect(run.mentions).toBe(1);
+  await expect(resumeGrantedThread("0.152.0")).rejects.toThrow("has no pinned schema");
 });
 
 test("a resumed thread whose Telegram is connected is told nothing", async () => {
@@ -829,7 +824,7 @@ test("a resumed thread whose Telegram is connected is told nothing", async () =>
   writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
     identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
   try {
-    const run = await resumeGrantedThread("0.159.3");
+    const run = await resumeGrantedThread("0.159.0");
     expect(run.methods).toContain("turn/start");
     expect(run.injected).toEqual([]);
     expect(run.mentions).toBe(0);

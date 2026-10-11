@@ -8,13 +8,19 @@ import pathlib
 import re
 import select
 import shlex
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import uuid
+
+
+CPU_SLICE = "delegatus.slice"
+CPU_WEIGHT = "1000"
 
 
 class Clock:
@@ -57,18 +63,70 @@ def ready(serving, target, placement=True):
 
 
 def run_switch(adapter, target, samples=21, interval=15, timeout=180):
+    # Keep termination deferred through recovery and the final cleanup, too.
+    with deferred_termination():
+        result = None
+        try:
+            result = observe_switch(adapter, target, samples, interval, timeout)
+        finally:
+            relocation = getattr(adapter, "relocation", None)
+            if relocation and relocation["stopSubmitted"]:
+                attempts = relocation["startAttempts"]
+                pending = None
+                # The detached worker owns the start until the same unit is
+                # active with no queued job. Each batch remains bounded; a
+                # refused final batch cannot discharge that obligation.
+                while True:
+                    try:
+                        adapter.recover_start(attempts=START_ATTEMPTS)
+                    except Exception as error:
+                        relocation["started"] = False
+                        relocation["outcome"] = "start-failed"
+                        diagnostic = "exit-recovery:" + type(error).__name__
+                        if diagnostic not in relocation["diagnostics"]:
+                            relocation["diagnostics"].append(diagnostic)
+                    if relocation["started"]:
+                        break
+                    pending = {"state": "pending", "ownerPid": os.getpid(), "unit": adapter.unit}
+                    # Report failure while recovery is outstanding, even if
+                    # observation raised or evidence publication itself fails.
+                    with contextlib.suppress(Exception):
+                        adapter.emit({**(result or {"serving": {}, "diagnostics": []}),
+                                      "verdict": "fail", "relocation": relocation, "recovery": pending})
+                    adapter.clock.sleep(5)
+                if pending:
+                    completed = {**pending, "state": "complete"}
+                    if result is not None:
+                        result["recovery"] = completed
+                    else:
+                        with contextlib.suppress(Exception):
+                            adapter.emit({"verdict": "fail", "target": target, "serving": {},
+                                          "diagnostics": ["exit-recovery:health-unverified"],
+                                          "relocation": relocation, "recovery": completed})
+                if result is not None and (pending or relocation["startAttempts"] != attempts):
+                    # The last health sample predates this recovery operation.
+                    result["verdict"] = "fail"
+                    result["diagnostics"].append("exit-recovery:health-unverified")
+        adapter.emit(result)
+        return result
+
+
+def observe_switch(adapter, target, samples, interval, timeout):
     old, hosts = adapter.preflight()
     started = utc()
     diagnostics = []
     serving = {}
     protected = []
+    relocation = None
     # Even a publication call which raises after its atomic rename owes samples.
     try:
         adapter.publish()
-        adapter.restart()
+        relocation = adapter.restart()
     except Exception as error:
         diagnostics.append(type(error).__name__)
     finally:
+        # A restart that raised after stopping still recorded what it did.
+        relocation = relocation or getattr(adapter, "relocation", None)
         for index in range(samples):
             if index:
                 adapter.clock.sleep(interval)
@@ -95,6 +153,8 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
             serving = {}
             def read_serving():
                 nonlocal serving
+                if relocation and relocation["stopSubmitted"]:
+                    adapter.recover_start()
                 serving = adapter.serving()
                 if not ready(serving, target):
                     raise RuntimeError("replacement not ready")
@@ -123,9 +183,8 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
     verdict = "fail" if not healthy or "lost" in outcomes else "needs_decision" if unknown else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
               "protected": protected, "interrupted": interrupted,
-              "interruptedUnreadable": unreadable, "diagnostics": diagnostics}
+              "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
     adapter.last_result = result
-    adapter.emit(result)
     return result
 
 
@@ -361,6 +420,58 @@ def read_process(entry, read=proc_field):
         return None
 
 
+def pidfd_signal(entry, signum, group, read=proc_field):
+    """Signals exactly one process. The descriptor is opened first and the
+    start identity and cgroup are read through /proc afterwards, so a PID
+    reused before the open fails the identity check and one reused after it
+    cannot be reached through the descriptor. False means the PID no longer
+    names that process in that cgroup; nothing was signalled."""
+    pid = entry["pid"]
+    try:
+        descriptor = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return False
+    try:
+        if (start_identity(read(pid, "stat")) != entry["startIdentity"]
+                or not within(kernel_cgroup(read(pid, "cgroup")), group)):
+            return False
+        signal.pidfd_send_signal(descriptor, signum)
+        return True
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    finally:
+        os.close(descriptor)
+
+
+@contextlib.contextmanager
+def deferred_termination():
+    """Holds SIGTERM, SIGHUP and SIGINT while the service may be stopped, so stopping
+    the worker's own unit cannot cut between the stop and the start. A held
+    signal is delivered once the start has run. SIGKILL cannot be held."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    held = []
+    previous = {signum: signal.signal(signum, lambda number, frame: held.append(number))
+                for signum in [signal.SIGTERM, signal.SIGHUP, signal.SIGINT]}
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+        for signum in dict.fromkeys(held):
+            os.kill(os.getpid(), signum)
+
+
+# The relocation's bounds. Release waits for the launcher to retire its
+# generation (three seconds, then terminate and kill) and for systemd to prune
+# the emptied cgroup; each signal round waits for its survivors to exit.
+RELEASE_WAIT = 30
+SIGNAL_WAIT = 5
+STOP_SETTLE = 300
+START_ATTEMPTS = 3
+
+
 class LeftoverProcesses(RuntimeError):
     """The service cgroup holds processes that are neither agents nor the
     serving generation. KillMode=process spares them at the restart, and while
@@ -390,6 +501,10 @@ def systemd_properties(output):
 
 def parent_pid(stat):
     return int(stat[stat.rfind(")") + 2:].split()[1])
+
+
+def process_group(stat):
+    return int(stat[stat.rfind(")") + 2:].split()[2])
 
 
 def kernel_cgroup(text):
@@ -587,10 +702,14 @@ class Checkout:
 
     def __init__(self, config, run_id=None, *, process_read=proc_field, http=http_read,
                  runtime=socket_health, execute=command, clock=None, mcp_factory=Mcp,
-                 cgroup_root="/sys/fs/cgroup"):
+                 cgroup_root="/sys/fs/cgroup", signal_process=pidfd_signal):
         self.clock = clock or Clock()
+        self.signal_process = signal_process
+        self.relocation = None
         self.cgroup_root = pathlib.Path(cgroup_root)
         self.agents = {}
+        self.retirement_roots = {}
+        self.viewer_group = None
         self.leftovers_found = []
         self.process_read, self.http, self.runtime, self.command = process_read, http, runtime, execute
         self.config_file = pathlib.Path(config).resolve()
@@ -694,16 +813,18 @@ class Checkout:
         return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
 
     def placement(self):
-        """The slice the unit configures and the cgroup it actually runs in.
+        """Observed configuration and cgroup, against the required CPU slice.
         A missing value is unreadable, never a match."""
-        unit = systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "Slice", "-p", "ControlGroup"]))
+        unit = systemd_properties(self.command(["systemctl", "--user", "show", self.unit,
+                                                "-p", "Slice", "-p", "ControlGroup", "-p", "CPUWeight"]))
         configured, actual = unit.get("Slice"), unit.get("ControlGroup")
         if not configured or not actual:
             raise RuntimeError("service placement unreadable")
-        parent = systemd_properties(self.command(["systemctl", "--user", "show", configured, "-p", "ControlGroup"])).get("ControlGroup")
-        if not parent:
+        parent = systemd_properties(self.command(["systemctl", "--user", "show", CPU_SLICE, "-p", "ControlGroup"])).get("ControlGroup")
+        if not parent or not parent.endswith("/" + CPU_SLICE):
             raise RuntimeError("slice placement unreadable")
-        return {"slice": configured, "expected": parent.rstrip("/") + "/" + self.unit, "actual": actual}
+        return {"slice": configured, "expected": parent.rstrip("/") + "/" + self.unit, "actual": actual,
+                "weight": unit.get("CPUWeight")}
 
     def members(self, group):
         """Every PID in the cgroup subtree. A subtree that cannot be read whole
@@ -843,14 +964,278 @@ class Checkout:
                                   "checkoutHead": self.plan["checkoutHead"], "publishedAt": utc()})
         self.emit({"published": self.target})
 
+    def active_state(self):
+        return systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "ActiveState"])).get("ActiveState")
+
+    def generation(self, group):
+        """The serving generation's members of the service cgroup, read
+        immediately before the stop: the recorded launcher, Viewer and runtime
+        host, the launcher's verified ancestors up to MainPID, and helpers
+        in the Viewer's process group. Detached descendants are never admitted
+        by ancestry alone: a runtime host may have just started an agent.
+        Each is held as PID and start identity; only these, and processes
+        whose parents still reach them, can later be proven leftovers."""
+        record = json.loads(self.record_file.read_text())
+        rows = complete_activity(self.mcp.call("agent_activity", {"liveOnly": True, "compact": False, "limit": 200}))
+        for row in rows:
+            host = row.get("host") or {}
+            if host.get("state") == "alive" and isinstance(host.get("pid"), int):
+                proc = self.process({"pid": host["pid"]})
+                if proc:
+                    self.agents[host["pid"]] = proc["startIdentity"]
+        owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
+        for key in ["launcher", "web", "runtimeHost"]:
+            owners[record[key]["pid"]] = ("current", record[key].get("startIdentity"))
+        try:
+            ancestors = self.launcher_ancestors(record, group)
+        except Exception:
+            ancestors = {}
+        self.retirement_roots = {record[key]["pid"]: record[key].get("startIdentity")
+                                 for key in ["launcher", "web", "runtimeHost"]}
+        self.retirement_roots.update({pid: link[0] for pid, link in ancestors.items()})
+        viewer = record["web"]
+        viewer_stat = self.process_read(viewer["pid"], "stat")
+        self.viewer_group = viewer["pid"] if (start_identity(viewer_stat) == viewer.get("startIdentity")
+                                               and process_group(viewer_stat) == viewer["pid"]) else None
+        captured = {}
+        for pid in self.members(group):
+            try:
+                stat = self.process_read(pid, "stat")
+                identity = start_identity(stat)
+                if self.agents.get(pid) == identity:
+                    continue
+                if (self.retirement_roots.get(pid) == identity
+                        or (self.viewer_group is not None and process_group(stat) == self.viewer_group
+                            and self.owner(pid, owners) == "current")):
+                    captured[pid] = identity
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+        return captured
+
+    def group_state(self, group):
+        """Whether the old cgroup path holds no process, and whether it is
+        released: its directory is gone, or systemd no longer names it."""
+        root = self.cgroup_root / group.lstrip("/")
+        if not root.is_dir():
+            return {"empty": True, "released": True}
+        try:
+            empty = not self.members(group)
+        except RuntimeError:
+            if root.is_dir():
+                raise
+            return {"empty": True, "released": True}
+        named = systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "ControlGroup"])).get("ControlGroup")
+        if named is None:
+            raise RuntimeError("old cgroup release unreadable")
+        return {"empty": empty, "released": not root.is_dir() or named != group}
+
+    def await_release(self, group, bound):
+        """Polls until the old cgroup is empty and released, within bound."""
+        deadline = self.clock.now() + bound
+        while True:
+            try:
+                state = self.group_state(group)
+                if state["empty"] and state["released"]:
+                    return True
+            except Exception:
+                pass
+            if self.clock.now() >= deadline:
+                return False
+            self.clock.sleep(min(1, deadline - self.clock.now()))
+
+    def survivors(self, group, captured):
+        """Every process still in the old cgroup, with the evidence that does
+        or does not tie it to the stopped generation. A survivor is proven
+        when it, or a parent its chain still reaches, is a captured member
+        with the same start identity. A chain that reaches an agent host, the
+        user manager or a process that has exited proves nothing."""
+        try:
+            pids = self.members(group)
+        except RuntimeError:
+            if (self.cgroup_root / group.lstrip("/")).is_dir():
+                raise
+            pids = []
+        found = []
+        for pid in pids:
+            stat, identity, args = None, None, []
+            try:
+                stat = self.process_read(pid, "stat")
+                identity = start_identity(stat)
+                args = self.process_read(pid, "cmdline").decode().split("\0")
+                proven, reason = self.proof(pid, stat, captured)
+                if start_identity(self.process_read(pid, "stat")) != identity:
+                    proven, reason = False, "identity changed while read"
+            except (FileNotFoundError, ProcessLookupError):
+                if self.process({"pid": pid}) is None:
+                    continue
+                proven, reason = False, "parent chain unreadable"
+            found.append({"pid": pid, "startIdentity": identity, "parentPid": parent_pid(stat) if stat else None,
+                          "args": [arg for arg in args if arg], "name": process_name(args),
+                          "proven": proven, "reason": reason})
+        return found
+
+    def proof(self, pid, stat, captured):
+        # Helpers stay in the Viewer's group; agents and their children lead
+        # detached groups. This remains evidence after a parent exits, and
+        # excludes agents admitted after the activity read.
+        if (self.retirement_roots.get(pid) != start_identity(stat)
+                and process_group(stat) != self.viewer_group):
+            owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
+            return False, "agent host or its descendant" if self.owner(pid, owners) == "agent" else "no captured owner"
+        current, seen = pid, set()
+        while current > 1 and current not in seen and len(seen) < 64:
+            seen.add(current)
+            link = stat if current == pid else self.process_read(current, "stat")
+            identity = start_identity(link)
+            if self.agents.get(current) == identity:
+                return False, "agent host or its descendant"
+            if captured.get(current) == identity:
+                return True, "captured serving generation" if current == pid else "descends from captured serving generation"
+            current = parent_pid(link)
+        return False, "no captured owner"
+
+    def lingering(self, survivor, group):
+        process = self.process({"pid": survivor["pid"], "startIdentity": survivor["startIdentity"]})
+        if process is None:
+            return False
+        try:
+            return within(kernel_cgroup(self.process_read(survivor["pid"], "cgroup")), group)
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+
+    def retire(self, proven, group):
+        """Terminates, then kills, the proven survivors, each by PID through a
+        descriptor validated against its start identity and cgroup."""
+        # Keep each survivor's proof after its parent is retired. The final
+        # pidfd read still requires its identity and Viewer process group.
+        captured = {**self.retirement_capture,
+                    **{entry["pid"]: entry["startIdentity"] for entry in proven}}
+        signalled = []
+        for signum in [signal.SIGTERM, signal.SIGKILL]:
+            alive = [survivor for survivor in proven if self.lingering(survivor, group)]
+            if not alive:
+                break
+            for survivor in alive:
+                with contextlib.suppress(Exception):
+                    def verified_read(pid, field):
+                        value = self.process_read(pid, field)
+                        if field == "stat" and pid == survivor["pid"] and not self.proof(pid, value, captured)[0]:
+                            raise RuntimeError("retirement ownership changed")
+                        return value
+                    if self.signal_process(survivor, signum, group, verified_read):
+                        signalled.append({"pid": survivor["pid"], "startIdentity": survivor["startIdentity"],
+                                          "signal": signal.Signals(signum).name})
+            deadline = self.clock.now() + SIGNAL_WAIT
+            while any(self.lingering(survivor, group) for survivor in alive) and self.clock.now() < deadline:
+                self.clock.sleep(min(0.2, deadline - self.clock.now()))
+        return signalled
+
+    def start(self, relocation, attempts=START_ATTEMPTS):
+        """Starts the unit, retrying a refused or failed start. Whatever the
+        relocation found, this always runs once a stop was submitted."""
+        for attempt in range(attempts):
+            if attempt:
+                self.clock.sleep(5)
+            try:
+                relocation["startAttempts"] += 1
+                self.command(["systemctl", "--user", "--no-block", "start", self.unit])
+                def settled():
+                    if self.jobs():
+                        raise RuntimeError("named start pending")
+                retry(settled, self.clock, STOP_SETTLE)
+                state = self.active_state()
+                if state == "active":
+                    relocation["started"] = True
+                    relocation["outcome"] = relocation["stopOutcome"]
+                    return
+            except Exception as error:
+                diagnostic = "start:" + type(error).__name__
+                if diagnostic not in relocation["diagnostics"]:
+                    relocation["diagnostics"].append(diagnostic)
+        relocation["started"] = False
+        relocation["outcome"] = "start-failed"
+
+    def recover_start(self, attempts=1):
+        relocation = self.relocation
+        try:
+            if not self.jobs() and self.active_state() == "active":
+                relocation["started"] = True
+                relocation["outcome"] = relocation["stopOutcome"]
+                return
+        except Exception:
+            pass
+        self.start(relocation, attempts)
+        with contextlib.suppress(Exception):
+            observed = self.placement()
+            relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
+            relocation["to"] = observed["actual"]
+
     def restart(self):
-        # Submission can time out while systemd continues its named job.
-        # No rollback or second restart is issued by this procedure.
-        self.command(["systemctl", "--user", "--no-block", "restart", self.unit])
-        def settled():
-            if self.jobs():
-                raise RuntimeError("named restart pending")
-        retry(settled, self.clock, 300)
+        """Stop, wait for the old cgroup to empty and be released, then start.
+        A plain restart cannot move the unit: systemd keeps a populated
+        cgroup's path and starts the replacement in it, so one old descendant
+        alive during the stop pins the service outside its configured slice
+        (2026-10-11). Submission can time out while systemd continues its
+        named job. No rollback or second switch is issued by this procedure,
+        and once the stop is submitted the start always follows."""
+        with deferred_termination():
+            return self.relocate()
+
+    def relocate(self):
+        group = self.placement()["actual"]
+        relocation = {"from": group, "stopSubmitted": False, "released": False, "survivors": [],
+                      "signalled": [], "started": False, "startAttempts": 0,
+                      "outcome": None, "placement": None, "diagnostics": []}
+        self.relocation = relocation
+        try:
+            try:
+                captured = self.generation(group)
+            except Exception as error:
+                # Without the capture no survivor can be proven, so none is signalled.
+                captured = {}
+                relocation["diagnostics"].append("generation:" + type(error).__name__)
+            relocation["captured"] = len(captured)
+            self.retirement_capture = captured
+            # Marked before submission: a submission that times out may still stop.
+            relocation["stopSubmitted"] = True
+            self.command(["systemctl", "--user", "--no-block", "stop", self.unit])
+            def stopped():
+                if self.jobs() or self.active_state() not in ["inactive", "failed"]:
+                    raise RuntimeError("named stop pending")
+            retry(stopped, self.clock, STOP_SETTLE)
+            if self.await_release(group, RELEASE_WAIT):
+                relocation["released"], relocation["outcome"] = True, "released"
+            else:
+                survivors = self.survivors(group, captured)
+                relocation["survivors"] = survivors
+                if any(not survivor["proven"] for survivor in survivors):
+                    # Signalling the proven ones could not release the path.
+                    relocation["outcome"] = "unproven-survivors"
+                elif not survivors:
+                    # Emptied since the bound passed, or systemd still names
+                    # the empty path it would reuse.
+                    relocation["released"] = self.await_release(group, 0)
+                    relocation["outcome"] = "released" if relocation["released"] else "not-released"
+                else:
+                    relocation["signalled"] = self.retire(survivors, group)
+                    relocation["released"] = self.await_release(group, RELEASE_WAIT)
+                    relocation["outcome"] = "released-after-retirement" if relocation["released"] else "not-released"
+        except Exception as error:
+            relocation["diagnostics"].append("relocation:" + type(error).__name__)
+            relocation["outcome"] = relocation["outcome"] or "stop-incomplete"
+        finally:
+            if relocation["stopSubmitted"]:
+                relocation["stopOutcome"] = relocation["outcome"]
+                self.start(relocation)
+            with contextlib.suppress(Exception):
+                observed = self.placement()
+                relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
+                relocation["to"] = observed["actual"]
+            with contextlib.suppress(Exception):
+                self.emit({"relocation": relocation})
+        if not relocation["started"]:
+            raise RuntimeError("named service start refused")
+        return relocation
 
     def stage(self, host):
         answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
@@ -935,13 +1320,21 @@ class Checkout:
         def placement():
             observed = self.placement()
             result["placement"] = observed
-            if observed["actual"] != observed["expected"]:
+            if observed["slice"] != CPU_SLICE or observed["actual"] != observed["expected"]:
                 with contextlib.suppress(Exception):
                     observed["leftovers"] = self.leftovers(observed["actual"])
-                raise RuntimeError("service runs outside its configured slice")
+                raise RuntimeError("required CPU slice not in effect")
             for key in ["launcher", "web", "runtimeHost"]:
                 if not within(kernel_cgroup(self.process_read(record[key]["pid"], "cgroup")), observed["actual"]):
                     raise RuntimeError("serving process outside the service cgroup")
+            # The unit accepts CPUWeight= even where its parent never enabled
+            # the cpu controller; only the kernel file says it is in effect.
+            try:
+                observed["effectiveWeight"] = (self.cgroup_root / observed["actual"].lstrip("/") / "cpu.weight").read_text().strip()
+            except OSError:
+                observed["effectiveWeight"] = None
+            if observed["weight"] != CPU_WEIGHT or observed["effectiveWeight"] != CPU_WEIGHT:
+                raise RuntimeError("required CPU weight not in effect")
         check("placement", placement)
         return result
 
@@ -961,10 +1354,21 @@ class Checkout:
             placement = event["serving"].get("placement")
             if placement and event["serving"].get("checks", {}).get("placement") is False:
                 serving += " placement=FAILED expected=" + placement["expected"] + " actual=" + placement["actual"]
+                serving += " Slice=" + placement["slice"] + "/" + CPU_SLICE
+                serving += " cpu.weight=" + str(placement.get("effectiveWeight")) + "/" + CPU_WEIGHT
+                serving += " CPUWeight=" + str(placement.get("weight"))
+            relocation = event.get("relocation")
+            if relocation:
+                serving += " relocation=" + str(relocation.get("outcome"))
+            recovery = event.get("recovery")
+            if recovery:
+                serving += " recovery=" + recovery["state"] + " ownerPid=" + str(recovery["ownerPid"])
             with open(self.run_dir / "switch.log", "a") as stream:
                 stream.write("Verdict: " + event["verdict"] + " " + serving + "\n")
             write_json(self.run_dir.parent / ("latest-" + self.install + ".json"),
-                       {"run": self.run_dir.name, "verdict": event["verdict"], "finishedAt": event["at"]})
+                       {"run": self.run_dir.name, "verdict": event["verdict"],
+                        ("observedAt" if recovery and recovery["state"] == "pending" else "finishedAt"): event["at"],
+                        **({"recovery": recovery} if recovery else {})})
 
 
 def main():

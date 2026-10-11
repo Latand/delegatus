@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
+import { installedCodexVersion } from "@/lib/accounts/codexPinnedProtocol";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import { CODEX_VIEWER_SPAWN_FEATURES } from "@/lib/agent/spawnPolicy";
 import { agentRegistry } from "@/lib/agent/registry";
@@ -97,6 +98,7 @@ export class CodexLiveProvider implements LiveProvider {
     try {
       const environment = codexVoiceEnvironment(account.home, this.options.environment ?? process.env);
       client = await CodexAppServerClient.start({ home: account.home, args: CODEX_VOICE_ARGS, requestTimeoutMs: this.options.startTimeoutMs ?? 20_000,
+        protocolProfile: "voice", readProtocolVersion: () => installedCodexVersion(codexAccountBinary(environment), environment),
         // The guardian owns group signalling and its bounded TERM escalation.
         // The generic client's KILL fallback must never kill that guardian.
         signalProcess: () => { throw new Error("lease owns signals"); },

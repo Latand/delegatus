@@ -28,6 +28,8 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   preservedLocalRef?: PreservedProvisionRef;
   /** The controller must retry this committing attempt after collecting fresh evidence. */
   deferred?: true;
+  /** The controller deadline expired before Git could commit; no file refusal. */
+  commitTimeout?: true;
   /** Set when Git or index validation refuses the proposed stage commit. */
   commitRefusal?: StageCommitRefusal;
 };
@@ -39,6 +41,9 @@ export type StageCommitRefusal = { paths: string[] };
 /** A spent commit retry may recover existing work, but cannot write another
     commit. The intent is flushed immediately before the hook can run. */
 export type StageCommitControl = { recoveryHead?: string; beforeCommit: (head: string) => void | Promise<void> };
+/** Repository hooks may take longer than ordinary Git probes. Expiry is
+    retried by the controller while retaining the passed verdict and index. */
+export const STAGE_COMMIT_TIMEOUT_MS = 15 * 60_000;
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
 async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
@@ -709,10 +714,13 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
   const marker = `Delegatus-Stage-Settlement: ${crypto.randomUUID()}`;
   await beforeCommit?.();
   const commit = await exec("git", ["commit", ...[...messages, marker].flatMap(message => ["-m", message])], cwd,
-    pipelineLiteralGitEnv(controllerCommitIdentityEnv()));
+    pipelineLiteralGitEnv(controllerCommitIdentityEnv()), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
   if (commit.code !== 0) {
     const current = await exec("git", ["rev-parse", "HEAD"], cwd);
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
+    if (commit.code === null && /^command timed out after \d+ms(?:$|:)/.test(commit.stderr)) {
+      return { ...failure("committing the passed stage", commit), deferred: true, commitTimeout: true };
+    }
     return failure("committing the passed stage", commit);
   }
   const head = await exec("git", ["rev-parse", "HEAD"], cwd);
