@@ -16,6 +16,8 @@ import type { CompanionPlan, Locale, PlanWindow } from "./contract";
 import { jsonObject, type LiveConnection, type LiveProvider, type LiveToolHandler } from "./provider";
 import { BACKEND_INSTRUCTIONS, LIVE_BACKEND_MODEL, liveInstructions } from "./sessionConfig";
 import { COMPANION_TOOL_REGISTRY } from "./tools";
+import { CodexVoiceTranscript } from "./codexTranscript";
+import { VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
 
 type VoiceAccount = { id: string; kind: "managed" | "legacy"; home: string; authPresent: boolean };
 /** The voices a V3 WebRTC call accepts on `codex-cli 0.162.1`: `thread/realtime/listVoices`
@@ -59,12 +61,20 @@ export function codexVoiceEnvironment(home: string, source: NodeJS.ProcessEnv): 
 export function codexVoiceThread(cwd: string, compactPrompt = true) {
   const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread");
   return { model: LIVE_BACKEND_MODEL, cwd, approvalPolicy: "never", sandbox: "read-only", ephemeral: true,
-    dynamicTools: COMPANION_TOOL_REGISTRY.filter(tool => tool.class !== "delegation").map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })),
+    dynamicTools: COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })),
     developerInstructions: instructions, ...(compactPrompt ? { environments: [], baseInstructions: instructions } : {}) };
 }
 export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string, voice: CodexVoice = CODEX_VOICE) {
   return { threadId, version: "v3", model: "gpt-live-1-codex", outputModality: "audio", transport: { type: "webrtc", sdp: sdp.replace(/\r?\n/g, "\r\n") },
     clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName), voice };
+}
+export function codexVoiceContext(threadId: string, text: string) {
+  return { threadId, items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }] };
+}
+export function codexVoiceText(threadId: string, text: string) { return { threadId, role: "developer", text }; }
+export function codexVoiceToolResult(result: unknown) {
+  return { contentItems: [{ type: "inputText", text: JSON.stringify(result) },
+    ...((result as SpeechReadResult | null)?.[VOICE_IMAGES] ?? []).map(image => ({ type: "inputImage", imageUrl: `data:${image.mime};base64,${image.data}` }))], success: true };
 }
 interface Call {
   client: CodexAppServerClient; account: VoiceAccount; cwd: string; id: string; createdAt: number; locale: Locale;
@@ -72,6 +82,10 @@ interface Call {
   stopping?: Promise<void>; reaped: Promise<void>; sdpReceived?: boolean; failed?: boolean;
   /** The plan as merged from every reading of this call: a rolling update never clears what it leaves out. */
   plan: CompanionPlan | null; limitReached?: boolean;
+  transcriptAdapter: CodexVoiceTranscript;
+  writing: Promise<void>;
+  speech: string[]; speaking: boolean; awaitingSpeech: boolean;
+  backingTurns: Set<string>; awaitingBackingSpeech: boolean;
 }
 /** Said once when the account's plan runs out mid-call, before the call stops. */
 export const LIMIT_SPEECH: Record<Locale, string> = {
@@ -117,7 +131,7 @@ export class CodexLiveProvider implements LiveProvider {
         client.request("account/rateLimits/read").then(jsonObject, () => null)]);
       const id = jsonObject(started?.thread)?.id;
       if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new CodexVoiceError("CODEX_UNSUPPORTED");
-      call = { client, account, cwd, id, locale, events: [], createdAt: this.now(), reaped, plan: null };
+      call = { client, account, cwd, id, locale, events: [], createdAt: this.now(), reaped, plan: null, transcriptAdapter: new CodexVoiceTranscript(), writing: Promise.resolve(), speech: [], speaking: false, awaitingSpeech: false, backingTurns: new Set(), awaitingBackingSpeech: false };
       this.calls.set(id, call);
       const active = call;
       const opening = this.limits(active, reading?.rateLimits);
@@ -125,11 +139,11 @@ export class CodexLiveProvider implements LiveProvider {
       client.onRequest(async request => {
         const params = jsonObject(request.params);
         if (request.method !== "item/tool/call" || params?.threadId !== id || typeof params.tool !== "string" || typeof params.callId !== "string" || typeof params.turnId !== "string"
-          || !COMPANION_TOOL_REGISTRY.some(tool => tool.class !== "delegation" && tool.name === params.tool))
-          return { contentItems: [{ type: "inputText", text: "Tool is unavailable in this voice slice." }], success: false };
+          || !COMPANION_TOOL_REGISTRY.some(tool => tool.name === params.tool))
+          return { contentItems: [{ type: "inputText", text: "Tool is unavailable." }], success: false };
         if (!active.tool || active.stopping || active.failed) return { contentItems: [{ type: "inputText", text: "Voice session is unavailable." }], success: false };
         const result = await active.tool(params.tool, params.arguments, params.callId, params.turnId);
-        return { contentItems: [{ type: "inputText", text: JSON.stringify(result) }], success: true };
+        return codexVoiceToolResult(result);
       });
       let resolveSdp!: (sdp: string) => void; let rejectSdp!: (error: Error) => void;
       const answer = new Promise<string>((resolve, reject) => { resolveSdp = resolve; rejectSdp = reject; });
@@ -189,9 +203,27 @@ export class CodexLiveProvider implements LiveProvider {
   }
   private notification(call: Call, notification: AppServerNotification) {
     const params = jsonObject(notification.params)!;
-    if (notification.method === "thread/realtime/itemAdded") {
+    if (notification.method.startsWith("thread/realtime/transcript/")) {
+      if (params.role === "assistant") {
+        if (notification.method.endsWith("/delta")) call.speaking = true;
+        else if (notification.method.endsWith("/done")) {
+          call.speaking = false;
+          call.awaitingSpeech = false;
+          if (!call.backingTurns.size) call.awaitingBackingSpeech = false;
+        }
+      }
+      for (const event of call.transcriptAdapter.notification(notification.method, params, this.now() - call.createdAt)) this.emit(call, event);
+      this.flushSpeech(call);
+    } else if (notification.method === "thread/realtime/itemAdded") {
       const item = jsonObject(params.item);
       if (item?.type === "handoff_request" && typeof item.handoff_id === "string") this.emit(call, { type: "session.delegation.created", offset_ms: this.now() - call.createdAt, delegation: { id: item.handoff_id, target: "client" } });
+    } else if (notification.method === "turn/started") {
+      const turn = jsonObject(params.turn);
+      if (typeof turn?.id === "string") {
+        call.backingTurns.add(turn.id);
+        call.awaitingBackingSpeech = true;
+        this.emit(call, { type: "codex.turn.started", turnId: turn.id });
+      }
     } else if (notification.method === "thread/tokenUsage/updated") {
       const usage = jsonObject(params.tokenUsage); const total = jsonObject(usage?.total);
       if (total) this.emit(call, { type: "codex.tokenUsage", tokens: Object.fromEntries(Object.entries(total).filter(([, value]) => Number.isSafeInteger(value) && (value as number) >= 0)) });
@@ -200,8 +232,17 @@ export class CodexLiveProvider implements LiveProvider {
         this.emit(call, { type: notification.method.endsWith("error") ? "error" : "session.closed" });
         void this.hangup(call.id, "").catch(() => call.lost?.());
       }
-    } else if (notification.method === "turn/completed" && jsonObject(params.turn)?.status === "failed") {
-      void call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text: "The board could not be read just now." }).catch(() => call.lost?.());
+    } else if (notification.method === "turn/completed") {
+      const turn = jsonObject(params.turn);
+      if (typeof turn?.id === "string") {
+        call.backingTurns.delete(turn.id);
+        this.emit(call, { type: "codex.turn.completed", turnId: turn.id });
+      }
+      if (turn?.status !== "completed") {
+        call.awaitingBackingSpeech = false;
+        if (turn?.status === "failed") this.queueSpeech(call, "The board could not be read just now.");
+        else this.flushSpeech(call);
+      }
     }
   }
   /** Merges one rate-limit reading into the call's plan, records it for the
@@ -235,12 +276,36 @@ export class CodexLiveProvider implements LiveProvider {
     for (const queued of call.events.splice(0)) event(queued);
     return { send: command => {
       if (command.type === "session.close") void this.hangup(id, "").then(() => event({ type: "session.closed" }), lost);
-      // Reports, context and interruption are added in slice 2.
+      else if (["session.commentary.append", "session.instructions.append"].includes(command.type) && typeof command.content === "string") {
+        const text = command.content;
+        if (command.type === "session.commentary.append") this.queueSpeech(call, text);
+        else call.writing = call.writing.then(async () => {
+          if (call.stopping || call.failed) return;
+          await call.client.request("thread/inject_items", codexVoiceContext(id, text));
+          if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendText", codexVoiceText(id, text));
+        }).catch(() => { call.failed = true; call.lost?.(); });
+      }
     }, dispose: () => {
       call.event = undefined; call.lost = undefined; call.tool = undefined;
       // Session recovery retains the open flag until hangup confirms reaping.
       void this.hangup(id, "").catch(() => {});
     } };
+  }
+  private queueSpeech(call: Call, text: string): void {
+    call.speech.push(text);
+    this.flushSpeech(call);
+  }
+  /** Standalone speech can be lost while a backing answer is being voiced.
+   * An RPC acknowledgement confirms context receipt only. Wait for assistant
+   * output completion before sending the next report, including across polls. */
+  private flushSpeech(call: Call): void {
+    if (call.stopping || call.failed || call.limitReached || call.speaking || call.awaitingSpeech || call.backingTurns.size || call.awaitingBackingSpeech) return;
+    const text = call.speech.shift();
+    if (text === undefined) return;
+    call.awaitingSpeech = true;
+    call.writing = call.writing.then(async () => {
+      if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text });
+    }).catch(() => { call.failed = true; call.lost?.(); });
   }
   async hangup(id: string, _key: string): Promise<void> {
     void _key;

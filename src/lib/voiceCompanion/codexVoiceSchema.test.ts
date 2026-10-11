@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
-import { CODEX_V3_VOICES, CODEX_VOICE, codexVoiceStart, codexVoiceThread } from "./codexProvider";
+import { CODEX_V3_VOICES, CODEX_VOICE, codexVoiceContext, codexVoiceStart, codexVoiceText, codexVoiceThread, codexVoiceToolResult } from "./codexProvider";
+import { VOICE_IMAGES } from "./boardReads";
 
 type Schema = boolean | { $ref?: string; oneOf?: Schema[]; anyOf?: Schema[]; allOf?: Schema[]; properties?: Record<string, Schema>; required?: string[]; items?: Schema; enum?: unknown[]; type?: string | string[]; definitions?: Record<string, Schema> };
 /** Unknown properties are rejected even where serde's schema allows them:
@@ -45,6 +46,9 @@ test.if(Bun.which(codexBinary) !== null)("the installed Codex experimental schem
       ["v2/ThreadRealtimeStartParams", codexVoiceStart("fixture", "en", "v=0\n", "Fixture")],
       ["v2/ThreadRealtimeStopParams", { threadId: "fixture" }],
       ["v2/ThreadRealtimeAppendSpeechParams", { threadId: "fixture", text: "The board could not be read just now." }],
+      ["v2/ThreadInjectItemsParams", codexVoiceContext("fixture", "The operator views the second project.")],
+      ["v2/ThreadRealtimeAppendTextParams", codexVoiceText("fixture", "The operator views the second project.")],
+      ["DynamicToolCallResponse", codexVoiceToolResult({ speech: "Frame attached", [VOICE_IMAGES]: [{ mime: "image/png", data: "fixture" }] })],
       ["DynamicToolCallResponse", { contentItems: [{ type: "inputText", text: "Fixture answer" }], success: true }],
     ] as const;
     for (const [name, params] of cases) {
