@@ -48,6 +48,9 @@ pairing, paused relay or replaced connected bot cancels the send before it
 starts. The review uses the existing durable send claim and does not grant
 general agent posting permission in the private chat. Without a pairing or an
 enabled target, it sends nowhere, and the relay panel shows why.
+If the selected first target has no engine or model, it is absent from the
+relay claim. Reviews stay off with an instruction to configure that target,
+using the existing controls; a later target never silently replaces it.
 
 Confirmed Telegram posts use the production publication hook with this same
 target selection. The pairing's queue and cooldowns are shared across route

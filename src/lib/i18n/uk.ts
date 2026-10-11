@@ -210,6 +210,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.review.paused": "Рев’ю в Telegram вимкнено: ретранслятор Celestia на паузі.",
   "externalRelay.review.no_target": "Рев’ю в Telegram вимкнено: немає ввімкненої цілі, яка відповідає тут.",
   "externalRelay.review.invalid_owner": "Рев’ю в Telegram вимкнено: прив’язка не має Telegram-ідентичності власника.",
+  "externalRelay.review.not_configured": "Рев’ю в Telegram вимкнено: виберіть рушій і модель для першої ввімкненої цілі.",
   "externalRelay.review.ready": "Рев’ю прототипів надходять у ваш приватний чат із {target}.",
   "externalRelay.target.running": "{count} з {max} виконуються",
   "externalRelay.target.perHour": "{count}/год",

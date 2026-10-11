@@ -211,6 +211,7 @@ export const en = {
   "externalRelay.review.paused": "Telegram reviews are off: the Celestia relay is paused.",
   "externalRelay.review.no_target": "Telegram reviews are off: no enabled target answers here.",
   "externalRelay.review.invalid_owner": "Telegram reviews are off: the pairing has no Telegram owner identity.",
+  "externalRelay.review.not_configured": "Telegram reviews are off: choose an engine and model for the first enabled target.",
   "externalRelay.review.ready": "Prototype reviews go to your private chat with {target}.",
   "externalRelay.target.running": "{count} of {max} running",
   "externalRelay.target.perHour": "{count}/h",

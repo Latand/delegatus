@@ -9425,6 +9425,7 @@ browserTest("external relay: owner review destination and off reasons at phone a
     { name: "several", relays: [destinationRelay([destinationTarget("ordinary"), destinationTarget("owner-first", true), destinationTarget("owner-second", true)])], reason: "ready" },
     { name: "unpaired", relays: [], reason: "no_relay" },
     { name: "no-target", relays: [destinationRelay([])], reason: "no_target" },
+    { name: "not-configured", relays: [destinationRelay([{ ...destinationTarget("first"), engine: null }, destinationTarget("second")])], reason: "not_configured" },
     { name: "paused", relays: [{ ...destinationRelay(), paused: true }], reason: "paused" },
   ];
   try {

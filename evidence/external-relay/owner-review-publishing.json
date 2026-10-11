@@ -47,6 +47,17 @@
     {
       "locale": "en",
       "width": 390,
+      "state": "not-configured",
+      "reason": "not_configured",
+      "text": "Telegram reviews are off: choose an engine and model for the first enabled target.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 32,
+      "frame": "owner-review-not-configured-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
       "state": "paused",
       "reason": "paused",
       "text": "Telegram reviews are off: the Celestia relay is paused.",
@@ -98,6 +109,17 @@
       "lineWidth": 590,
       "lineHeight": 16,
       "frame": "owner-review-no-target-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "not-configured",
+      "reason": "not_configured",
+      "text": "Telegram reviews are off: choose an engine and model for the first enabled target.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-not-configured-1440-en.png"
     },
     {
       "locale": "en",
@@ -157,6 +179,17 @@
     {
       "locale": "uk",
       "width": 390,
+      "state": "not-configured",
+      "reason": "not_configured",
+      "text": "Рев’ю в Telegram вимкнено: виберіть рушій і модель для першої ввімкненої цілі.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 32,
+      "frame": "owner-review-not-configured-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
       "state": "paused",
       "reason": "paused",
       "text": "Рев’ю в Telegram вимкнено: ретранслятор Celestia на паузі.",
@@ -208,6 +241,17 @@
       "lineWidth": 590,
       "lineHeight": 16,
       "frame": "owner-review-no-target-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "not-configured",
+      "reason": "not_configured",
+      "text": "Рев’ю в Telegram вимкнено: виберіть рушій і модель для першої ввімкненої цілі.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-not-configured-1440-uk.png"
     },
     {
       "locale": "uk",

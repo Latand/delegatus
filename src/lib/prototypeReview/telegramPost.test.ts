@@ -164,7 +164,8 @@ test("publication posts to the paired owner's private chat once and an unpaired 
 test("owner review sends nothing with no target, a paused relay or a changed destination during lookup", async () => {
   const { service, transport, store } = await connected();
   const input = { clientRequestId: "owner-review", message: renderPrototypeTelegram(telegramRound(), []) };
-  for (const relay of [destinationRelay([]), { ...destinationRelay(), paused: true }]) {
+  for (const relay of [destinationRelay([]), { ...destinationRelay(), paused: true },
+    destinationRelay([{ ...destinationRelay().targets[0]!, model: null }])]) {
     updateRelayStore(s => ({ ...s, relays: [relay] }));
     expect(await service.sendOwnerReview(input)).toBeNull();
   }

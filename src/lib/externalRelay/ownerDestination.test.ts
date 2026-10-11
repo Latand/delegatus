@@ -24,6 +24,9 @@ test("missing pairing, missing enabled target and paused pairing stay off withou
   expect(selectOwnerDestination([destinationRelay([])])).toEqual({ reason: "no_target" });
   expect(selectOwnerDestination([destinationRelay([{ ...destinationTarget("disabled"), enabled: false }])])).toEqual({ reason: "no_target" });
   expect(selectOwnerDestination([{ ...destinationRelay(), paused: true }])).toEqual({ reason: "paused" });
+  expect(selectOwnerDestination([destinationRelay([
+    { ...destinationTarget("unconfigured"), engine: null }, destinationTarget("configured")])])).toEqual({ reason: "not_configured" });
+  expect(selectOwnerDestination([destinationRelay([{ ...destinationTarget("missing-model"), model: null }])])).toEqual({ reason: "not_configured" });
   for (const owner of [{ namespace: "internal", id: "41" }, { namespace: "telegram", id: "owner" }, { namespace: "telegram", id: "-41" }])
     expect(selectOwnerDestination([{ ...destinationRelay(), owner: { ...destinationRelay().owner, ...owner } }])).toEqual({ reason: "invalid_owner" });
 });
@@ -40,7 +43,9 @@ test("production publisher selection follows the first target and stops after pa
     expect(urls).toEqual(["/v1/targets/first/messages"]);
     relays[0]!.paused = true;
     expect(await publisher(receipt)).toBe("skipped");
-    relays[0]!.paused = false; relays[0]!.targets = [];
+    relays[0]!.paused = false; relays[0]!.targets[0]!.engine = null;
+    expect(await publisher(receipt)).toBe("skipped");
+    relays[0]!.targets = [];
     expect(await publisher(receipt)).toBe("skipped");
     relays = [{ ...destinationRelay(), api_base: `${server.origin}/v1` }]; bot = "456";
     expect(await publisher(receipt)).toBe("skipped");
