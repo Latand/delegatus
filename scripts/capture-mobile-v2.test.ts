@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 
 import {
   CANVAS,
+  capturePort,
+  captureServerUrl,
   DRIVERS,
   evaluateGates,
   FLOWS,
@@ -35,6 +38,75 @@ import {
  */
 
 const ids = (failures: { gate: string }[]) => failures.map((f) => f.gate);
+
+test("parallel captures ask the server to bind an ephemeral port by default", () => {
+  expect(capturePort(undefined)).toBe(0);
+  expect(capturePort("4439")).toBe(4439);
+});
+
+test("parallel capture children announce distinct bound ports and serve their own fixtures", async () => {
+  const children = ["first", "second"].map(label => {
+    const child = spawn(process.execPath, ["-e", `
+      const http = require('node:http');
+      const server = http.createServer((_request, response) => response.end(${JSON.stringify(label)}));
+      server.listen(0, '127.0.0.1', () => {
+        process.stdout.write('- Loc');
+        setTimeout(() => console.log('al: http://127.0.0.1:' + server.address().port), 10);
+      });
+    `], { stdio: ["ignore", "pipe", "ignore"] });
+    return { child, exited: new Promise<void>(resolve => child.once("close", () => resolve())) };
+  });
+  try {
+    const urls = await Promise.all(children.map(({ child }) => captureServerUrl(child, 2_000)));
+    expect(urls[0]).not.toBe(urls[1]);
+    expect(await Promise.all(urls.map(async url => (await fetch(url)).text()))).toEqual(["first", "second"]);
+  } finally {
+    for (const { child } of children) child.kill("SIGKILL");
+    await Promise.all(children.map(({ exited }) => exited));
+  }
+});
+
+test("the pinned Next CLI reports the actual port it binds for port zero", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-capture-next-"));
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ private: true }));
+  const child = spawn(process.execPath, ["--bun", path.resolve(import.meta.dir, "../node_modules/next/dist/bin/next"),
+    "start", root, "--hostname", "127.0.0.1", "--port", "0"], {
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1", DELEGATUS_TELEMETRY: "0", DO_NOT_TRACK: "1" },
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const exited = new Promise<void>(resolve => child.once("close", () => resolve()));
+  try {
+    const url = new URL(await captureServerUrl(child, 5_000));
+    expect(url.hostname).toBe("127.0.0.1");
+    expect(Number(url.port)).toBeGreaterThan(0);
+  } finally {
+    child.kill("SIGKILL");
+    await exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);
+
+test("an occupied override cannot make a capture trust a foreign server", async () => {
+  let foreignReads = 0;
+  const foreign = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    foreignReads++;
+    return new Response("foreign fixture");
+  } });
+  const child = spawn(process.execPath, ["-e", `
+    const server = require('node:http').createServer();
+    server.on('error', () => process.exit(1));
+    server.listen(${foreign.port}, '127.0.0.1', () => console.log('- Local: http://127.0.0.1:' + server.address().port));
+  `], { stdio: ["ignore", "pipe", "ignore"] });
+  const exited = new Promise<void>(resolve => child.once("close", () => resolve()));
+  try {
+    await expect(captureServerUrl(child, 2_000)).rejects.toThrow("port may already be in use");
+    expect(foreignReads).toBe(0);
+  } finally {
+    child.kill("SIGKILL");
+    await exited;
+    foreign.stop(true);
+  }
+});
 
 /* ── screens ─────────────────────────────────────────────────────────────── */
 

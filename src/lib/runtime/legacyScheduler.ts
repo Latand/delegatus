@@ -4,7 +4,6 @@ export interface LegacySchedulerPorts {
   scan(): Promise<FileEntry[]>;
   tickFlows(entries: FileEntry[]): Promise<unknown>;
   tickWorkflows(entries: FileEntry[]): Promise<unknown>;
-  tickTaskInbox(entries: FileEntry[]): void;
   publishFiles?(entries: FileEntry[]): Promise<void> | void;
 }
 
@@ -23,7 +22,6 @@ export class LegacyRuntimeScheduler {
       await this.ports.publishFiles?.(entries);
       await this.ports.tickFlows(entries);
       await this.ports.tickWorkflows(entries);
-      this.ports.tickTaskInbox(entries);
       this.lastRun = this.now();
       return true;
     } finally {

@@ -103,6 +103,63 @@ function startSwitch(store: AgentRegistry, names: string[], requestId: string) {
   return conversations;
 }
 
+for (const publication of ["owner", "claim"] as const) test(`orphan cleanup preserves a ${publication} published while it awaits the writer, then delivers once`, async () => {
+  const made = sqliteRegistryFixture("llv-orphan-publication");
+  const store = made.registry;
+  const conversation = store.ensureConversation("codex", "/sessions/orphan.jsonl", "a");
+  const held = store.holdDelivery(conversation.id, "accepted during publication", "orphan-original-key");
+  const generation = conversation.generations[0]!;
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { AgentRegistry } = await import(process.argv[1]);
+    const { captureProcessIdentity } = await import(process.argv[2]);
+    const store = new AgentRegistry(process.argv[3], undefined, undefined,
+      { sqliteMode: "sqlite", sqliteFilename: process.argv[4] });
+    const entry = JSON.parse(process.argv[5]);
+    entry.structuredHost.process = captureProcessIdentity(process.pid);
+    const db = store.sqliteStore.db;
+    const exec = db.exec.bind(db);
+    let writer = false;
+    db.exec = (sql) => {
+      if (sql.startsWith("BEGIN IMMEDIATE")) writer = true;
+      if (sql === "COMMIT" && writer) {
+        writer = false;
+        process.stdout.write("publishing\\n");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600);
+      }
+      return exec(sql);
+    };
+    await store.deliveryWrite({ label: "test.publish" }, () => process.argv[6] === "owner"
+      ? store.upsert(entry) : store.beginDeliveryAttempt(process.argv[7], entry.key.sessionId));
+    setInterval(() => {}, 1000);
+  `, path.resolve("src/lib/agent/registry.ts"), path.resolve("src/lib/processIdentity.ts"),
+  path.join(made.root, "registry.json"), made.sqliteFilename, JSON.stringify({
+    key: { engine: "codex", sessionId: generation.id }, artifactPath: generation.path,
+    cwd: "/repo", accountId: "a", launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
+    status: "idle", host: null, structuredHost: {
+      kind: "codex-app-server", endpoint: "fake:owned", process: null, eventCursor: 0,
+      protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    }, claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
+  }), publication, held.id], { stdout: "pipe", stderr: "inherit" });
+  try {
+    const first = await child.stdout.getReader().read();
+    expect(new TextDecoder().decode(first.value)).toContain("publishing");
+    const delivered: string[] = [];
+    const delivery: HeldDeliveryPort = { ...port(delivered), async reconcileUncertain({ clientMessageId }) {
+      delivered.push(clientMessageId); return "delivered";
+    } };
+    await reconcileMigrations(provider(), delivery, store, { passBudgetMs: 2_000 });
+    expect(store.snapshot().heldDeliveries[held.id]?.state).not.toBe("failed");
+    await drainHeldDeliveries(conversation.id, delivery, store);
+    await drainHeldDeliveries(conversation.id, delivery, store);
+    expect(delivered).toEqual(["orphan-original-key"]);
+  } finally {
+    child.kill();
+    await child.exited;
+    store.close();
+    made.cleanup();
+  }
+});
+
 describe("the account-migration coordinator's registry writes wait off the event loop", () => {
   test("the drain's claim and settle wait for a lock held elsewhere, correlated with the send's operation", async () => {
     const { store, holder } = fixture("drain");

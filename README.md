@@ -306,10 +306,12 @@ review to ask for.
 board's ⋯ menu, is off by default.
 While it is off, a pipeline ends with its pull request open and the
 orchestrator tells you it is ready. Turn it on and Delegatus merges each
-pipeline whose reviews passed, one at a time per repository, once every
-check on the head has finished green. It updates a branch that fell behind
-and leaves conflicts to you. The pipeline shows "waiting for checks", "merge
-stopped" or "merged". A stopped merge appears under **Needs you** with **Try
+pipeline whose reviews passed, one at a time per repository, once the base
+branch's required checks on the head have settled green. Pending optional
+checks can continue; any reported check failure stops the merge. It updates a
+branch that fell behind and leaves conflicts to you. The pipeline shows
+"waiting for checks", "merge stopped" or "merged". A stopped merge appears
+under **Needs you** with **Try
 the merge again**. The orchestrator can also hand several reviewed pull
 requests to one **merger** stage, which lands them as a single batch pull
 request with one commit per original;
@@ -322,11 +324,18 @@ finished lanes four days after they settle when every commit is on the
 remote. It skips any worktree that is still in use or holds unpublished
 work.
 
-When a stage reports, its agent can leave one to three short rules for the
-next agent of its role, for every role in the project or for every project
-on the machine, and those agents start with them. Review and verification
-stages get none and leave none. **Learned rules** on the board's ⋯ menu
-shows the three groups and removes a rule with ×.
+When a stage reports, its agent gives one answer about learned rules, and
+the default is none. It can instead rewrite a rule it was given, by its id,
+with sharper or more general text; the rule keeps its id and level, and the
+earlier text is kept as a version that can be restored. Or it can leave one
+new rule, when that rule would change what an agent does on a different
+task, at the narrowest level that holds: the agents of its role, every role
+in the project, or every project on the machine. A rule that names a pull
+request, an issue, a commit or another id of one task is refused, and that
+detail belongs in the stage report. Agents of that level read the rules in
+their engine instructions at every start. Review and verification stages get
+none and leave none. **Learned rules** on the board's ⋯ menu shows the three
+groups and removes a rule with ×.
 
 On the task's card a pipeline takes one row: its stages as a chain, its
 state, its pull request and the issues that pull request closes. When it
@@ -685,7 +694,7 @@ The tools, by area:
 - **pipelines:** `create_pipeline`, `list_pipelines`, `get_pipeline`,
   `pipeline_action`, `link_task_to_pipeline`, `stage_report`, which a
   stage agent calls to report its verdict, and `leave_lesson`, which stores
-  the rules it leaves for the next agents;
+  the rule it leaves for the next agents or rewrites one it was given;
 - **review flows:** `list_flows`, `get_flow`, `flow_action`;
 - **the orchestrator seat:** `create_orchestrator`, `get_orchestrator`,
   `rotate_orchestrator`, `send_message_to_orchestrator`,
@@ -823,6 +832,17 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 | `VIEWER_PROC_BACKEND` | `linux`, `portable` or `windows`: forces the process-discovery backend. |
 
 ### Agent memory
+
+Before a structured, terminal or headless agent launch, Delegatus requires
+at least 2 GiB of available RAM. This floor leaves 1 GiB of headroom above
+the exhaustion observed in [#1211](https://github.com/Latand/delegatus/issues/1211).
+The check uses reclaimable RAM (`MemAvailable` on Linux), independently of
+lane count, swap usage and the memory-limit mode, including `off`. An
+unavailable reading permits the launch. A refusal reports the measured RAM
+and required floor; structured and terminal launch receipts retain that reason
+as a failed launch, which the board and pipeline failure handling display.
+This is a point-in-time check: later tool allocations remain governed by
+memory ceilings and the shared gate runner.
 
 Each agent gets a ceiling computed at launch from RAM and the number of live
 hosts. Delegatus reserves at least 4 GiB (15% of RAM) for the core and OS;

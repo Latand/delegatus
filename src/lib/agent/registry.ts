@@ -17,7 +17,7 @@ import {
   sameRecordedProcessIdentity,
   type ProcessIdentity,
 } from "@/lib/processIdentity";
-import { durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
+import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -248,6 +248,9 @@ export interface SpawnReceipt {
   admissionOwner: ProcessIdentity | null;
   /** One-way binding for the caller credential injected into this worker. */
   spawnCapabilityDigest: string | null;
+  /** A migration host can identify itself while its predecessor still serves.
+      Promoted only in the transaction that commits this operation. */
+  pendingSpawnCapability?: { operationId: string; digest: string } | null;
   /** Viewer MCP transport selected for this launch, after HTTP admission. */
   viewerMcpTransport?: "stdio" | "http" | null;
   /** Reserved at receipt birth so path discovery cannot choose the identity. */
@@ -1202,6 +1205,7 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
     allowSubagents: current.allowSubagents || requested.allowSubagents,
     /* Clean once, clean for good: a resume never brings memory back. */
     ...(current.cleanMemory || requested.cleanMemory ? { cleanMemory: true } : {}),
+    ...(current.learnedRules ?? requested.learnedRules ? { learnedRules: current.learnedRules ?? requested.learnedRules } : {}),
     mcpServers: current.mcpServers,
     /* The plugin grant was decided at spawn from the session's origin; a
        resume replays the durable value and can never widen it (issue #687). */
@@ -1563,6 +1567,27 @@ function rearmRolledBackMigrationDeliveries(
     delivery.error = null;
     syncDeliveryOperationOwnerState(file, delivery);
   }
+}
+
+const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
+
+export function deliveryHasDurableClaimOwner(
+  snapshot: RegistryFile,
+  conversation: RegistryConversation,
+  delivery: HeldDelivery,
+): boolean {
+  const current = conversation.generations.at(-1);
+  if (!current || delivery.generationId !== current.id) return false;
+  if (current.host !== null && current.host !== undefined) return true;
+  if (Object.values(snapshot.entries).some((entry) =>
+    entry.key.engine === conversation.engine
+    && entry.key.sessionId === current.id
+    && entry.artifactPath === current.path
+    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
+  return Object.values(snapshot.receipts).some((receipt) =>
+    receipt.engine === conversation.engine
+    && receipt.conversationId === conversation.id
+    && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
 }
 
 function terminalizeHeldDelivery(
@@ -3775,6 +3800,11 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     spawnCapabilityDigest: typeof value.spawnCapabilityDigest === "string" && /^[0-9a-f]{64}$/.test(value.spawnCapabilityDigest)
       ? value.spawnCapabilityDigest
       : null,
+    pendingSpawnCapability: value.pendingSpawnCapability
+      && typeof value.pendingSpawnCapability.operationId === "string" && value.pendingSpawnCapability.operationId.length > 0
+      && typeof value.pendingSpawnCapability.digest === "string" && /^[0-9a-f]{64}$/.test(value.pendingSpawnCapability.digest)
+      ? { operationId: value.pendingSpawnCapability.operationId, digest: value.pendingSpawnCapability.digest }
+      : null,
     viewerMcpTransport: value.viewerMcpTransport === "http" || value.viewerMcpTransport === "stdio"
       ? value.viewerMcpTransport : null,
     conversationId: typeof value.conversationId === "string" && value.conversationId.startsWith("conversation_")
@@ -5506,7 +5536,8 @@ export class AgentRegistry {
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
     if (!/^[0-9a-f]{64}$/.test(digest)) return null;
     const file = this.readOnlySnapshot();
-    const receipt = Object.values(file.receipts).find((candidate) => candidate.spawnCapabilityDigest === digest);
+    const receipt = Object.values(file.receipts).find((candidate) => candidate.spawnCapabilityDigest === digest
+      || candidate.pendingSpawnCapability?.digest === digest);
     return receipt ? resolveConversationAlias(file, receipt.conversationId) : null;
   }
 
@@ -5520,6 +5551,7 @@ export class AgentRegistry {
       for (const receipt of Object.values(file.receipts)) {
         if (resolveConversationAlias(file, receipt.conversationId) === conversationId) {
           receipt.spawnCapabilityDigest = null;
+          receipt.pendingSpawnCapability = null;
         }
       }
       target.spawnCapabilityDigest = digest;
@@ -5532,15 +5564,50 @@ export class AgentRegistry {
       .find((candidate) => conversationOwnsPath(candidate, artifactPath))?.id ?? null)?.capability ?? null;
   }
 
-  /**
-   * Mint a capability for a conversation's newest receipt, as a relaunch does,
-   * and return the digests it replaced so a launch that does not survive can
-   * hand them back ({@link restoreSpawnCapabilityDigests}).
-   */
+  /** Persist a successor identity without withdrawing the serving host's.
+      No plaintext capability is stored. A restarted Viewer can discard the
+      operation without needing the publisher's in-memory restore callback. */
+  stageSpawnCapabilityForConversation(conversationId: string, operationId: string): { capability: string; digest: string } | null {
+    if (!operationId) throw new Error("migration capability operation is missing");
+    const capability = crypto.randomBytes(32).toString("base64url");
+    const digest = crypto.createHash("sha256").update(capability).digest("hex");
+    return this.mutate((file) => {
+      const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      const conversation = file.conversations[owner];
+      if (!conversation) return null;
+      if (conversation.migration && (conversation.migration.operationId !== operationId
+        || conversation.migration.phase === "committed")) {
+        throw new Error("migration capability publication ownership is stale");
+      }
+      const receipts = Object.values(file.receipts)
+        .filter((receipt) => resolveConversationAlias(file, receipt.conversationId) === owner)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+      const current = receipts[0];
+      if (!current) return null;
+      for (const receipt of receipts) receipt.pendingSpawnCapability = null;
+      current.pendingSpawnCapability = { operationId, digest };
+      return { capability, digest };
+    });
+  }
+
+  /** Discard only the named publication; a later launch or publication owns
+      its identity even if an older host finishes cleanup afterwards. */
+  discardSpawnCapabilityForOperation(operationId: string, digest?: string): void {
+    this.mutate((file) => {
+      for (const receipt of Object.values(file.receipts)) {
+        if (receipt.pendingSpawnCapability?.operationId === operationId
+          && (digest === undefined || receipt.pendingSpawnCapability.digest === digest)) {
+          receipt.pendingSpawnCapability = null;
+        }
+      }
+    });
+  }
+
+  /** Mint a capability for a conversation's newest receipt, as a relaunch
+      does. */
   rotateSpawnCapabilityForConversation(conversationId: string): {
     capability: string;
     digest: string;
-    previous: Record<string, string | null>;
   } | null {
     return this.rotateSpawnCapabilityWhere((file) => {
       const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
@@ -5553,7 +5620,6 @@ export class AgentRegistry {
   private rotateSpawnCapabilityWhere(conversationOf: (file: RegistryFile) => ViewerConversationId | null): {
     capability: string;
     digest: string;
-    previous: Record<string, string | null>;
   } | null {
     const capability = crypto.randomBytes(32).toString("base64url");
     const digest = crypto.createHash("sha256").update(capability).digest("hex");
@@ -5565,26 +5631,12 @@ export class AgentRegistry {
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
       const current = receipts[0];
       if (!current) return null;
-      const previous = Object.fromEntries(receipts.map((receipt) => [receipt.launchId, receipt.spawnCapabilityDigest ?? null]));
-      for (const receipt of receipts) receipt.spawnCapabilityDigest = null;
-      current.spawnCapabilityDigest = digest;
-      return { capability, digest, previous };
-    });
-  }
-
-  /** Undo {@link rotateSpawnCapabilityForConversation}, and only while the
-      digest it minted is still the conversation's current one: a later launch
-      that rotated again owns the identity and is left alone. */
-  restoreSpawnCapabilityDigests(conversationId: string, rotatedDigest: string, previous: Record<string, string | null>): boolean {
-    return this.mutate((file) => {
-      const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
-      const receipts = Object.values(file.receipts)
-        .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === owner);
-      if (!receipts.some((receipt) => receipt.spawnCapabilityDigest === rotatedDigest)) return false;
       for (const receipt of receipts) {
-        receipt.spawnCapabilityDigest = Object.hasOwn(previous, receipt.launchId) ? previous[receipt.launchId]! : null;
+        receipt.spawnCapabilityDigest = null;
+        receipt.pendingSpawnCapability = null;
       }
-      return true;
+      current.spawnCapabilityDigest = digest;
+      return { capability, digest };
     });
   }
 
@@ -5665,10 +5717,17 @@ export class AgentRegistry {
         }
       }
       const requestedTitle = input.launchProfile?.title;
+      const existingAttempt = input.clientAttemptId
+        ? Object.values(file.receipts).find((receipt) => receipt.clientAttemptId === input.clientAttemptId)
+        : null;
       const requestedProfile = emptyLaunchProfile({
         cwd: input.cwd,
         ...(input.launchProfile ?? {}),
-        title: durableSemanticTitle(requestedTitle),
+        /* A replay that omits title keeps the admitted name before deriving a
+           fresh one; an explicit title still participates in compatibility. */
+        title: durableSemanticTitle(requestedTitle) ?? (requestedTitle == null
+          ? durableSemanticTitle(existingAttempt?.launchProfile.title) ?? firstMeaningfulPromptLine(input.launchDisplay?.prompt, 80)
+          : null),
         ...(explicitProject ? { project: explicitProject } : {}),
         parentConversationId,
       });
@@ -5694,7 +5753,7 @@ export class AgentRegistry {
         throw new Error("conversation migration prevents resume succession");
       }
       if (input.clientAttemptId) {
-        const existing = Object.values(file.receipts).find((receipt) => receipt.clientAttemptId === input.clientAttemptId);
+        const existing = existingAttempt;
         if (existing) {
           const existingTitle = durableSemanticTitle(existing.launchProfile.title);
           const requestedTitle = durableSemanticTitle(profile.title);
@@ -5814,6 +5873,7 @@ export class AgentRegistry {
         for (const existing of Object.values(file.receipts)) {
           if (resolveConversationAlias(file, existing.conversationId) === conversationId) {
             existing.spawnCapabilityDigest = null;
+            existing.pendingSpawnCapability = null;
           }
         }
       }
@@ -5831,6 +5891,7 @@ export class AgentRegistry {
           ? input.spawnCapabilityDigest
           : null,
         viewerMcpTransport: null,
+        pendingSpawnCapability: null,
         conversationId: conversationId ?? `conversation_${crypto.randomUUID()}`,
         purpose: input.purpose ?? "launch",
         supersedes: supersedes ? { conversationId: supersedes, reason: input.supersedesReason ?? "recovery-spawn" } : null,
@@ -8644,6 +8705,7 @@ export class AgentRegistry {
     id: ViewerConversationId,
     targetId: string,
     reconfigureOwner?: { operationId: string; revision: number },
+    profile?: Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">,
   ): RegistryConversation {
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
@@ -8658,6 +8720,9 @@ export class AgentRegistry {
       }
       const source = conversation.generations.at(-1);
       if (!source || source.accountId === null || source.accountId === targetId) return clone(conversation);
+      /* A pane's profile and reseat commit together. A refused writer or a
+         failed reseat leaves both untouched, with no separate rollback. */
+      if (profile) writeConversationLaunchProfile(file, conversation, source, profile);
       const replaced = inFlightMigration(conversation);
       if (conversation.migration
         && !["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration.phase)) {
@@ -9006,6 +9071,15 @@ export class AgentRegistry {
         (pathname) => !committedContinuityPaths.has(pathname),
       );
       conversation.migration = { ...migration, phase: "committed", updatedAt: now() };
+      const receipts = Object.values(file.receipts)
+        .filter((receipt) => resolveConversationAlias(file, receipt.conversationId) === conversation.id);
+      const pending = receipts.find((receipt) => receipt.pendingSpawnCapability?.operationId === expectedOperationId);
+      const digest = pending?.pendingSpawnCapability?.digest ?? null;
+      // A rollback successor can publish without HTTP identity; its archived predecessor still loses access at commit.
+      for (const receipt of receipts) {
+        receipt.spawnCapabilityDigest = receipt === pending ? digest : null;
+        receipt.pendingSpawnCapability = null;
+      }
       conversation.updatedAt = now();
       settleDeliveriesAtCommit(file, conversation, migration, predecessor, generation, committedAt);
       file.conversationRevision[conversation.engine] += 1;
@@ -9440,6 +9514,26 @@ export class AgentRegistry {
       const delivery = file.heldDeliveries[id];
       if (!delivery) throw new Error("held delivery is unknown");
       if (delivery.state !== "delivered") terminalizeHeldDelivery(file, delivery, reason);
+      return clone(delivery);
+    }, { deliveryOnly: true });
+  }
+
+  /** Cancel an orphan only if its operation, attempt and assignment still
+      match the selected candidate and it still has no durable owner, all
+      decided under the writer. Publication or a claim during acquisition
+      preserves the accepted payload for the next drain. */
+  terminalizeOrphanedHeldDelivery(expected: HeldDelivery, reason: string): HeldDelivery | null {
+    return this.mutate((file) => {
+      const delivery = file.heldDeliveries[expected.id];
+      if (!delivery || delivery.state !== expected.state
+        || (delivery.state !== "held" && delivery.state !== "assigned")
+        || delivery.command.operationId !== expected.command.operationId
+        || delivery.attempts !== expected.attempts || delivery.assignedAt !== expected.assignedAt
+        || delivery.generationId !== expected.generationId
+        || delivery.recoveryIntent === "reclaimed-host") return null;
+      const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      if (!conversation || conversation.migration || deliveryHasDurableClaimOwner(file, conversation, delivery)) return null;
+      terminalizeHeldDelivery(file, delivery, reason);
       return clone(delivery);
     }, { deliveryOnly: true });
   }

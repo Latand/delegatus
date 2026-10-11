@@ -18,16 +18,23 @@ afterAll(() => {
 });
 
 const { viewerMcpBindings } = await import("./bindings");
+const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
 const { accountProjectBindings } = await import("@/lib/accounts/projectBindings");
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
 
 const ATLAS = "project-atlas";
 const BEACON = "project-beacon";
 const RESERVED = "acct-reserved";
 const SPARE = "acct-spare";
 
-function bindingsFor(callerProject = ATLAS) {
+function bindingsFor(callerProject: string | null = ATLAS, projects = [
+  { project: ATLAS, displayName: "Atlas" },
+  { project: BEACON, displayName: "Beacon" },
+]) {
   return viewerMcpBindings(undefined, undefined, {
     callerProject: () => callerProject,
+    registrySnapshot: () => ({ conversations: {} }),
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: projects, complete: true } }),
     listBindableAccounts: (engine: "claude" | "codex") => engine === "claude"
       ? [{ accountId: RESERVED, label: "Reserved" }, { accountId: SPARE, label: "Spare" }]
       : [],
@@ -48,6 +55,70 @@ test("a list of an unconfigured project reports every account allowed, and no bi
     bindings: [],
     allowedFor: { claude: { restricted: false, allowed: [{ accountId: RESERVED, label: "Reserved" }, { accountId: SPARE, label: "Spare" }] } },
   });
+});
+
+test("a list by display name returns the canonical project's stored restriction", async () => {
+  const tool = bindingsFor();
+  await tool.account_project_binding({ action: "add", engine: "claude", accountId: RESERVED, project: ATLAS });
+  const read = await tool.account_project_binding({ action: "list", project: "Atlas" });
+  expect(read).toMatchObject({
+    project: ATLAS,
+    allowedFor: { claude: { restricted: true, allowed: [{ accountId: RESERVED, label: "Reserved" }] } },
+  });
+});
+
+test("an unknown project list refuses instead of reporting an unrestricted policy", async () => {
+  const tool = bindingsFor();
+  await tool.account_project_binding({ action: "add", engine: "claude", accountId: RESERVED, project: ATLAS });
+  const service = createMcpToolService(tool, new MemoryMcpReceiptStore());
+  const read = await service.callTool("account_project_binding", { clientRequestId: "binding-unknown", action: "list", project: "Missing project" });
+  expect(read).toMatchObject({ ok: false, details: { code: "unknown_project", outcome: "not-executed" } });
+  expect(read.error).toContain('unknown project "Missing project"');
+  expect(read).not.toHaveProperty("allowedFor");
+  expect(accountProjectBindings()).toEqual([expect.objectContaining({ project: ATLAS, accountId: RESERVED })]);
+});
+
+test("an ambiguous display name list refuses and names the candidate project keys", async () => {
+  const tool = bindingsFor(ATLAS, [
+    { project: ATLAS, displayName: "Atlas" },
+    { project: BEACON, displayName: "Atlas" },
+  ]);
+  await tool.account_project_binding({ action: "add", engine: "claude", accountId: RESERVED, project: ATLAS });
+  const service = createMcpToolService(tool, new MemoryMcpReceiptStore());
+  const read = await service.callTool("account_project_binding", { clientRequestId: "binding-ambiguous", action: "list", project: "Atlas" });
+  expect(read).toMatchObject({
+    ok: false,
+    details: { code: "ambiguous_project", outcome: "not-executed", candidates: [ATLAS, BEACON] },
+  });
+  expect(read.error).toContain('ambiguous project "Atlas"');
+  expect(read).not.toHaveProperty("allowedFor");
+});
+
+test("a canonical alias retains the restriction and a known unconfigured project allows every account", async () => {
+  persistProjectAliases([{ source: "older-atlas", target: ATLAS, displayName: "Atlas" }]);
+  const tool = bindingsFor();
+  await tool.account_project_binding({ action: "add", engine: "claude", accountId: RESERVED, project: ATLAS });
+  expect(await tool.account_project_binding({ action: "list", project: "older-atlas" })).toMatchObject({
+    project: ATLAS,
+    allowedFor: { claude: { restricted: true, allowed: [{ accountId: RESERVED, label: "Reserved" }] } },
+  });
+  expect(await tool.account_project_binding({ action: "list", project: "Beacon" })).toMatchObject({
+    project: BEACON,
+    allowedFor: { claude: { restricted: false, allowed: [{ accountId: RESERVED }, { accountId: SPARE }] } },
+  });
+});
+
+test("a list without a project or caller returns the whole table without an effective policy", async () => {
+  const tool = bindingsFor(null, []);
+  await tool.account_project_binding({ action: "add", engine: "claude", accountId: RESERVED, project: ATLAS });
+  await tool.account_project_binding({ action: "add", engine: "claude", accountId: SPARE, project: BEACON });
+  const read = await tool.account_project_binding({ action: "list" });
+  expect(read).toMatchObject({
+    project: null,
+    callerProject: null,
+    bindings: [expect.objectContaining({ project: ATLAS }), expect.objectContaining({ project: BEACON })],
+  });
+  expect(read).not.toHaveProperty("allowedFor");
 });
 
 test("a binding refusal behind a foreign holder carries the safe public account-store message", async () => {

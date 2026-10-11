@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
-import { deleteRule, projectView, restoreRule, RoleMemoryRefusal } from "@/lib/memory/roleStore";
+import { deleteRule, projectView, restoreRule, revertRule, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,8 +26,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     if (typeof body.project !== "string" || !body.project.trim() || body.project.length > 256
-      || typeof body.ruleId !== "string" || !RULE_ID.test(body.ruleId) || !["delete", "restore"].includes(body.action)) return Response.json({}, { status: 400 });
-    if (body.action === "delete") deleteRule(body.ruleId); else restoreRule(body.ruleId);
+      || typeof body.ruleId !== "string" || !RULE_ID.test(body.ruleId) || !["delete", "restore", "revert"].includes(body.action)) return Response.json({}, { status: 400 });
+    if (body.action === "delete") deleteRule(body.ruleId);
+    else if (body.action === "restore") restoreRule(body.ruleId);
+    else revertRule(body.ruleId);
     return answer(body.project);
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) return Response.json({ error: error.code }, { status: 409 });

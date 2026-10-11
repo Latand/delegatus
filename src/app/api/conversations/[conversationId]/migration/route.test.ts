@@ -29,10 +29,11 @@ function observation(pathname: string, accountId: string, turnState: "idle" | "b
   };
 }
 
-function seededRegistry(withHealthyQuota: boolean, turnState: "idle" | "busy" = "idle"): { registry: AgentRegistry; id: ViewerConversationId } {
+function seededRegistry(withHealthyQuota: boolean, turnState: "idle" | "busy" = "idle", sqlite = false, deadlineMs = 5_000): { registry: AgentRegistry; id: ViewerConversationId } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reseat-route-"));
   roots.push(root);
-  const registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined,
+    sqlite ? { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite"), sqliteWriterDeadlineMs: deadlineMs } : { sqliteMode: "off" });
   registry.reconcileConversations([observation("/sessions/limited.jsonl", "limited", turnState)]);
   if (withHealthyQuota) {
     registry.recordQuotaEvaluation({
@@ -64,6 +65,42 @@ function reseatRequest(conversationId: string, body: Record<string, unknown>): N
     body: JSON.stringify(body),
   });
 }
+
+for (const refuse of [false, true]) test(`legacy reseat waits off-loop, correlates its migration and preserves a refused send (${refuse})`, async () => {
+  const { registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  const { advanceConversationMigration, drainHeldDeliveries } = await import("@/lib/accounts/migration/coordinator");
+  const { registry, id } = seededRegistry(true, "busy", true, refuse ? 80 : 5_000);
+  const holder = registryLockHolder(path.join(roots.at(-1)!, "registry.sqlite"));
+  const held = registry.holdDelivery(id, "accepted before reseat", "reseat-original-key");
+  try {
+    resetBlockingWaitsForTests(() => {});
+    await holder.hold(600);
+    const { value, gapMs } = await longestLoopGap(() => applyConversationMigration({ conversationId: id, action: "reseat" }, { registry: () => registry }));
+    expect(gapMs).toBeLessThan(50);
+    expect(value.status).toBe(refuse ? 503 : 200);
+    expect(registry.snapshot().heldDeliveries[held.id]?.text).toBe(held.text);
+    if (refuse) {
+      expect(value.body).toMatchObject({ retryable: true });
+      expect(registry.conversation(id)?.migration).toBeNull();
+      await holder.release();
+      expect((await applyConversationMigration({ conversationId: id, action: "reseat" }, { registry: () => registry })).status).toBe(200);
+    } else {
+      expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "migration.reseat-request")?.operationId).toBe(registry.conversation(id)?.migration?.operationId);
+    }
+    registry.reconcileConversations([observation("/sessions/limited.jsonl", "limited", "idle")]);
+    const provider: SuccessorProviderPort = { virtualSource: true, async create(input) {
+      return { operationId: input.operationId, nativeId: "reseat-successor", path: "/sessions/reseat-successor.jsonl", continuityPaths: [], historyHash: "hash",
+        host: { kind: "codex-app-server", identity: "reseat-successor", epoch: 1, verifiedAt: "now" } };
+    }, async verify() {}, async publishHost() {} };
+    await advanceConversationMigration(id, registry, provider);
+    let inputs = 0;
+    const port = { async deliver() { inputs += 1; return "delivered" as const; } };
+    await drainHeldDeliveries(id, port, registry);
+    await drainHeldDeliveries(id, port, registry);
+    expect(inputs).toBe(1);
+  } finally { await holder.close(); registry.close(); }
+});
 
 test("reseat requires a known conversation", async () => {
   seededRegistry(true);

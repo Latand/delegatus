@@ -428,6 +428,64 @@ function expectHomeUntouched(fixture: ReturnType<typeof usedClaudeHome>): void {
   expect(readRegistryJson().removals ?? []).toEqual([]);
 }
 
+function retireClaudeFixtureInPlace(fixture: ReturnType<typeof usedClaudeHome>): void {
+  const registry = persistedAccountRegistry("claude");
+  seedAccountRegistry("claude", {
+    ...registry,
+    accounts: registry.accounts.filter((account) => account.id !== fixture.account.id),
+    retired: [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234 }],
+  });
+}
+
+test.skipIf(process.platform !== "linux")("cleanup archives a Claude account retired in place, preserves its label and history, and reports the move", () => {
+  const fixture = usedClaudeHome("Retired archive");
+  retireClaudeFixtureInPlace(fixture);
+
+  const cleaned = mod.cleanupOrphanedClaudeHomes();
+
+  expect(cleaned).toMatchObject({
+    removed: [], unresolved: [],
+    archived: [{ id: fixture.account.id, files: Object.keys(LEFTOVERS).length, bytes: Object.values(LEFTOVERS).reduce((sum, contents) => sum + Buffer.byteLength(contents), 0) }],
+  });
+  expect(fs.existsSync(fixture.account.home)).toBe(false);
+  for (const [relative, contents] of Object.entries(LEFTOVERS)) expect(fs.readFileSync(path.join(fixture.archive, relative), "utf8")).toBe(contents);
+  expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(false);
+  expect(fs.readFileSync(fixture.sharedTranscript, "utf8")).toBe("{\"cwd\":\"/repo\"}\n");
+  expect(mod.claudeProjectRoots()).toContain(fixture.shared);
+  const expectedRetired = [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, archived: true }];
+  expect(persistedAccountRegistry("claude").retired).toEqual(expectedRetired);
+  expect(mod.cleanupOrphanedClaudeHomes()).toEqual({ removed: [], unresolved: [] });
+});
+
+test.skipIf(process.platform !== "linux")("archive cleanup retains a file swapped in for a classified capability link", () => {
+  const fixture = usedClaudeHome("Archive replacement");
+  const skills = path.join(fixture.archive, "skills");
+  const outside = path.join(SANDBOX, "outside-capability");
+  fs.writeFileSync(outside, "outside history", { mode: 0o600 });
+  fs.rmSync(path.join(fixture.account.home, "skills"), { force: true });
+  fs.symlinkSync(outside, path.join(fixture.account.home, "skills"));
+  const originalLstat = fs.lstatSync;
+  let swapped = false;
+  fs.lstatSync = ((target: fs.PathLike, options?: unknown) => {
+    const stat = originalLstat(target, options as never);
+    if (!swapped && String(target).startsWith("/proc/self/fd/") && path.basename(String(target)) === "skills") {
+      swapped = true;
+      fs.unlinkSync(skills);
+      fs.writeFileSync(skills, "replacement history", { mode: 0o600 });
+    }
+    return stat;
+  }) as typeof fs.lstatSync;
+
+  let report: ReturnType<typeof mod.removeManagedClaudeAccount>;
+  try { report = mod.removeManagedClaudeAccount(fixture.account.id); }
+  finally { fs.lstatSync = originalLstat; }
+
+  expect(swapped).toBe(true);
+  expect(report.cleanupPending).toBe(true);
+  expect(fs.readFileSync(skills, "utf8")).toBe("replacement history");
+  expect(fs.readFileSync(outside, "utf8")).toBe("outside history");
+});
+
 test("a used Claude home is removed and every leftover moves into the shared archive (#1857)", () => {
   const fixture = usedClaudeHome("Invented Bravo");
   agentRegistry().setConversationMigration(fixture.conversation.id, {
@@ -586,15 +644,33 @@ test("creating an account keeps the shared transcript store and the removed-acco
   expect(fs.readFileSync(path.join(fixture.archive, "history.jsonl"), "utf8")).toBe(LEFTOVERS["history.jsonl"]!);
 });
 
-async function crashRemovalAt(accountId: string, checkpoint: string): Promise<void> {
+async function crashRemovalAt(accountId: string, checkpoint: string, action = "remove"): Promise<void> {
   const child = Bun.spawn({
-    cmd: [process.execPath, path.join(import.meta.dir, "fixtures", "accountRemovalCrash.ts"), "claude", accountId, checkpoint],
+    cmd: [process.execPath, path.join(import.meta.dir, "fixtures", "accountRemovalCrash.ts"), "claude", accountId, checkpoint, action],
     env: { ...process.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR!, LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME! },
     stdout: "ignore",
     stderr: "pipe",
   });
   await child.exited;
   expect(child.signalCode).toBe("SIGKILL");
+}
+
+for (const checkpoint of ["journaled", "renamed", "registry-retired", "accounts-committed"] as const) {
+  test.skipIf(process.platform !== "linux")(`retired-in-place Claude cleanup recovers a crash after ${checkpoint} without losing its label`, async () => {
+    const fixture = usedClaudeHome("Retired recovery");
+    retireClaudeFixtureInPlace(fixture);
+    await crashRemovalAt(fixture.account.id, checkpoint, "cleanup");
+
+    expect(mod.recoverInterruptedClaudeAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+    const committed = checkpoint === "registry-retired" || checkpoint === "accounts-committed";
+    const expectedRetired = [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, ...(committed ? { archived: true } : {}) }];
+    expect(persistedAccountRegistry("claude").retired).toEqual(expectedRetired);
+    expect(fs.existsSync(fixture.account.home)).toBe(!committed);
+    if (!committed) expect(mod.cleanupOrphanedClaudeHomes()).toMatchObject({ unresolved: [], archived: [{ id: fixture.account.id }] });
+    expect(fs.readFileSync(path.join(fixture.archive, "history.jsonl"), "utf8")).toBe(LEFTOVERS["history.jsonl"]!);
+    expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(false);
+    expect(readRegistryJson().removals ?? []).toEqual([]);
+  });
 }
 
 for (const checkpoint of ["journaled", "renamed"] as const) {

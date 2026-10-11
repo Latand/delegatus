@@ -73,6 +73,7 @@ class MemoryEventStore implements RuntimeEventStore {
  *   rollout file on disk, which is the same file the production scan reads.
  */
 class InjectAppServer extends EventEmitter {
+  accountInstructions = "";
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
@@ -175,7 +176,7 @@ class InjectAppServer extends EventEmitter {
     if (method === "model/list") {
       return this.respond(message.id, { data: [{ id: "gpt-6-astra", isDefault: true, inputModalities: ["text"] }] });
     }
-    if (method === "config/read") return this.respond(message.id, { config: { mcp_servers: {} } });
+    if (method === "config/read") return this.respond(message.id, { config: { mcp_servers: {}, developer_instructions: this.accountInstructions } });
     if (method === "thread/start" || method === "thread/resume") {
       return this.respond(message.id, { thread: { id: this.threadId, path: this.rolloutPath, turns: [] } });
     }
@@ -211,8 +212,8 @@ class InjectAppServer extends EventEmitter {
   }
 }
 
-function startHost(server: InjectAppServer, options: Record<string, unknown> = {}) {
-  return CodexAppServerHost.start({
+function startHost(server: InjectAppServer, options: Record<string, unknown> = {}, resume = false) {
+  const launch = {
     cwd: "/repo",
     requestTimeoutMs: 500,
     injectObservationTimeoutMs: 400,
@@ -221,8 +222,24 @@ function startHost(server: InjectAppServer, options: Record<string, unknown> = {
     pidAlive: () => true,
     processIdentity: () => "6161:owned",
     ...options,
-  });
+  };
+  return resume ? CodexAppServerHost.adopt(server.threadId, launch) : CodexAppServerHost.start(launch);
 }
+
+test("start and resume add learned rules after account instructions in the developer channel", async () => {
+  clearTelegramConnection();
+  for (const resume of [false, true]) for (const cleanMemory of [false, true]) {
+    const server = new InjectAppServer(scratchRoot());
+    server.accountInstructions = "Keep the account's own developer guidance.";
+    const block = "Learned rules for this synthetic fixture.";
+    const host = await startHost(server, { developerInstructions: block, cleanMemory, mcpServers: ["viewer", "telegram"] }, resume);
+    try {
+      const instructions = server.requests.find(request => request.method === (resume ? "thread/resume" : "thread/start"))?.params.developerInstructions;
+      if (resume && cleanMemory) expect(instructions).toBeUndefined(); // The existing notice goes to history.
+      else expect(instructions).toBe([server.accountInstructions, ...(cleanMemory ? [] : [block]), TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE].join("\n\n"));
+    } finally { await host.release(); }
+  }
+});
 
 function digestOf(text: string): string {
   return structuredContent(text, []).contentDigest;

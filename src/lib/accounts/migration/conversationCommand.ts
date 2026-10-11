@@ -219,7 +219,11 @@ export async function applyConversationMigration(
         },
       };
     }
-    const requested = registry.requestConversationReseat(conversationId, target.accountId);
+    const written = await registry.deliveryWrite({ label: "migration.reseat-request", operationId: command.requestOperationId },
+      () => registry.requestConversationReseat(conversationId, target.accountId),
+      requested => ({ label: "migration.reseat-request", operationId: requested.migration?.operationId ?? command.requestOperationId }));
+    if (!written.acquired) return registryBusy("the reseat and its messages remain unchanged");
+    const requested = written.value;
     let final = requested;
     if (requested.migration) {
       try {
@@ -266,7 +270,10 @@ export async function applyConversationMigration(
       }
       return { status: 409, body: { error: "the reconfigure has already settled", code: "SWITCH_SETTLED", status: read.receipt.status } };
     }
-    const withdrawal = registry.withdrawConversationReconfigure(conversationId, operationId);
+    const written = await registry.deliveryWrite({ label: "migration.withdraw-pick", operationId },
+      () => registry.withdrawConversationReconfigure(conversationId, operationId));
+    if (!written.acquired) return registryBusy("the waiting pick and its messages remain held");
+    const withdrawal = written.value;
     if (withdrawal.kind === "claimed") {
       /* The revision to cancel by exists only once this switch's own migration does. */
       const owned = withdrawal.conversation.reconfigure?.operationId === operationId

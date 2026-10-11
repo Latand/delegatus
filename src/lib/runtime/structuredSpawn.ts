@@ -1,4 +1,5 @@
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
+import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
@@ -12,6 +13,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
@@ -1701,6 +1703,7 @@ export function claudeStructuredHostOptions(
     providerAccount: Boolean(input.account.claudeProvider),
     allowSubagents: profile.allowSubagents,
     cleanMemory: profile.cleanMemory === true,
+    appendSystemPrompt: learnedRulesForLaunchProfile(profile),
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
     readOnly: launchProfileEngineReadOnly(profile),
@@ -1770,6 +1773,7 @@ export async function defaultStartHost(
       effort: profile.effort ?? undefined,
       allowSubagents: profile.allowSubagents,
       cleanMemory: profile.cleanMemory === true,
+      developerInstructions: learnedRulesForLaunchProfile(profile),
       mcpServers: profile.mcpServers,
       validateTelegramGrant,
       /* Plugin grant from the durable profile (issue #687): present only for
@@ -2183,6 +2187,7 @@ export async function spawnStructuredConversation(
   };
   try {
     input = admittedStructuredLaunchInput(input);
+    assertSpawnMemoryAvailable();
     const assertResumeSurvivorsRetired = () => {
       if (!resumeKey) return;
       const entry = input.registry.readOnlySnapshot().entries[sessionKeyId(resumeKey)];

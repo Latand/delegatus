@@ -39,15 +39,24 @@ async function poll(): Promise<void> {
   inFlight?.abort();
   const controller = new AbortController();
   inFlight = controller;
-  const ids = [...subscribers.keys()].slice(0, 64);
+  const ids = [...subscribers.keys()];
   try {
-    const query = ids.map((id) => `operationId=${encodeURIComponent(id)}`).join("&");
-    const response = await fetch(`/api/runtime/delivery-progress?${query}`, { signal: controller.signal, cache: "no-store" });
-    if (!response.ok) return;
-    const body = await response.json() as { records?: DeliveryProgressRecord[] };
-    if (controller.signal.aborted || !Array.isArray(body.records)) return;
-    reading = { records: new Map(body.records.map((record) => [record.operationId, record])), readAt: Date.now() };
-    emit();
+    const batches = Array.from({ length: Math.ceil(ids.length / 64) }, (_, n) => ids.slice(n * 64, (n + 1) * 64));
+    await Promise.allSettled(batches.map(async (batch) => {
+      const query = batch.map((id) => `operationId=${encodeURIComponent(id)}`).join("&");
+      const response = await fetch(`/api/runtime/delivery-progress?${query}`, { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) return;
+      const body = await response.json() as { records?: DeliveryProgressRecord[] };
+      if (inFlight !== controller || controller.signal.aborted || !Array.isArray(body.records)) return;
+      // Publish each answer immediately, even while another batch is pending.
+      const records = new Map([...reading.records].filter(([id]) => subscribers.has(id)));
+      for (const id of batch) records.delete(id);
+      for (const record of body.records) {
+        if (subscribers.has(record.operationId)) records.set(record.operationId, record);
+      }
+      reading = { records, readAt: Date.now() };
+      emit();
+    }));
   } catch {
     /* Unreachable or aborted: the last answer stands. */
   } finally {

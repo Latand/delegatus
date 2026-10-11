@@ -19,7 +19,7 @@ const { ClaudeLoginSupervisor, setClaudeLoginSupervisorForTests } = await import
 const { claudeProjectRoots, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderHeaders } = await import("@/lib/accounts/claude");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
-const { seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
+const { persistedAccountRegistry, seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
 const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
 const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("@/lib/accounts/removal");
@@ -29,6 +29,21 @@ function deleteRequest(body: unknown) {
     method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
   });
 }
+
+test.skipIf(process.platform !== "linux")("cleanup reports an archived Claude home retired in place", async () => {
+  const account = createManagedClaudeAccount("Retired report");
+  const transcript = path.join(account.home, "projects", "-repo", "history.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(transcript, "{}\n", { mode: 0o600 });
+  const registry = persistedAccountRegistry("claude");
+  seedAccountRegistry("claude", { ...registry, accounts: [], retired: [{ id: account.id, label: account.label, retiredAt: 1234 }] });
+
+  const response = await remove(deleteRequest({ cleanupOrphans: true }));
+
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toMatchObject({ removed: [], unresolved: [], archived: [{ id: account.id, files: 1, bytes: 3 }] });
+  expect(fs.readFileSync(path.join(retiredAccountArchive("claude", account.id), "projects", "-repo", "history.jsonl"), "utf8")).toBe("{}\n");
+});
 const { DELETE: remove, PATCH, POST } = await import("./route");
 const { GET: providerStatus } = await import("./[id]/status/route");
 const { DELETE } = await import("./login/[operationId]/route");

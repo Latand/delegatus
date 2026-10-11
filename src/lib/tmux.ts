@@ -9,6 +9,7 @@ import os from "node:os";
 import { prepareAgentPublicationSpec, withSpawnCapability, type ResumeSpec } from "@/lib/agent/cli";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fenceViewerSpawnPrompt } from "@/lib/agent/spawnPolicy";
+import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import {
   agentRegistry,
   type ProcessIdentity,
@@ -1553,6 +1554,7 @@ export async function spawnAgentWithPrompt(spec: ResumeSpec, text: string, exist
     receipt = begun.receipt;
   }
   try {
+    assertSpawnMemoryAvailable();
     const refusal = legacyClaudeTmuxSpawnRefusal(spec);
     if (refusal) throw new Error(refusal);
     const prepared = await prepareAgentPublicationSpec(spec);

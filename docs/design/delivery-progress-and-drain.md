@@ -416,6 +416,14 @@ a send the queue was dispatching replaced `dispatching` with
 stall while the original send was still in flight; the "continues the same
 record" claim for P16 did not hold on this intersection.
 
+P16 also includes a live same-key resend with a journal attempt already queued,
+pending or delivering. It answers that original operation before recovery,
+rearm or admission notes, and rechecks after reservation acquisition. The
+queue's entire record, attempt and settlement deadline remain unchanged during
+checking and dispatching. If the journal read fails, the active queue's standing
+record still prevents a rearm. A journal-confirmed uncertain attempt remains eligible
+for the existing authorized retry path.
+
 **A request-local reservation a switch overtook** (P17, round 9). Between the
 preflight fence and the hold, a switch can begin, so the hold returns a `held`
 reservation whose payload (oversized text, images) is request-local and must
@@ -1103,7 +1111,7 @@ holds sends towards its commit).
 | `:1163` | `requeueUnactuatedDelivery` | rearm | `delivery.requeue` | stays `delivery-uncertain`, reconciled under its original key; Note 1 |
 | `:1166` `:1168` | `recordDeliveryOutcome` | settle | `delivery.settle` | stays `delivery-uncertain`; the next pass reconciles; the journal replays the same operation |
 | new (Note 2) | `recordDeliveryOutcome` failed `lost` with the payload's rejection | settle | `delivery.reject` | stays `delivery-uncertain`; the next pass reaches the same rejection before any command |
-| `:1243` | orphan `terminalizeHeldDelivery` | settle | `delivery.cancel` | stays; **the lane ends without draining that conversation this pass** |
+| orphan cleanup in `coordinator.ts` | `terminalizeOrphanedHeldDelivery` | settle | `delivery.cancel` | stays; **the lane ends without draining that conversation this pass**. Inside the acquired writer, recheck operation, state, attempt, assignment, generation, migration and absence of durable ownership. An owner or claim published during acquisition preserves the payload; the next drain sends once |
 | `:1259` | `terminalizeRolledBackMigrationDelivery` | settle | `delivery.cancel` | same: no drain this pass |
 | `:956` `:1288` | `rollbackConversationMigration` | bind | `migration.rollback` | the migration and its rows stay as they were; the lane ends; next pass |
 | `:1064` | `commitSuccessor` (`settleDeliveriesAtCommit`) | bind, settle | `migration.commit` | stays `verifying`, held rows stay held; the next pass publishes again (idempotent per operation) and commits |
@@ -1121,6 +1129,10 @@ holds sends towards its commit).
 
 | Site | Write | Effect | Label | A refused acquisition |
 |---|---|---|---|---|
+| legacy reseat in `migration/conversationCommand.ts` | `requestConversationReseat` | bind, advance | `migration.reseat-request`, correlated with the returned migration operation | retryable 503; no migration or delivery change |
+| pane account switch in `delivery.ts` | profile and `requestConversationReseat` in one mutation | bind, advance | `migration.reseat-request`, correlated with the returned migration operation | 503 `REGISTRY_WRITER_BUSY`; profile, migration and accepted send unchanged; no rollback writer is needed |
+| waiting-pick withdrawal in `structuredControls.ts` and `migration/conversationCommand.ts` | `withdrawConversationReconfigure` | bind | `migration.withdraw-pick`, the pick operation | retryable 503; pick and accepted sends remain intact; the current claim result is decided inside the mutation |
+| native hand-off in `nativeQueueHttp.ts` | `recordDirectAdmission` | create | `delivery.direct-admission`, correlated from the returned owner | retryable 503; nothing admitted. Fresh and replayed successful waits name the original operation minted or recovered by the write |
 | `structuredMessageDelivery.ts:578` `:1201` | `requestConversationMigrationToActiveAccount` | bind | `migration.reseat-request` | before any reservation: refused as `REGISTRY_WRITER_BUSY` with `admission: "refused"`, as a refused hold is today |
 | `:1483` | `retryUncertainDelivery` | rearm | `delivery.rearm` | stays `delivery-uncertain`; answered with `uncertainReservationFailure` |
 | `:1578` | `requeueHeldDelivery` | rearm | `delivery.requeue` | stays `assigned`, unclaimed; answered `held`; `checking` noted |
@@ -1202,6 +1214,13 @@ mutation; only how its lock is waited for changes.
 | `beginSpawnRequest`'s membership refusal (`registry.ts:5482`–`:5483`) | fails a receipt created in the same synchronous call, before any first message exists | none on rows once narrowed | — | stays synchronous. The failed-spawn sweep inside `failSpawn`/`failStructuredSpawn` is narrowed to the launch being failed (`terminalizeFailedSpawnDeliveriesInFile(file, launchId)`), so this call touches no delivery row; other launches' rows are the convergence's (C4), which already repairs them |
 | `retireAccount` (`registry.ts:8037`) from the removal's step 4 (`accounts/removal.ts:758`) | path rewrite, pins, owed deliveries ended with the account-removed reason, parked migrations settled | settle, bind | `account.retire` | `deliveryWriteNow`. The removal runs inside the accounts registry file lock, whose waiters spin with a synchronous sleep (`accounts/codex.ts:296`–`:320`, `claude.ts:282`); holding it across an `await` would let a same-process waiter spin on the loop while the holder cannot run. So the write makes one attempt and never waits. A refusal takes the step's existing failure branch (`putHomeBack`, journal cleared, `removal.ts:759`–`:765`): nothing retired, the held sends still held, and the operator's dialog answers that the registry was busy and to try again |
 | `retireAccount` from removal recovery (`removal.ts:834`) | the same | settle, bind | `account.retire` | `deliveryWriteNow`; a refusal is the recovery's existing `return null` ("busy: retried by the next listing", `:835`–`:837`) |
+
+The C5 inventory also includes both restoration branches in `removal.ts`:
+
+| Site | Write | Effect | Label | A refused acquisition |
+|---|---|---|---|---|
+| accounts commit failure | owned `restoreSnapshot` | bind, restore | `account.retirement-rollback`, stable removal operation | `deliveryWriteNow`; keep the archive and the retiring journal with its rewrites. A later recovery finishes the documented retirement; no send is replayed |
+| archiving recovery, including a home already renamed back | `rewriteAccountPaths` | bind | `account.archive-recovery`, stable removal operation | `deliveryWriteNow`; return null and retain the journal. After a successful acquisition, restore the home and its generation paths; clear the intent only afterward |
 
 Note 1: leaving a never-dispatched send claimed (a refused requeue at `:1163`,
 or a refused `lost` failure at `:1162`) changes how it can end. With the host
@@ -1364,6 +1383,18 @@ in the stage's local verification artifact.
 | missing leaf record | `http.retryProgress.test.ts`, terminal replay cases | P14 / A2; immediate original key, admission, reason, deadline; active queue record unchanged |
 | recovery after reservation | `http.retryProgress.test.ts`, terminal retry recovery case | P14 × P9/P16 / A2; hosted check refusal after owner write; recovery/republish/admission named; stalled wait and one leaf/input |
 | current-account release | `structuredControls.test.ts`, keep-current/current-account writer cases | P21 / C2; both entry points, heartbeat <150 ms, operation-correlated asynchronous writer refusal, unchanged hold/message, successful replay |
+
+The retained follow-up paths have these focused regressions:
+
+| Path | Regression file | Decisive assertion |
+|---|---|---|
+| P9 / C1 orphan cancellation | `accounts/migration/coordinator.writerWait.test.ts` | Owner publication and attempt claim during a real 600 ms writer hold survive cleanup; later drains deliver once. The unchanged ownerless control still cancels |
+| P16 live same-key replay | `runtime/http.retryProgress.test.ts` | Checking and dispatching retain the entire progress record, reservation, attempt and deadline; one raw host input |
+| P21 / C2 legacy reseat | `conversations/[conversationId]/migration/route.test.ts`, `delivery.test.ts` | Both entry points keep heartbeat below 50 ms with a 600 ms holder; successful waits name the migration; refusal preserves the original send and pane profile; later reseat drains once |
+| P21 / C2 waiting-pick withdrawal | `runtime/structuredControls.test.ts` | Both callers keep heartbeat below 50 ms, correlate the pick, preserve it on refusal, and release the original send once on replay; an intervening claim remains atomic |
+| Shared progress read | `hooks/useDeliveryProgress.dom.test.tsx` | 65 simultaneous subscriptions from two conversations read their stalls within ten seconds in bounded batches; each answered batch publishes independently while another stays pending until poll abort. Failed reads, poll aborts and unsubscribe preserve other readings. The hook adds no rendered change or locale-dependent behavior |
+| P26 / C5 retirement restoration | `accounts/removal.writerWait.test.ts` | Busy rollback and archive recovery never wait synchronously; listed and retired-in-place homes retain durable intent through refusal and a rename interruption; later recovery restores and sends once, or completes retirement without replaying |
+| P25 / C2 native hand-off | `runtime/nativeQueueRuntime.test.ts` | Fresh and replayed writer waits name the returned original operation; one native add |
 
 The merger's #2572 attribution names these six files, each run individually:
 `accounts/migration/coordinator.test.ts`, `accounts/removal.test.ts`,

@@ -640,22 +640,33 @@ test("an inactive carried-over host retired mid-registration is detached and sta
   }
 });
 
-test("a carried-over host whose registration fails is retried and delivers exactly once (#1191)", async () => {
+test("a busy carried-over host delivers its queued message exactly once after registration recovery (#1197)", async () => {
   const { registry, journal, directory, client, close } = fixture("handover-retry");
-  await bindStructuredDeliveryQueue([], { registry, client });
+  const timing = { hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 };
+  await bindStructuredDeliveryQueue([], { registry, client, ...timing });
   const { conversationId, key } = seedConversation(registry, directory, "handover-retry-session");
   let subscriptions = 0;
-  const host = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), {
-    onStateChange: () => { subscriptions += 1; return () => {}; },
+  let busy = true;
+  const listeners = new Set<(state: import("./engineHost").HostState) => void>();
+  const engine = new FakeEngineHost(createFakeDeliveryLedger());
+  const health = engine.health.bind(engine);
+  const host = Object.assign(engine, {
+    health: async (): Promise<import("./engineHost").HostState> => ({ ...await health(), status: busy ? "active" : "idle", activeTurnRef: busy ? "busy-turn" : null }),
+    onStateChange: (listener: (state: import("./engineHost").HostState) => void) => {
+      subscriptions += 1;
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
   });
   await publishStructuredDeliveryHost({ key, host });
   expect(subscriptions).toBe(1);
 
   let cursorFailures = 0;
+  let recovered = false;
   const failingClient = {
     ...client,
     producerCursor: async (producerKind: string, eventKeyPrefix: string) => {
-      if (cursorFailures === 0) {
+      if (!recovered) {
         cursorFailures += 1;
         throw new RuntimeHostUnavailableError("runtime host request timed out");
       }
@@ -663,33 +674,46 @@ test("a carried-over host whose registration fails is retried and delivers exact
     },
   } as RuntimeHostClient;
 
-  await bindStructuredDeliveryQueue([], { registry, client: failingClient });
-  expect(cursorFailures).toBe(1);
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client: failingClient, ...timing });
+    expect(cursorFailures).toBeGreaterThanOrEqual(1);
+    expect(listeners.size).toBe(0);
 
-  /* The failed registration left a host that resolves but that nothing is
-     watching: without its own state subscription, a delivery admitted here has
-     nothing to wake the queue when the host turns idle again. */
-  expect(hasStructuredDeliveryHost(key)).toBe(true);
-  journal.executeOperation({
-    kind: "send",
-    operationId: "operation-handover-retry",
-    idempotencyKey: "handover-retry",
-    conversationId,
-    text: "admitted while the registration was failing",
-    policy: "queue",
-  });
-  await kickStructuredDeliveryQueue();
-  await settles(
-    () => journal.operationResult("operation-handover-retry")?.receipt.status === "delivered",
-    "the delivery admitted while the registration was failing",
-  );
+    /* Without the recovered subscription, nothing wakes this busy delivery
+       when the host becomes idle. */
+    expect(hasStructuredDeliveryHost(key)).toBe(true);
+    journal.executeOperation({
+      kind: "send",
+      operationId: "operation-handover-retry",
+      idempotencyKey: "handover-retry",
+      conversationId,
+      text: "admitted while the registration was failing",
+      policy: "queue",
+    });
+    await kickStructuredDeliveryQueue();
+    expect(journal.operationResult("operation-handover-retry")?.receipt.status).toBe("queued");
+    expect(host.ledger.writes).toHaveLength(0);
 
-  /* The retry behind the seat makes the registration good. */
-  await settles(() => subscriptions === 2, "the retried registration");
-  expect(hasStructuredDeliveryHost(key)).toBe(true);
-  expect(host.ledger.writes.map((entry) => entry.id)).toEqual(["operation-handover-retry"]);
-
-  await close();
+    recovered = true;
+    await settles(() => subscriptions === 2, "the retried registration");
+    // Consume the registration wake while still busy. Only the recovered state
+    // subscription can wake the message after the following idle transition.
+    await kickStructuredDeliveryQueue();
+    expect(host.ledger.writes).toHaveLength(0);
+    expect(journal.operationResult("operation-handover-retry")?.receipt.status).toBe("queued");
+    busy = false;
+    const idle = await host.health();
+    for (const listener of listeners) listener(idle);
+    await settles(
+      () => journal.operationResult("operation-handover-retry")?.receipt.status === "delivered",
+      "the recovered subscription's idle wake",
+    );
+    expect(hasStructuredDeliveryHost(key)).toBe(true);
+    expect(host.ledger.writes.map((entry) => entry.id)).toEqual(["operation-handover-retry"]);
+    for (const listener of listeners) listener(idle);
+    await kickStructuredDeliveryQueue();
+    expect(host.ledger.writes).toHaveLength(1);
+  } finally { await close(); }
 });
 
 test.each(["health-failure", "deadline", "durable-read-loss", "claim-read-failure", "release-write-failure"])("retirement keeps its barrier across controller generations: %s", async (scenario) => {

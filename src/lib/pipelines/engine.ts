@@ -43,6 +43,8 @@ import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
+import { readHostTurnRecord } from "@/lib/runtime/eventStore";
+import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
 import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
@@ -105,7 +107,6 @@ import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
-import { learnedRulesReserve, withLearnedRules } from "@/lib/memory/roleLaunch";
 import { withoutStoredLessons } from "@/lib/memory/roleStore";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
@@ -257,10 +258,8 @@ export interface PipelinePorts {
     /** Prior-attempt conversation this stage retry terminally supersedes
         (issue #383); attempt chains become round chains automatically. */
     supersedes?: string | null;
-    /** Role memory's learned rules (docs/design/role-memory.md §3.1), expanded
-        into the prompt only at dispatch. Never part of the persisted input or
-        the request digest, so no pipeline record holds rule text. */
-    learnedRules?: string | null;
+    /** Text-free selector persisted with the launch; hosts resolve it at every start. */
+    learnedRules?: { project: string; roleId: string | null } | null;
     /** A clean stage (a reviewer, a verifier, the issue reporter or a review
         gate): its launch profile carries the mark, so the shared-memory hook
         and the engine's own memory stay off for it on every resume too. */
@@ -338,6 +337,9 @@ export interface PipelinePorts {
       that handed its host over, or the boot that found the turn in flight,
       recorded it. Null for every conversation no restart cut. */
   conversationRestartCut?(conversationId: string): { recordedAt: string } | null;
+  /** Startup has not yet decided this row's restart evidence. Replacement
+      must wait even when the runtime already describes the host as dead. */
+  conversationRestartCutHeld?(conversationId: string): boolean;
   /** The runtime host generation currently serving this process (#1747). It
       advances on every release succession, which replaces every engine process
       the previous generation hosted, so a change is the controller's only
@@ -616,10 +618,9 @@ async function spawnPipelineAgent(
   input: Parameters<PipelinePorts["spawnAgent"]>[0],
   onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
 ): Promise<PipelineStageSpawn> {
-  /* The message as it is sent: a lesson the brief quotes withheld, the
-     learned rules added. Built before any account or launch is reserved, so
-     a message that cannot carry its rules reserves nothing. */
-  const message = withLearnedRules(withoutStoredLessons(input.prompt), input.learnedRules);
+  /* The message carries the stage prompt, with any quoted private rule
+     withheld. The engine renders its selector into its instruction channel. */
+  const message = withoutStoredLessons(input.prompt);
   /* #1279's seam. An unbound project takes the same branch it always took —
      the active account — so nothing changes for a project nobody configured.
      A bound one draws from its allowed set only: a stage naming an account
@@ -678,6 +679,7 @@ async function spawnPipelineAgent(
     parentConversationId: parent.conversationId,
     title: input.title,
     ...(input.cleanMemory ? { cleanMemory: true } : {}),
+    ...(input.learnedRules ? { learnedRules: input.learnedRules } : {}),
   });
   const registry = agentRegistry();
   /* Stage-retry supersedence (issue #383): the retry names the prior attempt's
@@ -1582,7 +1584,17 @@ export function defaultPipelinePorts(
         const current = await runtimeSnapshot;
         const session = current.sessions.find((item) => item.conversationId === conversationId);
         if (!session || session.attentionIds.length > 0 || session.host === "conflict") return null;
-        if (session.host === "dead" || session.host === "unhosted") return "dead";
+        if (session.host === "dead" || session.host === "unhosted") {
+          const conversation = registry.conversation(conversationId as ViewerConversationId);
+          const generation = conversation?.generations.at(-1);
+          if (conversation?.engine === "codex" && generation) {
+            const ledger = readHostTurnRecord(generation.id, { frames: false });
+            /* Completion reaches the host ledger before the rollout. Losing
+               the process cannot reopen that completed Codex turn. */
+            if (ledger.state === "read" && ledger.turn?.closed?.status === "completed") return null;
+          }
+          return "dead";
+        }
         if (session.turn === "idle") return "idle";
         const liveness = await conversationTurnLiveness(registry, conversationId as ViewerConversationId, dependencies.liveness);
         return liveness?.state === "severed" ? "stalled" : null;
@@ -1664,6 +1676,12 @@ export function defaultPipelinePorts(
     conversationRestartCut: (conversationId) => {
       const cut = newestCut(conversationId);
       return cut ? { recordedAt: cut.recordedAt } : null;
+    },
+    conversationRestartCutHeld: (conversationId) => {
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      const generation = conversation?.generations.at(-1);
+      return Boolean(conversation && generation
+        && restartCutEvidenceUnresolved(sessionKeyId({ engine: conversation.engine, sessionId: generation.id })));
     },
     runtimeHostEpoch: async () => {
       const client = runtimeHostClient();
@@ -4235,7 +4253,8 @@ async function stageCommitRepairSettled(
   if (!repair) return true;
   const worker = publication ? publicationRepairWorker(pipeline, attempt) : { stage, attempt };
   const parkRepair = (why: string) => {
-    const detail = publication ? publicationRepairParkDetail(attempt.publicationRepair!, why) : `${repair.detail}\n${why}`;
+    const detail = publication ? publicationRepairParkDetail(attempt.publicationRepair!, why)
+      : why.includes(repair.detail) ? why : `${repair.detail}\n${why}`;
     attempt.error = detail;
     park(pipeline, detail, publication ? undefined : attempt);
   };
@@ -4303,12 +4322,20 @@ async function commitPassedStage(
   const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
+  const repair = attempt.commitRepair;
+  const commitControl = repair ? {
+    recoveryHead: repair.recommit?.head,
+    beforeCommit: async (head: string) => {
+      repair.recommit = { at: ports.now(), head };
+      await persist();
+    },
+  } : undefined;
   let result = allowCommit
     ? await commitAndAdoptStageBranch(pipeline, stage.id, ports.exec, loadPipelines, attempt.branchAdoption, async (intent) => {
       attempt.branchAdoption = intent;
       await persist();
-    }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile)
-    : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile);
+    }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl)
+    : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
     if (result.deferred) {
       // Keep the durable committing cursor. The next tick repeats the forge
@@ -4317,6 +4344,10 @@ async function commitPassedStage(
       return;
     }
     if (await requestStageCommitRepair(pipeline, stage, attempt, result, ports, persist)) return;
+    if (attempt.commitRepair) {
+      attempt.commitRepair.outcome = { status: "rejected", reason: afterCommitRepair(attempt, result.error) };
+      await persist();
+    }
     parkStage(result.error);
     return;
   }
@@ -4944,6 +4975,7 @@ async function replaceInterruptedStageAttempt(
   // A stage report is durable authority even when succession entered recovery
   // (or one was recorded while the host-stop operation was awaiting).
   if (attempt.report) return false;
+  if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   const previous = attempt.restartRecovery;
   const needsPromptHistory = interruption.cut || previous?.promptBoundary !== undefined;
@@ -4971,6 +5003,7 @@ async function replaceInterruptedStageAttempt(
     return true;
   };
   if (cancelForOperatorPrompt(before)) return true;
+  if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   if (attempt.report || attempt.providerWait?.retryCancelled || newerExternalProviderPrompt(attempt, before)
     || interruption.cut && before && !restartCutOf(attempt, before, ports)) return false;
   /* A second interruption in the same boot keeps the bounded recovery policy.
@@ -4997,6 +5030,7 @@ async function replaceInterruptedStageAttempt(
   attempt.restartRecovery = { bootId, requestedAt, lastRecordAt,
     ...(promptBoundary === undefined ? {} : { promptBoundary }), ...(endedEarlier ? { stopped: endedEarlier } : {}) };
   persist();
+  if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
   /* A withdrawn stop did nothing, so it leaves no reservation behind either;
      whatever the transcript holds by now is read by the ordinary paths. */
@@ -5074,8 +5108,15 @@ async function replaceInterruptedStageAttempt(
      gone by the time the stop looked, was lost. */
   const cause: PipelineStageInterruptionCause = restarted ? "restart"
     : ended && ended.kind !== "dead" ? "engine-stop" : "host-lost";
+  if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports);
   persist();
+  return true;
+}
+
+function restartCutHoldsStageRecovery(attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+  if (!attempt.conversationId || !ports.conversationRestartCutHeld?.(attempt.conversationId)) return false;
+  ports.scheduleTick?.(1_000);
   return true;
 }
 
@@ -5645,9 +5686,8 @@ async function spawnRunStage(
 ): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
   try {
-    /* Role memory, read once per activation and before the composer, so the
-       composed input leaves room for the learned rules' pointer. A clean
-       stage carries the clean mark and no rules. */
+    /* Carry the text-free role-memory selector through every spawn. Clean
+       stages carry only their clean mark. */
     const memory = stageMemoryForLaunch(pipeline, stage, attempt.effectiveRole.roleId ?? null);
     if (attempt.activation?.prepareInput || prepareInput) {
       const bound = attemptStage(stage, attempt);
@@ -5665,7 +5705,7 @@ async function spawnRunStage(
         return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
       };
       try {
-        const reserve = learnedRulesReserve(memory.learnedRules) + Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
+        const reserve = Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
         const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
         revalidate();
         if (abort.signal.aborted) throw new ActivationSuperseded();
@@ -6087,7 +6127,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       await driveRuntimeSwitch(pipeline, stage, attempt, outside, checkpoint, async role => {
         const bound = attemptStage(stage, attempt);
         const memory = stageMemoryForLaunch(pipeline, stage, role.roleId ?? null);
-        const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec, learnedRulesReserve(memory.learnedRules));
+        const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec);
         return { role, runtimeProfile: pipelineStageRuntimeProfile(bound), cwd: pipeline.worktreeDir!, project: pipeline.project,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}), ...(memory.cleanMemory ? { cleanMemory: true } : {}),
           requestedAccountId: record.to.accountId, title: pipelineStageTitle(pipeline.task, stage.id), prompt: composed,

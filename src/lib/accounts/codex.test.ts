@@ -249,6 +249,37 @@ function codexRegistryJson(): { removals?: unknown[]; retired: Array<{ id: strin
   return persistedAccountRegistry("codex");
 }
 
+function retireCodexFixtureInPlace(fixture: ReturnType<typeof usedCodexHome>): void {
+  const registry = persistedAccountRegistry("codex");
+  seedAccountRegistry("codex", {
+    ...registry,
+    accounts: registry.accounts.filter((account) => account.id !== fixture.account.id),
+    retired: [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234 }],
+  });
+}
+
+test.skipIf(process.platform !== "linux")("cleanup archives a Codex account retired in place, keeps rollouts readable, and reports the move", () => {
+  const fixture = usedCodexHome("Retired archive");
+  retireCodexFixtureInPlace(fixture);
+
+  const cleaned = cleanupOrphanedCodexHomes();
+
+  expect(cleaned).toMatchObject({
+    removed: [], unresolved: [],
+    archived: [{ id: fixture.account.id, files: Object.keys(CODEX_LEFTOVERS).length, bytes: Object.values(CODEX_LEFTOVERS).reduce((sum, contents) => sum + Buffer.byteLength(contents), 0) }],
+  });
+  expect(fs.existsSync(fixture.account.home)).toBe(false);
+  for (const [relative, contents] of Object.entries(CODEX_LEFTOVERS)) expect(fs.readFileSync(path.join(fixture.archive, relative), "utf8")).toBe(contents);
+  expect(fs.existsSync(path.join(fixture.archive, "auth.json"))).toBe(false);
+  const moved = path.join(fixture.archive, path.relative(fixture.account.home, fixture.rollout));
+  expect(codexSessionRoots()).toContain(path.join(fixture.archive, "sessions"));
+  expect(pathAllowed(moved)).toBe(true);
+  expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(moved);
+  const expectedRetired = [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, archived: true }];
+  expect(persistedAccountRegistry("codex").retired).toEqual(expectedRetired);
+  expect(cleanupOrphanedCodexHomes()).toEqual({ removed: [], unresolved: [] });
+});
+
 test("a used Codex home is removed and every rollout stays readable in the shared archive (#1857)", () => {
   const fixture = usedCodexHome("Invented Delta");
 
@@ -298,15 +329,35 @@ test("an existing Codex archive destination refuses removal and leaves the home 
   expect(codexRegistryJson().removals ?? []).toEqual([]);
 });
 
-async function crashCodexRemovalAt(accountId: string, checkpoint: string): Promise<void> {
+async function crashCodexRemovalAt(accountId: string, checkpoint: string, action = "remove"): Promise<void> {
   const child = Bun.spawn({
-    cmd: [process.execPath, path.join(import.meta.dir, "fixtures", "accountRemovalCrash.ts"), "codex", accountId, checkpoint],
+    cmd: [process.execPath, path.join(import.meta.dir, "fixtures", "accountRemovalCrash.ts"), "codex", accountId, checkpoint, action],
     env: { ...process.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR!, LLV_CODEX_HOME: process.env.LLV_CODEX_HOME! },
     stdout: "ignore",
     stderr: "pipe",
   });
   await child.exited;
   expect(child.signalCode).toBe("SIGKILL");
+}
+
+for (const checkpoint of ["journaled", "renamed", "registry-retired", "accounts-committed"] as const) {
+  test.skipIf(process.platform !== "linux")(`retired-in-place Codex cleanup recovers a crash after ${checkpoint} without losing its label`, async () => {
+    const fixture = usedCodexHome("Retired recovery");
+    retireCodexFixtureInPlace(fixture);
+    await crashCodexRemovalAt(fixture.account.id, checkpoint, "cleanup");
+
+    expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+    const committed = checkpoint === "registry-retired" || checkpoint === "accounts-committed";
+    const expectedRetired = [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, ...(committed ? { archived: true } : {}) }];
+    expect(persistedAccountRegistry("codex").retired).toEqual(expectedRetired);
+    expect(fs.existsSync(fixture.account.home)).toBe(!committed);
+    if (!committed) expect(cleanupOrphanedCodexHomes()).toMatchObject({ unresolved: [], archived: [{ id: fixture.account.id }] });
+    const moved = path.join(fixture.archive, path.relative(fixture.account.home, fixture.rollout));
+    expect(fs.readFileSync(moved, "utf8")).toBe("{\"type\":\"session_meta\"}\n");
+    expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(moved);
+    expect(fs.existsSync(path.join(fixture.archive, "auth.json"))).toBe(false);
+    expect(codexRegistryJson().removals ?? []).toEqual([]);
+  });
 }
 
 for (const checkpoint of ["journaled", "renamed"] as const) {

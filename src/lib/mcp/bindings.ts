@@ -2444,7 +2444,7 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lessons: args.lessons, none: args.none });
+    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none });
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
@@ -4735,7 +4735,7 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
  *   The `restricted` flag on each engine's block says which of the two a
  *   project is in, so "allows everything" never reads like "allows nothing".
  */
-function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+async function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const action = text(args.action) || "list";
   if (action !== "list" && action !== "add" && action !== "remove") {
     throw new Error("action must be list, add or remove");
@@ -4749,7 +4749,11 @@ function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDom
 
   const callerProject = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
   const requestedProject = text(args.project) || (action === "list" ? callerProject ?? "" : "");
-  const project = requestedProject ? canonicalOrchestratorProject(requestedProject) : null;
+  const project = requestedProject
+    ? action === "list"
+      ? await resolveOrchestratorToolProject(requestedProject, dependencies)
+      : canonicalOrchestratorProject(requestedProject)
+    : null;
 
   if (action !== "list") {
     if (!project) throw new Error("project is required to add or remove a binding");

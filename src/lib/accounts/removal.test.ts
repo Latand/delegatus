@@ -134,6 +134,67 @@ test("an unknown file appearing after preflight blocks anchored removal", () => 
   expect(fs.readFileSync(artifact, "utf8")).toBe("late state");
 });
 
+test.skipIf(process.platform !== "linux")("a classified skills link replaced by an unknown file refuses removal and preserves both targets", () => {
+  const home = path.join(sandbox, "replaced-link-home");
+  const outside = path.join(sandbox, "replaced-link-target");
+  fs.mkdirSync(home, { mode: 0o700 });
+  fs.writeFileSync(outside, "outside history", { mode: 0o600 });
+  const skills = path.join(home, "skills");
+  fs.symlinkSync(outside, skills);
+  const originalLstat = fs.lstatSync;
+  let swapped = false;
+  fs.lstatSync = ((target: fs.PathLike, options?: unknown) => {
+    const stat = originalLstat(target, options as never);
+    if (!swapped && String(target).startsWith("/proc/self/fd/") && path.basename(String(target)) === "skills") {
+      swapped = true;
+      fs.unlinkSync(skills);
+      fs.writeFileSync(skills, "replacement history", { mode: 0o600 });
+    }
+    return stat;
+  }) as typeof fs.lstatSync;
+
+  let caught: unknown;
+  try { removeHistoryFreeAccountHome("claude", "work", home); }
+  catch (error) { caught = error; }
+  finally { fs.lstatSync = originalLstat; }
+
+  expect(swapped).toBe(true);
+  expect(caught).toBeInstanceOf(AccountHistoryInventoryBlockedError);
+  const report = (caught as InstanceType<typeof AccountHistoryInventoryBlockedError>).report;
+  expect(report.error?.path ?? report.artifacts.find((artifact) => artifact.classification === "unknown")?.path).toBe("skills");
+  expect(fs.existsSync(home)).toBe(true);
+  expect(fs.readFileSync(skills, "utf8")).toBe("replacement history");
+  expect(fs.readFileSync(outside, "utf8")).toBe("outside history");
+});
+
+test.skipIf(process.platform !== "linux")("a same-type replacement of a classified credential is retained and named in the refusal", () => {
+  const home = path.join(sandbox, "replaced-credential-home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const credential = path.join(home, ".credentials.json");
+  const previous = path.join(sandbox, "previous-credential");
+  fs.writeFileSync(credential, "old state", { mode: 0o600 });
+  const originalLstat = fs.lstatSync;
+  let swapped = false;
+  fs.lstatSync = ((target: fs.PathLike, options?: unknown) => {
+    const stat = originalLstat(target, options as never);
+    if (!swapped && String(target).startsWith("/proc/self/fd/") && path.basename(String(target)) === ".credentials.json") {
+      swapped = true;
+      fs.renameSync(credential, previous);
+      fs.writeFileSync(credential, "replacement state", { mode: 0o600 });
+    }
+    return stat;
+  }) as typeof fs.lstatSync;
+  let caught: unknown;
+  try { removeHistoryFreeAccountHome("claude", "work", home); }
+  catch (error) { caught = error; }
+  finally { fs.lstatSync = originalLstat; }
+
+  expect(caught).toBeInstanceOf(AccountHistoryInventoryBlockedError);
+  expect((caught as InstanceType<typeof AccountHistoryInventoryBlockedError>).report.error?.path).toBe(".credentials.json");
+  expect(fs.readFileSync(credential, "utf8")).toBe("replacement state");
+  expect(fs.readFileSync(previous, "utf8")).toBe("old state");
+});
+
 test("an incomplete directory inventory blocks deletion and names the unreadable path", () => {
   const home = path.join(sandbox, "unreadable-inventory-home");
   const relative = "unreadable-directory";
@@ -279,10 +340,9 @@ test("an unresolved live launch blocks removal of every managed account for its 
   expect(accountRemovalBlockers("claude", "work")).toEqual([]);
 });
 
-test("an aged queued pin blocks every account until its durable receipt settles", () => {
-  const store = registry();
+function queuedPin(store: Registry, engine: "claude" | "codex") {
   const begun = beginLegacySpawnFixture(store, {
-    engine: "claude",
+    engine,
     cwd: "/repo",
     transport: "structured",
     accountId: "work",
@@ -295,22 +355,68 @@ test("an aged queued pin blocks every account until its durable receipt settles"
     retryAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString(),
     accountId: "work",
     locale: "en",
-    spec: { engine: "claude", command: "claude", cwd: "/repo", windowName: "queued-pin", launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Queued account work" }) },
+    spec: { engine, command: engine, cwd: "/repo", windowName: "queued-pin", launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Queued account work" }) },
     ["prompt"]: "continue",
     imageRefs: [],
     parentArtifactPath: null,
     pipelineSourceConversationId: null,
   }, "queued for account capacity");
   store.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner!);
+  return begun.receipt.launchId;
+}
+
+/* The former "blocks every account" assertion used a receipt and a durable
+   queue naming work. queuePinnedSpawn atomically publishes the queue on that
+   receipt and requires matching account IDs; queuedPinnedSpawnForReceipt
+   checks the same match at recovery. Its target is already known even days
+   before execution (#1600).
+   Unresolved receipt ownership keeps its wider safety fence below. */
+for (const engine of ["claude", "codex"] as const) test(`an aged queued ${engine} pin blocks only its named account until its receipt settles (issue #1600)`, () => {
+  const store = registry();
+  const launchId = queuedPin(store, engine);
+  expect(store.readOnlySnapshot().receipts[launchId]).toMatchObject({
+    accountId: "work",
+    queuedPinnedSpawn: { accountId: "work" },
+  });
 
   /* The dialog names a queued pin apart from a running agent (#1857). */
-  expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual(["queued_pin"]);
-  expect(accountRemovalBlockers("claude", "other", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual([]);
+  expect(accountRemovalBlockers(engine === "claude" ? "codex" : "claude", "work", DAYS_LATER)).toEqual([]);
 
   /* Anything genuinely running outranks the queued pin. */
-  beginLegacySpawnFixture(store, { engine: "claude", cwd: "/repo", accountId: "work" });
-  expect(accountRemovalBlockers("claude", "work")).toEqual(["live_sessions"]);
-  expect(accountRemovalBlockers("claude", "other")).toEqual(["queued_pin"]);
+  const running = beginLegacySpawnFixture(store, { engine, cwd: "/repo", accountId: "work" });
+  if (running.kind !== "created") throw new Error("expected a live launch receipt");
+  expect(accountRemovalBlockers(engine, "work")).toEqual(["live_sessions"]);
+  expect(accountRemovalBlockers(engine, "other")).toEqual([]);
+
+  expect(store.failSpawn(running.receipt.launchId, "launch ended")).toBe(true);
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(store.failSpawn(launchId, "queued launch cancelled")).toBe(true);
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual([]);
+  expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual([]);
+});
+
+for (const engine of ["claude", "codex"] as const) test(`an aged queued ${engine} pin with unresolved receipt ownership blocks every account until settlement`, () => {
+  /* Admission refuses an unresolved account. A legacy/imported receipt can
+     still have missing ownership: removal must stay conservative for it. */
+  const filename = path.join(process.env.LLV_STATE_DIR!, "unresolved-pin.json");
+  const store = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(store);
+  const launchId = queuedPin(store, engine);
+  const snapshot = store.snapshot();
+  snapshot.receipts[launchId].accountId = null;
+  fs.writeFileSync(filename, JSON.stringify(snapshot));
+  expect(() => store.queuePinnedSpawn(launchId, snapshot.receipts[launchId].queuedPinnedSpawn!, "queued for account capacity"))
+    .toThrow("queued pinned spawn payload conflicts with its durable receipt");
+
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers(engine === "claude" ? "codex" : "claude", "work", DAYS_LATER)).toEqual([]);
+
+  expect(store.failSpawn(launchId, "unresolved queued launch cancelled")).toBe(true);
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual([]);
+  expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual([]);
 });
 
 /* Production shape of issue #1595: launch receipts pinned to an account, left

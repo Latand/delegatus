@@ -165,7 +165,8 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
   const writeRow = async (adoptOperationId?: string): Promise<DeliveryOperationOwner | NextResponse> => {
     try {
       const row = await registry!.deliveryWrite({ label: "delivery.direct-admission", operationId: adoptOperationId ?? command.operationId ?? null },
-        () => registry!.recordDirectAdmission({ handOff: identity!, ...(adoptOperationId ? { adoptOperationId } : {}) }));
+        () => registry!.recordDirectAdmission({ handOff: identity!, ...(adoptOperationId ? { adoptOperationId } : {}) }),
+        owner => owner ? { label: "delivery.direct-admission", operationId: owner.command.operationId } : null);
       if (!row.acquired || !row.value) {
         return NextResponse.json({ error: "the delivery record's write lock is busy; nothing was sent", retryable: true }, { status: 503 });
       }

@@ -7,14 +7,15 @@ import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/s
 import { canonicalProject } from "@/lib/projects/aliases";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 
-import { appendRule, lessonPattern, sameRule, scopeChars } from "./roleConsolidate";
+import { appendRule, lessonPattern, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
-import { MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
+import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import { renderLearnedRules } from "./roleRender";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
   type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type RuleView, type ScopeView, type StageLessonView,
+  type RewriteInput, type RuleRevision, type RuleRevisionView,
 } from "./roleTypes";
 
 /* One collection in state.sqlite, so role memory inherits the state store's
@@ -28,7 +29,8 @@ import {
    src/lib/projects/succession.ts). A rule keeps the scope it was written
    under, and every read resolves that scope through the project's aliases;
    a scope row left under a moved key is joined into the current one on the
-   next read or write, within the bound. */
+   next operator view or write, within the bound; engine starts resolve the
+   same aliases without writing. */
 
 const COLLECTION = "role_memory";
 const HISTORY_LIMIT = 500;
@@ -83,7 +85,7 @@ export function projectScope(project: string): string {
 /** A stored scope as it reads today, under its project's current key. */
 export function canonicalScope(scope: string): string {
   const kind = scopeKind(scope);
-  if (kind === "machine") return scope;
+  if (kind === "machine" || isCrossProjectRoleScope(scope)) return scope;
   return kind === "role" ? roleScope(scopeProject(scope)!, scopeRole(scope)!) : projectScope(scopeProject(scope)!);
 }
 
@@ -97,9 +99,9 @@ function scopeResolver(): (scope: string) => string {
   };
 }
 
-/** The scopes a stage reads, in the order they are injected: its role, its project, the machine. */
+/** The four scopes a stage reads: its role here, that role everywhere, the project and machine. */
 export function readableScopes(project: string, roleId: string | null): string[] {
-  return [...(roleId ? [roleScope(project, roleId)] : []), projectScope(project), MACHINE_SCOPE];
+  return [...(roleId ? [roleScope(project, roleId), crossProjectRoleScope(roleId)] : []), projectScope(project), MACHINE_SCOPE];
 }
 
 export class RoleMemoryRefusal extends Error {
@@ -109,8 +111,7 @@ export class RoleMemoryRefusal extends Error {
 /** Joins every scope row stored under a project key that has since moved
     into the project's current key, in one transaction: the active rules of
     both in the order they were written, a word-for-word repeat merged into
-    the earlier rule, and the oldest archived while the joined scope is over
-    its bound. Both histories stay, with one entry that records the join. */
+    the earlier rule, with the same curation order and bound as every writer. Both histories stay, with one entry that records the join. */
 function joinMovedScopes(now = new Date().toISOString()): void {
   const held = collection();
   if (!held) return;
@@ -127,20 +128,26 @@ function joinMovedScopes(now = new Date().toISOString()): void {
       const current: RoleMemoryScopeRow = target?.kind === "scope" ? target : { kind: "scope", scope: into, revision: 0, active: [], history: [] };
       const joined: RoleMemoryRule[] = [];
       const merged: { from: string; into: string }[] = [];
-      for (const rule of [...rulesOf(current.active), ...rulesOf(source.active)].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+      const candidates = [...rulesOf(current.active), ...rulesOf(source.active)];
+      const uncurated = candidates.filter(rule => !rule.curatedAt && !rule.keptByOperatorAt).sort((a, b) => a.changedAt.localeCompare(b.changedAt));
+      for (const rule of [...uncurated, ...candidates.filter(rule => rule.curatedAt || rule.keptByOperatorAt)]) {
         const earlier = joined.find((kept) => sameRule(kept.rule, rule.rule));
         if (!earlier) { joined.push(rule); continue; }
+        // A duplicate carries the strongest retention decision across a rename.
+        if (rule.curatedAt || rule.keptByOperatorAt) {
+          const kept = { ...earlier, curatedAt: rule.curatedAt ?? earlier.curatedAt, keptByOperatorAt: rule.keptByOperatorAt ?? earlier.keptByOperatorAt };
+          joined.splice(joined.indexOf(earlier), 1);
+          joined.push(kept);
+          tx.put(kept);
+        }
         tx.put({ ...rule, state: "merged", reason: "duplicate", mergedInto: earlier.id, changedAt: now });
         merged.push({ from: rule.id, into: earlier.id });
       }
-      const archived: string[] = [];
-      while (joined.length > 1 && scopeChars(joined) > ROLE_MEMORY_BOUND) {
-        const oldest = joined.shift()!;
-        tx.put({ ...oldest, state: "archived", reason: "budget", changedAt: now });
-        archived.push(oldest.id);
-      }
+      const retained = retainRules(joined, now);
+      for (const changed of retained.changed) tx.put(changed);
+      const archived = retained.archived;
       const revision = Math.max(current.revision, source.revision) + 1;
-      tx.put({ ...current, revision, active: joined.map((rule) => rule.id),
+      tx.put({ ...current, revision, active: retained.active.map((rule) => rule.id),
         history: [...source.history, ...current.history, { revision, at: now, by: "succession" as const, added: source.active, merged, archived }].slice(-HISTORY_LIMIT) });
       tx.delete(`s:${from}`);
     }
@@ -161,9 +168,18 @@ export function activeRules(scope: string): RoleMemoryRule[] {
 }
 
 /** The block a new stage of this role and project starts with. */
-export function learnedRulesBlock(project: string, roleId: string | null): string {
-  joinMovedScopes();
-  return renderLearnedRules(readableScopes(project, roleId).map((scope) => ({ scope, rules: activeRules(scope) })));
+export function learnedRulesBlock(project: string, roleId: string | null, maxBytes = Infinity): string {
+  // A process start resolves aliases in its snapshot; it never joins or migrates state.
+  const all = rows();
+  const resolve = scopeResolver();
+  const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
+  return renderLearnedRules(readableScopes(project, roleId).map(scope => {
+    const active = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope ? row.active : [])
+      .flatMap(id => { const found = byId.get(id); return found?.state === "active" && !found.versionOf ? [found] : []; });
+    // Two aliased rows can exceed one scope's bound before an owner joins them.
+    // Apply the same retention decision to this snapshot without writing it.
+    return { scope, rules: retainRules(active, new Date().toISOString()).active.reverse() };
+  }), maxBytes);
 }
 
 export function lessonRequest(pipelineId: string, stageId: string, attempt: number): LessonRequestRow | null {
@@ -185,6 +201,7 @@ function hintsOf(text: string): StaticFindingClass[] {
 }
 
 export interface LeftLesson {
+  action: "lesson" | "rewrite";
   id: string;
   scope: string;
   state: RoleMemoryRule["state"];
@@ -192,26 +209,59 @@ export interface LeftLesson {
   scopeChars: number;
   archived: string[];
   hints: StaticFindingClass[];
+  version?: string;
 }
 
-/** Appends an attempt's lessons to their scopes in one transaction, consolidating each scope under its bound. */
+type RuleTransaction = { get(key: string): RoleMemoryRow | null; put(row: RoleMemoryRow): void };
+
+function versionedRule(tx: RuleTransaction, current: RoleMemoryRule, text: Pick<RoleMemoryRule, "rule" | "why" | "hints">, revisedBy: RuleRevision): { updated: RoleMemoryRule; version: string } {
+  const version = newRuleId(tx);
+  const prior: RoleMemoryRule = { ...current, id: version, state: "archived", reason: "rewritten", versionOf: current.id, changedAt: revisedBy.at };
+  delete prior.versions;
+  delete prior.mergedInto;
+  tx.put(prior);
+  const updated = { ...current, rule: text.rule, why: text.why, hints: text.hints, changedAt: revisedBy.at, revisedBy, versions: [...(current.versions ?? []), version] };
+  tx.put(updated);
+  return { updated, version };
+}
+
+/** Accepts one stage answer in one transaction, retaining versions and the scope bound. */
 export function leaveLessons(input: {
   request: Pick<LessonRequestRow, "pipelineId" | "stageId" | "attempt">;
   source: RuleSource;
   lessons: readonly LessonInput[];
   none: string | null;
+  rewrite?: RewriteInput;
   now?: string;
 }): { left: LeftLesson[]; none: string | null } {
   const now = input.now ?? new Date().toISOString();
   const project = canonicalProject(input.source.project);
+  if (project === "*" || Number(input.lessons.length > 0) + Number(input.rewrite !== undefined) + Number(input.none !== null) !== 1
+    || input.lessons.length > MAX_LESSONS_PER_ATTEMPT) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite or one lesson for a concrete project");
   joinMovedScopes(now);
   const result = collection(true)!.boundedPatch(4096, (tx) => {
     const request = tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt));
     if (request?.kind !== "request") throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "this stage attempt was not asked for a lesson");
-    if (request.ruleIds.length + input.lessons.length > MAX_LESSONS_PER_ATTEMPT) {
-      throw new RoleMemoryRefusal("LESSON_LIMIT", `a stage leaves at most ${MAX_LESSONS_PER_ATTEMPT} lessons; this one already left ${request.ruleIds.length}`);
-    }
+    if (request.none !== null || request.rewrote || request.ruleIds.length) throw new RoleMemoryRefusal("LESSON_LIMIT", "this stage attempt already answered its lesson request");
     const left: LeftLesson[] = [];
+    if (input.rewrite) {
+      const target = tx.get(`r:${input.rewrite.id}`);
+      const scope = target?.kind === "rule" ? canonicalScope(target.scope) : "";
+      const held = tx.get(`s:${scope}`);
+      if (target?.kind !== "rule" || target.versionOf || target.state !== "active" || held?.kind !== "scope"
+        || !held.active.includes(target.id) || !readableScopes(project, input.source.roleId).includes(scope)) {
+        throw new RoleMemoryRefusal("RULE_NOT_READABLE", "rewrite must name an active readable rule of this stage");
+      }
+      if (sameRule(target.rule, input.rewrite.rule)) throw new RoleMemoryRefusal("LESSON_INVALID", "rewrite must change the rule text");
+      const { updated, version } = versionedRule(tx, target, { rule: input.rewrite.rule, why: input.rewrite.why, hints: hintsOf(`${input.rewrite.rule}\n${input.rewrite.why}`) }, { by: "agent", at: now, source: { ...input.source, project } });
+      const active = held.active.flatMap(id => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
+      const retained = retainRules(active, now, new Set([target.id]));
+      for (const changed of retained.changed) tx.put(changed);
+      const revision = held.revision + 1;
+      tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: [...held.history, { revision, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }].slice(-HISTORY_LIMIT) });
+      tx.put({ ...request, rewrote: target.id });
+      return { left: [{ action: "rewrite" as const, id: updated.id, version, scope, state: updated.state, scopeChars: scopeChars(retained.active), archived: retained.archived, hints: updated.hints }], none: null };
+    }
     for (const lesson of input.lessons) {
       const scope = lesson.scope === "machine" ? MACHINE_SCOPE
         : lesson.scope === "project" ? projectScope(project)
@@ -232,7 +282,7 @@ export function leaveLessons(input: {
         history: [...current.history, { revision, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }].slice(-HISTORY_LIMIT),
       });
       const stored = outcome.changed.find((entry) => entry.id === incoming.id)!;
-      left.push({ id: incoming.id, scope, state: stored.state, ...(stored.mergedInto ? { mergedInto: stored.mergedInto } : {}), scopeChars: scopeChars(outcome.active), archived: outcome.archived, hints });
+      left.push({ action: "lesson", id: incoming.id, scope, state: stored.state, ...(stored.mergedInto ? { mergedInto: stored.mergedInto } : {}), scopeChars: scopeChars(outcome.active), archived: outcome.archived, hints });
     }
     const none = input.none ?? request.none;
     tx.put({ ...request, ruleIds: [...request.ruleIds, ...left.map((entry) => entry.id)], none });
@@ -250,6 +300,7 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
   return collection(true)!.boundedPatch(8, (tx) => {
     const rule = tx.get(`r:${ruleId}`);
     if (rule?.kind !== "rule") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "no such rule");
+    if (rule.versionOf) throw new RoleMemoryRefusal("RULE_IS_VERSION", "an earlier text is a version; revert it on its original rule");
     if (rule.state !== "active") throw new RoleMemoryRefusal("RULE_NOT_ACTIVE", "this rule is not in the injected list");
     const held = tx.get(`s:${canonicalScope(rule.scope)}`);
     if (held?.kind !== "scope") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "the rule's scope is missing");
@@ -268,36 +319,68 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
   return collection(true)!.boundedPatch(4096, (tx) => {
     const rule = tx.get(`r:${ruleId}`);
     if (rule?.kind !== "rule") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "no such rule");
+    if (rule.versionOf) throw new RoleMemoryRefusal("RULE_IS_VERSION", "an earlier text is a version; revert it on its original rule");
     if (rule.state === "active") return rule;
     const scope = canonicalScope(rule.scope);
     const held = tx.get(`s:${scope}`);
     const current: RoleMemoryScopeRow = held?.kind === "scope" ? held : { kind: "scope", scope, revision: 0, active: [], history: [] };
-    const restored: RoleMemoryRule = { ...rule, scope, state: "active", changedAt: now };
+    const restored: RoleMemoryRule = { ...rule, scope, state: "active", changedAt: now, keptByOperatorAt: now };
     delete restored.reason;
     delete restored.mergedInto;
     const next = [...current.active.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; }), restored];
-    const archived: string[] = [];
     tx.put(restored);
-    while (next.length > 1 && scopeChars(next) > ROLE_MEMORY_BOUND) {
-      const oldest = next.shift()!;
-      tx.put({ ...oldest, state: "archived", reason: "budget", changedAt: now });
-      archived.push(oldest.id);
-    }
+    const retained = retainRules(next, now, new Set([ruleId]));
+    for (const changed of retained.changed) tx.put(changed);
+    const archived = retained.archived;
     const revision = current.revision + 1;
-    tx.put({ ...current, revision, active: next.map((entry) => entry.id),
+    tx.put({ ...current, revision, active: retained.active.map((entry) => entry.id),
       history: [...current.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }].slice(-HISTORY_LIMIT) });
     return restored;
   });
 }
 
+/** Restore an earlier text on its original rule and retain the text it replaces. */
+export function revertRule(versionId: string, now = new Date().toISOString()): RoleMemoryRule {
+  joinMovedScopes(now);
+  const result = collection(true)!.boundedPatch(4096, tx => {
+    const version = tx.get(`r:${versionId}`);
+    const current = version?.kind === "rule" && version.versionOf ? tx.get(`r:${version.versionOf}`) : null;
+    if (version?.kind !== "rule" || !version.versionOf || current?.kind !== "rule" || !current.versions?.includes(version.id)) {
+      throw new RoleMemoryRefusal("RULE_NOT_FOUND", "no such rule version");
+    }
+    const scope = canonicalScope(current.scope);
+    const held = tx.get(`s:${scope}`);
+    if (held?.kind !== "scope") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "the rule's scope is missing");
+    const { updated, version: replaced } = versionedRule(tx, current, version, { by: "operator", at: now, revertedTo: versionId });
+    const active = held.active.flatMap(id => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
+    const retained = retainRules(active, now, new Set([current.id]));
+    for (const changed of retained.changed) tx.put(changed);
+    const revision = held.revision + 1;
+    tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: [...held.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }].slice(-HISTORY_LIMIT) });
+    return updated;
+  });
+  try { refreshLessonKnownValues(); } catch { /* egress fails closed */ }
+  return result;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function view(row: RoleMemoryRule, now: number): RuleView {
+function revisionView(revision: RuleRevision): RuleRevisionView {
+  return { by: revision.by, at: revision.at, ...(revision.revertedTo ? { revertedTo: revision.revertedTo } : {}),
+    ...(revision.source ? { roleId: revision.source.roleId, fixRound: revision.source.fixRound } : {}) };
+}
+
+function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>): RuleView {
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints,
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
     roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.stageId,
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
+    ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),
+    ...(row.versions?.length ? { versions: row.versions.flatMap(id => {
+      const prior = byId.get(id);
+      return prior ? [{ id: prior.id, rule: prior.rule, why: prior.why, hints: prior.hints, createdAt: prior.createdAt, ...(prior.revisedBy ? { revisedBy: revisionView(prior.revisedBy) } : {}) }] : [];
+    }) } : {}),
   };
 }
 
@@ -308,18 +391,18 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
   const resolve = scopeResolver();
   const all = rows();
   const rulesById = new Map(all.flatMap((row) => row.kind === "rule" ? [[row.id, row] as const] : []));
-  const wanted = [...all.flatMap((row) => row.kind === "scope" && scopeProject(row.scope) === canonical && scopeKind(row.scope) === "role" ? [row.scope] : []).sort(),
+  const wanted = [...all.flatMap((row) => row.kind === "scope" && (scopeProject(row.scope) === canonical || isCrossProjectRoleScope(row.scope)) && scopeKind(row.scope) === "role" ? [row.scope] : []).sort(),
     projectScope(canonical), MACHINE_SCOPE];
   const scopes: ScopeView[] = wanted.map((scope) => {
     const held = all.find((row): row is RoleMemoryScopeRow => row.kind === "scope" && row.scope === scope);
     const active = (held?.active ?? []).flatMap((id) => { const found = rulesById.get(id); return found ? [found] : []; });
-    const left = [...rulesById.values()].filter((row) => row.state !== "active" && resolve(row.scope) === scope)
+    const left = [...rulesById.values()].filter((row) => row.state !== "active" && !row.versionOf && resolve(row.scope) === scope)
       .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
     return {
       scope, kind: scopeKind(scope), roleId: scopeRole(scope), revision: held?.revision ?? 0,
       chars: scopeChars(active), bound: ROLE_MEMORY_BOUND,
       addedToday: active.filter((row) => now - Date.parse(row.createdAt) < DAY_MS).length,
-      active: active.map((row) => view(row, now)), left: left.map((row) => view(row, now)),
+      active: active.map((row) => view(row, now, rulesById)), left: left.map((row) => view(row, now, rulesById)),
     };
   });
   return { project: canonical, enabled: roleMemoryEnabled(), scopes };

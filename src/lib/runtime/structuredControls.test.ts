@@ -1262,6 +1262,53 @@ function profiledConversation() {
   return { ...fixture, id };
 }
 
+for (const caller of ["control", "migration"] as const) {
+  for (const refuse of [false, true]) test(`waiting-pick withdrawal through ${caller} waits off-loop and preserves a refused pick (${refuse})`, async () => {
+    const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+    const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+    const { drainHeldDeliveries } = await import("@/lib/accounts/migration/coordinator");
+    const made = sqliteRegistryFixture("llv-waiting-pick", refuse ? { sqliteWriterDeadlineMs: 80 } : {});
+    const holder = registryLockHolder(made.sqliteFilename);
+    const fixture = structuredConversation({ registry: made.registry });
+    const id = fixture.conversationId as `conversation_${string}`;
+    const profile = { model: "gpt-5.6-sol", effort: "high", fast: true };
+    made.registry.updateConversationLaunchProfile(id, profile);
+    const { journal, client } = journalClient(`waiting-pick-${caller}-${refuse}`);
+    const withdraw = () => caller === "control"
+      ? pickAccount(fixture, client, "pick-current", { ...profile, accountId: "codex-subscription" })
+      : applyConversationMigration({ conversationId: id, action: "withdraw", operationId: "pick-b" },
+          { registry: () => made.registry, operationStatus: operationId => client.operationStatus(operationId), kick: () => {} });
+    try {
+      expect((await pickAccount(fixture, client, "pick-b", { ...profile, accountId: "codex-b" }))?.status).toBe(202);
+      const held = made.registry.holdDelivery(id, "accepted before withdrawal", "waiting-pick-original-key");
+      resetBlockingWaitsForTests(() => {});
+      await holder.hold(600);
+      const { value, gapMs } = await longestLoopGap(withdraw);
+      expect(gapMs).toBeLessThan(50);
+      expect(value?.status).toBe(refuse ? 503 : 200);
+      expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "migration.withdraw-pick")?.operationId).toBe("pick-b");
+      if (refuse) {
+        expect(value?.body).toMatchObject({ retryable: true });
+        expect(made.registry.reconfigureCancelled(id, "pick-b")).toBe(false);
+        expect(made.registry.snapshot().heldDeliveries[held.id]?.text).toBe(held.text);
+        await holder.release();
+        expect((await withdraw())?.status).toBe(200);
+      }
+      expect(made.registry.reconfigureCancelled(id, "pick-b")).toBe(true);
+      let inputs = 0;
+      const port = { async deliver() { inputs += 1; return "delivered" as const; } };
+      await drainHeldDeliveries(id, port, made.registry);
+      await drainHeldDeliveries(id, port, made.registry);
+      expect(inputs).toBe(1);
+    } finally {
+      await holder.close();
+      journal.close();
+      made.registry.close();
+      made.cleanup();
+    }
+  });
+}
+
 test("picking B and then the account it runs on withdraws B, and no migration is ever attempted", async () => {
   const fixture = profiledConversation();
   const { journal, client, commands } = journalClient("b-then-a");
