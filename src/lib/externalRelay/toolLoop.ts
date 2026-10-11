@@ -49,7 +49,7 @@ export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> 
 /** Request-scoped memory only. The service owns the durable C6 ledger. */
 export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest, lease: {
   signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>;
-}, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void) {
+}, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void, onToolState?: (pending: boolean) => void) {
   // I8/C8 admission and the authoritative index belong to the service. The
   // feature gates only the amended owner semantics; legacy 2a owner reads stay.
   const tools = callableTools(request);
@@ -221,8 +221,10 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             if (rejectionCode || callsLeft() === 0) return { result: null, code: "too_many_calls", output: "" };
             sent++;
           }
+          onToolState?.(true);
           if (!tool.audience) onProgress?.(call.tool, false, false);
-          return send(body, call.tool);
+          const sent = send(body, call.tool);
+          return onToolState ? sent.finally(() => onToolState(false)) : sent;
         })().then((value) => {
           if (!tool.audience && (!value.result || !value.result.audience)) onProgress?.(call.tool, true, value.result?.status !== "ok");
           return value;
