@@ -1861,7 +1861,7 @@ async function adoptStructuredHostsPass(
   }
   /* A queued message's on-demand recovery waits for these rows as well, until
      the re-probe decides them or reaches its cap. */
-  if (!admitHeldPendingWork) for (const key of heldHostKeys) holdRestartCutRow(key);
+  for (const key of heldHostKeys) holdRestartCutRow(key, { admitPendingWork: admitHeldPendingWork });
   const stamps = recognition.stamps;
   const self = captureProcessIdentity(process.pid);
   const withdrawMovedProposals = (key: string, stamp: RestartCutStamp): void => {
@@ -1895,7 +1895,7 @@ async function adoptStructuredHostsPass(
     console.error("[structured hosts] restart cut evidence moved after it was decided; holding the row", { key });
     withdrawMovedProposals(key, stamp);
     heldHostKeys.add(key);
-    if (!admitHeldPendingWork) holdRestartCutRow(key);
+    holdRestartCutRow(key, { admitPendingWork: admitHeldPendingWork });
     return true;
   };
   const controllerBoundEarly = client !== null;
@@ -2431,8 +2431,9 @@ function rememberDeferredStructuredStartup(
   };
   deferredStartup = state;
   /* Past the cap, pending work takes a row that still cannot be decided, on
-     demand as well as in a pass. */
-  setRestartCutHeldRows(state.capAdmitted ? [] : held.keys());
+     demand as well as in a pass. Automatic stage recovery still waits for
+     the evidence to be resolved. */
+  setRestartCutHeldRows(held.keys(), { admitPendingWork: state.capAdmitted });
   if (!sameEvidence) console.error(`[structured hosts] ${message}; re-probing the evidence`, { hosts: hostKeys, nextProbeMs: delayMs });
   scheduleDeferredStartupReprobe(dependencies, registry, state);
 }

@@ -44,7 +44,7 @@ import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor }
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 import { readHostTurnRecord } from "@/lib/runtime/eventStore";
-import { restartCutEvidenceHolds } from "@/lib/runtime/restartCutHold";
+import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
 import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
@@ -1684,7 +1684,7 @@ export function defaultPipelinePorts(
       const conversation = registry.conversation(conversationId as ViewerConversationId);
       const generation = conversation?.generations.at(-1);
       return Boolean(conversation && generation
-        && restartCutEvidenceHolds(sessionKeyId({ engine: conversation.engine, sessionId: generation.id })));
+        && restartCutEvidenceUnresolved(sessionKeyId({ engine: conversation.engine, sessionId: generation.id })));
     },
     runtimeHostEpoch: async () => {
       const client = runtimeHostClient();

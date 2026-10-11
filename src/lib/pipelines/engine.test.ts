@@ -25150,10 +25150,25 @@ test.each(["completed", "open"] as const)("a held restart proposal waits for led
   const started = JSON.stringify({ kind: "turn-started", turnId: "T1", seq: 1 }) + "\n";
   const completed = JSON.stringify({ kind: "turn-ended", turnId: "T1", status: "completed", seq: 2 }) + "\n";
   fs.writeFileSync(ledgerFile, started);
+  const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
   const startup = (next: InstanceType<typeof AgentRegistry>) => adoptStructuredHostsAtStartup({
-    registry: next, client: null, orchestratorSeats: () => [], schedule: () => ({ unref() {} }),
+    registry: next, client: null, orchestratorSeats: () => [],
+    schedule: (callback, delayMs) => { scheduled.push({ callback, delayMs }); return { unref() {} }; },
     adopt: async () => [], adoptClaude: async () => [],
   });
+  const reachReprobeCap = async () => {
+    /* Drive the current boot's real callbacks through the cap pass, waiting
+       for each asynchronous probe to schedule its successor. */
+    for (let probe = 0; probe < 10; probe += 1) {
+      const timer = scheduled.shift()!;
+      expect(timer).toBeDefined();
+      timer.callback();
+      for (let wait = 0; wait < 400 && scheduled.length === 0; wait += 1) await Bun.sleep(5);
+      expect(scheduled).toHaveLength(1);
+      if (timer.delayMs === 30_000) return;
+    }
+    throw new Error("restart evidence re-probe never reached its cap");
+  };
   try {
     await startup(registry).catch(() => {});
     const store = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
@@ -25164,9 +25179,13 @@ test.each(["completed", "open"] as const)("a held restart proposal waits for led
     await startup(next).catch(() => {});
     expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
     expect(restartCutEvidenceHolds(hostKey)).toBe(true);
+    await reachReprobeCap();
+    expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
+    expect(restartCutEvidenceHolds(hostKey)).toBe(false);
     h.advanceWallClock(6 * 60_000);
     await withRuntimeSnapshot({ runtime: { hostEpoch: 7 }, sessions: [{ conversationId, host: "dead", turn: "idle", attentionIds: [] }] }, async () => {
       const production = defaultPipelinePorts();
+      let stops = 0;
       const ports: PipelinePorts = {
         ...h.ports, sourcePathAllowed: () => true, pathForConversation: () => transcriptPath,
         durableTurnEvidence: (engine, file, reportAt, startedAt) => durableStageTurnEvidence(engine, file, reportAt, startedAt),
@@ -25175,16 +25194,20 @@ test.each(["completed", "open"] as const)("a held restart proposal waits for led
         conversationInterruption: production.conversationInterruption,
         conversationRestartCut: production.conversationRestartCut,
         conversationRestartCutHeld: production.conversationRestartCutHeld,
-        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+        stopInterruptedStageAgent: async (...args) => { stops += 1; return production.stopInterruptedStageAgent!(...args); },
         conversationHostUnavailableSince: async () => new Date(Date.now() - 5 * 60_000).toISOString(),
       };
       for (let tick = 0; tick < 3; tick += 1) await tickPipelines([entry(transcriptPath)], ports);
       expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
       expect(h.spawnInputs).toHaveLength(1);
+      expect(stops).toBe(0);
       /* Reopening startup on the same unreadable evidence grants no retry. */
+      scheduled.length = 0;
       await startup(new AgentRegistry(registry.filename)).catch(() => {});
-      await tickPipelines([entry(transcriptPath)], defaultPorts());
+      await reachReprobeCap();
+      for (let tick = 0; tick < 3; tick += 1) await tickPipelines([entry(transcriptPath)], defaultPorts());
       expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(stops).toBe(0);
 
       fs.writeFileSync(ledgerFile, started + (ending === "completed" ? completed : ""));
       await startup(new AgentRegistry(registry.filename)).catch(() => {});
@@ -25192,6 +25215,7 @@ test.each(["completed", "open"] as const)("a held restart proposal waits for led
       for (let tick = 0; tick < 3; tick += 1) await tickPipelines([entry(transcriptPath)], defaultPorts());
       expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(ending === "completed" ? 1 : 2);
       expect(h.spawnInputs).toHaveLength(ending === "completed" ? 1 : 2);
+      expect(stops).toBe(ending === "completed" ? 0 : 1);
       if (ending === "completed") {
         expect(store.list()).toEqual([]);
         expect(defaultPipelinePorts().conversationRestartCut!(conversationId)).toBeNull();
