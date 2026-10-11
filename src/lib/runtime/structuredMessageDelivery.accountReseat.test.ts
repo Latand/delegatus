@@ -1403,3 +1403,37 @@ test("a delivered image replay racing reseat admission wins over source capabili
   expect(registry.snapshot().migrationIntents).toEqual(beforeIntents);
   expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{ state: "delivered" }]);
 });
+
+/* Task d7759de2: routing a crash left on a removed account (a hidden Main or
+   a retired one) names nothing, so a send never reseats its conversation onto
+   it; spawn admission would refuse that account and the message would fail. */
+for (const removed of ["default", "seat-removed"] as const) {
+  test(`routing left on a removed account (${removed}) never reseats a live send onto it`, async () => {
+    const { seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
+    seedAccountRegistry("codex", { version: 1, active: "default", accounts: [], retired: [{ id: "seat-removed", label: "Removed", retiredAt: 1, archived: true }], removals: [], legacyHidden: true });
+    try {
+      const { registry, conversation } = registryWithConversation();
+      registry.setEngineRouting("codex", removed);
+      let commands = 0;
+      const result = await enqueueStructuredMessage({
+        path: artifactPath,
+        conversationId: conversation.id,
+        clientMessageId: `removed-routing-${removed}`,
+        text: "stay on the account this conversation runs on",
+      }, {
+        enabled: () => true,
+        client: () => deliveredClient(conversation.id, () => { commands += 1; }),
+        registry: () => registry,
+        requestMigrationTick: () => {},
+        kick: () => {},
+      });
+
+      expect(result).toMatchObject({ ok: true, structured: true });
+      expect((result as { outcome?: string }).outcome).not.toBe("held");
+      expect(commands).toBe(1);
+      expect(registry.conversation(conversation.id)?.migration ?? null).toBeNull();
+    } finally {
+      seedAccountRegistry("codex", { version: 1, active: "default", accounts: [], retired: [], removals: [] });
+    }
+  });
+}

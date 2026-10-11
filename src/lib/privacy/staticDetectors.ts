@@ -61,19 +61,67 @@ export function staticSensitiveClasses(
   if (matched("credential", /\b(?:github_pat_|gh[pousr]_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b/)) {
     findings.add("credential");
   }
-  const separator = String.raw`[^a-z0-9\r\n]{1,8}`;
-  const splitTokenPrefix = new RegExp([
+  const separator = String.raw`[^\p{L}\p{N}\r\n]{0,8}`;
+  const legacySeparator = String.raw`[^\p{L}\p{N}\r\n]{1,8}`;
+  // The delimiter can also open a following formatted token; leave it available.
+  const splitTokenPrefix = new RegExp(String.raw`(?<![\p{L}\p{N}_$])(_+)?(?:` + [
     `g${separator}i${separator}t${separator}h${separator}u${separator}b${separator}p${separator}a${separator}t`,
     `g${separator}h${separator}[pousr]`,
-    `x${separator}o${separator}x${separator}[baprs]`,
-    `s${separator}k`,
-  ].join("|") + String.raw`[^a-z0-9\r\n]{0,8}?[_-][^a-z0-9\r\n]*`, "gi");
+    `x${legacySeparator}o${legacySeparator}x${legacySeparator}[baprs]`,
+    `s${legacySeparator}k`,
+  ].join("|") + String.raw`)[^\p{L}\p{N}\r\n]{0,8}?(?=\\?[_-])`, "giu");
+  const splitTokenBody = /^[^\p{L}\p{N}\r\n]*[a-z0-9](?:[^\p{L}\p{N}\r\n]*[a-z0-9])*/iu;
+  let emphasisClosings: Map<number, number> | undefined;
   let lineStart = 0;
   for (const line of searchableText.split(/\n/)) {
     splitTokenPrefix.lastIndex = 0;
     for (let match = splitTokenPrefix.exec(line); match; match = splitTokenPrefix.exec(line)) {
-      const compactTail = compactSensitiveText(line.slice(match.index));
-      if (/^(?:githubpat|gh[pousr]|xox[baprs]|sk)[a-z0-9]{12,}/i.test(compactTail)) {
+      let bodyEnd = line.length;
+      if (match[1]) {
+        // Pair runs once across lines. Nested emphasis can consume an opening
+        // run in parts; the first partial closure bounds the token's body.
+        if (!emphasisClosings) {
+          emphasisClosings = new Map<number, number>();
+          const openings: { start: number; remaining: number; firstClosing?: number }[] = [];
+          // Consume escape pairs before runs, so a literal underscore cannot
+          // steal a closure. Paired backslashes leave the following run active.
+          for (const marker of searchableText.matchAll(/\\[\s\S]|_+/g)) {
+            if (marker[0][0] === "\\") continue;
+            const end = marker.index + marker[0].length;
+            const before = searchableText.slice(Math.max(0, marker.index - 2), marker.index);
+            const after = searchableText.slice(end, end + 2);
+            let remaining = marker[0].length;
+            if (before && !/\s$/u.test(before) && !/^[\p{L}\p{N}_$]/u.test(after)) {
+              while (remaining && openings.length) {
+                const opening = openings[openings.length - 1];
+                const consumed = Math.min(remaining, opening.remaining);
+                opening.firstClosing ??= marker.index;
+                opening.remaining -= consumed;
+                remaining -= consumed;
+                if (!opening.remaining) {
+                  emphasisClosings.set(opening.start, opening.firstClosing);
+                  openings.pop();
+                }
+              }
+            }
+            if (remaining && after && !/^\s/u.test(after) && !/[\p{L}\p{N}_$]$/u.test(before)) {
+              openings.push({ start: end - remaining, remaining });
+            }
+          }
+        }
+        const closing = emphasisClosings.get(lineStart + match.index);
+        if (closing === undefined) continue;
+        // Formatting confined to prefix letters leaves the body outside it.
+        if (closing > lineStart + splitTokenPrefix.lastIndex) {
+          bodyEnd = Math.min(line.length, closing - lineStart);
+        }
+      }
+      // A non-base62 letter or number ends the candidate body. GitHub bodies
+      // need their full base62 length after compaction; longer formats also match.
+      const body = splitTokenBody.exec(line.slice(splitTokenPrefix.lastIndex, bodyEnd));
+      if (!body) continue;
+      const compactTail = compactSensitiveText(match[0] + body[0]);
+      if (/^(?:gh[pous][a-z0-9]{36,}|ghr[a-z0-9]{76,}|githubpat[a-z0-9]{81,}|(?:xox[baprs]|sk)[a-z0-9]{12,})$/i.test(compactTail)) {
         onMatch?.("credential", lineStart + match.index, lineStart + line.length);
         findings.add("credential");
         break;

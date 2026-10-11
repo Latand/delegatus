@@ -197,6 +197,7 @@ export interface CodexAppServerHostOptions {
   allowSubagents?: boolean;
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
+  developerInstructions?: string;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   /** Codex plugins granted to this session (issue #687). Empty or absent
@@ -1565,14 +1566,16 @@ export class CodexAppServerHost implements EngineHost {
          the model only what changed, so there the line goes into its history
          below, where the next turn reads it. An engine too old to take a
          history item still gets the instructions. */
-      const noticeIntoHistory = telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory();
+      const learnedInstructions = options.cleanMemory ? undefined : options.developerInstructions;
+      const noticeIntoHistory = telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory() && !learnedInstructions;
       /* The thread parameter replaces the account's own developer
-         instructions, so the notice is added to them. */
-      const runNotice = telegram.unavailable && !noticeIntoHistory
+         instructions; keep those before this run's learned rules and notice. */
+      const runInstructions = learnedInstructions || telegram.unavailable && !noticeIntoHistory
         ? {
           developerInstructions: [
             typeof configRead.config?.developer_instructions === "string" ? configRead.config.developer_instructions.trim() : "",
-            TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE,
+            learnedInstructions,
+            telegram.unavailable && !noticeIntoHistory ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : "",
           ].filter(Boolean).join("\n\n"),
         }
         : {};
@@ -1581,7 +1584,7 @@ export class CodexAppServerHost implements EngineHost {
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
-          ...runNotice,
+          ...runInstructions,
           config,
         })
         : await provisional.rpc("thread/start", {
@@ -1589,7 +1592,7 @@ export class CodexAppServerHost implements EngineHost {
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...launchAccess,
-          ...runNotice,
+          ...runInstructions,
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");

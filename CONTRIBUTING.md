@@ -181,6 +181,19 @@ does not hold and is refused by GitHub itself. Nothing here changes git or
 `gh` configuration on disk, so a person's own terminal behaves as before. The
 shims are POSIX shell; on Windows a launched agent keeps the environment it had.
 
+## Review exports
+
+From the lane, run `bun scripts/review-export.ts <reviewed-commit>` with the
+stage's `TMPDIR` set. It exports committed source into a new scratch checkout
+and returns its directory, resolved commit and dependency status as JSON.
+Matching manifests, Bun lockfiles and patch files let it borrow the lane's
+`node_modules` through a link. Reviewers treat that link as read-only; caches
+and build output belong in the scratch checkout. Never run an install there.
+Local or workspace dependencies, changed inputs and absent dependencies return
+`unavailable`, leaving the source ready for code review without an install.
+If a required check needs that incompatible graph, report the access gap.
+The stage's scratch teardown removes the export and its link together.
+
 ## Local hooks
 
 Enable once in each clone (linked worktrees inherit the setting):
