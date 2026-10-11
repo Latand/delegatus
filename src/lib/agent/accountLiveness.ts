@@ -269,7 +269,9 @@ export function accountLiveSessionKind(
        open state weeks ago block removal for ever, on their own account and on
        every other account of the engine (issue #1595). */
     const queuedPin = receipt.accountPin === true && receipt.queuedPinnedSpawn !== null;
-    if (receipt.engine !== engine || !owned(receipt.accountId) && !queuedPin) continue;
+    /* A known target scopes the pin; unresolved ownership still fences every
+       account of this engine through owned(null), even after launch grace. */
+    if (receipt.engine !== engine || !owned(receipt.accountId)) continue;
     if (queuedPin && OPEN_RECEIPT_STATES.has(receipt.state)) { queued = true; continue; }
     if (receiptIsLive(file, receipt, probe)) return "live_sessions";
   }

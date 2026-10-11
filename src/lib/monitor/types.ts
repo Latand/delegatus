@@ -1071,6 +1071,7 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  hostRecovery?: import("./seatHostRecovery").SeatHostRecovery;
   autoRotation?: import("./seatAutoRotation").SeatAutoRotationState;
   authIncident?: SeatAuthIncident;
   /** Recovered credential scopes still owe their original operator notice. */
@@ -1350,7 +1351,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable" | "auth-failed" | "auto-rotation";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery";
   detail: string;
   /**
    * Whether the condition still holds.

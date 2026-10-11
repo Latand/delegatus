@@ -43,6 +43,8 @@ import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
+import { readHostTurnRecord } from "@/lib/runtime/eventStore";
+import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
 import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
@@ -335,6 +337,9 @@ export interface PipelinePorts {
       that handed its host over, or the boot that found the turn in flight,
       recorded it. Null for every conversation no restart cut. */
   conversationRestartCut?(conversationId: string): { recordedAt: string } | null;
+  /** Startup has not yet decided this row's restart evidence. Replacement
+      must wait even when the runtime already describes the host as dead. */
+  conversationRestartCutHeld?(conversationId: string): boolean;
   /** The runtime host generation currently serving this process (#1747). It
       advances on every release succession, which replaces every engine process
       the previous generation hosted, so a change is the controller's only
@@ -1579,7 +1584,17 @@ export function defaultPipelinePorts(
         const current = await runtimeSnapshot;
         const session = current.sessions.find((item) => item.conversationId === conversationId);
         if (!session || session.attentionIds.length > 0 || session.host === "conflict") return null;
-        if (session.host === "dead" || session.host === "unhosted") return "dead";
+        if (session.host === "dead" || session.host === "unhosted") {
+          const conversation = registry.conversation(conversationId as ViewerConversationId);
+          const generation = conversation?.generations.at(-1);
+          if (conversation?.engine === "codex" && generation) {
+            const ledger = readHostTurnRecord(generation.id, { frames: false });
+            /* Completion reaches the host ledger before the rollout. Losing
+               the process cannot reopen that completed Codex turn. */
+            if (ledger.state === "read" && ledger.turn?.closed?.status === "completed") return null;
+          }
+          return "dead";
+        }
         if (session.turn === "idle") return "idle";
         const liveness = await conversationTurnLiveness(registry, conversationId as ViewerConversationId, dependencies.liveness);
         return liveness?.state === "severed" ? "stalled" : null;
@@ -1661,6 +1676,12 @@ export function defaultPipelinePorts(
     conversationRestartCut: (conversationId) => {
       const cut = newestCut(conversationId);
       return cut ? { recordedAt: cut.recordedAt } : null;
+    },
+    conversationRestartCutHeld: (conversationId) => {
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      const generation = conversation?.generations.at(-1);
+      return Boolean(conversation && generation
+        && restartCutEvidenceUnresolved(sessionKeyId({ engine: conversation.engine, sessionId: generation.id })));
     },
     runtimeHostEpoch: async () => {
       const client = runtimeHostClient();
@@ -4798,6 +4819,7 @@ async function replaceInterruptedStageAttempt(
   // A stage report is durable authority even when succession entered recovery
   // (or one was recorded while the host-stop operation was awaiting).
   if (attempt.report) return false;
+  if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   const previous = attempt.restartRecovery;
   const needsPromptHistory = interruption.cut || previous?.promptBoundary !== undefined;
@@ -4825,6 +4847,7 @@ async function replaceInterruptedStageAttempt(
     return true;
   };
   if (cancelForOperatorPrompt(before)) return true;
+  if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   if (attempt.report || attempt.providerWait?.retryCancelled || newerExternalProviderPrompt(attempt, before)
     || interruption.cut && before && !restartCutOf(attempt, before, ports)) return false;
   /* A second interruption in the same boot keeps the bounded recovery policy.
@@ -4851,6 +4874,7 @@ async function replaceInterruptedStageAttempt(
   attempt.restartRecovery = { bootId, requestedAt, lastRecordAt,
     ...(promptBoundary === undefined ? {} : { promptBoundary }), ...(endedEarlier ? { stopped: endedEarlier } : {}) };
   persist();
+  if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
   /* A withdrawn stop did nothing, so it leaves no reservation behind either;
      whatever the transcript holds by now is read by the ordinary paths. */
@@ -4928,8 +4952,15 @@ async function replaceInterruptedStageAttempt(
      gone by the time the stop looked, was lost. */
   const cause: PipelineStageInterruptionCause = restarted ? "restart"
     : ended && ended.kind !== "dead" ? "engine-stop" : "host-lost";
+  if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports);
   persist();
+  return true;
+}
+
+function restartCutHoldsStageRecovery(attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+  if (!attempt.conversationId || !ports.conversationRestartCutHeld?.(attempt.conversationId)) return false;
+  ports.scheduleTick?.(1_000);
   return true;
 }
 

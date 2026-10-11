@@ -11,6 +11,7 @@ import { cachedLimitsProvenance } from "@/lib/limits";
 import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
 import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
 import { activeDrain } from "@/lib/selfUpdate/drain";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
@@ -28,6 +29,10 @@ import {
 import { spawnTransport } from "./spawnTransport";
 
 export interface StructuredRecoveryRequest {
+  /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
+  admissionGuard?: DeliveryAdmissionGuard;
+  /** Seat authority after reservation, independent of this launch's new identity. */
+  authorityGuard?: () => void;
   path: string;
   conversationId?: string | null;
   origin?: MessageOrigin;
@@ -121,9 +126,8 @@ export interface StructuredRecoveryDependencies {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** A resume that could not publish its host within its bound (#2046). The
-    attempt is settled failed and its host retired before this is thrown, so
-    the conversation reads `reclaimed` again and the reason is the answer. */
+/** A resume whose publication ended in failure (#2046), including an immediate
+    terminal exit or a staged attempt that exhausted its publication bound. */
 export class StructuredResumeUnpublishedError extends Error {
   constructor(reason: string) {
     super(reason);
@@ -398,7 +402,10 @@ async function recoverCandidate(
        claim. Retire that claim only through the registry's PID/start-identity
        check; a live or unverifiable host remains fenced. */
     if (!current.hostLive) {
-      reconcileDeadStructuredRegistryHost(registry, current.conversationId, current.key);
+      request.admissionGuard?.();
+      if (reconcileDeadStructuredRegistryHost(registry, current.conversationId, current.key)) {
+        request.admissionGuard?.(current.key);
+      }
       current = candidateFor(registry, request, Boolean(ownership), park);
       if (!current) return null;
     }
@@ -429,6 +436,7 @@ async function recoverCandidate(
     );
     const assertAccountAuthorized = async (): Promise<void> => {
       await ownership?.authorizeAccount?.(account.accountId ?? null);
+      request.authorityGuard?.();
     };
     let begun: SpawnBeginResult;
     try {
@@ -436,6 +444,7 @@ async function recoverCandidate(
         // Admission may have closed while recovery waited for this lease.
         assertRecoveryAdmission(request, registry);
         await assertAccountAuthorized();
+        request.admissionGuard?.();
         return await registry.beginSpawnRequestAsync({
           engine: current.engine,
           cwd: current.spec.cwd,
@@ -473,16 +482,35 @@ async function recoverCandidate(
       await registry.failSpawnOffLoop(begun.receipt.launchId, "structured recovery account is no longer allowed");
       throw error;
     }
-    const response = await (dependencies.spawn ?? spawnStructuredConversation)({
-      engine: current.engine,
-      receipt: begun.receipt,
-      spec: current.spec,
-      account,
-      "prompt": "",
-      registry,
-      client,
-      authorize: assertAccountAuthorized,
-    });
+    let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
+    try {
+      response = await (dependencies.spawn ?? spawnStructuredConversation)({
+        engine: current.engine,
+        receipt: begun.receipt,
+        spec: current.spec,
+        account,
+        "prompt": "",
+        registry,
+        client,
+        authorize: assertAccountAuthorized,
+      });
+    } catch (error) {
+      // A terminal CLI exit can throw before returning the staged response.
+      // Only its settled receipt and released host prove unpublished failure;
+      // unconfirmed cleanup or an unsettled receipt keeps the original retry.
+      if (error instanceof DeliveryAdmissionRefusedError) throw error;
+      await assertOwnership();
+      await assertAccountAuthorized();
+      const snapshot = registry.readOnlySnapshot();
+      const receipt = snapshot.receipts[begun.receipt.launchId];
+      const entry = snapshot.entries[sessionKeyId(current.key)];
+      if ((receipt?.state === "failed" || receipt?.state === "conflicted")
+        && !entry?.host && !entry?.claimOwner && !entry?.structuredHost?.process
+        && !entry?.pendingAction && !(entry?.structuredTerminationSurvivors?.length)) {
+        throw new StructuredResumeUnpublishedError(receipt.error ?? (error instanceof Error ? error.message : "host resume did not publish"));
+      }
+      throw error;
+    }
     let publishedPath = response.ok ? response.path : null;
     /* A staged resume with no path has not published its host yet. One that
        names its path has, and only its transcript is pending. */
