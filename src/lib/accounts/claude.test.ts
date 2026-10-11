@@ -773,7 +773,7 @@ test("a Viewer killed after the accounts registry committed finishes the removal
 });
 
 /* Task d7759de2: Main is removed through the same control as every other
-   account. It is forgotten, never deleted: ~/.claude is the operator's own. */
+   account. It is only forgotten: ~/.claude is the operator's own and stays untouched. */
 test("removing Main hides it from every list and pick, keeps its home and transcripts, and restores", () => {
   const legacy = process.env.LLV_CLAUDE_HOME!;
   const transcript = path.join(legacy, "projects", "-repo", "99999999-1234-1234-1234-123456789abc.jsonl");

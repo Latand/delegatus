@@ -647,7 +647,7 @@ for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`orp
 });
 
 /* Task d7759de2: every signed-in account goes through the same remove
-   control. Main is forgotten, never deleted, and comes back on request. */
+   control. Main is only forgotten, its home untouched, and comes back on request. */
 test("Main is removed through DELETE with its home untouched and comes back through restore", async () => {
   const legacy = process.env.LLV_CLAUDE_HOME!;
   fs.mkdirSync(legacy, { recursive: true });

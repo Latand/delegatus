@@ -444,7 +444,7 @@ for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`orp
 });
 
 /* Task d7759de2: every signed-in account goes through the same remove
-   control. Main is forgotten, never deleted, and comes back on request. */
+   control. Main is only forgotten, its home untouched, and comes back on request. */
 /* An earlier case in this file leaves a registry the store refuses. */
 const freshCodexRegistry = () => seedAccountRegistry("codex", { version: 1, active: "default", accounts: [], retired: [], removals: [] });
 

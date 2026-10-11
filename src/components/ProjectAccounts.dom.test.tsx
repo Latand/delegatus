@@ -6,8 +6,8 @@ import { installActEnv } from "@/test-helpers/actEnv";
 import { installOnboardingDom } from "@/test-helpers/onboardingDom";
 
 /* Task d7759de2: a removal drops the account's project bindings, so the
-   project's account strip reads them again instead of naming the account
-   until the page reloads. */
+   project's account strip reads them again at once; it used to keep naming
+   the account until the page reloaded. */
 
 installOnboardingDom();
 installActEnv();

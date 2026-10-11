@@ -510,7 +510,7 @@ test("removal recovery that meets a held registry lock answers busy and finishes
 });
 
 /* Task d7759de2: Main is removed through the same control as every other
-   account. It is forgotten, never deleted: ~/.codex is the operator's own. */
+   account. It is only forgotten: ~/.codex is the operator's own and stays untouched. */
 test("removing Main hides it from every list and pick, keeps its home and sessions, and restores", async () => {
   const { hideLegacyCodexAccount, restoreLegacyCodexAccount, accountForSpawn, codexAccountListed } = await import("./codex");
   const legacy = path.join(SANDBOX, "legacy-codex");

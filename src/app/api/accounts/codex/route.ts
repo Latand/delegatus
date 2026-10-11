@@ -107,7 +107,7 @@ export async function DELETE(req: NextRequest) {
         return NextResponse.json({ error: "Codex account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers, ...accountRemovalLiveWork("codex", account.id) }, { status: 409 });
       }
       try {
-        /* Main is forgotten, never deleted: its home is the operator's own. */
+        /* Main is only forgotten: its home is the operator's own and stays untouched. */
         if (account.kind === "legacy") {
           const retirement = hideLegacyCodexAccount();
           const bindingsCleared = forgetBindings(account.id);

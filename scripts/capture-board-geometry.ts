@@ -3052,7 +3052,7 @@ async function accountRemovalMain(): Promise<void> {
        bindings read drop what a stubbed success removed, the way the real ones would. */
     const stubbed = async (context: Awaited<ReturnType<Browser["newContext"]>>) => {
       const gone = new Set<string>();
-      /* A removal drops the account's bindings for good; Show again lists it, not its bindings. */
+      /* A removal drops the account's bindings for good; Show again lists the account and leaves them dropped. */
       const unbound = new Set<string>();
       let next: Answer | null = null;
       let hold: Promise<void> | null = null;
