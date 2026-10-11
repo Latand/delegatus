@@ -52,6 +52,19 @@ function host(send: (entry: QueueEntry, firstDispatch?: FirstDispatchEvidence) =
   };
 }
 
+test("every regular drain reconciles the native queue before reading even an empty effect batch (#1674)", async () => {
+  const order: string[] = [];
+  const queue = new StructuredDeliveryQueue({
+    nativeQueueReconcile: async () => { order.push("reconcile"); },
+    effects: async () => { order.push("effects"); return []; },
+    status: async () => null,
+    transition: async () => {},
+  }, () => null);
+  await queue.drain();
+  await queue.drain();
+  expect(order).toEqual(["reconcile", "effects", "reconcile", "effects"]);
+});
+
 test("a durable queued turn waits while automatic restart admission is held", async () => {
   let held = true;
   let sends = 0;

@@ -36,6 +36,9 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
     its files or reports why it cannot. `paths` are the files the refused commit
     held, for the message to name. */
 export type StageCommitRefusal = { paths: string[] };
+/** A spent commit retry may recover existing work, but cannot write another
+    commit. The intent is flushed immediately before the hook can run. */
+export type StageCommitControl = { recoveryHead?: string; beforeCommit: (head: string) => void | Promise<void> };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
 async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
@@ -686,7 +689,7 @@ async function recoverStageCommit(
     directly; update-ref compares the parent atomically. No second index read
     by porcelain can turn a validated stage into an unverified revert. */
 async function commitStageTree(pipeline: Pipeline, parent: string, tree: string, messages: string[], exec: ExecPort,
-  outputPaths?: readonly string[]): Promise<PipelineGitResult> {
+  outputPaths?: readonly string[], beforeCommit?: () => void | Promise<void>): Promise<PipelineGitResult> {
   const cwd = pipeline.worktreeDir;
   const locations = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], cwd);
   if (locations.code !== 0) return failure("locating stage index custody", locations);
@@ -694,6 +697,7 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
   if (!index || !path.isAbsolute(index)) return { ok: false, error: "stage index custody paths could not be verified" };
   let lock: { file: string; fd: number; ino: number; dev: number } | undefined;
   let scratch: string | undefined;
+  let enteredCommit = false;
   const changed = (): PipelineGitResult => ({ ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" });
   try {
     const file = `${index}.lock`;
@@ -720,6 +724,10 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
     }
     const message = path.join(scratch, "COMMIT_EDITMSG");
     fs.writeFileSync(message, `${messages.join("\n\n")}\n`);
+    // Spend the durable retry only after custody is proven. An interruption
+    // once intent starts must propagate for the controller's recovery path.
+    enteredCommit = true;
+    await beforeCommit?.();
     // These are the hooks git commit -m runs, in its order. A refusal retains
     // its diagnostic so the existing stage repair path can act on it.
     for (const args of [
@@ -750,6 +758,7 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
     await exec("git", ["hook", "run", "--ignore-missing", "post-commit"], cwd, env);
     return { ok: true, sha };
   } catch (error) {
+    if (enteredCommit) throw error;
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return { ok: false, deferred: true, error: "stage index custody is held by another Git writer; retrying later" };
     return { ok: false, error: "stage index custody could not be acquired; preserve the index and worktree" };
   } finally {
@@ -774,11 +783,15 @@ export async function commitPipelineStage(
   declaredOutputs: readonly string[] = [],
   protectedHead: string | null = allowCommit ? null : pipeline.lastPassedCommit,
   receiptFile?: string,
+  control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
   const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const initialHead = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (initialHead.code !== 0 || !initialHead.stdout.trim()) return failure("recording the passed stage commit", initialHead);
+  const sha = initialHead.stdout.trim();
+  const unrecoveredRetry: PipelineGitResult = { ok: false, error: "the stage's one commit retry was already started and no completed commit could be recovered; preserve the worktree for the operator" };
+  if (control?.recoveryHead === sha) return unrecoveredRetry;
   if (protectedHead !== null && initialHead.stdout.trim() !== protectedHead) {
     if (!allowCommit && receiptFile && declaredOutputs.length) {
       const recovered = await recoverStageCommit(receiptFile, protectedHead, initialHead.stdout.trim(), declaredOutputs, exec, pipeline.worktreeDir);
@@ -786,7 +799,6 @@ export async function commitPipelineStage(
     }
     return { ok: false, error: `read-only stage ${stageId} created a commit` };
   }
-  const sha = initialHead.stdout.trim();
   const settleWithoutCommit = async (): Promise<PipelineGitResult> => {
     const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
     return unstage ?? { ok: true, sha };
@@ -808,6 +820,7 @@ export async function commitPipelineStage(
   } else if (!status.stdout.trim()) {
     return settleWithoutCommit();
   }
+  if (control?.recoveryHead !== undefined) return unrecoveredRetry;
   const add = (await exec(
     "git",
     ["add", ...(allowCommit ? ["-A", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS] : ["-f", "-A", "--", ...changedOutputPaths])],
@@ -846,7 +859,8 @@ export async function commitPipelineStage(
     return { ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" };
   }
   const commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
-    ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths);
+    ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths,
+    () => control?.beforeCommit(sha));
   if (!commit.ok) {
     if (commit.deferred) return commit;
     return { ...commit,

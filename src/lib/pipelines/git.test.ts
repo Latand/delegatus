@@ -1198,18 +1198,22 @@ test.each([true, false])("controller commit retains foreign index custody acquir
     fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
     const lock = path.join(box.repo, ".git", "index.lock");
     let reads = 0;
+    let commitIntents = 0;
+    const control = { beforeCommit: () => { commitIntents++; } };
     const exec: ExecPort = async (command, args, cwd, env) => {
       const result = await box.exec(command, args, cwd, env);
       if (args[0] === "write-tree" && ++reads === 2) fs.writeFileSync(lock, "foreign writer custody\n", { flag: "wx" });
       return result;
     };
-    expect(await commitPipelineStage(subject, "audit", allowCommit, exec, ["report.md"], subject.lastPassedCommit))
+    expect(await commitPipelineStage(subject, "audit", allowCommit, exec, ["report.md"], subject.lastPassedCommit, undefined, control))
       .toMatchObject({ ok: false, deferred: true });
+    expect(commitIntents).toBe(0);
     expect(fs.readFileSync(lock, "utf8")).toBe("foreign writer custody\n");
     expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
     fs.unlinkSync(lock); // Only this fixture's writer releases its custody.
-    expect(await commitPipelineStage(subject, "audit", allowCommit, box.exec, ["report.md"], subject.lastPassedCommit))
+    expect(await commitPipelineStage(subject, "audit", allowCommit, box.exec, ["report.md"], subject.lastPassedCommit, undefined, control))
       .toMatchObject({ ok: true });
+    expect(commitIntents).toBe(1);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
