@@ -1,5 +1,5 @@
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
-import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
 
@@ -12,6 +12,8 @@ import {
 } from "@/lib/agent/registry";
 import { structuredHostsEnabled } from "./flags";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { readRetiredAccountIds } from "@/lib/accounts/accountsStore";
+import type { AgentEngine } from "@/lib/agent/cli";
 import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { actingOperation, actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
@@ -59,7 +61,9 @@ import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./reco
 
 export interface StructuredMessageRequest {
   /** Live authorization at fresh reservation, after runtime and lock waits. */
-  admissionGuard?: () => void;
+  admissionGuard?: DeliveryAdmissionGuard;
+  /** The autonomous caller's authority fence during replacement host publication. */
+  recoveryAuthorityGuard?: () => void;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -494,6 +498,17 @@ interface HeldAdmissionWait {
   detail?: string | null;
 }
 
+/** The engine's routed account a send may reseat onto. Routing left on an
+    account the operator removed (a hidden Main, a retired one) names nothing:
+    spawn admission refuses that account, so reseating onto it would fail the
+    message. An unreadable accounts registry keeps the routing as it is. */
+function deliveryRoutingAccountId(registry: AgentRegistry, engine: AgentEngine): string | null {
+  const routed = registry.engineRouting(engine).activeAccountId;
+  if (!routed || (engine !== "claude" && engine !== "codex")) return routed;
+  const retired = readRetiredAccountIds(engine);
+  return retired.kind === "known" && retired.ids.has(routed) ? null : routed;
+}
+
 async function holdDuringRuntimeSynchronization(
   request: StructuredMessageRequest,
   registry: AgentRegistry,
@@ -508,7 +523,7 @@ async function holdDuringRuntimeSynchronization(
     : registry.conversationForPath(request.path);
   const unresolvedGeneration = unresolvedConversation?.generations.at(-1);
   const activeAccountId = unresolvedConversation
-    ? registry.engineRouting(unresolvedConversation.engine).activeAccountId
+    ? deliveryRoutingAccountId(registry, unresolvedConversation.engine)
     : null;
   const accountReseatWithoutOwner = !owner
     && unresolvedConversation !== null
@@ -610,7 +625,7 @@ async function holdDuringRuntimeSynchronization(
     if (!replay && request.admissionGuard
       && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
     const generation = conversation.generations.at(-1);
-    const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
+    const activeAccountId = deliveryRoutingAccountId(registry, conversation.engine);
     const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
     /* The registry write lock is waited for off the event loop. */
     const place = async (): Promise<HeldDelivery> => {
@@ -839,6 +854,8 @@ async function recoverReclaimedMessage(
       origin: reservation.command.origin,
       operationId: reservation.command.operationId,
       admittedAt: reservation.createdAt,
+      admissionGuard: request.admissionGuard,
+      authorityGuard: request.recoveryAuthorityGuard,
     }, {
       registry,
       client,
@@ -854,6 +871,7 @@ async function recoverReclaimedMessage(
         outcome: "failed",
         error: settled.error,
         status: 503,
+        code: "structured_revival_impossible",
         operationId: admitted.operationId,
       };
     }
@@ -1440,7 +1458,7 @@ export async function enqueueStructuredMessage(
   const replay = await liveReplay(existingReservation);
   if (replay) return replay;
   const generation = conversation.generations.at(-1);
-  const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
+  const activeAccountId = deliveryRoutingAccountId(registry, conversation.engine);
   const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
   /* Conflict preflight computes candidate refs and digest before writing.
      A changed payload under an existing client message id rejects with zero
@@ -1637,6 +1655,8 @@ export async function enqueueStructuredMessage(
         origin: recoveryReservation?.command.origin,
         operationId: recoveryReservation?.command.operationId,
         admittedAt: recoveryReservation?.createdAt,
+        admissionGuard: request.admissionGuard,
+        authorityGuard: request.recoveryAuthorityGuard,
       }, { registry, client });
     } catch (error) {
       const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;
@@ -1649,6 +1669,7 @@ export async function enqueueStructuredMessage(
           outcome: "failed",
           error: settled.error,
           status: 503,
+          code: "structured_revival_impossible",
           operationId: recoveryReservation.command.operationId,
         };
       }

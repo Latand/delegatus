@@ -2810,6 +2810,19 @@ function steerQueueFixture(policies: string[] = ["steer-or-queue"], conversation
   return { queue, target, states, writes, interrupts, transitions, setActive: (turn: string | null) => { active = turn; }, effects, port };
 }
 
+test("an explicit next-turn fence waits through a running turn without steering", async () => {
+  const f = steerQueueFixture();
+  Object.assign(f.effects[0]!.payload, { turnId: null });
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual([]);
+  expect(f.interrupts).toEqual([]);
+  expect(f.states.get("m0")!.status).toBe("queued");
+  f.setActive(null);
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual(["start:m0"]);
+  expect(f.states.get("m0")!.status).toBe("delivered");
+});
+
 for (const fallback of ["claude", "copilot"]) test(`steer-or-queue waits durably on ${fallback} without declared queued-send support`, async () => {
   const f = steerQueueFixture();
   Object.assign(f.target, { supportsSteer: false, ...(fallback === "copilot" ? {steerFallback: "interrupt"} : {}) });

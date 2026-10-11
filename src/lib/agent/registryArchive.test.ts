@@ -216,6 +216,33 @@ test("cold resume, path ownership, capability and exact launch replay survive re
   try { expect(db.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" }); } finally { db.close(); }
 });
 
+test("a cold launch replay without a title keeps its admitted name with bounded receipt reads", () => {
+  const { open,filename,initial,directory } = fixture();
+  for (let index = 0; index < 40; index++) {
+    const launchId = `unrelated-launch-${index}`;
+    initial.receipts[launchId] = { ...structuredClone(initial.receipts["archive-launch-1"]!),
+      launchId,clientAttemptId: `unrelated-attempt-${index}` };
+  }
+  const store = open();
+  archiveAll(store);
+  let receiptReads = 0;
+  const registry = new AgentRegistry(path.join(directory,"agent-registry.json"),undefined,undefined,{
+    sqliteMode: "sqlite",sqliteFilename: filename,
+    onSqliteRowPayloadRead: (collection,count) => { if (collection === "receipts") receiptReads += count; },
+  });
+  try {
+    receiptReads = 0;
+    const request = { engine: "codex" as const,cwd: "/repo",clientAttemptId: "archive-attempt-0",requestDigest: "d".repeat(64),
+      launchDisplay: { prompt: "A different prompt-derived title",images: 0,echo: "Replay fixture" } };
+    const replay = registry.beginSpawnRequest(request);
+    expect(replay.kind).toBe("replay");
+    expect(replay.receipt.launchId).toBe("archive-launch-0");
+    expect(replay.receipt.launchProfile.title).toBe("Archive regression");
+    expect(receiptReads).toBeLessThan(20);
+    expect(registry.beginSpawnRequest({ ...request,launchProfile: { title: "Explicit replacement title" } }).kind).toBe("conflict");
+  } finally { registry.close(); }
+});
+
 test("an old reader sees cold history and an old writer promotes it during release handover", () => {
   const { open,filename,initial } = fixture();
   const store = open();

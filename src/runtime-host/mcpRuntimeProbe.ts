@@ -164,8 +164,9 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
   let tools: string[] = [];
   let deploymentStatus = false;
   let boardSnapshot = false;
+  let evidence: ViewerMcpRuntimeHealthEvidence;
   try {
-    await client.connect(transport);
+    await client.connect(transport, { timeout });
     processReady = true;
     if (transport.pid !== null) options.onProcessReady?.(transport.pid);
     const listed = await client.listTools(undefined, { timeout });
@@ -191,7 +192,7 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
        the verdict: the refusal is the only account of the candidate's own
        runtime that survives, and the candidate is retired seconds later. */
     const callFailures = mcpProbeCallFailures(reads);
-    return {
+    evidence = {
       checkedAt,
       revision: options.runtime.revision,
       artifactDigest: options.runtime.artifactDigest,
@@ -207,7 +208,7 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
       }),
     };
   } catch (error) {
-    return {
+    evidence = {
       checkedAt,
       revision: options.runtime.revision,
       artifactDigest: options.runtime.artifactDigest,
@@ -218,6 +219,13 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
       detail: (error instanceof Error ? error.message : "MCP runtime probe failed").replace(/[\r\n]+/g, " ").slice(0, 500),
     };
   } finally {
-    await client.close().catch(() => transport.close().catch(() => {}));
+    await transport.close();
   }
+  if (transport.cleanupError) {
+    evidence.ok = false;
+    evidence.detail = probeExcerpt(redactMonitorText(
+      `MCP probe cleanup failed: ${transport.cleanupError.message}; ${evidence.detail ?? ""}`,
+    ), 500);
+  }
+  return evidence;
 }

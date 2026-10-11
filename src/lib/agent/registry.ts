@@ -17,9 +17,9 @@ import {
   sameRecordedProcessIdentity,
   type ProcessIdentity,
 } from "@/lib/processIdentity";
-import { durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
+import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
-import { retiredAccountIds } from "@/lib/accounts/accountsStore";
+import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
@@ -946,7 +946,7 @@ function rewriteAccountPath(pathname: string, rewrites: readonly AccountPathRewr
     artifact. Returns the ids of the conversations whose paths changed. */
 function rewriteRegistryAccountPaths(
   file: RegistryFile,
-  engine: MigrationEngine,
+  engine: AgentEngine,
   rewrites: readonly AccountPathRewrite[],
 ): Set<ViewerConversationId> {
   const changed = new Set<ViewerConversationId>();
@@ -1205,6 +1205,7 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
     allowSubagents: current.allowSubagents || requested.allowSubagents,
     /* Clean once, clean for good: a resume never brings memory back. */
     ...(current.cleanMemory || requested.cleanMemory ? { cleanMemory: true } : {}),
+    ...(current.learnedRules ?? requested.learnedRules ? { learnedRules: current.learnedRules ?? requested.learnedRules } : {}),
     mcpServers: current.mcpServers,
     /* The plugin grant was decided at spawn from the session's origin; a
        resume replays the durable value and can never widen it (issue #687). */
@@ -1432,7 +1433,7 @@ export function compareDeliveryAdmission(
 /** The next admission sequence of a canonical conversation, inside the reservation's own transaction. */
 function nextAdmissionSeq(file: RegistryFile, canonicalId: ViewerConversationId): number {
   let highest = 0;
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  for (const delivery of conversationRows(file, "heldDeliveries", canonicalId)) {
     if (typeof delivery.admissionSeq !== "number" || delivery.admissionSeq <= highest) continue;
     if (resolveConversationAlias(file, delivery.conversationId) === canonicalId) highest = delivery.admissionSeq;
   }
@@ -5694,6 +5695,12 @@ export class AgentRegistry {
            list is read through the store rather than by parsing the file. */
         if (retiredAccountIds(input.engine).has(input.accountId)) throw new Error(`${input.engine} account is retired`);
       }
+      /* Main removed from Delegatus refuses the same way; an unreadable
+         registry keeps Main launchable, as it always was. */
+      if ((input.engine === "claude" || input.engine === "codex") && input.accountId === "default") {
+        const read = readRetiredAccountIds(input.engine);
+        if (read.kind === "known" && read.ids.has("default")) throw new Error(`${input.engine} account is retired`);
+      }
       const result = this.mutate((file) => this.beginSpawnRequestInFile(file, input));
       if (result.kind === "rejected") throw new SpawnAdmissionError(result.receipt, result.receipt.rejection!);
       if (result.kind === "replay" && result.receipt.rejection) {
@@ -5751,10 +5758,17 @@ export class AgentRegistry {
         }
       }
       const requestedTitle = input.launchProfile?.title;
+      const existingAttempt = input.clientAttemptId
+        ? registryRowsMatching(file,"receipts","clientAttemptId",input.clientAttemptId)[0]
+        : null;
       const requestedProfile = emptyLaunchProfile({
         cwd: input.cwd,
         ...(input.launchProfile ?? {}),
-        title: durableSemanticTitle(requestedTitle),
+        /* A replay that omits title keeps the admitted name before deriving a
+           fresh one; an explicit title still participates in compatibility. */
+        title: durableSemanticTitle(requestedTitle) ?? (requestedTitle == null
+          ? durableSemanticTitle(existingAttempt?.launchProfile.title) ?? firstMeaningfulPromptLine(input.launchDisplay?.prompt, 80)
+          : null),
         ...(explicitProject ? { project: explicitProject } : {}),
         parentConversationId,
       });
@@ -5780,7 +5794,7 @@ export class AgentRegistry {
         throw new Error("conversation migration prevents resume succession");
       }
       if (input.clientAttemptId) {
-        const existing = registryRowsMatching(file,"receipts","clientAttemptId",input.clientAttemptId)[0];
+        const existing = existingAttempt;
         if (existing) {
           const existingTitle = durableSemanticTitle(existing.launchProfile.title);
           const requestedTitle = durableSemanticTitle(profile.title);
@@ -8360,9 +8374,9 @@ export class AgentRegistry {
       never run again on it: owed deliveries on its conversations and their
       parked `failed-recoverable` migrations. */
   retireAccount(
-    engine: MigrationEngine,
+    engine: AgentEngine,
     accountId: string,
-    fallbackAccountId: string,
+    fallbackAccountId: string | null,
     liveness: AccountLivenessOptions = {},
     options: { rewrite?: readonly AccountPathRewrite[] } = {},
   ): AccountRetirementReport {
@@ -8378,9 +8392,9 @@ export class AgentRegistry {
    * lock held elsewhere with nothing retired.
    */
   retireAccountNow(
-    engine: MigrationEngine,
+    engine: AgentEngine,
     accountId: string,
-    fallbackAccountId: string,
+    fallbackAccountId: string | null,
     liveness: AccountLivenessOptions = {},
     options: { rewrite?: readonly AccountPathRewrite[] } = {},
   ): AccountRetirementReport {
@@ -8393,9 +8407,9 @@ export class AgentRegistry {
   }
 
   private retireAccountInFile(
-    engine: MigrationEngine,
+    engine: AgentEngine,
     accountId: string,
-    fallbackAccountId: string,
+    fallbackAccountId: string | null,
     liveness: AccountLivenessOptions,
     options: { rewrite?: readonly AccountPathRewrite[] },
   ): AccountRetirementReport {
@@ -9672,7 +9686,7 @@ export class AgentRegistry {
          switch commits cannot overtake what the switch carried. Every actuator claims here, and its claim and
          journal admission run inside `withConversationActuation`, so an earlier claim is admitted first. */
       const canonicalId = resolveConversationAlias(file, delivery.conversationId);
-      if (Object.values(file.heldDeliveries).some((other) => other.id !== delivery.id
+      if (conversationRows(file, "heldDeliveries", canonicalId).some((other) => other.id !== delivery.id
         && other.state === "assigned"
         && other.generationId === generationId
         && resolveConversationAlias(file, other.conversationId) === canonicalId
