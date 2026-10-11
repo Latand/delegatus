@@ -7,7 +7,6 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountProjectBindings, type AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
-import { FRESH_QUOTA_MS } from "@/lib/accounts/headlessSelection";
 import { recordLiveObservation } from "@/lib/accounts/liveLimits";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
@@ -41,31 +40,17 @@ export interface CodexVoiceOptions {
   voice?: CodexVoice;
   recordObservation?(observation: QuotaObservation): void;
 }
-/** An account's reading said its limit is reached. `rateLimitReachedType` can say
- * so while no window shows 100% (a workspace member's limit, spent credits), and
- * the recorded observation keeps the percentages it read, so the pick reads this
- * beside it. Unix seconds in `resetsAt`, milliseconds in `observedAt`. */
-export interface VoiceLimitMark { accountId: string; observedAt: number; resetsAt: number | null }
 export class CodexVoiceError extends Error {
   constructor(code: "NO_CODEX_ACCOUNT" | "CODEX_LIMIT_REACHED" | "CODEX_AUTH_REQUIRED" | "CODEX_UNSUPPORTED" | "PROVIDER_ERROR", readonly resetsAt: number | null = null) { super(code); }
 }
-export function selectVoiceAccount(accounts: readonly VoiceAccount[], observations: readonly DurableQuotaObservation[], bindings: readonly AccountProjectBinding[], project: string | null, now = Date.now(),
-  marks: readonly VoiceLimitMark[] = []): VoiceAccount {
+export function selectVoiceAccount(accounts: readonly VoiceAccount[], observations: readonly DurableQuotaObservation[], bindings: readonly AccountProjectBinding[], project: string | null, now = Date.now()): VoiceAccount {
   // Exclusions are a fallback tier in headless selection. Remove legacy homes
   // from the candidate set itself, so exhaustion can never pick the main home.
-  const signedIn = accounts.filter(account => account.kind === "managed" && account.authPresent);
-  // A mark holds as long as the selector trusts any reading, and never past its reset;
-  // the next start reads the account again and marks it anew if it is still out.
-  const reached = marks.filter(mark => signedIn.some(account => account.id === mark.accountId) && now >= mark.observedAt && now - mark.observedAt <= FRESH_QUOTA_MS
-    && (mark.resetsAt === null || mark.resetsAt * 1000 > now));
-  const candidates = signedIn.filter(account => !reached.some(mark => mark.accountId === account.id));
+  const candidates = accounts.filter(account => account.kind === "managed" && account.authPresent);
   const picked = selectProjectAccount({ accounts: candidates, observations, bindings, project, engine: "codex", unbound: "capacity", model: LIVE_BACKEND_MODEL, now });
   const account = picked.kind === "available" ? candidates.find(account => account.id === picked.accountId) : undefined;
   if (account) return account;
-  if (picked.kind === "exhausted" || reached.length) {
-    const resets = [...(picked.kind === "exhausted" && picked.resetsAt !== null ? [picked.resetsAt] : []), ...reached.flatMap(mark => mark.resetsAt === null ? [] : [mark.resetsAt])];
-    throw new CodexVoiceError("CODEX_LIMIT_REACHED", resets.length ? Math.min(...resets) : null);
-  }
+  if (picked.kind === "exhausted") throw new CodexVoiceError("CODEX_LIMIT_REACHED", picked.resetsAt);
   throw new CodexVoiceError("NO_CODEX_ACCOUNT");
 }
 export const CODEX_VOICE_ARGS = ["-c", "cli_auth_credentials_store=file", "-c", "mcp_servers={}", "-c", "analytics.enabled=false", "-c", "features.shell_tool=false",
@@ -97,6 +82,8 @@ interface Call {
   stopping?: Promise<void>; reaped: Promise<void>; sdpReceived?: boolean; failed?: boolean;
   /** The plan as merged from every reading of this call: a rolling update never clears what it leaves out. */
   plan: CompanionPlan | null; limitReached?: boolean;
+  /** The last `rateLimitReachedType` this call read; a reading without the field keeps it. */
+  reachedMarker?: boolean;
   transcriptAdapter: CodexVoiceTranscript;
   writing: Promise<void>;
   speech: string[]; speaking: boolean; awaitingSpeech: boolean;
@@ -115,13 +102,12 @@ export const LIMIT_SPEECH: Record<Locale, string> = {
 export class CodexLiveProvider implements LiveProvider {
   readonly backend = "codex" as const;
   private readonly calls = new Map<string, Call>();
-  private readonly marks = new Map<string, VoiceLimitMark>();
   private readonly now: () => number;
   constructor(private readonly options: CodexVoiceOptions = {}) { this.now = options.now ?? Date.now; }
 
   async create(_key: string, locale: Locale, sdp: string, projectName?: string, project?: string) {
     const account = selectVoiceAccount((this.options.accounts ?? listCodexAccounts)(), (this.options.observations ?? (() => agentRegistry().quotaObservations("codex")))(),
-      (this.options.bindings ?? accountProjectBindings)(), project ?? null, this.now(), this.limitMarks());
+      (this.options.bindings ?? accountProjectBindings)(), project ?? null, this.now());
     const directory = statePath("scratch", "voice-codex"); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const cwd = fs.mkdtempSync(path.join(directory, "call-"));
     let call: Call | undefined;
@@ -284,21 +270,21 @@ export class CodexLiveProvider implements LiveProvider {
     const primary = window(source.primary) ?? call.plan?.primary ?? null;
     const secondary = window(source.secondary) ?? call.plan?.secondary ?? null;
     const exhausted = [primary, secondary].filter((row): row is PlanWindow => !!row && row.usedPercent >= 100);
-    const reached = exhausted.length > 0 || (typeof source.rateLimitReachedType === "string" && source.rateLimitReachedType.length > 0);
+    // `rateLimitReachedType` can say the account is out while every window has room
+    // (a workspace member's limit, spent credits); the record carries it beside them.
+    if ("rateLimitReachedType" in source) call.reachedMarker = typeof source.rateLimitReachedType === "string" && source.rateLimitReachedType.length > 0;
+    const reached = exhausted.length > 0 || call.reachedMarker === true;
     call.plan = { type: type ?? call.plan?.type ?? null, primary, secondary, limitReached: reached, observedAt: this.now() };
     const resetsAt = exhausted.length && exhausted.every(row => row.resetsAt !== null) ? Math.max(...exhausted.map(row => row.resetsAt!)) : null;
-    if (reached) this.marks.set(call.account.id, { accountId: call.account.id, observedAt: this.now(), resetsAt });
-    else if ("rateLimitReachedType" in source) this.marks.delete(call.account.id);
     const rateLimits: AppServerRateLimits = { primary: primary && { usedPercent: primary.usedPercent, resetsAt: primary.resetsAt, windowDurationMins: primary.windowMinutes },
       secondary: secondary && { usedPercent: secondary.usedPercent, resetsAt: secondary.resetsAt, windowDurationMins: secondary.windowMinutes }, planType: call.plan.type };
     const observation: QuotaObservation = { engine: "codex", accountId: call.account.id, authenticated: true, authCheckedAt: this.now(), observedAt: this.now(),
-      limits: mapAppServerRateLimits(rateLimits, Math.floor(this.now() / 1000)), provenance: { source: "live", reason: null, staleSince: null } };
+      limits: mapAppServerRateLimits(rateLimits, Math.floor(this.now() / 1000)), provenance: { source: "live", reason: null, staleSince: null },
+      ...(call.reachedMarker === undefined ? {} : { limitReached: call.reachedMarker }) };
     if (this.options.recordObservation) this.options.recordObservation(observation); else recordLiveObservation(observation, "managed");
     this.emit(call, { type: "codex.plan", plan: call.plan });
     return reached ? { resetsAt } : null;
   }
-  /** The limits this provider's calls have read, for the next pick. */
-  limitMarks(): VoiceLimitMark[] { return [...this.marks.values()]; }
   async attach(id: string, _key: string, event: (value: unknown) => void, lost: () => void, tool?: LiveToolHandler): Promise<LiveConnection> {
     const call = this.calls.get(id); if (!call || call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");
     call.event = event; call.lost = lost; call.tool = tool;

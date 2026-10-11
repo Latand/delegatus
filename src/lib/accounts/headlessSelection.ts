@@ -1,7 +1,7 @@
 import { gatingWindows } from "./migration/quotaPolicy";
 import type { DurableQuotaObservation } from "./migration/contracts";
 
-export const FRESH_QUOTA_MS = 5 * 60 * 1_000;
+const FRESH_QUOTA_MS = 5 * 60 * 1_000;
 
 export type HeadlessAccountSelection =
   | { kind: "available"; accountId: string }
@@ -58,7 +58,10 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
   if (observation.provenance.source !== "live"
     && !(copilotTranscript && (observationFresh || staleCopilotExhaustion))
     && !(observation.provenance.source === "transcript" && observationFresh && remaining <= 0)) return { kind: "unknown" };
-  if (remaining > 0) return { kind: "available", remaining };
+  /* The provider's own word that the limit is reached outranks windows that
+     still show room; it holds only while the reading is fresh, like they do. */
+  if (remaining > 0 && !(observation.limitReached && observation.provenance.source === "live")) return { kind: "available", remaining };
+  if (!exhaustedWindows.length) return { kind: "exhausted", resetsAt: null };
   if (copilotTranscript && exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "unknown" };
   if (exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "exhausted", resetsAt: null };
   return { kind: "exhausted", resetsAt: Math.max(...exhaustedWindows.map((window) => window.resetsAt!)) };

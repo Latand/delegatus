@@ -13,6 +13,7 @@ import type { LiveProvider } from "./provider";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
 import { durableQuotaObservation } from "@/lib/accounts/migration/quotaController";
+import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 
 const roots: string[] = [];
 const stateDirectory = process.env.LLV_STATE_DIR;
@@ -35,10 +36,11 @@ function fixture(mode = "sdp", now?: () => number, picks: { accounts?: string[];
   const observations: QuotaObservation[] = [];
   const accounts = { ids: picks.accounts ?? ["account-a"] };
   // `recorded` hands the pick what this provider recorded, as the registry would.
-  const provider = new CodexLiveProvider({ accounts: () => accounts.ids.map(id => ({ id, kind: "managed" as const, authPresent: true, home: root })),
-    observations: () => picks.recorded ? observations.map(observation => durableQuotaObservation(observation, "fixture")) : [], bindings: () => [], recordObservation: observation => { observations.push(observation); }, now,
-    environment: { ...process.env, LLV_CODEX_BINARY: binary, VOICE_STUB_ROOT: root, VOICE_STUB_MODE: mode, OPENAI_API_KEY: "synthetic", OTHER_API_KEY: "synthetic" } });
-  return { root, binary, provider, observations, accounts };
+  const options = { accounts: () => accounts.ids.map(id => ({ id, kind: "managed" as const, authPresent: true, home: root })),
+    observations: () => picks.recorded ? observations.map(observation => durableQuotaObservation(observation, "fixture")) : [], bindings: () => [], recordObservation: (observation: QuotaObservation) => { observations.push(observation); }, now,
+    environment: { ...process.env, LLV_CODEX_BINARY: binary, VOICE_STUB_ROOT: root, VOICE_STUB_MODE: mode, OPENAI_API_KEY: "synthetic", OTHER_API_KEY: "synthetic" } };
+  // `fresh` is the provider a restarted Viewer builds: it knows only what was recorded.
+  return { root, binary, provider: new CodexLiveProvider(options), fresh: () => new CodexLiveProvider(options), observations, accounts };
 }
 function sessions(root: string, provider: CodexLiveProvider, apiProvider?: Pick<LiveProvider, "hangup">, options: { now?: () => number; limitGraceMs?: number; limitTailMs?: number } = {}) {
   process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -123,16 +125,23 @@ for (const [name, reading, recordedPercent] of [
     expect(requests.findIndex(row => row.method === "thread/realtime/stop")).toBeGreaterThan(requests.indexOf(spoken[0]!));
     expect(storage.usageFor(session.sessionId)).toMatchObject({ backend: "codex", callFinal: true, plan: { limitReached: true, primary: { usedPercent: recordedPercent } } });
     await until(() => gone(pid));
-    // The recorded observation keeps the percentages it read.
-    expect(durableQuotaObservation(f.observations.at(-1)!, "fixture")).toMatchObject({ accountId: "account-a", limits: { session: { usedPercent: recordedPercent, resetsAt: 2000000100 } } });
-    // With no other account the next start is refused before any process starts.
+    // The recorded observation keeps the percentages it read, and says the limit is reached.
+    expect(durableQuotaObservation(f.observations.at(-1)!, "fixture")).toMatchObject({ accountId: "account-a", limitReached: true, limits: { session: { usedPercent: recordedPercent, resetsAt: 2000000100 } } });
+    // Workers pick from the same record.
+    const recorded = f.observations.map(observation => durableQuotaObservation(observation, "fixture"));
+    expect(selectHeadlessAccount([{ id: "account-a", authPresent: true }, { id: "account-b", authPresent: true }], recorded, null, [], Date.now())).toEqual({ kind: "available", accountId: "account-b" });
+    // With no other account the next start is refused before any process starts, by this provider and by a restarted Viewer's.
     f.accounts.ids = ["account-a"];
     await expect(f.provider.create("", "en", "v=0", "Fixture", "fixture")).rejects.toMatchObject({ message: "CODEX_LIMIT_REACHED" });
+    await expect(f.fresh().create("", "en", "v=0", "Fixture", "fixture")).rejects.toMatchObject({ message: "CODEX_LIMIT_REACHED" });
     expect(Number(fs.readFileSync(path.join(f.root, "pid"), "utf8"))).toBe(pid);
     // With another, the next start runs on it.
     f.accounts.ids = ["account-a", "account-b"];
-    await f.provider.create("", "en", "v=0", "Fixture", "fixture");
-    expect(f.observations.at(-1)!.accountId).toBe("account-b");
+    const restarted = f.fresh();
+    try {
+      await restarted.create("", "en", "v=0", "Fixture", "fixture");
+      expect(f.observations.at(-1)!.accountId).toBe("account-b");
+    } finally { await restarted.hangup("voice_thread", ""); }
   } finally { await service.close(session.sessionId); await f.provider.hangup("voice_thread", ""); }
 });
 
@@ -349,16 +358,15 @@ test("capacity honours project bindings and never falls back to the legacy home"
   const available = [observation("account-a", 30, reset), observation("account-b", 10, reset)];
   expect(selectVoiceAccount(accounts, available, [], "fixture", now).id).toBe("account-b");
   expect(selectVoiceAccount(accounts, available, [{ engine: "codex", accountId: "account-a", project: "fixture", createdAt: new Date(now).toISOString() }], "fixture", now).id).toBe("account-a");
-  // A reached mark holds the account out of the pick while the selector trusts a reading, and never past its reset.
-  const mark = { accountId: "account-b", observedAt: now, resetsAt: null };
-  expect(selectVoiceAccount(accounts, available, [], "fixture", now, [mark]).id).toBe("account-a");
-  expect(() => selectVoiceAccount(accounts.slice(0, 3), available, [], "fixture", now, [mark, { ...mark, accountId: "account-a", resetsAt: reset }])).toThrow("CODEX_LIMIT_REACHED");
-  try { selectVoiceAccount(accounts, available, [], "fixture", now, [mark, { ...mark, accountId: "account-a", resetsAt: reset }]); } catch (error) { expect(error).toMatchObject({ resetsAt: reset }); }
-  // With nothing observed the pick goes by id, so the marked first account shows when its mark lapses.
-  const first = { ...mark, accountId: "account-a" };
-  expect(selectVoiceAccount(accounts, [], [], "fixture", now, [first]).id).toBe("account-b");
-  expect(selectVoiceAccount(accounts, [], [], "fixture", now + 5 * 60_000 + 1, [first]).id).toBe("account-a");
-  expect(selectVoiceAccount(accounts, [], [], "fixture", now, [{ ...first, resetsAt: Math.floor(now / 1000) - 1 }]).id).toBe("account-a");
+  // A recorded reached limit holds the account out of the pick while its windows still have room.
+  const reached = (accountId: string, at = now): DurableQuotaObservation => ({ ...observation(accountId, 10, reset), observedAt: new Date(at).toISOString(), authCheckedAt: new Date(at).toISOString(), limitReached: true });
+  expect(selectVoiceAccount(accounts, [observation("account-a", 30, reset), reached("account-b")], [], "fixture", now).id).toBe("account-a");
+  expect(() => selectVoiceAccount(accounts, [reached("account-a"), reached("account-b")], [], "fixture", now)).toThrow("CODEX_LIMIT_REACHED");
+  expect(() => selectVoiceAccount(accounts.slice(0, 2), [reached("account-a")], [], "fixture", now)).toThrow("CODEX_LIMIT_REACHED");
+  // A later reading that says the limit is no longer reached restores the account.
+  expect(selectVoiceAccount(accounts.slice(0, 2), [{ ...reached("account-a"), limitReached: false }], [], "fixture", now).id).toBe("account-a");
+  // So does the selector's freshness horizon: a stale mark proves nothing.
+  expect(selectVoiceAccount(accounts.slice(0, 2), [reached("account-a", now - 5 * 60_000 - 1)], [], "fixture", now).id).toBe("account-a");
 });
 
 test("Codex tool calls use the session registry and reuse the read ledger across turns", async () => {

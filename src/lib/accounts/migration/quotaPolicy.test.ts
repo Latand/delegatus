@@ -15,6 +15,13 @@ describe("quota migration policy", () => {
     expect(decision?.evidence.sourcePercent).toBe(10);
   });
 
+  test("a provider that says the limit is reached leaves no headroom while the windows still show room", () => {
+    const reached = { ...observation("b", 10, 10), limitReached: true };
+    expect(effectiveRemaining(reached, now)).toEqual({ percent: 0, window: "session" });
+    expect(chooseAutoBalance("codex", "a", [observation("a", 80, 80), reached], policy(), now)).toBeNull();
+    expect(chooseAutoBalance("codex", "b", [reached, observation("a", 10, 10)], policy(), now)?.targetId).toBe("a");
+  });
+
   test("requires fresh live ownership and obeys strict threshold and hysteresis", () => {
     expect(chooseAutoBalance("codex", "a", [observation("a", 75, 75), observation("b", 74.999, 74.999)], policy(), now)).toBeNull();
     expect(chooseAutoBalance("codex", "a", [observation("a", 80, 80), observation("b", 10, 10, "cache")], policy(), now)).toBeNull();

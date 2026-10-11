@@ -563,6 +563,22 @@ test("account/rateLimits/read carries the reset-credit summary when the app-serv
   client.close();
 });
 
+test("account/rateLimits/read says whether the limit is reached even when every window has room", async () => {
+  let reachedType: unknown = "workspace_member_usage_limit_reached";
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialize") fake.respond(requestId(message), {});
+    if (message.method === "account/rateLimits/read") fake.respond(requestId(message), { rateLimits: { primary: { usedPercent: 10 }, ...(reachedType === undefined ? {} : { rateLimitReachedType: reachedType }) } });
+  });
+  const client = await start();
+  await expect(client.readRateLimits()).resolves.toMatchObject({ rateLimits: { primary: { usedPercent: 10 } }, limitReached: true });
+  reachedType = null;
+  await expect(client.readRateLimits()).resolves.toMatchObject({ limitReached: false });
+  // An app-server that does not report the marker leaves the question open.
+  reachedType = undefined;
+  expect(await client.readRateLimits()).not.toHaveProperty("limitReached");
+  client.close();
+});
+
 test("a count-only or malformed reset-credit summary degrades to count-only or null, never a throw", async () => {
   let shape: unknown = { availableCount: 2, credits: null };
   const { start } = clientWith((fake, message) => {

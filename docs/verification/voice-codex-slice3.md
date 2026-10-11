@@ -46,12 +46,19 @@ assertions that said there was no backend to choose.
    bounded wait still stops it. Then come `thread/realtime/stop`, one
    `session.closed` with reason `limit` and `incomplete: false`, and an ended
    usage with `limitReached: true`. The recorded observation keeps the
-   percentages it read (100 or 10). The provider also keeps a reached mark
-   for the account, which holds while the selector trusts any reading
-   (five minutes) and never past a known reset. The next start through the
-   same provider runs on the other managed account; with only the marked
-   account it is refused with `CODEX_LIMIT_REACHED` before any process
-   starts. A `thread/realtime/error` that follows the limit still closes
+   percentages it read (100 or 10) and records `limitReached: true` beside
+   them, which the background probe also records from
+   `account/rateLimits/read` (`codexAppServer.test.ts`,
+   `quotaController.test.ts`). The shared capacity check treats a fresh live
+   reading that says the limit is reached as exhausted whatever its windows
+   show, so the worker pick (`selectHeadlessAccount`), automatic balancing
+   (`effectiveRemaining`) and a provider built after a restart all avoid the
+   account. The next start, through the same provider or a fresh one, runs
+   on the other managed account; with only the reached account it is
+   refused with `CODEX_LIMIT_REACHED` before any process starts. A later
+   reading whose `rateLimitReachedType` is null restores the account, and
+   so does the selector's five-minute freshness horizon
+   (`headlessSelection.test.ts`, `quotaPolicy.test.ts`). A `thread/realtime/error` that follows the limit still closes
    with reason `limit` and emits no generic error. A start the limit refuses
    names its reset in the notice (`liveAdapter.test.ts`,
    `voiceCompanionProduct.dom.test.tsx`, and the driver's no-key case). A

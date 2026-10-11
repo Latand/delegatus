@@ -32,6 +32,11 @@ export interface QuotaObservation {
   envelope?: "headerless" | "jsonrpc-2.0" | null;
   /** Codex only; null when the probe carried no reset-credit summary. */
   resetCredits?: QuotaResetCredits | null;
+  /** Codex only: the provider's `rateLimitReachedType` said the account is out,
+      which it can say while every window still has room (a workspace member's
+      limit, spent credits). The windows keep the percentages it read. Absent
+      when the reading did not say either way. */
+  limitReached?: boolean;
 }
 
 export interface EffectiveRemaining {
@@ -79,7 +84,9 @@ export function effectiveRemaining(observation: QuotaObservation, now = Date.now
     (value.resetsAt !== null && (!Number.isSafeInteger(value.resetsAt) || value.resetsAt < 0)))) return null;
   const windows = reportedWindows;
   if (!windows.length) return null;
-  return windows.map(({ window, value }) => ({ window, percent: 100 - value.usedPercent }))
+  // A provider that says the limit is reached leaves no headroom, whatever the windows show.
+  const reached = observation.limitReached === true;
+  return windows.map(({ window, value }) => ({ window, percent: reached ? 0 : 100 - value.usedPercent }))
     .sort((a, b) => a.percent - b.percent || a.window.localeCompare(b.window))[0] ?? null;
 }
 

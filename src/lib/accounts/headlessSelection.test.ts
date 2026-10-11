@@ -162,3 +162,14 @@ test("headless selection excludes fresh live signed-out evidence even when crede
     accountId: "spare",
   });
 });
+
+test("headless selection treats a fresh reached-limit reading as exhausted while its windows still have room", () => {
+  const reached = { ...observation("default", 10), limitReached: true };
+  expect(selectHeadlessAccount(accounts, [reached], "default", [], NOW)).toEqual({ kind: "available", accountId: "spare" });
+  expect(selectHeadlessAccount([accounts[0]!], [reached], "default", [], NOW)).toEqual({ kind: "exhausted", resetsAt: null });
+  // A later reading that says it is no longer reached, or a mark past the freshness horizon, restores it.
+  expect(selectHeadlessAccount([accounts[0]!], [{ ...reached, limitReached: false }], "default", [], NOW)).toEqual({ kind: "available", accountId: "default" });
+  expect(selectHeadlessAccount([accounts[0]!], [reached], "default", [], NOW + 5 * 60_000)).toEqual({ kind: "available", accountId: "default" });
+  // Only the provider's live word counts; a carried reading does not refuse on it.
+  expect(selectHeadlessAccount([accounts[0]!], [{ ...reached, provenance: { source: "cache", reason: "quota-probe-failed", staleSince: null } }], "default", [], NOW)).toEqual({ kind: "available", accountId: "default" });
+});

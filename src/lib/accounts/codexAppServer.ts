@@ -99,6 +99,10 @@ export interface AppServerRateLimitsRead {
   /** Null when the app-server sent no summary (older codex, or a backend that
       omitted it); never a throw, so limits keep reading without it. */
   resetCredits: AppServerResetCredits | null;
+  /** The snapshot's `rateLimitReachedType`: set means the account is out even
+      when every window has room, null means it is not. Absent when the
+      app-server did not send the field. */
+  limitReached?: boolean;
 }
 
 /** Outcomes of `account/rateLimitResetCredit/consume` (codex-cli 0.151.0). */
@@ -361,6 +365,8 @@ export class CodexAppServerClient {
         planType: typeof snapshot.planType === "string" ? snapshot.planType : null,
       },
       resetCredits: optionalResetCredits(response.rateLimitResetCredits),
+      ...(typeof snapshot.rateLimitReachedType === "string" || snapshot.rateLimitReachedType === null
+        ? { limitReached: typeof snapshot.rateLimitReachedType === "string" && snapshot.rateLimitReachedType.length > 0 } : {}),
     };
   }
 
