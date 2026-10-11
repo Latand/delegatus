@@ -87,6 +87,8 @@ export type ProjectSpawnRequest = {
   project: string | null;
   /** Account the caller named — a pipeline stage's `account`, say. */
   requestedId?: string | null;
+  /** Automatically selected recovery target: require current capacity without substituting another account. */
+  requireCapacity?: boolean;
   /**
    * An account this launch would rather use, with nobody having named it: the
    * one a previous attempt of the same work already ran on, say.

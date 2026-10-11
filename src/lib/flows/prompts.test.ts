@@ -55,3 +55,12 @@ test("reviewer prompt includes pinned specification and acceptance criteria", ()
 test("kickoff carries a pinned specification into the implementer session", () => {
   expect(kickoffPrompt("Task\nAC1: Deliver context")).toContain("AC1: Deliver context");
 });
+
+test("flow reviewers require base evidence and retain blocking head-only failures", () => {
+  const prompt = reviewerPrompt(flow(), round);
+  expect(prompt).toContain("Test baseline comparison:");
+  expect(prompt).toContain("captured review base");
+  expect(prompt).toContain("it alone never warrants a finding or a failing verdict");
+  expect(prompt).toContain("New head-only failures still block");
+  expect(prompt).toContain("Missing, skipped or incomplete runs");
+});
