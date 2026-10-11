@@ -1,4 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -83,6 +84,7 @@ async function fixture(unstaged = false, admissionRestarts = 0) {
         return { launchId, conversationId: begun.receipt.conversationId, sessionId: null, transcript: null, paneId: null };
       }
       artifactPath = path.join(root, `${starts + 1}.jsonl`);
+      const threadId = randomUUID();
       const response = await spawnStructuredConversation({ engine: "codex", receipt: begun.receipt, registry, client, prompt: "Build",
         spec: { engine: "codex", command: "codex", cwd: root, windowName: "fixture", launchProfile: profile },
         account: { engine: "codex", accountId: "account-a", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" } },
@@ -91,7 +93,7 @@ async function fixture(unstaged = false, admissionRestarts = 0) {
         sleep: async ms => { clock += ms; },
         startHost: async () => {
           starts++;
-          return { identity: { threadId: `stage-${starts}`, path: artifactPath }, health: async () => ({ status: "idle" }), release: async () => {},
+          return { identity: { threadId, path: artifactPath }, health: async () => ({ status: "idle" }), release: async () => {},
             sessionMaterializationEvidence: async () => ({ state: "materialized" }),
           } as unknown as import("@/lib/runtime/structuredSpawn").SpawnedStructuredHost;
         },
@@ -107,7 +109,7 @@ async function fixture(unstaged = false, admissionRestarts = 0) {
         deliverFirst: async () => {
           messages++;
           record(`spawn_message_${launchId}`, begun.receipt.conversationId, "delivered");
-          fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: `stage-${starts}` } }) + "\n");
+          fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: threadId } }) + "\n");
         },
       });
       return { launchId, conversationId: begun.receipt.conversationId, sessionId: null, transcript: response.path ?? null, paneId: null };
@@ -146,7 +148,10 @@ async function fixture(unstaged = false, admissionRestarts = 0) {
   }, ports);
   if (!created.pipeline) throw new Error(created.error);
   await tickPipelines([], ports);
+  await tickPipelines([], ports);
+  if (!launchId) throw new Error(loadPipelines()[0]?.stateDetail ?? "fixture stage did not launch");
   const original = registry.readOnlySnapshot().receipts[launchId]!;
+  if (!unstaged && !original.key) throw new Error(original.error ?? loadPipelines()[0]?.stateDetail ?? "fixture host was not bound");
   const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
   const park = () => {
     const pipelines = loadPipelines();
