@@ -15,6 +15,7 @@ import {
 } from "./provider";
 import { CodexAppServerError, type CodexAppServerClient } from "@/lib/accounts/codexAppServer";
 import { AgentRegistry, type ConversationObservation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { sessionKey, sessionKeyId } from "@/lib/agent/sessionKey";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
 import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
@@ -689,6 +690,104 @@ test.each([false, true])("a migrated Claude successor preserves predecessor iden
     expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBeNull();
   } finally {
     controller.registerActiveHost = originalRegister;
+    adopt.mockRestore();
+    if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
+  }
+});
+
+test("a second provider instance that republishes a successor discards its pending identity when it releases the host", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-successor-republish-"));
+  roots.push(base);
+  const source = accountRoot("claude", base, "source");
+  const target = accountRoot("claude", base, "target");
+  const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  const nativeId = "49494949-4949-\x34949-8949-494949494949";
+  const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+  fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+  const launch = registry.beginSpawn("claude", base, { cwd: base, title: "Migrated conversation" });
+  registry.settleSpawn(launch.launchId, {
+    key: { engine: "claude", sessionId: nativeId }, artifactPath: transcript, cwd: base, accountId: "target",
+    status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+  const before = registry.rotateSpawnCapabilityForReceipt(launch.launchId);
+  const fakeHost = {
+    identity: { sessionId: nativeId },
+    setWriterFence() {},
+    health: async () => ({
+      status: "idle", sessionKey: nativeId, endpoint: "stdio:successor", pid: process.pid, processStartIdentity: null,
+      eventCursor: 0, protocolVersion: "test-v1", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+    }),
+    onStateChange: () => () => {},
+    release: async () => {},
+  } as unknown as ClaudeStreamBrokerHost & EngineHost;
+  const adoptOptions: Array<{ env?: NodeJS.ProcessEnv }> = [];
+  const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(async (_sessionId, options) => {
+    adoptOptions.push(options as { env?: NodeJS.ProcessEnv });
+    return fakeHost;
+  });
+  const dependencies: ProviderDependencies = {
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source },
+    startCodex: async () => { throw new Error("unexpected Codex client"); },
+    claudeStatus: async () => ({ loggedIn: true }),
+    verifyClaudeHost: async () => true,
+    cancelClaude: async () => "absent",
+    registry,
+    now: () => "2026-07-22T09:00:00.000Z",
+  };
+  const receipt: ProviderReceipt = {
+    operationId: "claude-successor-republish",
+    nativeId,
+    path: transcript,
+    continuityPaths: [transcript],
+    historyHash: "claude-successor-republish-history",
+    host: { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-07-22T09:00:00.000Z" },
+  } as ProviderReceipt;
+  const input = {
+    engine: "claude" as const,
+    conversationId: launch.conversationId,
+    targetAccountId: "target",
+    launchProfile: emptyLaunchProfile({ cwd: base }),
+  };
+  const structuredFlag = process.env.LLV_STRUCTURED_HOSTS;
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  const controller = (process as typeof process & {
+    __llvStructuredDeliveryController?: {
+      registerActiveHost: ((item: unknown) => Promise<() => Promise<void>>) | null;
+      activeHosts: Map<string, EngineHost> | null;
+      releaseActiveHost: ((key: unknown) => Promise<boolean>) | null;
+    };
+  }).__llvStructuredDeliveryController!;
+  const originalRegister = controller.registerActiveHost;
+  const originalHosts = controller.activeHosts;
+  const originalRelease = controller.releaseActiveHost;
+  const hosts = new Map<string, EngineHost>();
+  const id = sessionKeyId(sessionKey("claude", nativeId)!);
+  controller.registerActiveHost = async () => { hosts.set(id, fakeHost); return async () => { hosts.delete(id); }; };
+  controller.activeHosts = hosts;
+  controller.releaseActiveHost = async () => hosts.delete(id);
+  try {
+    /* Instance A starts the successor and stages its identity. */
+    await new RegisteredSuccessorProvider(dependencies).publishHost(receipt, input);
+    expect(adoptOptions).toHaveLength(1);
+    const capability = adoptOptions[0]!.env?.LLV_SPAWN_CAPABILITY ?? "";
+    const digest = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+    expect(registry.conversationIdForSpawnCapabilityDigest(digest(capability))).toBe(launch.conversationId);
+
+    /* A later pass builds instance B, which finds the host already held and
+       adopts nothing; when ownership is lost it releases the host, and the
+       identity staged for that host goes with it. */
+    const second = new RegisteredSuccessorProvider(dependencies);
+    await second.publishHost(receipt, input);
+    expect(adoptOptions).toHaveLength(1);
+    await second.cleanup(receipt);
+    expect(hosts.size).toBe(0);
+    expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBe(launch.conversationId);
+    expect(registry.conversationIdForSpawnCapabilityDigest(digest(capability))).toBeNull();
+  } finally {
+    controller.registerActiveHost = originalRegister;
+    controller.activeHosts = originalHosts;
+    controller.releaseActiveHost = originalRelease;
     adopt.mockRestore();
     if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
     else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;

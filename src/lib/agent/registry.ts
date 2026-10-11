@@ -5581,15 +5581,11 @@ export class AgentRegistry {
     });
   }
 
-  /**
-   * Mint a capability for a conversation's newest receipt, as a relaunch does,
-   * and return the digests it replaced so a launch that does not survive can
-   * hand them back ({@link restoreSpawnCapabilityDigests}).
-   */
+  /** Mint a capability for a conversation's newest receipt, as a relaunch
+      does. */
   rotateSpawnCapabilityForConversation(conversationId: string): {
     capability: string;
     digest: string;
-    previous: Record<string, string | null>;
   } | null {
     return this.rotateSpawnCapabilityWhere((file) => {
       const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
@@ -5602,7 +5598,6 @@ export class AgentRegistry {
   private rotateSpawnCapabilityWhere(conversationOf: (file: RegistryFile) => ViewerConversationId | null): {
     capability: string;
     digest: string;
-    previous: Record<string, string | null>;
   } | null {
     const capability = crypto.randomBytes(32).toString("base64url");
     const digest = crypto.createHash("sha256").update(capability).digest("hex");
@@ -5614,29 +5609,12 @@ export class AgentRegistry {
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
       const current = receipts[0];
       if (!current) return null;
-      const previous = Object.fromEntries(receipts.map((receipt) => [receipt.launchId, receipt.spawnCapabilityDigest ?? null]));
       for (const receipt of receipts) {
         receipt.spawnCapabilityDigest = null;
         receipt.pendingSpawnCapability = null;
       }
       current.spawnCapabilityDigest = digest;
-      return { capability, digest, previous };
-    });
-  }
-
-  /** Undo {@link rotateSpawnCapabilityForConversation}, and only while the
-      digest it minted is still the conversation's current one: a later launch
-      that rotated again owns the identity and is left alone. */
-  restoreSpawnCapabilityDigests(conversationId: string, rotatedDigest: string, previous: Record<string, string | null>): boolean {
-    return this.mutate((file) => {
-      const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
-      const receipts = Object.values(file.receipts)
-        .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === owner);
-      if (!receipts.some((receipt) => receipt.spawnCapabilityDigest === rotatedDigest)) return false;
-      for (const receipt of receipts) {
-        receipt.spawnCapabilityDigest = Object.hasOwn(previous, receipt.launchId) ? previous[receipt.launchId]! : null;
-      }
-      return true;
+      return { capability, digest };
     });
   }
 

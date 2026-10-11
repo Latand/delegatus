@@ -1541,9 +1541,12 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     if (published && published.nativeId === receipt.nativeId && published.path === receipt.path) {
       await published.cleanup();
       this.publishedHosts.delete(receipt.operationId);
-      return;
+    } else {
+      await this.cleanupRecoveredHost(receipt);
     }
-    await this.cleanupRecoveredHost(receipt);
+    /* Whichever instance releases the host, the identity staged for this
+       operation goes with it: an instance that found the host already held
+       staged nothing itself, and its release closure knows nothing of it. */
     (this.dependencies.registry ?? agentRegistry()).discardSpawnCapabilityForOperation(receipt.operationId);
   }
 
