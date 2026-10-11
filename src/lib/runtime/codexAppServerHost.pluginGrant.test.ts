@@ -4,7 +4,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 import { afterAll, expect, test } from "bun:test";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 
-import { CodexAppServerHost } from "./codexAppServerHost";
+import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import type { RuntimeEvent } from "./engineHost";
 import type { RuntimeEventStore } from "./eventStore";
 const restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nplugins stable true\ncomputer_use stable true"));
@@ -61,6 +61,8 @@ class FakeAppServer extends EventEmitter {
     if (method === "initialize") return this.respond(message.id, { userAgent: "codex_desktop_app/0.145.0 (Linux)" });
     if (method === "account/read") return this.respond(message.id, { account: { type: "chatgpt", planType: "pro" } });
     if (method === "model/list") return this.respond(message.id, { data: [{ id: "gpt-5.3-codex-spark", isDefault: true }] });
+    if (method === "modelProvider/capabilities/read") return this.respond(message.id, { webSearch: false, imageGeneration: false });
+    if (method === "thread/queue/list") return this.respond(message.id, { items: [] });
     if (method === "config/read") return this.respond(message.id, {
       config: {
         mcp_servers: this.configuredServers,
@@ -94,6 +96,10 @@ function fakeSpawn(server: FakeAppServer, captured?: { options?: SpawnOptionsWit
   };
 }
 
+function startHost(options: CodexAppServerHostOptions) {
+  return CodexAppServerHost.start({ readProtocolVersion: () => "0.162.1", ...options });
+}
+
 const DESKTOP_ENV: NodeJS.ProcessEnv & Record<string, string | undefined> = {
   NODE_ENV: "test",
   DISPLAY: ":0",
@@ -111,7 +117,7 @@ const DESKTOP_ENV: NodeJS.ProcessEnv & Record<string, string | undefined> = {
 test("a granted thread turns the plugin subsystem on for itself and allowlists computer use only", async () => {
   const server = new FakeAppServer();
   server.pluginServers = ["computer-use"];
-  const host = await CodexAppServerHost.start({
+  const host = await startHost({
     cwd: "/repo",
     plugins: ["computer-use"],
     env: DESKTOP_ENV,
@@ -126,12 +132,13 @@ test("a granted thread turns the plugin subsystem on for itself and allowlists c
     "computer-use@openai-bundled": { enabled: true },
     "browser@openai-bundled": { enabled: false },
   });
+  expect(server.requests.find(request => request.method === "mcpServerStatus/list")?.params).toEqual({});
   await host.release();
 });
 
 test("a session without a grant leaves the plugin subsystem off", async () => {
   const server = new FakeAppServer();
-  const host = await CodexAppServerHost.start({
+  const host = await startHost({
     cwd: "/repo",
     env: DESKTOP_ENV,
     eventStore: new MemoryEventStore(),
@@ -151,14 +158,14 @@ test("only a granted host receives the desktop session environment", async () =>
   const denied = { options: undefined as SpawnOptionsWithoutStdio | undefined };
   const grantedServer = new FakeAppServer();
   grantedServer.pluginServers = ["computer-use"];
-  const grantedHost = await CodexAppServerHost.start({
+  const grantedHost = await startHost({
     cwd: "/repo",
     plugins: ["computer-use"],
     env: DESKTOP_ENV,
     eventStore: new MemoryEventStore(),
     spawnProcess: fakeSpawn(grantedServer, granted),
   });
-  const deniedHost = await CodexAppServerHost.start({
+  const deniedHost = await startHost({
     cwd: "/repo",
     env: DESKTOP_ENV,
     eventStore: new MemoryEventStore(),
@@ -182,7 +189,7 @@ test("only a granted host receives the desktop session environment", async () =>
 test("a granted thread that surfaces another plugin's server never opens", async () => {
   const server = new FakeAppServer();
   server.pluginServers = ["computer-use", "browser"];
-  await expect(CodexAppServerHost.start({
+  await expect(startHost({
     cwd: "/repo",
     plugins: ["computer-use"],
     env: DESKTOP_ENV,
@@ -194,7 +201,7 @@ test("a granted thread that surfaces another plugin's server never opens", async
 test("a grant that cannot be verified is not granted", async () => {
   const server = new FakeAppServer();
   server.statusError = "mcpServerStatus/list is unavailable";
-  await expect(CodexAppServerHost.start({
+  await expect(startHost({
     cwd: "/repo",
     plugins: ["computer-use"],
     env: DESKTOP_ENV,
@@ -206,7 +213,7 @@ test("a grant that cannot be verified is not granted", async () => {
 test("a stored profile naming an ungrantable plugin gets no grant at all", async () => {
   const server = new FakeAppServer();
   const captured = { options: undefined as SpawnOptionsWithoutStdio | undefined };
-  const host = await CodexAppServerHost.start({
+  const host = await startHost({
     cwd: "/repo",
     plugins: ["browser", "*"],
     env: DESKTOP_ENV,
@@ -230,7 +237,7 @@ test("with the HTTP flag, only an app-server holding a capability gives its thre
   const viewerFor = async (env: Record<string, string>) => {
     const server = new FakeAppServer();
     server.configuredServers = { playwright: { command: "npx" } };
-    const host = await CodexAppServerHost.start({ cwd: "/repo", env: { NODE_ENV: "test", ...env } as NodeJS.ProcessEnv, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    const host = await startHost({ cwd: "/repo", env: { NODE_ENV: "test", ...env } as NodeJS.ProcessEnv, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
     const config = (server.requests.find((request) => request.method === "thread/start")
       ?.params as { config: { mcp_servers: Record<string, Record<string, unknown>> } }).config;
     await host.release();

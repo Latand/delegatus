@@ -16507,6 +16507,10 @@ test("an unpublished launch whose host is verified alive survives the tick that 
 
     // The same launch once its host is gone terminalizes as before.
     await host.end();
+    const receipt = f.registry.readOnlySnapshot().receipts[f.launchId()]!;
+    const writer = f.registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
+    expect(f.registry.setStructuredHostClaimed(receipt.key!, { ...writer.structuredHost!, process: null },
+      "dead", writer.claimOwner!, writer.claimEpoch, true)).toMatchObject({ status: "dead", claimOwner: null });
     await f.wake();
     expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("failed");
     expect(f.attempt()).toMatchObject({ state: "failed", error: expect.stringMatching(/^stage launch never started: runtime host recovery exhausted/) });
@@ -17648,6 +17652,10 @@ test.each(["path-pending", "starting", "closed", "closed-pending"] as const)("ne
     reason: "runtime host recovery exhausted after 2 checks; original launch and first-message operation inspected; last result: runtime host request timed out",
   });
   f.registry.preserveSpawnArtifactOwnership(receipt.launchId, stopped);
+  // The staged fixture's writer retires before the controller proves no agent started.
+  const writer = f.registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
+  expect(f.registry.setStructuredHostClaimed(receipt.key!, { ...writer.structuredHost!, process: null },
+    "dead", writer.claimOwner!, writer.claimEpoch, true)).toMatchObject({ status: "dead", claimOwner: null });
   const records = loadPipelines();
   records[0]!.state = closed ? "closed" : "needs_decision";
   if (closed) {

@@ -1,12 +1,13 @@
 "use client";
 
-import { MessageCircleQuestionMark, GalleryHorizontalEnd } from "lucide-react";
+import { MessageCircleQuestionMark, GalleryHorizontalEnd, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 
 import { ArrowRight } from "@/components/icons";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type TFunction } from "@/lib/i18n";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 
 import { usePrototypeNoticesFor } from "./prototypeReviewStore";
 
@@ -36,11 +37,12 @@ export function PrototypeNoticeRow({ project }: { project: string }) {
           key={notice.id}
           role="status"
           data-prototype-notice={notice.taskId}
-          className="flex min-w-0 items-center gap-1.5 rounded-control border border-accent/30 bg-accent-soft py-0.5 pl-2 pr-0.5 text-label text-accent"
+          {...(notice.undelivered ? { "data-prototype-notice-undelivered": "" } : {})}
+          className={`flex min-w-0 items-center gap-1.5 rounded-control border py-0.5 pl-2 pr-0.5 text-label ${notice.undelivered ? "border-warning/30 bg-warning-soft text-warning" : "border-accent/30 bg-accent-soft text-accent"}`}
         >
-          <NoticeMark questions={notice.asks === "questions"} className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <NoticeMark notice={notice} className="h-3.5 w-3.5 shrink-0" aria-hidden />
           {/* The phone gives the line to the task's name; the mark and the action already say what waits. */}
-          <span className={mobile ? "sr-only" : "shrink-0 font-semibold"}>{t(notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
+          <span className={mobile ? "sr-only" : "shrink-0 font-semibold"}>{noticeWord(t, notice)}</span>
           <span className="min-w-0 flex-1 truncate font-medium text-primary" title={notice.roundTitle ? `${notice.title} · ${notice.roundTitle}` : notice.title}>
             {notice.title}
             {notice.roundTitle ? <span data-prototype-notice-round="" className="font-normal text-muted"> · {notice.roundTitle}</span> : null}
@@ -48,11 +50,11 @@ export function PrototypeNoticeRow({ project }: { project: string }) {
           <button
             type="button"
             data-prototype-notice-open={notice.taskId}
-            aria-label={t(notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title })}
+            aria-label={t(notice.undelivered ? "proto.notice.undeliveredAria" : notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title })}
             className="inline-flex min-h-7 shrink-0 items-center gap-1 rounded-control px-2 font-semibold text-accent hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11"
             onClick={() => openPrototypeReview({ ...notice.target, from: "notice" })}
           >
-            {t(notice.asks === "questions" ? "proto.notice.answer" : "proto.notice.open")}
+            {t(notice.asks === "questions" && !notice.undelivered ? "proto.notice.answer" : "proto.notice.open")}
             <ArrowRight className="h-3.5 w-3.5" aria-hidden />
           </button>
         </li>
@@ -86,7 +88,7 @@ export function PrototypeNoticeChip({ project, compact = false }: { project: str
   const first = notices[0];
   if (!first) return null;
   const open = () => openPrototypeReview({ ...first.target, from: "notice" });
-  const label = `${t(first.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}: ${first.title}. ${t(first.asks === "questions" ? "proto.notice.answer" : "proto.notice.open")}`;
+  const label = `${noticeWord(t, first)}: ${first.title}. ${t(first.asks === "questions" && !first.undelivered ? "proto.notice.answer" : "proto.notice.open")}`;
   if (compact) {
     return (
       <div data-prototype-notice-chip-line="" className="order-last -mt-1 flex basis-full pl-10">
@@ -98,7 +100,7 @@ export function PrototypeNoticeChip({ project, compact = false }: { project: str
           onClick={open}
         >
           <span className="inline-flex h-8 items-center gap-1 rounded-full bg-accent-soft px-2 text-label font-semibold tabular-nums text-accent">
-            <NoticeMark questions={first.asks === "questions"} className="h-4 w-4 shrink-0" aria-hidden />
+            <NoticeMark notice={first} className="h-4 w-4 shrink-0" aria-hidden />
             <span data-prototype-notice-chip-word="" className="whitespace-nowrap">{t(first.asks === "questions" ? "proto.questions" : "proto.button.word")}</span>
             <span>{notices.length}</span>
           </span>
@@ -115,14 +117,18 @@ export function PrototypeNoticeChip({ project, compact = false }: { project: str
       className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-accent/30 bg-accent-soft px-2 text-label font-semibold text-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       onClick={open}
     >
-      <NoticeMark questions={first.asks === "questions"} className="h-3.5 w-3.5 shrink-0" aria-hidden />
-      <span className="whitespace-nowrap">{t(first.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
+      <NoticeMark notice={first} className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span className="whitespace-nowrap">{noticeWord(t, first)}</span>
       {notices.length > 1 ? <span className="tabular-nums opacity-80">{notices.length}</span> : null}
     </button>
   );
 }
 
-function NoticeMark({ questions, ...props }: { questions: boolean; className?: string; "aria-hidden"?: boolean }) {
-  const Mark = questions ? MessageCircleQuestionMark : GalleryHorizontalEnd;
+/** What waits: a prototype, questions, or a decision whose message keeps failing to reach the seat. */
+function noticeWord(t: TFunction, notice: PrototypeReviewNotice): string {
+  return t(notice.undelivered ? "proto.notice.undelivered" : notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready");
+}
+function NoticeMark({ notice, ...props }: { notice: PrototypeReviewNotice; className?: string; "aria-hidden"?: boolean }) {
+  const Mark = notice.undelivered ? TriangleAlert : notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
   return <Mark {...props} />;
 }
