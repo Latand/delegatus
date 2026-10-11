@@ -63,12 +63,13 @@ export function staticSensitiveClasses(
   }
   const separator = String.raw`[^\p{L}\p{N}\r\n]{0,8}`;
   const legacySeparator = String.raw`[^\p{L}\p{N}\r\n]{1,8}`;
+  // The delimiter can also open a following formatted token; leave it available.
   const splitTokenPrefix = new RegExp(String.raw`(?<![\p{L}\p{N}_$])(_+)?(?:` + [
     `g${separator}i${separator}t${separator}h${separator}u${separator}b${separator}p${separator}a${separator}t`,
     `g${separator}h${separator}[pousr]`,
     `x${legacySeparator}o${legacySeparator}x${legacySeparator}[baprs]`,
     `s${legacySeparator}k`,
-  ].join("|") + String.raw`)[^\p{L}\p{N}\r\n]{0,8}?[_-]`, "giu");
+  ].join("|") + String.raw`)[^\p{L}\p{N}\r\n]{0,8}?(?=[_-])`, "giu");
   const splitTokenBody = /^[^\p{L}\p{N}\r\n]*[a-z0-9](?:[^\p{L}\p{N}\r\n]*[a-z0-9])*/iu;
   let emphasisClosings: Map<number, number> | undefined;
   let lineStart = 0;

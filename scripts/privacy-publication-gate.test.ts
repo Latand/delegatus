@@ -1151,7 +1151,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   test("an incomplete refresh prefix leaves a following formatted token detectable", () => {
     const incomplete = [...syntheticShortGithubToken("r", "")].join(" ");
     const split = [...syntheticShortGithubToken("p")].join(" ");
-    expect(sensitiveClasses(`${incomplete} _${split}_`).has("credential")).toBe(true);
+    for (const prefix of [incomplete, incomplete.slice(0, -2)]) {
+      expect(sensitiveClasses(`${prefix} _${split}_`).has("credential")).toBe(true);
+    }
   });
 
   test.concurrent("fails closed when required known-value fingerprints are unavailable", async () => {
