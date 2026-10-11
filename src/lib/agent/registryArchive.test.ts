@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
 import { registryConversationsForPath, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { installRegistryArchive } from "./registryArchive";
 
 const directories: string[] = [];
 const stores: SqliteAgentRegistryStore[] = [];
@@ -95,6 +96,35 @@ function archiveAll(store: SqliteAgentRegistryStore) {
   }
   throw new Error("archive pass did not converge");
 }
+
+test("keyed archive reads use the cold identity index after upgrading an existing view", () => {
+  const { open, filename } = fixture();
+  archiveAll(open());
+  const db = new Database(filename);
+  try {
+    // Reproduce the first archive schema, including its retained cold payloads.
+    db.exec(`DROP VIEW registry_records;
+      CREATE VIEW registry_records AS
+      SELECT collection,row_key,value_json,row_order FROM registry_hot_rows
+      UNION ALL SELECT a.collection,a.row_key,a.value_json,a.row_order
+      FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id`);
+    const before = db.query("SELECT * FROM registry_records ORDER BY collection,row_key").all();
+    installRegistryArchive(db);
+    expect(db.query("SELECT * FROM registry_records ORDER BY collection,row_key").all()).toEqual(before);
+    const query = "SELECT value_json FROM registry_records WHERE collection=? AND row_key=?";
+    for (const key of [`codex:${id(0)}`, "missing-entry"]) {
+      const plan = db.query<{ detail: string }, [string, string]>(`EXPLAIN QUERY PLAN ${query}`)
+        .all("entries", key).map(row => row.detail);
+      expect(plan.some(detail => /SCAN c\b/.test(detail))).toBe(false);
+      expect(plan.some(detail => /SEARCH c .*\(collection=\? AND row_key=\?\)/.test(detail))).toBe(true);
+    }
+    expect(db.query(query).get("entries", `codex:${id(0)}`)).not.toBeNull();
+    expect(db.query(query).get("entries", "missing-entry")).toBeNull();
+    // Reopening a store must retain the indexed definition and the same rows.
+    open();
+    expect(db.query("SELECT * FROM registry_records ORDER BY collection,row_key").all()).toEqual(before);
+  } finally { db.close(); }
+});
 
 for (const archived of [false,true]) {
   for (const external of [false,true]) {

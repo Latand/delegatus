@@ -1,5 +1,10 @@
 import type { Database } from "bun:sqlite";
 
+const RECORDS_VIEW = `CREATE VIEW registry_records AS
+  SELECT collection,row_key,value_json,row_order FROM registry_hot_rows
+  UNION ALL SELECT c.collection,c.row_key,a.value_json,a.row_order
+  FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id`;
+
 /** Cold rows share the registry's transaction and backup boundary. registry_rows
  * keeps a compatibility copy for older processes during release handover;
  * current readers enumerate registry_hot_rows and fetch cold versions on demand.
@@ -17,10 +22,6 @@ export function installRegistryArchive(db: Database): void {
     )`,
     `CREATE VIEW IF NOT EXISTS registry_hot_rows AS SELECT r.* FROM registry_rows r
       WHERE NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection=r.collection AND c.row_key=r.row_key)`,
-    `CREATE VIEW IF NOT EXISTS registry_records AS
-      SELECT collection,row_key,value_json,row_order FROM registry_hot_rows
-      UNION ALL SELECT a.collection,a.row_key,a.value_json,a.row_order
-      FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id`,
     `CREATE TABLE IF NOT EXISTS registry_changes (
       seq INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL, row_key TEXT NOT NULL
     )`,
@@ -59,6 +60,18 @@ export function installRegistryArchive(db: Database): void {
         BEGIN INSERT INTO registry_grant_changes(collection,row_key) VALUES (${row}.collection,${row}.row_key); END`;
     }),
   ]) db.run(statement);
+  // Select identity from the indexed cold mapping. Selecting it from the archive
+  // makes SQLite scan every cold row for each keyed read, including misses.
+  // Upgrade existing installations atomically; no stored payload is rewritten.
+  const installed = db.query<{ sql: string }, []>(
+    "SELECT sql FROM sqlite_master WHERE type='view' AND name='registry_records'",
+  ).get();
+  if (installed?.sql !== RECORDS_VIEW) {
+    db.transaction(() => {
+      db.run("DROP VIEW IF EXISTS registry_records");
+      db.run(RECORDS_VIEW);
+    }).immediate();
+  }
 }
 
 /** Move only terminal evidence. Unknown or outstanding work stays hot; keyed
