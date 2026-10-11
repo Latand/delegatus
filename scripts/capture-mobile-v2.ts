@@ -566,21 +566,51 @@ export function buildEnvironment(home: Home, port: number): NodeJS.ProcessEnv {
     LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
     LLV_REAPER_ENABLED: "0",
     NEXT_TELEMETRY_DISABLED: "1",
+    DELEGATUS_TELEMETRY: "0",
+    DO_NOT_TRACK: "1",
     PORT: String(port),
     TZ: "UTC", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", USER: "demo", LOGNAME: "demo", SHELL: "/bin/sh",
   };
 }
 
-export function capturePort(raw: string | undefined, fallback = 4439): number {
+export function capturePort(raw: string | undefined, fallback = 0): number {
   const port = Number(raw ?? fallback);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("MOBILE_V2_CAPTURE_PORT must be a valid non-privileged port");
+  if (!Number.isInteger(port) || (port !== 0 && port < 1024) || port > 65535) throw new Error("MOBILE_V2_CAPTURE_PORT must be 0 or a valid non-privileged port");
   return port;
+}
+
+/** Next prints its Local URL after binding, including the port assigned for
+    :0. Read only the owned child's output before probing that listener. */
+export function captureServerUrl(child: ChildProcess, timeoutMs = 90_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let output = "";
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.stdout?.off("data", onData);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const onError = (error: Error) => { cleanup(); reject(error); };
+    const onExit = () => onError(new Error("production server exited before announcing its bound port; the requested port may already be in use"));
+    const onData = (chunk: Buffer) => {
+      output = (output + chunk.toString()).slice(-16_384);
+      const match = output.match(/Local:\s+(http:\/\/127\.0\.0\.1:(\d+))(?=\s)/);
+      if (!match || Number(match[2]) < 1 || Number(match[2]) > 65535) return;
+      cleanup();
+      resolve(match[1]);
+    };
+    const timer = setTimeout(() => onError(new Error("production server did not announce its bound port")), timeoutMs);
+    child.stdout?.on("data", onData);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    if (!child.stdout || child.exitCode !== null || child.signalCode !== null) onExit();
+  });
 }
 
 async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`production server exited with ${child.exitCode}`);
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`production server exited with ${child.exitCode ?? child.signalCode}`);
     try {
       if ((await fetch(`${url}/api/files`)).ok) return;
     } catch {
@@ -1294,22 +1324,28 @@ async function main(): Promise<void> {
   const base = createCaptureDirectory({ envName: "MOBILE_V2_CAPTURE_DIR", prefix: "llv-issue-1439", raw: process.env.MOBILE_V2_CAPTURE_DIR, repoRoot: REPO_ROOT });
   const home = seedHome(base);
   const port = capturePort(process.env.MOBILE_V2_CAPTURE_PORT);
-  const baseUrl = `http://127.0.0.1:${port}`;
   if (!fs.existsSync(path.join(REPO_ROOT, ".next", "BUILD_ID"))) throw new Error("no production build: run `bun run build` first");
   /* `bun --bun`: under node the instrumentation hook dies on the SQLite state
      stores and every request answers 500. */
   const server = spawn("bun", ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: REPO_ROOT,
     env: buildEnvironment(home, port),
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", "pipe", "inherit"],
   });
+  const serverExited = new Promise<void>((resolve) => server.once("close", () => resolve()));
+  const boundUrl = captureServerUrl(server);
+  // Keep the rejection handled while startup and browser setup are in flight.
+  void boundUrl.catch(() => {});
+  server.stdout?.pipe(process.stdout);
   const executablePath = process.env.CHROME_BIN
     ?? ["/usr/bin/chromium", "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome"].find((candidate) => fs.existsSync(candidate));
-  const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+  let browser: Browser | null = null;
   const frames: FrameResult[] = [];
   let flows: FlowResult[] = [];
   try {
+    const baseUrl = await boundUrl;
     await waitForServer(baseUrl, server);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
     const discovered = await discover(baseUrl, home);
     console.log(`frames: ${home.outDir}`);
     const screens = options.only.length ? SCREENS.filter((s) => options.only.includes(s.id)) : SCREENS;
@@ -1364,8 +1400,13 @@ async function main(): Promise<void> {
       for (const flow of flows) console.log(`flow ${flow.id}: ${flow.status}${flow.detail ? ` — ${flow.detail}` : ""}`);
     }
   } finally {
-    await browser.close();
-    server.kill("SIGTERM");
+    try { await browser?.close(); }
+    finally {
+      server.kill("SIGTERM");
+      const escalation = setTimeout(() => server.kill("SIGKILL"), 2_000);
+      try { await serverExited; }
+      finally { clearTimeout(escalation); }
+    }
   }
   const summary = summarize(frames, flows, options.strict);
   fs.writeFileSync(path.join(home.outDir, "manifest.json"), JSON.stringify({ generatedAt: new Date().toISOString(), frames: frames.map(({ gates: _gates, ...rest }) => rest) }, null, 2) + "\n");

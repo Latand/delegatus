@@ -169,21 +169,17 @@ export async function reconfigureConversation(
          project for this transcript is what the board already groups it under. */
       project: entry.project,
     });
-    const previousProfile = generation.launchProfile;
-    let profileUpdated = false;
     try {
       await (overrides.validateAccount ?? validateAccountAuthentication)(entry.engine, config.accountId);
       (overrides.resolveAccount ?? accountManager.resolveSpawn)(entry.engine, config.accountId);
-      registry.updateConversationLaunchProfile(conversation.id, {
-        model: config.model,
-        effort: config.effort,
-        fast: config.fast,
-      });
-      profileUpdated = true;
-      const queued = registry.requestConversationReseat(conversation.id, config.accountId);
-      if (!queued.migration) throw new Error("account switch could not be queued");
+      const targetId = config.accountId;
+      const written = await registry.deliveryWrite({ label: "migration.reseat-request" },
+        () => registry.requestConversationReseat(conversation.id, targetId, undefined, {
+          model: config.model, effort: config.effort, fast: config.fast,
+        }), requested => ({ label: "migration.reseat-request", operationId: requested.migration?.operationId }));
+      if (!written.acquired) return { ...failure(REGISTRY_WRITER_BUSY, 503), code: "REGISTRY_WRITER_BUSY" };
+      if (!written.value.migration) throw new Error("account switch could not be queued");
     } catch (error) {
-      if (profileUpdated) registry.updateConversationLaunchProfile(conversation.id, previousProfile);
       return failure(error, 409);
     }
     /* Accepted: the reseat is durably queued, so the record describes a switch
