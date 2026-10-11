@@ -1758,3 +1758,41 @@ test("explicit asks to send again in handoffs with no transcript send once each 
     await f.service.close(s.sessionId);
   }
 });
+
+test("targets that differ only in their opening capital each send once; a handle-named rephrasing and a duplicate handoff of an ask again send nothing", async () => {
+  const WORDS = {
+    en: { opening: "Release: what changed?", openingLower: "release: what changed?", openingReworded: "And release, what changed there?", again: "Send that once more" },
+    uk: { opening: "Release: що змінилося?", openingLower: "release: що змінилося?", openingReworded: "А release, що там змінилося?", again: "Надішли це ще раз" },
+  };
+  for (const [locale, words] of Object.entries(WORDS) as Array<["en" | "uk", typeof WORDS.en]>) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    let next: Record<string, unknown> = { instruction: words.opening, pending_request: null, asked_again: null };
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Sent.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", next)]);
+    const s = await f.service.start({ project: "fixture", locale, sdp: "v=0" });
+    const step = async (handoff: string, at: number, operator?: string) => {
+      f.provider.replay(s.providerId, ...(operator ? [said(operator, at)] : []), delegationCreated(handoff, at + 600));
+      await f.service.drain(s.sessionId);
+    };
+    await step("opening", 0, words.opening);
+    f.provider.replay(s.providerId, said("Sent.", 1_000, "output"));
+    next = { instruction: words.openingLower, pending_request: null, asked_again: null };
+    await step("lower", 2_000, words.openingLower);
+    expect([locale, f.sends()]).toEqual([locale, 2]);
+    next = { instruction: words.openingReworded, pending_request: "r2", asked_again: null };
+    await step("reworded", 4_000, words.openingReworded);
+    expect([locale, f.sends()]).toEqual([locale, 2]);
+    // An explicit ask again with no transcript, then a duplicate handoff of it before the voice answers: one attempt, one send.
+    f.provider.replay(s.providerId, said("Sent.", 5_000, "output"));
+    next = { instruction: words.openingLower, pending_request: "r2", asked_again: words.again };
+    await step("again", 6_000);
+    expect([locale, f.sends()]).toEqual([locale, 3]);
+    next = { ...next, pending_request: "r3" };
+    await step("again-duplicate", 6_100);
+    expect([locale, f.sends()]).toEqual([locale, 3]);
+    expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => [row.proposal.instruction, row.sourceTurn]))
+      .toEqual([[words.opening, 1], [words.openingLower, 2], [words.openingLower, undefined]]);
+    await f.service.close(s.sessionId);
+  }
+});

@@ -792,8 +792,10 @@ test("a request whose delivery is uncertain still waits and is never sent twice;
 
 /* Case-sensitive targets, explicit asks again without a transcript, and handles switched within one turn. The words are written for this test. */
 const TARGETS = {
-  en: { upper: "What changed on branch Release?", lower: "What changed on branch release?", reworded: "So what about branch Release?", ask: "Review the plan", again: "Send the plan review once more" },
-  uk: { upper: "Що змінилося у гілці Release?", lower: "Що змінилося у гілці release?", reworded: "То що там з гілкою Release?", ask: "Переглянь план", again: "Надішли перегляд плану ще раз" },
+  en: { upper: "What changed on branch Release?", lower: "What changed on branch release?", reworded: "So what about branch Release?", ask: "Review the plan", again: "Send the plan review once more",
+    opening: "Release: what changed?", openingLower: "release: what changed?", openingReworded: "And release, what changed there?" },
+  uk: { upper: "Що змінилося у гілці Release?", lower: "Що змінилося у гілці release?", reworded: "То що там з гілкою Release?", ask: "Переглянь план", again: "Надішли перегляд плану ще раз",
+    opening: "Release: що змінилося?", openingLower: "release: що змінилося?", openingReworded: "А release, що там змінилося?" },
 };
 const resendFixture = () => {
   fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
@@ -810,11 +812,17 @@ for (const [locale, words] of Object.entries(TARGETS) as Array<["en" | "uk", typ
       const turn = (n: number, text: string) => { if (transcribed) admission.input(session.id, { itemId: `said-${n}`, text, final: true, turn: n }); return transcribed ? { sourceTurn: n } : {}; };
       expect(await admission.delegate(session.id, "call-1", "turn-1", words.upper, turn(1, words.upper))).toEqual({ state: "sent", status: "queued" });
       expect(await admission.delegate(session.id, "call-2", "turn-2", words.lower, turn(2, words.lower))).toEqual({ state: "sent", status: "queued" });
-      // The same words with only their opening capital or closing stop changed are a repeat.
-      const repeat = `${words.upper[0]!.toLowerCase()}${words.upper.slice(1, -1)}`;
+      // The same words with only their spacing or closing stop changed are a repeat.
+      const repeat = `  ${words.upper.slice(0, -1).replace(" ", "  ")} `;
       expect(await admission.delegate(session.id, "call-3", "turn-3", repeat, turn(3, repeat))).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
       expect(await admission.delegate(session.id, "call-4", "turn-4", words.reworded, { ...turn(4, words.reworded), pendingRequest: "r1" })).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
-      expect([transcribed, sent.map(row => row.text)]).toEqual([transcribed, [words.upper, words.lower]]);
+      // A target at the start of the ask keeps its case too: each sends once, before either report.
+      expect(await admission.delegate(session.id, "call-5", "turn-5", words.opening, turn(5, words.opening))).toEqual({ state: "sent", status: "queued" });
+      expect(await admission.delegate(session.id, "call-6", "turn-6", words.openingLower, turn(6, words.openingLower))).toEqual({ state: "sent", status: "queued" });
+      expect(admission.awaitingReports(session.id).map(request => request.handle)).toEqual(["r1", "r2", "r3", "r4"]);
+      // A rephrasing of the lowercase one, named by its handle, sends nothing.
+      expect(await admission.delegate(session.id, "call-7", "turn-7", words.openingReworded, { ...turn(7, words.openingReworded), pendingRequest: "r4" })).toMatchObject({ state: "awaiting_report", request: { handle: "r4" } });
+      expect([transcribed, sent.map(row => row.text)]).toEqual([transcribed, [words.upper, words.lower, words.opening, words.openingLower]]);
     }
   });
 

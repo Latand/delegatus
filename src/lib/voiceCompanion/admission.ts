@@ -30,6 +30,8 @@ const sameRequest = (row: StoredProposal, sourceItemId: string, instruction: str
  * has no transcribed turn, the same Live delegation. */
 const sameAttempt = (row: StoredProposal, sourceItemId: string, sourceTurn?: number) =>
   sourceTurn !== undefined && row.sourceTurn !== undefined ? row.sourceTurn === sourceTurn : row.proposal.sourceItemId === sourceItemId;
+/** One operator attempt: its transcribed turn, if any, and the Live delegation that raised it. */
+export interface OperatorAttempt { sourceTurn?: number; sourceItemId: string }
 /** The request a renewal sends once more, followed back to the first send. */
 const lineageRoot = (session: StoredSession, row: StoredProposal) => {
   let root = row;
@@ -257,14 +259,19 @@ export class CompanionAdmission {
   /** The delegation tool's whole effect. With no confirmation asked the request
    * is admitted and sent before this returns; a retry of the same call finds
    * its first outcome and never sends again. `confirmation` is the model's own
-   * reason for asking first: nothing here reads the request to decide that. */
-  async delegate(id: string, callId: string, sourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string; renewed?: boolean; project?: string; pendingRequest?: string } = {}): Promise<DelegationOutcome> {
+   * reason for asking first: nothing here reads the request to decide that.
+   * `attempt` is the operator attempt an explicit ask again belongs to, when it
+   * is later than the turn the backend delegation was raised for: a backing
+   * turn that later operator words were steered into keeps its own source turn. */
+  async delegate(id: string, callId: string, rawSourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string; renewed?: boolean; project?: string; pendingRequest?: string; attempt?: OperatorAttempt } = {}): Promise<DelegationOutcome> {
     const clean = this.cleaner();
     const logicalInstruction = clean(instruction).trim();
     const session = this.session(id);
     const project = options.project ?? (session.currentProject === undefined ? session.project : session.currentProject);
+    const { attempt, ...rest } = options;
+    const [sourceItemId, sourceTurn] = options.renewed && attempt ? [attempt.sourceItemId, attempt.sourceTurn] : [rawSourceItemId, options.sourceTurn];
     const duplicate = Object.values(session.proposals).find(row => row.proposal.callId === clean(callId)
-      || sameRequest(row, clean(sourceItemId), logicalInstruction, options.sourceTurn, project));
+      || sameRequest(row, clean(sourceItemId), logicalInstruction, sourceTurn, project));
     if (duplicate) {
       // Recover older two-commit records when a caller retries after restart.
       if (duplicate.state === "pending" && !duplicate.proposal.confirmation) {
@@ -293,11 +300,11 @@ export class CompanionAdmission {
     // which handle of the request it names, the original or a renewal.
     const renews = held && options.renewed && (awaitingReport(held) || held.answered) ? lineageRoot(session, held) : undefined;
     const resent = renews ? Object.values(session.proposals).find(row => lineageRoot(session, row) === renews
-      && sameAttempt(row, clean(sourceItemId), options.sourceTurn)) : undefined;
+      && sameAttempt(row, clean(sourceItemId), sourceTurn)) : undefined;
     if (resent) return this.outcome(id, resent.proposal.proposalId);
-    const proposal = this.propose(id, callId, sourceItemId, instruction, { ...options, autosend: !options.confirmation?.trim(), ...(renews ? { renews } : {}) });
+    const proposal = this.propose(id, callId, sourceItemId, instruction, { ...rest, sourceTurn, autosend: !options.confirmation?.trim(), ...(renews ? { renews } : {}) });
     const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === clean(callId)
-      || sameRequest(held, clean(sourceItemId), logicalInstruction, options.sourceTurn, project));
+      || sameRequest(held, clean(sourceItemId), logicalInstruction, sourceTurn, project));
     if (!row) {
       const last = this.events(id, 0).at(-1);
       return { state: "refused", code: last?.type === "delegation.tool.result" && "code" in last.result ? last.result.code as DelegationCode : "not_admitted" };

@@ -3,7 +3,7 @@ import { reportHeaderName } from "@/lib/projects/settings";
 import { hardenedRedact } from "@/lib/view/compactText";
 import type { CompanionCommand, CompanionEvent, Locale, Payload } from "./contract";
 import { CompanionStorage, type StoredSession } from "./storage";
-import { CompanionAdmission } from "./admission";
+import { CompanionAdmission, type OperatorAttempt } from "./admission";
 import { CompanionBoardReads, READ_TOOL_NAMES, VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
 import { LiveTranscript } from "./liveTranscript";
 import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
@@ -17,7 +17,9 @@ function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
-interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number }
+/** A backing turn's project, send source turn and waiting confirmation stay frozen; the operator's latest
+ * attempt steered into it moves on, and it alone binds hang-up intent and an explicit ask again. */
+interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt }
 interface ActiveSession {
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
   key: string; secrets: string[];
@@ -41,7 +43,7 @@ interface ActiveSession {
   runningCodexTurnId?: string;
   codexTurns: Map<string, CodexTurnContext>;
   /** The latest handoff: the operator turn then latest, the turn it was given, and whether the voice spoke since. */
-  lastHandoff?: { latest?: number; turn?: number; replied: boolean };
+  lastHandoff?: { latest?: number; turn?: number; replied: boolean; attempt: string };
 }
 interface Options {
   key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean;
@@ -180,7 +182,7 @@ export class CompanionLiveSessions {
         if (active.ended || active.closePromise) throw new Error("SESSION_CLOSED");
         const context = active.codexTurns.get(turnId) ?? active.codexTurn;
         if (context && !active.codexTurns.has(turnId)) this.codexTurn(active, turnId, context);
-        const result = await this.tool(active, { name, call_id: callId, arguments: JSON.stringify(args) }, turnId, name === "end_conversation" ? context?.endSourceTurn ?? context?.sourceTurn : context?.sourceTurn, context?.confirmationProposalId, context?.project);
+        const result = await this.tool(active, { name, call_id: callId, arguments: JSON.stringify(args) }, turnId, name === "end_conversation" ? context?.endSourceTurn ?? context?.sourceTurn : context?.sourceTurn, context?.confirmationProposalId, context?.project, context?.attempt);
         // Let the RPC owner's microtask write the tool result before hanging up.
         if (active.endRequested) active.timers.push(setTimeout(() => { void this.close(id, "tool"); }, 0));
         return result;
@@ -289,20 +291,24 @@ export class CompanionLiveSessions {
       // A handoff after the voice answered the previous one, with no operator turn
       // transcribed since, has no turn of its own: that turn was the earlier
       // attempt's, and its delegation names this one. A duplicate handoff of
-      // the same words, before any answer, shares the previous handoff's turn.
+      // the same words, before any answer, shares the previous handoff's turn
+      // and attempt.
       const latest = active.transcript.latestTurn();
       const last = active.lastHandoff;
+      const duplicate = !!last && last.latest === latest && !last.replied;
       const turn = last && last.latest === latest ? (last.replied ? undefined : last.turn) : latest;
-      active.lastHandoff = { latest, turn, replied: false };
+      const attempt: OperatorAttempt = { ...(turn !== undefined ? { sourceTurn: turn } : {}), sourceItemId: duplicate ? last.attempt : delegation.id };
+      active.lastHandoff = { latest, turn, replied: false, attempt: attempt.sourceItemId };
       this.transcript(active, active.transcript.boundary(event.offset_ms));
       this.admission.record(active.id, { id: `delegation-${delegation.id}`, kind: "delegation", atMs: event.offset_ms,
         data: { delegationId: delegation.id, sourceTurn: turn } });
       if (this.provider.backend === "codex") {
         const stored = this.admission.session(active.id);
         const running = active.runningCodexTurnId ? active.codexTurns.get(active.runningCodexTurnId) : undefined;
-        if (running) running.endSourceTurn = turn;
+        // A handoff steered into the running turn is a later operator attempt, unless it duplicates the previous handoff.
+        if (running) Object.assign(running, { endSourceTurn: turn }, duplicate ? {} : { attempt });
         active.codexTurn = { project: stored.currentProject === undefined ? stored.project : stored.currentProject, sourceTurn: turn, confirmationProposalId: this.admission.awaiting(active.id)?.proposalId ?? null };
-      } else this.delegate(active, delegation.id, turn);
+      } else this.delegate(active, delegation.id, turn, attempt);
     } else if (event.type === "codex.tokenUsage" && this.provider.backend === "codex") {
       const tokens = jsonObject(event.tokens);
       if (tokens) this.storage.change(document => { document.sessions[active.id].usage!.codexTokens = tokens as Record<string, number>; });
@@ -334,7 +340,7 @@ export class CompanionLiveSessions {
   }
   /** Runs one client delegation: backend responses, each paid for before it is
    * asked, the registry tools they call, and one spoken answer back to Live. */
-  private delegate(active: ActiveSession, delegationId: string, sourceTurn: number | undefined): void {
+  private delegate(active: ActiveSession, delegationId: string, sourceTurn: number | undefined, attempt: OperatorAttempt): void {
     const work = (async () => {
       const record = active.transcript.record().map(row => `${row.speaker === "operator" ? "Operator" : "Delegatus"}: ${row.text}`).join("\n").slice(-12_000);
       const waiting = this.admission.awaiting(active.id);
@@ -402,7 +408,7 @@ export class CompanionLiveSessions {
           catch { replayArguments = scrub(item.arguments as string); }
           input.push({ type: "function_call", call_id: replayId,
             name: scrub(item.name as string) === item.name ? item.name : "redacted_tool", arguments: replayArguments });
-          const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null, project);
+          const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null, project, attempt);
           const resultObject = jsonObject(toolResult);
           if (["request_orchestrator_delegation", "resolve_orchestrator_confirmation"].includes(String(item.name))
             && resultObject?.status === "sent"
@@ -427,7 +433,7 @@ export class CompanionLiveSessions {
     });
   }
   private async tool(active: ActiveSession, item: Record<string, unknown>, delegationId: string, sourceTurn: number | undefined,
-    confirmationProposalId?: string | null, project: string | null = this.admission.session(active.id).project): Promise<unknown> {
+    confirmationProposalId?: string | null, project: string | null = this.admission.session(active.id).project, attempt?: OperatorAttempt): Promise<unknown> {
     const callId = item.call_id as string; const name = item.name as string;
     const atMs = this.now() - active.createdAt;
     let argumentsText: string;
@@ -437,7 +443,7 @@ export class CompanionLiveSessions {
     this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
     this.admission.emit(active.id, { type: "tool.called", callId, name: name.slice(0, 80), summary: name.slice(0, 80).replaceAll("_", " ") });
     try {
-      const result = await runCompanionTool({ project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId,
+      const result = await runCompanionTool({ project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId, ...(attempt ? { attempt } : {}),
         admission: this.admission, reads: this.reads, read:(name,args)=>this.read(active,project,name,args,delegationId), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
       const output = jsonObject(result);
       // Codex voices queued speech after the turn's own answer, so a report asked for again is handed at once.

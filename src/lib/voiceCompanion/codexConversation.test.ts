@@ -391,3 +391,67 @@ test("on the real Codex adapter more reports than the speech queue holds are all
     expect(f.admission.reportSpeech(f.session.sessionId)).toEqual([]);
   } finally { await f.close(); }
 }, 30_000);
+
+/* A target at the start of an ask, and explicit asks again steered into a backing turn that is still running. The words are written for this test. */
+const STEERED = {
+  en: { opening: "Release: what changed?", openingLower: "release: what changed?", openingReworded: "And release, what changed there?",
+    ask: "Review the plan", again: "Send the plan review once more", third: "Send it to the orchestrator again" },
+  uk: { opening: "Release: що змінилося?", openingLower: "release: що змінилося?", openingReworded: "А release, що там змінилося?",
+    ask: "Переглянь план", again: "Надішли перегляд плану ще раз", third: "Надішли це оркестратору знову" },
+};
+for (const [locale, words] of Object.entries(STEERED) as Array<["en" | "uk", typeof STEERED.en]>) {
+  const send = (id: string, turnId: string, instruction: string, pending: string | null, again: string | null = null) =>
+    tool(id, turnId, "request_orchestrator_delegation", { project: null, instruction, pending_request: pending, confirmation_reason: null, asked_again: again });
+  const operator = (text: string) => [delta("user", text), done("user", text)];
+  const finish = (turnId: string, text: string) => [note("turn/completed", { turn: { id: turnId, status: "completed" } }), delta("assistant", text), done("assistant", text)];
+
+  test(`${locale}: on the real Codex adapter two targets that differ only in their opening capital each send once; a rephrasing named by its handle sends nothing`, async () => {
+    const f = await fixture();
+    const answered = async (id: string) => JSON.parse((await f.reply(id)).contentItems[0].text);
+    try {
+      f.replay(...operator(words.opening), handoff("opening", words.opening), turn("opening"), send("send-opening", "opening", words.opening, null));
+      expect(await answered("send-opening")).toMatchObject({ status: "sent" });
+      f.replay(...finish("opening", "Sent."), ...operator(words.openingLower), handoff("lower", words.openingLower), turn("lower"), send("send-lower", "lower", words.openingLower, null));
+      // Different words from the waiting request: the backend is shown it first and judges.
+      expect(await answered("send-lower")).toMatchObject({ status: "check_waiting", waiting: [{ request: "r1", ask: words.opening }] });
+      f.replay(send("send-lower-new", "lower", words.openingLower, null));
+      expect(await answered("send-lower-new")).toMatchObject({ status: "sent" });
+      f.replay(...finish("lower", "Sent."), ...operator(words.openingReworded), handoff("reworded", words.openingReworded), turn("reworded"), send("send-reworded", "reworded", words.openingReworded, "r2"));
+      expect(await answered("send-reworded")).toMatchObject({ status: "awaiting_report", request: "r2" });
+      expect(f.deliveries.map(row => row.text.split("\n")[0])).toEqual([words.opening, words.openingLower]);
+    } finally { await f.close(); }
+  }, 20_000);
+
+  for (const replied of [false, true]) test(`${locale}: an explicit ask again steered into the running backing turn ${replied ? "after" : "before"} the voice answered sends once per operator attempt; a replay or duplicate handoff adds none`, async () => {
+    const f = await fixture();
+    const answered = async (id: string) => JSON.parse((await f.reply(id)).contentItems[0].text);
+    const reply = replied ? [delta("assistant", "Sent."), done("assistant", "Sent.")] : [];
+    try {
+      f.replay(...operator(words.ask), handoff("first", words.ask), turn("backing"), send("send-1", "backing", words.ask, null));
+      expect(await answered("send-1")).toMatchObject({ status: "sent" });
+      // A later operator turn steered into the same backing turn, which keeps running.
+      f.replay(...reply, ...operator(words.again), handoff("steered-again", words.again), send("send-2", "backing", words.ask, "r1", words.again));
+      expect(await answered("send-2")).toMatchObject({ status: "sent" });
+      expect(f.deliveries).toHaveLength(2);
+      // The tool call replayed, a duplicate handoff of that turn, and the request named by either handle: that same attempt.
+      f.replay(send("send-2", "backing", words.ask, "r1", words.again), handoff("steered-again-duplicate", words.again),
+        send("send-2b", "backing", `${words.again}.`, "r2", words.again), send("send-2c", "backing", words.ask, "r1", words.again));
+      for (const id of ["send-2b", "send-2c"]) expect(await answered(id)).toMatchObject({ status: "sent" });
+      await until(() => f.wire().filter(row => row.id === "send-2" && row.result).length === 2);
+      expect(f.deliveries).toHaveLength(2);
+      // A third operator turn, still in the same backing turn, is a later attempt: once more, under its own key.
+      f.replay(...reply, ...operator(words.third), handoff("steered-third", words.third), send("send-3", "backing", words.ask, "r2", words.third),
+        send("send-3b", "backing", words.ask, "r1", words.third));
+      for (const id of ["send-3", "send-3b"]) expect(await answered(id)).toMatchObject({ status: "sent" });
+      expect(f.deliveries.map(row => row.text.split("\n")[0])).toEqual([words.ask, words.ask, words.ask]);
+      expect(new Set(f.deliveries.map(row => row.delivery.clientMessageId)).size).toBe(3);
+      expect(f.admission.session(f.session.sessionId).inputs.map(row => row.turn)).toEqual([1, 2, 3]);
+      expect(Object.values(f.admission.session(f.session.sessionId).proposals).map(row => row.sourceTurn)).toEqual([1, 2, 3]);
+      // The backing turn's own sends stay bound to the turn it was raised for: the same words, not asked again, send nothing.
+      f.replay(send("send-plain", "backing", words.ask, null));
+      expect(await answered("send-plain")).toMatchObject({ status: "sent" });
+      f.replay(...finish("backing", "Sent."));
+      expect(f.deliveries).toHaveLength(3);
+    } finally { await f.close(); }
+  }, 20_000);
+}

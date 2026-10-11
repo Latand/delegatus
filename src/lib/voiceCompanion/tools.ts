@@ -1,5 +1,5 @@
 import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
-import type { CallRequest, CompanionAdmission } from "./admission";
+import type { CallRequest, CompanionAdmission, OperatorAttempt } from "./admission";
 import { DELEGATION_REASONS, deliveryFailureReason } from "./delegationOutcome";
 import { liveEndRefusal, requestText, VOICE_ASK_MAX_CHARS } from "./liveGate";
 import { READ_SCHEMAS, validToolValue, type ToolProperty } from "./readSchemas";
@@ -13,6 +13,8 @@ export interface CompanionToolContext {
   confirmationProposalId?: string | null;
   /** The operator's Live turn when Live delegated. */
   sourceTurn?: number;
+  /** The operator's latest attempt this delegation answers: later than `sourceTurn` once operator words were steered into it. */
+  attempt?: OperatorAttempt;
   admission: CompanionAdmission;
   reads: CompanionBoardReads;
   read?(name: string, args: Record<string, unknown>): Promise<unknown>;
@@ -121,7 +123,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       }
       const before = new Set(context.admission.awaitingReports(context.sessionId).map(request => request.proposalId));
       const outcome = await context.admission.delegate(context.sessionId, context.callId, context.delegationId, instruction,
-        { project, sourceTurn: context.sourceTurn, ...(pendingRequest ? { pendingRequest } : {}), ...(askedAgain ? { renewed: true } : {}), ...(typeof args.confirmation_reason === "string" && args.confirmation_reason.trim() ? { confirmation: args.confirmation_reason } : {}) });
+        { project, sourceTurn: context.sourceTurn, ...(pendingRequest ? { pendingRequest } : {}), ...(askedAgain ? { renewed: true, ...(context.attempt ? { attempt: context.attempt } : {}) } : {}), ...(typeof args.confirmation_reason === "string" && args.confirmation_reason.trim() ? { confirmation: args.confirmation_reason } : {}) });
       // A request this delegation sent is known to it.
       context.admission.showAwaiting(context.sessionId, context.delegationId,
         context.admission.awaitingReports(context.sessionId).map(request => request.proposalId).filter(proposalId => !before.has(proposalId)));
