@@ -74,6 +74,7 @@ export function decodeSensitiveText(
   preserveDefaultIgnorables: boolean,
   offsets?: number[],
   jsonEscapes = false,
+  preserveCommonMarkEscapes = false,
 ): { error: boolean; text: string } {
   const strip = preserveDefaultIgnorables ? (value: string): string => value
     : (value: string): string => decodeWithOffsets(value, removeDefaultIgnorables, /\p{Default_Ignorable_Code_Point}/gu, offsets);
@@ -88,7 +89,8 @@ export function decodeSensitiveText(
           ),
           decodeHtmlEntities, /&[^&;\s]*;/g, offsets,
         ),
-        decodeCommonMarkEscapes, /\\[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, offsets,
+        preserveCommonMarkEscapes ? (value) => value : decodeCommonMarkEscapes,
+        /\\[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, offsets,
       ),
     );
     if (next === decoded) return { error: false, text: decoded };
@@ -97,6 +99,7 @@ export function decodeSensitiveText(
   return { error: true, text: decoded };
 }
 
-export function canonicalSensitiveText(text: string, jsonEscapes = false): { error: boolean; text: string } {
-  return decodeSensitiveText(text, false, undefined, jsonEscapes);
+/** Token emphasis pairing needs a view that retains literal Markdown escapes. */
+export function canonicalSensitiveText(text: string, jsonEscapes = false, preserveCommonMarkEscapes = false): { error: boolean; text: string } {
+  return decodeSensitiveText(text, false, undefined, jsonEscapes, preserveCommonMarkEscapes);
 }

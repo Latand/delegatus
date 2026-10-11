@@ -1164,6 +1164,37 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }
   });
 
+  test.each([1, 2, 3])("the CLI blocks split tokens with an escaped delimiter under emphasis width %s", async (width) => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
+    temporaryDirectories.push(directory);
+    const publication = join(directory, "publication.md");
+    const marker = "_".repeat(width);
+    const split = syntheticShortGithubToken("p", "aZ9".repeat(12))
+      .replace(String.fromCharCode(103, 104, 112, 95), "g h p " + String.fromCharCode(92, 95));
+    writeFileSync(publication, marker + split + marker);
+
+    const result = await runGate([publication]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
+    expect(result.stderr.toString()).toBe("");
+  }, 15000);
+
+  test("escaped delimiters survive encoding without completing short bodies across emphasis", () => {
+    const literal = String.fromCharCode(92, 95);
+    const encode = (text: string) => [...text].map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`).join("");
+    for (const width of [1, 2, 3]) {
+      const marker = "_".repeat(width);
+      const full = marker + "g h p " + literal + "aZ9".repeat(12) + marker;
+      for (const text of [full, encode(full), full.replace(literal, "&#92;&#95;"), JSON.stringify(full), [...full].join("\u200B")]) {
+        expect(sensitiveClasses(text).has("credential")).toBe(true);
+      }
+      const short = marker + "g h p " + literal + "a Z 9 ".repeat(11) + "a Z" + marker + " a";
+      for (const text of [short, encode(short), short.replace(literal, "&#92;&#95;"), JSON.stringify(short)]) {
+        expect(sensitiveClasses(text).has("credential")).toBe(false);
+      }
+    }
+  });
+
   test("emphasis closing inside a split prefix keeps its complete token detectable", () => {
     const split = [...syntheticShortGithubToken("p")].join(" ");
     expect(sensitiveClasses("_" + split[0] + "_" + split.slice(1) + "_").has("credential")).toBe(true);

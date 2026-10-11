@@ -83,7 +83,10 @@ export function staticSensitiveClasses(
         if (!emphasisClosings) {
           emphasisClosings = new Map<number, number>();
           const openings: { start: number; remaining: number; firstClosing?: number }[] = [];
-          for (const marker of searchableText.matchAll(/_+/g)) {
+          // Consume escape pairs before runs, so a literal underscore cannot
+          // steal a closure. Paired backslashes leave the following run active.
+          for (const marker of searchableText.matchAll(/\\[\s\S]|_+/g)) {
+            if (marker[0][0] === "\\") continue;
             const end = marker.index + marker[0].length;
             const before = searchableText.slice(Math.max(0, marker.index - 2), marker.index);
             const after = searchableText.slice(end, end + 2);
