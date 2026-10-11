@@ -19,6 +19,15 @@
         "pr:example/delegatus#2691",
         "report:fixture-incident"
       ],
+      "pin": {
+        "pinned": true,
+        "sheetHeight": 743,
+        "sectionHeight": 338,
+        "bandHeight": 293,
+        "bodyHeight": 337,
+        "foldedSectionHeight": 45,
+        "foldedBodyHeight": 494
+      },
       "check": {
         "width": 44,
         "height": 44
@@ -90,6 +99,15 @@
         "pr:example/delegatus#2691",
         "report:fixture-incident"
       ],
+      "pin": {
+        "pinned": true,
+        "sheetHeight": 743,
+        "sectionHeight": 338,
+        "bandHeight": 293,
+        "bodyHeight": 337,
+        "foldedSectionHeight": 45,
+        "foldedBodyHeight": 494
+      },
       "check": {
         "width": 44,
         "height": 44

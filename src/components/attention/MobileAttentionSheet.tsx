@@ -52,7 +52,7 @@ import { PermissionActions } from "./PermissionActions";
  * the same on both surfaces. The wait gives way to an ellipsis before the age
  * does: the age is the one fact on the line that must stay whole.
  *
- * At the top of the sheet, «Готово» (docs/design/done-section.md) lists the
+ * Pinned at the top of the sheet, above its scroller, «Готово» (docs/design/done-section.md) lists the
  * finished work of the same slice still waiting to be accepted, newest first,
  * the same list the desktop panel and the report log pin at their tops; the header's count holds both until it is
  * accepted, and «Dismiss all» counts only the decisions it clears.
@@ -203,6 +203,10 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
       name="attention"
       title={title}
       onClose={onClose}
+      /* Pinned above the sheet's scroller, its rows in their own band: the
+         sheet is at most 88 % of the screen, so a 40 dvh band leaves the
+         decisions under it about half of a full sheet. */
+      pinned={<DoneSection items={done} current={current} projectNames={projectNames} surface="phone" place="needs-you" band="max-h-[40dvh]" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />}
       extra={dismissible || onToggleFilter ? (
         <>
           {onToggleFilter ? (
@@ -232,7 +236,6 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
         </>
       ) : null}
     >
-      <DoneSection items={done} current={current} projectNames={projectNames} surface="phone" place="needs-you" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />
       {notices.length ? (
         <div className="flex flex-col" data-mobile2-notices={notices.length}>
           <MobileSheetSection>{t("notices.title")}</MobileSheetSection>

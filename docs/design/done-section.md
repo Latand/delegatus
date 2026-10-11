@@ -298,10 +298,13 @@ One component, `DoneSection`, draws the list in all three places from the one
 store (`useDoneItems`): the desktop panel (every project's items), the phone
 sheet (the badge's slice) and the report log (its project's items and those of
 no board). It is pinned: it sits outside the scroller of what follows it, and
-on the desktop and the report log its rows scroll inside their own band
-(`max-h` 42 vh in the panel, 45 % of the log's own height in the report log,
-whose column can be short beside the chat), so neither the decisions nor the
-reports scroll it away and the log keeps room for its entries.
+its rows scroll inside their own band (`max-h` 42 vh in the panel; 40 dvh in
+the phone sheet, which `MobileSheet` places through its `pinned` slot between
+the header and the scrolling body, and which is itself at most 88 % of the
+screen; 45 % of the log's own height in the report log, whose column can be
+short beside the chat), so neither the decisions nor the reports scroll it
+away and what follows keeps room (at 390×844 the sheet's decisions keep
+337 px).
 
 The section head: a chevron, «Готово · N», and the accent «Бачив усе», which
 accepts every item the list shows. Pressing the head folds the list to that

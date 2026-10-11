@@ -378,7 +378,7 @@ test("a questionnaire phone row asks the operator to answer", () => {
 });
 
 /* «Готово» on the phone (docs/design/done-section.md §4.3, §5): the same
-   list pinned at the top of the sheet, the header counting both, the square check the
+   list pinned at the top of the sheet above its scroller, the header counting both, the square check the
    frames draw, and the accepted row left in place with its Undo. */
 type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
 const { useState } = await import("react");
@@ -410,8 +410,16 @@ test("«Готово» opens the sheet above the queue, the header counts both, 
   expect(q(host, "[data-needs-you-dismiss-all]")!.textContent).toBe("Dismiss all 3");
   const list = q(host, "[data-mobile2-attention-list]")!;
   const section = q(host, '[data-done-section="phone"]')!;
-  /* Pinned first: the queue follows it. */
+  /* Pinned first: the queue follows it, and only the queue is in the sheet's
+     scroller; «Готово» sits between the header and that body in its own band. */
   expect(section.compareDocumentPosition(list as unknown as Node) & 4).toBe(4);
+  const body = q(host, "[data-mobile2-sheet-body]")!;
+  expect(body.contains(list)).toBe(true);
+  expect(body.contains(section)).toBe(false);
+  expect(section.parentElement).toBe(body.parentElement);
+  expect(section.compareDocumentPosition(q(host, "[data-mobile2-sheet-header]") as unknown as Node) & 2).toBe(2);
+  expect(section.className).toContain("max-h-[40dvh]");
+  expect(q(section, "[data-done-list]")!.className).toContain("overflow-y-auto");
   expect(section.getAttribute("data-done-place")).toBe("needs-you");
   expect(q(section, "[data-done-accept-all]")!.textContent).toBe("Seen all");
   const check = q(section, '[data-done-accept="pr:acme/widgets#2691"]')!;

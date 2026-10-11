@@ -7449,7 +7449,8 @@ describe("agent memory isolation", () => {
  * «Готово» in the phone's «Чекають на вас» sheet (docs/design/done-section.md
  * §4.3, §5) at 390 in Ukrainian, over the needs-you fixture with `&done=1`,
  * read against variant 2's phone frames: the list pinned at the top of the
- * sheet, newest first, with the thumbnail and the square check, the frame's
+ * sheet above its scroller (scrolling the decisions leaves it in place; it
+ * folds to its head), newest first, with the thumbnail and the square check, the frame's
  * pair in the existing viewer, technical fixes accepted one by one with the
  * group head counting what is left, then «Бачив усе» with the badge back to
  * the decisions. Then the same list pinned above the orchestrator's report
@@ -7491,6 +7492,35 @@ describe("«Готово» in the phone sheet", () => {
           expect(await section.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector("[data-mobile2-attention-list]")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
           const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
           expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
+          /* Pinned above the sheet's one scroller: the decisions scroll under
+             it, its rows scroll in their own band, and the decisions keep room. */
+          const body = sheet.locator("[data-mobile2-sheet-body]");
+          const pin = () => sheet.evaluate((element) => {
+            const done = element.querySelector('[data-done-section="phone"]')!;
+            const scroller = element.querySelector("[data-mobile2-sheet-body]")!;
+            const band = done.querySelector("[data-done-list]");
+            return {
+              pinned: !scroller.contains(done) && Boolean(done.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING),
+              top: done.getBoundingClientRect().top,
+              sectionHeight: Math.round(done.getBoundingClientRect().height),
+              bandHeight: band ? Math.round(band.getBoundingClientRect().height) : 0,
+              bandScrolls: band ? band.scrollHeight > band.clientHeight : false,
+              bodyHeight: Math.round(scroller.getBoundingClientRect().height),
+              bodyScrolls: scroller.scrollHeight > scroller.clientHeight,
+              sheetHeight: Math.round(element.getBoundingClientRect().height),
+            };
+          });
+          const pinned = await pin();
+          expect(pinned.pinned).toBe(true);
+          expect(pinned.bandScrolls).toBe(true);
+          expect(pinned.bodyScrolls).toBe(true);
+          expect(pinned.sectionHeight).toBeLessThanOrEqual(Math.ceil(844 * 0.4) + 1);
+          expect(pinned.bodyHeight).toBeGreaterThanOrEqual(150);
+          await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+          expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+          expect((await pin()).top).toBe(pinned.top);
+          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet-scrolled.png`) });
+          await body.evaluate((element) => { element.scrollTop = 0; });
           const check = section.locator('[data-done-accept="pr:example/delegatus#2691"]');
           const box = (await check.boundingBox())!;
           expect(box.width).toBeGreaterThanOrEqual(44);
@@ -7537,6 +7567,17 @@ describe("«Готово» in the phone sheet", () => {
           expect(morning.heads.every((head) => head.lines === 1), JSON.stringify(morning.heads)).toBe(true);
           await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.screenshot({ path: path.join(out, `${scheme}-1-sheet.png`) });
+          /* Folded to its head the section gives the decisions the sheet, and
+             «Бачив усе» stays on the head; unfolded, the rows come back. */
+          await section.locator("[data-done-fold]").click();
+          expect(await section.locator("[data-done-list]").count()).toBe(0);
+          const folded = await pin();
+          expect(folded.sectionHeight).toBeLessThanOrEqual(48);
+          expect(folded.bodyHeight).toBeGreaterThan(pinned.bodyHeight);
+          expect(await section.locator("[data-done-accept-all]").isVisible()).toBe(true);
+          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet-folded.png`) });
+          await section.locator("[data-done-fold]").click();
+          await section.locator("[data-done-list]").waitFor();
 
           await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
           const viewer = page.locator('[role="dialog"][aria-modal="true"]').filter({ has: page.locator("[data-lightbox-compare]") });
@@ -7588,7 +7629,7 @@ describe("«Готово» in the phone sheet", () => {
           await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
           await page.screenshot({ path: path.join(out, `${scheme}-6-all-accepted.png`) });
           expect(errors).toEqual([]);
-          readings.push({ scheme, decisions, done: doneCount - 1, order, check: { width: box.width, height: box.height }, ...geometry, rows: morning.rows, groupLines: morning.lines, heads: morning.heads, receipts: after.receipts.map((receipt) => receipt.text) });
+          readings.push({ scheme, decisions, done: doneCount - 1, order, pin: { pinned: pinned.pinned, sheetHeight: pinned.sheetHeight, sectionHeight: pinned.sectionHeight, bandHeight: pinned.bandHeight, bodyHeight: pinned.bodyHeight, foldedSectionHeight: folded.sectionHeight, foldedBodyHeight: folded.bodyHeight }, check: { width: box.width, height: box.height }, ...geometry, rows: morning.rows, groupLines: morning.lines, heads: morning.heads, receipts: after.receipts.map((receipt) => receipt.text) });
         } finally { await context.close(); }
       }
 
