@@ -1596,3 +1596,63 @@ test("after four tool rounds the backend answers once more with tools off, so wh
   expect(spoken(f)).toMatchObject([{ delegation_id: "reads", content: "One open task: review the plan. Its stage is unknown." }]);
   await f.service.close(s.sessionId);
 });
+
+/** Codex owns its backing turn and calls the registry through the session's tool handler. */
+class FakeCodexProvider extends FakeLiveProvider {
+  readonly backend = "codex" as const;
+  tool?: import("./provider").LiveToolHandler;
+  override async attach(id: string, key: string, event: (value: unknown) => void, lost: () => void, tool?: import("./provider").LiveToolHandler) {
+    this.tool = tool;
+    return super.attach(id, key, event, lost);
+  }
+}
+
+test("on Codex the same handler holds a rephrased ask while its report is pending, sends a new question, and voices the report whole in words for the operator", async () => {
+  for (const locale of ["uk", "en"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const storage = new CompanionStorage();
+    storage.updateSettings({ enabled: true });
+    const sent: Array<{ text: string; key: string }> = [];
+    const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+    const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "codex" }), reports: () => reports,
+      send: async ({ text, delivery }) => { sent.push({ text: text.split("\n")[0]!, key: delivery.clientMessageId }); return { status: "queued", operationId: `operation-${sent.length}` }; } });
+    const provider = new FakeCodexProvider();
+    const service = new CompanionLiveSessions(storage, admission, noReads(), provider, { closeTimeoutMs: 20, timers: false });
+    const s = await service.start({ project: "fixture", locale, sdp: "v=0" });
+    const first = locale === "uk" ? "Що з ревʼю голосу?" : "How is the voice review going?";
+    const again = locale === "uk" ? "Спитай ще раз про ревʼю голосу і про деплой." : "Ask again about the voice review and the deploy.";
+    const fresh = locale === "uk" ? "Яку модель обрати для голосу?" : "Which model should the voice use?";
+    const send = (callId: string, turnId: string, instruction: string, pending: string | null = null) =>
+      provider.tool!("request_orchestrator_delegation", { project: null, instruction, pending_request: pending, confirmation_reason: null, asked_again: null }, callId, turnId);
+    provider.replay(s.providerId, said(first, 0), delegationCreated("handoff-1", 600));
+    await service.drain(s.sessionId);
+    expect(await send("call-1", "turn-1", first)).toMatchObject({ status: "sent" });
+    provider.replay(s.providerId, said(again, 2_000), delegationCreated("handoff-2", 2_600));
+    await service.drain(s.sessionId);
+    // The turn is shown what already waits, names it, and nothing is sent.
+    expect(await send("call-2", "turn-2", again)).toMatchObject({ status: "check_waiting", waiting: [{ request: "r1", ask: first }] });
+    expect(await send("call-3", "turn-2", again, "r1")).toMatchObject({ status: "awaiting_report", request: "r1" });
+    expect(await provider.tool!("orchestrator_reports", {}, "call-4", "turn-2")).toMatchObject({ requests: [{ request: "r1", state: "waiting_for_report" }] });
+    provider.replay(s.providerId, said(fresh, 5_000), delegationCreated("handoff-3", 5_600));
+    await service.drain(s.sessionId);
+    // A new turn is shown the waiting request once too; a new question then passes null and goes through.
+    expect(await send("call-5", "turn-3", fresh)).toMatchObject({ status: "check_waiting", waiting: [{ request: "r1" }] });
+    expect(await send("call-6", "turn-3", fresh)).toMatchObject({ status: "sent" });
+    expect(sent.map(row => row.text)).toEqual([first, fresh]);
+    // The answer arrives longer than one append: every line, in order, with no instruction spoken aloud.
+    const items = Array.from({ length: 6 }, (_, index) => `${index % 2 ? "ревʼю пройшло обидва раунди" : "деплой чекає на рішення"} ${index + 1}, ${"деталі перевірки ".repeat(index === 2 ? 16 : 3).trim()}`);
+    reports.push({ id: "answer-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "short display copy", correlatesDirective: sent[0]!.key,
+      complete: { summary: "Два факти, кожен зі своїм субʼєктом.", sections: [{ heading: "Готово", items }] }, origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await service.events(s.sessionId, 0);
+    const parts = provider.commands.filter(row => row.type === "session.commentary.append").map(row => String(row.content));
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts[0]!.startsWith('The orchestrator for project "fixture" reports result.\n')).toBe(true);
+    for (const part of parts) expect(Buffer.byteLength(part)).toBeLessThanOrEqual(500);
+    expect(parts.join("\n")).not.toMatch(/Report data|read the lines|continues|left out/);
+    expect(parts.join("\n").split("\n").slice(1).join("").replace(/\s+/gu, ""))
+      .toBe(["Два факти, кожен зі своїм субʼєктом.", "Готово:", ...items.map(item => `- ${item}`)].join("").replace(/\s+/gu, ""));
+    expect(await send("call-7", "turn-3", again, "r1")).toMatchObject({ status: "answered", request: "r1" });
+    expect(sent).toHaveLength(2);
+    await service.close(s.sessionId);
+  }
+});

@@ -41,11 +41,12 @@ function pieces(line: string, limit: number): string[] {
 
 /**
  * Report text split into ordered appends of at most `limit` bytes each. The
- * first carries `intro`, every later one `continued`; whole lines stay
- * together where they fit, and a longer line continues in the next append.
+ * first carries `intro`, every later one `continued`, unless it is empty;
+ * whole lines stay together where they fit, and a longer line continues in
+ * the next append.
  */
 export function speechParts(intro: string, text: string, continued: string, limit: number): string[] {
-  const room = limit - bytes(continued) - 1;
+  const room = continued ? limit - bytes(continued) - 1 : limit;
   if (bytes(intro) > limit || room < 16) throw new Error("SPEECH_FRAME_TOO_LONG");
   const parts: string[] = [];
   let current = intro;
@@ -53,7 +54,7 @@ export function speechParts(intro: string, text: string, continued: string, limi
     const joined = `${current}\n${piece}`;
     if (bytes(joined) <= limit) { current = joined; continue; }
     parts.push(current);
-    current = `${continued}\n${piece}`;
+    current = continued ? `${continued}\n${piece}` : piece;
   }
   parts.push(current);
   return parts;

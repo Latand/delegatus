@@ -39,3 +39,13 @@ test("two facts keep their own subjects and order; one unbroken word longer than
   for (const part of parts) expect(bytes(part)).toBeLessThanOrEqual(500);
   expect(parts.map((part, index) => part.slice((index === 0 ? INTRO : CONTINUED).length + 1)).join("").replace(/\n/g, "")).toBe(word);
 });
+
+test("with no continuation line every later append is report text alone, still whole and in order", () => {
+  const intro = 'The orchestrator for project "fixture" reports result.';
+  const text = Array.from({ length: 12 }, (_, index) => `- пункт ${index + 1}: ревʼю пройшло, деплой чекає на рішення оператора.`).join("\n");
+  const parts = speechParts(intro, text, "", 500);
+  expect(parts.length).toBeGreaterThan(1);
+  for (const part of parts) expect(bytes(part)).toBeLessThanOrEqual(500);
+  expect(parts[0]!.startsWith(`${intro}\n`)).toBe(true);
+  expect(parts.join("\n")).toBe(`${intro}\n${text}`);
+});
