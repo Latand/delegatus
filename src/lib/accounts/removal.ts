@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
-import { accountLiveSessionKind, liveAccountConversationIds, type AccountLivenessOptions, type ManagedAccountEngine } from "@/lib/agent/accountLiveness";
+import { accountLiveSessionKind, accountLiveWork, liveAccountConversationIds, type AccountLiveWorkItem, type AccountLivenessOptions, type ManagedAccountEngine } from "@/lib/agent/accountLiveness";
+import type { AgentEngine } from "@/lib/agent/cli";
 import { agentRegistry, RegistryWriterBusyError, type AccountPathRewrite, type AccountRetirementReport } from "@/lib/agent/registry";
 
 export type { ManagedAccountEngine };
@@ -513,7 +514,7 @@ export function cleanupAccountProviderSidecars(
  *  process is provably gone, parked `failed-recoverable` migrations and owed
  *  deliveries no host can take are not (issue #1857): removal settles them. */
 export function accountRemovalBlockers(
-  engine: ManagedAccountEngine,
+  engine: AgentEngine,
   accountId: string,
   options: AccountLivenessOptions = {},
 ): AccountRemovalBlocker[] {
@@ -523,6 +524,67 @@ export function accountRemovalBlockers(
     ...(live ? [live] : []),
     ...(liveAccountConversationIds(snapshot, engine, accountId, options).length > 0 ? ["current_conversations" as const] : []),
   ];
+}
+
+/** How many pieces of live work a refusal names; the rest are counted. */
+const LIVE_WORK_NAMED = 5;
+
+/** The live work behind a refusal, for the 409 answer: the first few named
+    with their conversation, and how many there are in all. */
+export function accountRemovalLiveWork(
+  engine: AgentEngine,
+  accountId: string,
+  options: AccountLivenessOptions = {},
+): { sessions: AccountLiveWorkItem[]; sessionCount: number } {
+  const work = accountLiveWork(agentRegistry().readOnlySnapshot(), engine, accountId, options);
+  return { sessions: work.slice(0, LIVE_WORK_NAMED), sessionCount: work.length };
+}
+
+/**
+ * Retires an account whose files stay where they are: an engine's own default
+ * home (`~/.claude`, `~/.codex`, `~/.copilot`), which Delegatus only forgets,
+ * and a Copilot home, whose transcripts stay readable in place. The same
+ * agent-registry retirement a managed removal runs settles pins, owed
+ * deliveries and migrations aimed at it and moves routing to
+ * `fallbackAccountId`; then `commit` records the account as gone. A failed
+ * commit puts the agent registry back. The caller holds the account mutation
+ * lock and its engine registry lock.
+ */
+export function retireAccountInPlace(spec: {
+  engine: AgentEngine;
+  accountId: string;
+  fallbackAccountId: string | null;
+  commit(): void;
+}): AccountRetirementReport {
+  const blockers = accountRemovalBlockers(spec.engine, spec.accountId);
+  if (blockers.length > 0) throw new AccountRemovalBlockedError(blockers);
+  const registry = agentRegistry();
+  const before = registry.readOnlySnapshot();
+  let retirement: AccountRetirementReport;
+  try {
+    retirement = registry.retireAccountNow(spec.engine, spec.accountId, spec.fallbackAccountId);
+  } catch (error) {
+    if (error instanceof RegistryWriterBusyError) throw new Error("the agent registry is busy; nothing was removed, try the removal again");
+    if (error instanceof Error && error.message === "account has live sessions") throw new AccountRemovalBlockedError(["live_sessions"]);
+    if (error instanceof Error && error.message === "account has current conversations") throw new AccountRemovalBlockedError(["current_conversations"]);
+    throw error;
+  }
+  const retired = registry.readOnlySnapshot();
+  try {
+    spec.commit();
+  } catch (error) {
+    /* One attempt, never a wait: the caller holds the accounts file lock. */
+    const restored = registry.deliveryWriteNow({ label: "account.retirement-rollback", operationId: `account-removal:${spec.engine}:${spec.accountId}` },
+      () => registry.restoreSnapshot(retired, before));
+    if (!restored.acquired) {
+      /* The account stays listed and launchable; only what the retirement
+         settled (pins, owed deliveries, routing) stays settled. Removing it
+         again finishes the job. */
+      throw new Error("the removal was not recorded and the agent registry is busy; the account is still listed, try the removal again", { cause: error });
+    }
+    throw error;
+  }
+  return retirement;
 }
 
 /* ---- Removal into the shared archive (issue #1857) ----
@@ -582,6 +644,9 @@ export interface ManagedAccountArchiveRemoval {
   /** Registry path moves for this home, read before the home moves. */
   rewrites(home: string, archive: string): AccountPathRewrite[];
   registry: AccountRemovalRegistryPort;
+  /** Where routing goes when it named this account; the engine's default
+      home unless that one was removed too. */
+  fallbackAccountId?: string | null;
 }
 
 export class AccountArchiveUnavailableError extends Error {
@@ -793,7 +858,7 @@ export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemov
          file lock (docs/design/delivery-progress-and-drain.md, C5). A registry
          lock held elsewhere takes the failure branch below with nothing
          retired, and the operator is asked to try again. */
-      retirement = registry.retireAccountNow(engine, accountId, "default", {}, { rewrite: rewrites });
+      retirement = registry.retireAccountNow(engine, accountId, spec.fallbackAccountId === undefined ? "default" : spec.fallbackAccountId, {}, { rewrite: rewrites });
     } catch (error) {
       putHomeBack();
       spec.registry.journal(null);
@@ -858,6 +923,9 @@ export function recoverManagedAccountRemoval(input: {
   /** An older retired record still names the original home. It participates
       in the same move/commit recovery as a listed account. */
   retiredInPlace?: boolean;
+  /** Where routing goes when it named this account, as on the removal
+      itself; the engine's default home unless that one was removed too. */
+  fallbackAccountId?: string | null;
   /** The accounts-registry commit of a finished removal: the account leaves,
       a retired record points at its archive, the journal moves to `scrubbing`. */
   commitRetired(): void;
@@ -880,7 +948,7 @@ export function recoverManagedAccountRemoval(input: {
     if (!input.listed && !input.retiredInPlace) return scrub();
     try {
       /* Busy, like any refusal here, is retried by the next listing. */
-      agentRegistry().retireAccountNow(input.engine, input.accountId, "default", {}, { rewrite: input.entry.rewrites ?? [] });
+      agentRegistry().retireAccountNow(input.engine, input.accountId, input.fallbackAccountId === undefined ? "default" : input.fallbackAccountId, {}, { rewrite: input.entry.rewrites ?? [] });
     } catch {
       return null;
     }
@@ -948,6 +1016,21 @@ export function removalResponse(accountId: string, removal: AccountArchiveRemova
     pinsCleared: removal.pinsCleared,
     deliveriesDropped: removal.deliveriesDropped,
     migrationsSettled: removal.migrationsSettled,
+  };
+}
+
+/** The DELETE answer for an engine's own default home: nothing moved, its
+    files stay where they are, and Delegatus no longer lists or picks it. */
+export function legacyRemovalResponse(accountId: string, home: string, retirement: AccountRetirementReport) {
+  return {
+    removed: { id: accountId },
+    hidden: { home },
+    cleanupPending: false,
+    moved: { archive: null, files: 0, bytes: 0 },
+    conversationsRewritten: retirement.conversationsRewritten,
+    pinsCleared: retirement.pinsCleared,
+    deliveriesDropped: retirement.deliveriesDropped,
+    migrationsSettled: retirement.migrationsSettled,
   };
 }
 

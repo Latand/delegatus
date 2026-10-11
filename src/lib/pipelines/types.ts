@@ -1114,9 +1114,10 @@ export type PipelineMerge = {
   state: PipelineMergeState;
   /** Who merged it: the runner, or anyone else (the PR was seen merged). */
   by: "auto-merge" | "outside" | null;
-  /** `<owner>/<repo>`, lower-cased, and the pull request's number. */
+  /** `<owner>/<repo>`, lower-cased, and the pull request's number.
+      A missing PR stays null while blocked or retrying its resolution. */
   repository: string;
-  prNumber: number;
+  prNumber: number | null;
   /** The setting's `changedAt` the lane was queued under. */
   policyChangedAt: string;
   /** The head the lane finished on (its `lastPassedCommit`). */

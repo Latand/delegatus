@@ -485,6 +485,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.groups = {}
         self.moving = set()
         self.stat_reads = 0
+        self.main_pid = 101
         self.members = [101, 102, 103]
         self.set_record(OLD)
         fixture = self
@@ -572,6 +573,8 @@ class CheckoutIntegration(unittest.TestCase):
         if args[:2] == ["git", "status"] or "list-jobs" in args:
             return ""
         if "show" in args:
+            if "MainPID" in args:
+                return "MainPID=" + str(self.main_pid) + "\nControlGroup=" + self.service_group
             if "ControlGroup" in args:
                 if args[3].endswith(".slice"):
                     return "ControlGroup=" + self.slice_group
@@ -581,6 +584,7 @@ class CheckoutIntegration(unittest.TestCase):
             self.current = TARGET
             self.set_record(TARGET)
             self.members = [201, 202, 203]
+            self.main_pid = 201
             self.old_gone = True
             self.mcp_failures = 1
             self.http_failures = 1
@@ -689,6 +693,127 @@ class CheckoutIntegration(unittest.TestCase):
         self.adapter.preflight()
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
+
+    def bootstrap_chain(self, intermediate=False):
+        self.main_pid = 90
+        self.parents[101] = 95 if intermediate else 90
+        self.parents.update({95: 90, 90: 1, 102: 101, 103: 101})
+        self.members = [90, 95, 101, 102, 103] if intermediate else [90, 101, 102, 103]
+        # The bootstrap can keep running from its checkout across releases.
+        self.cmdlines[90] = "bun\0" + str(self.checkout / "bin/cli.mjs") + "\0"
+
+    def assert_no_switch(self):
+        self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+        self.assertFalse(any("restart" in c or "stop" in c or "kill" in c for c in self.commands))
+
+    def test_bootstrap_main_pid_and_only_the_verified_launcher_ancestors_pass(self):
+        for intermediate in [False, True]:
+            with self.subTest(intermediate=intermediate):
+                self.bootstrap_chain(intermediate)
+                self.adapter.preflight()
+                self.assertTrue(any("MainPID" in c and self.adapter.unit in c for c in self.commands))
+                self.assert_no_switch()
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(sum("restart" in c for c in self.commands), 1)
+
+    def test_bootstrap_sibling_legacy_runner_and_child_still_refuse_by_identity(self):
+        self.bootstrap_chain(intermediate=True)
+        self.members = self.members + [150, 151]
+        self.parents.update({150: 90, 151: 95})
+        self.cmdlines[150] = "/state/telegram/venv/bin/python\0" + str(
+            self.releases / "2d611c2bc3b2/bin/telegram-mcp-server.py") + "\0"
+        self.cmdlines[151] = "sleep\0" + "60\0"
+        with self.assertRaises(deploy.LeftoverProcesses) as refused:
+            deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual([row["pid"] for row in refused.exception.members], [150, 151])
+        self.assertEqual(refused.exception.members[0]["startIdentity"], "150")
+        self.assertEqual(refused.exception.members[0]["name"], "python telegram-mcp-server.py")
+        self.assert_no_switch()
+
+    def test_older_release_child_of_current_viewer_is_named_and_refused(self):
+        self.bootstrap_chain()
+        self.members = self.members + [150]
+        self.parents[150] = 102
+        for entry in [str(self.releases / "2d611c2bc3b2/bin/telegram-mcp-server.py"),
+                      str(self.releases / OLD[:12] / "../2d611c2bc3b2/bin/telegram-mcp-server.py"),
+                      "../2d611c2bc3b2/bin/telegram-mcp-server.py"]:
+            with self.subTest(entry=entry):
+                self.cmdlines[150] = "python\0" + entry + "\0"
+                with self.assertRaises(deploy.LeftoverProcesses) as refused:
+                    self.adapter.preflight()
+                self.assertEqual([row["pid"] for row in refused.exception.members], [150])
+                self.assertEqual(refused.exception.members[0]["reason"], "older release in service cgroup")
+                self.assertIn("older release", deploy.leftover_lines(refused.exception.members)[0])
+                self.assertIn("identity=150", deploy.leftover_lines(refused.exception.members)[0])
+                self.assert_no_switch()
+
+    def test_current_release_runner_and_agent_children_pass_with_bootstrap(self):
+        self.bootstrap_chain()
+        self.members = self.members + [150, 160]
+        self.parents.update({150: 102, 160: 104})
+        self.cmdlines[150] = "python\0" + str(self.releases / OLD[:12] / "bin/telegram-mcp-server.py") + "\0"
+        # Agents may run tools from other release checkouts.
+        self.cmdlines[160] = "bun\0" + str(self.releases / "2d611c2bc3b2/bin/tool.mjs") + "\0"
+        self.adapter.preflight()
+        self.assert_no_switch()
+
+    def test_unrelated_main_pid_cannot_admit_launcher_ancestors(self):
+        self.bootstrap_chain()
+        self.main_pid = 80
+        self.members = self.members + [80]
+        with self.assertRaises(RuntimeError):
+            self.adapter.preflight()
+        self.assert_no_switch()
+
+    def test_unreadable_main_pid_refuses(self):
+        execute = self.adapter.command
+        for value in [None, "0", "-1", "unknown"]:
+            with self.subTest(value=value):
+                def unreadable(args, cwd=None):
+                    if "MainPID" in args:
+                        return "ControlGroup=" + self.service_group + ("\nMainPID=" + value if value is not None else "")
+                    return execute(args, cwd)
+                self.adapter.command = unreadable
+                with self.assertRaises(RuntimeError):
+                    self.adapter.preflight()
+                self.assert_no_switch()
+
+    def test_recycled_or_outside_launcher_ancestor_refuses(self):
+        self.bootstrap_chain(intermediate=True)
+        self.moving.add(95)
+        with self.assertRaises(RuntimeError):
+            self.adapter.preflight()
+        self.moving.clear()
+        self.groups[95] = self.service_group + "-other"
+        with self.assertRaises(RuntimeError):
+            self.adapter.preflight()
+        self.assert_no_switch()
+
+    def test_recycled_recorded_launcher_cannot_prove_bootstrap_ownership(self):
+        self.bootstrap_chain()
+        record = json.loads(self.record_file.read_text())
+        record["launcher"]["startIdentity"] = "stale"
+        deploy.write_json(self.record_file, record)
+        self.adapter.agents = {}
+        with self.assertRaises(RuntimeError):
+            self.adapter.leftovers(self.service_group)
+        self.assert_no_switch()
+
+    def test_main_pid_change_during_ancestry_read_refuses(self):
+        self.bootstrap_chain()
+        execute = self.adapter.command
+        observations = 0
+        def moving(args, cwd=None):
+            nonlocal observations
+            if "MainPID" in args:
+                observations += 1
+                return "MainPID=" + str(90 if observations % 2 else 80) + "\nControlGroup=" + self.service_group
+            return execute(args, cwd)
+        self.adapter.command = moving
+        with self.assertRaises(RuntimeError):
+            self.adapter.preflight()
+        self.assert_no_switch()
 
     def test_preflight_refuses_with_the_list_on_the_command_line(self):
         self.leftover_members()

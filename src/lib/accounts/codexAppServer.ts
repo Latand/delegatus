@@ -33,6 +33,8 @@ export interface CodexAppServerClock {
 
 export interface CodexAppServerOptions {
   home: string;
+  /** Complete argv for a specialised app-server consumer. */
+  args?: readonly string[];
   spawn?: CodexAppServerSpawn;
   clock?: CodexAppServerClock;
   requestTimeoutMs?: number;
@@ -277,7 +279,7 @@ export class CodexAppServerClient {
 
   static async start(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
     const client = new CodexAppServerClient(
-      (options.spawn ?? spawnCodexAppServer)(options.home, CODEX_ACCOUNT_APP_SERVER_ARGS),
+      (options.spawn ?? spawnCodexAppServer)(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS),
       options.clock ?? defaultClock,
       options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS,
       options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS,
@@ -464,7 +466,7 @@ export class CodexAppServerClient {
     this.write({ jsonrpc: "2.0", method, ...(params ? { params } : {}) });
   }
 
-  private request(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  request(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (this.closed) return Promise.reject(new CodexAppServerError("Codex app-server client is closed"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -489,6 +491,8 @@ export class CodexAppServerClient {
   }
 
   private write(message: Record<string, unknown>): void {
+    // An asynchronous server tool may settle after close ended stdin.
+    if (this.closed) return;
     try {
       this.child.stdin.write(JSON.stringify(message) + "\n");
     } catch (error) {
