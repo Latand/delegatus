@@ -184,6 +184,14 @@
  * notice; then the third generation arrives and the reader must follow it
  * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
  *
+ * With BOARD_CAPTURE_CASE=registry-history it opens the board over the
+ * candidate performance gate's synthetic registry, about 30,000 rows of
+ * retained history (#2761), in eight real browser views that each pin their
+ * own conversation, while two writer processes keep writing grant-bearing
+ * rows. Every view must draw its board, keep its main thread answering, keep
+ * receiving `/api/files` answers inside the gate's request bounds with none
+ * failing, and still answer an input once the writers stop.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -7501,7 +7509,144 @@ async function hydrationMain(): Promise<void> {
   console.log(`hydration acceptance: ${Object.keys(report.frames).length} loads, no hydration warnings or page errors`);
 }
 
-if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=registry-history (#2761)                                */
+/* ------------------------------------------------------------------------- */
+
+const REGISTRY_HISTORY_VIEWS = 8;
+const REGISTRY_HISTORY_WINDOW_MS = 30_000;
+/* The board's own half of the candidate gate's bounds (docs/design/candidate-performance-gate.md). */
+const REGISTRY_HISTORY_BOUNDS = { readyMs: 30_000, filesP95Ms: 5_000, filesMaxMs: 10_000, lagP95Ms: 50, lagMaxMs: 500, inputMs: 500 };
+
+async function registryHistoryMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  seedState(PROJECT_NAME, tasks, reviewers);
+  process.env.LLV_STATE_DIR = STATE_DIR;
+  const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
+  const dataset = buildRegistryPerformanceDataset(STATE_DIR);
+  SERVER_EXTRA_ENV.LLV_AGENT_REGISTRY_SQLITE = "sqlite";
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const percentile = (values: number[], fraction: number) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted.length ? Math.round(sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)]!) : 0;
+  };
+  const report: {
+    commit: string;
+    dataset: { rows: number; coldRows: number; payloadBytes: number };
+    bounds: typeof REGISTRY_HISTORY_BOUNDS;
+    writes: { count: number; p95Ms: number; maxMs: number };
+    views: Record<string, unknown>[];
+    failures: string[];
+  } = { commit: captureCommit(), dataset: { rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes }, bounds: REGISTRY_HISTORY_BOUNDS, writes: { count: 0, p95Ms: 0, maxMs: 0 }, views: [], failures: [] };
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const writers: ChildProcess[] = [];
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const views = await Promise.all(Array.from({ length: REGISTRY_HISTORY_VIEWS }, async (_, index) => {
+      const context = await browser!.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      /* The page's own clock: a 50 ms timer that runs late by however long the main thread was busy. */
+      await context.addInitScript(() => {
+        const probe = { lags: [] as number[] };
+        (window as unknown as { __historyProbe: typeof probe }).__historyProbe = probe;
+        let expected = performance.now() + 50;
+        const tick = () => { const now = performance.now(); probe.lags.push(Math.max(0, now - expected)); expected = now + 50; setTimeout(tick, 50); };
+        setTimeout(tick, 50);
+      });
+      const page = await context.newPage();
+      /* Every board request, read once the board is up: the first load is bounded by readyMs. */
+      const files: { query: string; status: number; ms: number }[] = [];
+      const failed: { query: string; error: string }[] = [];
+      let measuring = false;
+      page.on("requestfinished", async (request) => {
+        const url = new URL(request.url());
+        if (!measuring || !url.pathname.startsWith("/api/files")) return;
+        const response = await request.response();
+        const timing = request.timing();
+        files.push({ query: url.search, status: response?.status() ?? 0, ms: Math.round(timing.responseEnd > 0 ? timing.responseEnd : 0) });
+      });
+      page.on("requestfailed", (request) => {
+        const url = new URL(request.url());
+        if (measuring && url.pathname.startsWith("/api/files")) failed.push({ query: url.search, error: request.failure()?.errorText ?? "failed" });
+      });
+      const pinned = dataset.conversationPaths[(index * 7) % dataset.conversationPaths.length]!;
+      const started = performance.now();
+      await page.goto(`${baseUrl}/#f=${encodeURIComponent(pinned)}`, { waitUntil: "domcontentloaded" });
+      await page.waitForSelector("[data-kanban-board]", { timeout: REGISTRY_HISTORY_BOUNDS.readyMs });
+      const readyMs = Math.round(performance.now() - started);
+      measuring = true;
+      await page.evaluate(() => { (window as unknown as { __historyProbe: { lags: number[] } }).__historyProbe.lags.length = 0; });
+      return { index, context, page, files, failed, readyMs };
+    }));
+    const keys = dataset.grantSubjects.filter((subject) => subject.collection === "entries");
+    for (const half of [0, 1]) {
+      const writer = spawn(CAPTURE_BUN, ["src/runtime-host/candidatePerformanceRun.ts", "--writer",
+        "--registry", dataset.filename,
+        "--keys", JSON.stringify(keys.filter((_, index) => index % 2 === half).map(({ key, servers }) => ({ key, servers }))),
+        "--duration-ms", String(REGISTRY_HISTORY_WINDOW_MS)], { cwd: repoRoot, env: buildEnvironment(0), stdio: ["ignore", "pipe", "inherit"] });
+      writers.push(writer);
+    }
+    const written = Promise.all(writers.map((writer) => new Promise<number[]>((resolve) => {
+      let output = "";
+      writer.stdout?.on("data", (chunk) => { output += String(chunk); });
+      writer.once("exit", () => {
+        try { resolve((JSON.parse(output.trim().split("\n").at(-1) ?? "{}") as { latencies?: number[] }).latencies ?? []); } catch { resolve([]); }
+      });
+    })));
+    await Bun.sleep(REGISTRY_HISTORY_WINDOW_MS);
+    const writes = (await written).flat();
+    report.writes = { count: writes.length, p95Ms: percentile(writes, 0.95), maxMs: Math.round(Math.max(0, ...writes)) };
+    for (const view of views) {
+      const inputStarted = performance.now();
+      await view.page.mouse.wheel(0, 240);
+      await view.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
+      const inputMs = Math.round(performance.now() - inputStarted);
+      const lags = await view.page.evaluate(() => (window as unknown as { __historyProbe: { lags: number[] } }).__historyProbe.lags);
+      const cards = await view.page.locator("[data-kanban-card]").count();
+      const answered = view.files.filter((file) => file.status >= 200 && file.status < 400).map((file) => file.ms);
+      /* A poll the page itself abandons for a newer one is the client's choice. */
+      const errors = view.files.filter((file) => file.status >= 500).length + view.failed.filter((failure) => failure.error !== "net::ERR_ABORTED").length;
+      const reading = {
+        view: view.index,
+        readyMs: view.readyMs,
+        cards,
+        files: { answered: answered.length, errors, abandoned: view.failed.length - view.failed.filter((failure) => failure.error !== "net::ERR_ABORTED").length,
+          p95Ms: percentile(answered, 0.95), maxMs: Math.max(0, ...answered),
+          slowest: [...view.files].sort((a, b) => b.ms - a.ms).slice(0, 3), failures: view.failed.slice(0, 5) },
+        lag: { samples: lags.length, p95Ms: percentile(lags, 0.95), maxMs: Math.round(Math.max(0, ...lags)) },
+        inputMs,
+      };
+      report.views.push(reading);
+      const name = `view ${view.index}`;
+      if (!answered.length) report.failures.push(`${name} received no /api/files answer`);
+      if (errors) report.failures.push(`${name} saw ${errors} failed /api/files request(s)`);
+      if (reading.files.p95Ms > REGISTRY_HISTORY_BOUNDS.filesP95Ms) report.failures.push(`${name} /api/files p95 ${reading.files.p95Ms}ms`);
+      if (reading.files.maxMs > REGISTRY_HISTORY_BOUNDS.filesMaxMs) report.failures.push(`${name} /api/files max ${reading.files.maxMs}ms`);
+      if (reading.lag.p95Ms > REGISTRY_HISTORY_BOUNDS.lagP95Ms) report.failures.push(`${name} main-thread lag p95 ${reading.lag.p95Ms}ms`);
+      if (reading.lag.maxMs > REGISTRY_HISTORY_BOUNDS.lagMaxMs) report.failures.push(`${name} main-thread lag max ${reading.lag.maxMs}ms`);
+      if (reading.readyMs > REGISTRY_HISTORY_BOUNDS.readyMs) report.failures.push(`${name} drew its board after ${reading.readyMs}ms`);
+      if (inputMs > REGISTRY_HISTORY_BOUNDS.inputMs) report.failures.push(`${name} answered a wheel in ${inputMs}ms`);
+      await view.page.screenshot({ path: path.join(OUT_DIR, `registry-history-view-${view.index}.png`) });
+      await view.context.close();
+    }
+    if (!report.writes.count) report.failures.push("the writers recorded no writes");
+  } finally {
+    for (const writer of writers) if (writer.exitCode === null && writer.signalCode === null) writer.kill("SIGTERM");
+    await browser?.close();
+    await stop(server);
+  }
+  fs.writeFileSync(path.join(OUT_DIR, "registry-history.json"), JSON.stringify(report, null, 2) + "\n");
+  console.log(`registry history measurements: ${path.join(OUT_DIR, "registry-history.json")}`);
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+}
+
+if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistoryMain();
+else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
