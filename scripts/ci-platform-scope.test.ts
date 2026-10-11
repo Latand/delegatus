@@ -159,12 +159,18 @@ test("the real platform jobs reach the modules they run and not the board", () =
     "bin/server-runtime.test.ts",
     "src/runtime-host/fixtures/runtimeHostFenceContender.ts",
     "src/runtime-host/fixtures/runtimeHostFenceLegacyNullIdentity.ts",
+    "src/lib/search/transcriptSearchWorker.test.ts",
+    "src/lib/search/transcriptSearchWorker.ts",
+    "src/lib/transcriptSearchQuery.worker.ts",
+    "bin/helper-lease.mjs",
+    "bin/windows-process-identity.mjs",
   ]) {
     expect({ file, reached: windows.has(file) }).toEqual({ file, reached: true });
   }
   for (const reached of [macos, windows]) expect(reached.has("src/components/kanban/KanbanBoard.tsx")).toBe(false);
   expect(platformScope({ root: repositoryRoot, workflow: macosWorkflow, prefixes: [], changed: ["src/components/kanban/KanbanBoard.tsx"] }).run).toBe(false);
-  expect(platformScope({ root: repositoryRoot, workflow: windowsWorkflow, prefixes: [], changed: ["src/lib/limits.ts"] }).run).toBe(false);
+  // Query lifecycle tests now execute the limits module transitively.
+  expect(platformScope({ root: repositoryRoot, workflow: windowsWorkflow, prefixes: [], changed: ["src/lib/limits.ts"] }).run).toBe(true);
   expect(platformScope({ root: repositoryRoot, workflow: windowsWorkflow, prefixes: ["src/lib/proc/"], changed: ["src/runtime-host/fixtures/runtimeHostFenceContender.ts"] }).run).toBe(true);
 });
 
