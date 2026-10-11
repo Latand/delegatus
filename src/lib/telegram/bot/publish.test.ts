@@ -19,6 +19,7 @@ test("confirmed parts publish immediately with Telegram ids; pending or failed p
   const service = new TelegramBotService({ ...productionTelegramBotDependencies(), openStore: () => store,
     removeStoreFiles: () => {}, transportFor: () => transport, saveToken: value => { token = value; }, removeToken: () => { token = null; },
     withStoredToken: consume => token ? consume(token, connectedBot) : null,
+    signInHook: ({ text }) => text?.startsWith("/start") ? "Sign-in confirmed" : null,
     publishMessage: receipt => {
       receipts.push(receipt);
       if (mode === "pending") return pending;
@@ -37,6 +38,26 @@ test("confirmed parts publish immediately with Telegram ids; pending or failed p
     expect(receipts).toEqual([{ botId: "123", chatId: "77", messageId: 17, date: 1791724800, topicId: 7, text: "A & B" }]);
     expect(await service.send(input)).toMatchObject({ alreadySent: true }); expect(receipts).toHaveLength(1);
     release(); mode = "reject";
+    let testCalls = 0;
+    const lastPostBefore = service.status().chats[0]!.lastPostAt;
+    transport.handlers.sendMessage = () => {
+      connectedBot = "456";
+      return testCalls++ === 0 ? refused(400, "fixture migration", { migrateToChatId: "77" })
+        : ok({ message_id: 21, date: 1791724800 });
+    };
+    await service.testPost("owner", "Connection confirmed");
+    expect(receipts.at(-1)).toEqual({ botId: "123", chatId: "77", messageId: 21, date: 1791724800, topicId: null, text: "Connection confirmed" });
+    expect(service.status().chats[0]!.lastPostAt).toBe(lastPostBefore);
+    connectedBot = "123"; delete transport.handlers.sendMessage;
+    transport.handlers.getUpdates = () => {
+      connectedBot = "456";
+      return ok([{ update_id: 2, message: { message_id: 2, date: 1791724800,
+        text: "/start fixture", chat: { id: 77, type: "private", first_name: "Owner" } } }]);
+    };
+    transport.script("sendMessage", ok({ message_id: 22, date: 1791724800 }));
+    await service.pollOnce(new AbortController().signal);
+    expect(receipts.at(-1)).toEqual({ botId: "123", chatId: "77", messageId: 22, date: 1791724800, topicId: null, text: "Sign-in confirmed" });
+    connectedBot = "123";
     transport.script("sendMessage", ok({ message_id: 18, date: 1791724800 }), refused(400, "fixture"));
     await expect(service.send({ ...input, clientRequestId: "parts", text: "A".repeat(4200), format: "plain" })).rejects.toMatchObject({ code: "send_partial" });
     expect(receipts.at(-1)?.messageId).toBe(18);

@@ -19,8 +19,10 @@ truncation marker. Telegram send completion does not await publication.
 The sender exposes its confirmed-message publication hook for ordinary text,
 rich reviews and media captions. The review renderer supplies plain text with
 variant descriptions, frame captions, questions, recommendations and copied
-answer lines. Successful parts of a partial text send are also published;
-uncertain sends have no confirmed receipt to publish. Edits and deletions are
+answer lines. Successful parts of a partial text send, operator test posts and
+sign-in replies also publish their confirmed text with the bot identity retained
+from before the Telegram operation. Uncertain sends have no confirmed receipt
+to publish. Edits and deletions are
 outside this protocol.
 
 ## Target binding awaiting a decision

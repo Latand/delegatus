@@ -581,13 +581,17 @@ export class TelegramBotService {
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
     const transport = this.transport();
     if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
-    const params = { chat_id: Number(chat.chatId), text, disable_notification: true };
+    const botId = this.storedBotId();
+    let chatId = chat.chatId;
+    const params = { chat_id: Number(chatId), text, disable_notification: true };
     let result = await transport.call<TgSent>("sendMessage", params);
     if (!result.ok && result.migrateToChatId) {
       store.migrateChat(chat.chatId, result.migrateToChatId);
-      result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(result.migrateToChatId) });
+      chatId = result.migrateToChatId;
+      result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(chatId) });
     }
     if (!result.ok) throw sendFailure(result, chat);
+    if (result.result) this.publishConfirmed(botId, result.result, chatId, null, result.result.text ?? text);
     return { status: this.status(), sentAt: this.deps.now().toISOString() };
   }
 
@@ -665,6 +669,7 @@ export class TelegramBotService {
   async pollOnce(signal: AbortSignal): Promise<PollStep> {
     const transport = this.transport();
     if (!transport) return { next: "stop" };
+    const publishBotId = this.storedBotId();
     const store = this.store();
     const timeout = store.pendingReportReplies().length ? REPLY_RETRY_TIMEOUT_S : GET_UPDATES_TIMEOUT_S;
     const result = await transport.call<TgUpdate[]>("getUpdates", {
@@ -681,7 +686,7 @@ export class TelegramBotService {
       if (this.deps.reportReplies) admitReportReplies(store, this.storedBotId()!, updates, this.deps.reportReplies);
       if (applied.maxUpdateId !== null) this.offset = applied.maxUpdateId + 1;
       if (this.deps.reportReplies) await drainReportReplies(store, this.storedBotId()!, this.deps.reportReplies);
-      await this.answerSignIns(transport, updates, signal);
+      await this.answerSignIns(transport, updates, signal, publishBotId);
       const botId = Number(this.storedBotId());
       for (const chatId of applied.needsMembership) {
         const member = await transport.call<{ status?: string }>("getChatMember", { chat_id: Number(chatId), user_id: botId }, { signal });
@@ -720,14 +725,15 @@ export class TelegramBotService {
    * and the bot answers in that chat with what happened. The message itself
    * was stored above like any other; a failed reply is only a reply.
    */
-  private async answerSignIns(transport: BotTransport, updates: readonly TgUpdate[], signal: AbortSignal): Promise<void> {
+  private async answerSignIns(transport: BotTransport, updates: readonly TgUpdate[], signal: AbortSignal, botId: string | null): Promise<void> {
     for (const update of updates) {
       const message = update.message;
       if (!message || message.chat.type !== "private" || !message.text?.startsWith("/start")) continue;
       const reply = this.deps.signInHook?.({ from: message.from, chatType: message.chat.type, text: message.text }) ?? null;
       if (!reply || signal.aborted) continue;
       try {
-        await transport.call("sendMessage", { chat_id: message.chat.id, text: reply }, { signal });
+        const sent = await transport.call<TgSent>("sendMessage", { chat_id: message.chat.id, text: reply }, { signal });
+        if (sent.ok && sent.result) this.publishConfirmed(botId, sent.result, String(message.chat.id), null, sent.result.text ?? reply);
       } catch {
         /* the sign-in page still shows the outcome */
       }
