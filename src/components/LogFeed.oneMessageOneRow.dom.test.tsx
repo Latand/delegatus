@@ -994,7 +994,19 @@ const claudeSdkUserLine = (timestamp: string, uuid: string, text: string) => JSO
   message: { role: "user", content: text },
 });
 
-test("a delivered Claude record takes the operator's row and paints no second bubble", async () => {
+/** The shape the same delivery journals when it reaches Claude while a turn
+    runs: a `queued_command` attachment whose `source_uuid` is the engine id
+    the ledger joins, with Claude's own reminder text in `rendered`. */
+const claudeQueuedCommandLine = (timestamp: string, sourceUuid: string, text: string) => JSON.stringify({
+  type: "attachment", uuid: "attachment-one", timestamp, entrypoint: "sdk-cli", sessionId: "claude-one-message-one-row",
+  attachment: { type: "queued_command", commandMode: "prompt", source_uuid: sourceUuid, timestamp, prompt: [{ type: "text", text }] },
+  rendered: [{ content: [{ type: "text", text: `<system-reminder>\nThe user sent a new message while you were working:\n${text}\n</system-reminder>` }] }],
+});
+
+for (const [name, recordLine] of [
+  ["a delivered Claude record", claudeSdkUserLine],
+  ["a Claude delivery absorbed mid-turn", claudeQueuedCommandLine],
+] as const) test(`${name} takes the operator's row and paints no second bubble`, async () => {
   const host = document.createElement("div");
   document.body.append(host);
   const root: Root = createRoot(host);
@@ -1023,7 +1035,7 @@ test("a delivered Claude record takes the operator's row and paints no second bu
   expect(before.bubbles).toBe(1);
   const watch = watchMutations(host, () => before.row);
 
-  await settle(() => { lines = [claudeSdkUserLine(new Date(submittedAt + 3_000).toISOString(), uuid, TEXT)]; });
+  await settle(() => { lines = [recordLine(new Date(submittedAt + 3_000).toISOString(), uuid, TEXT)]; });
   await settle(() => root.render(feed()));
   /* And once more after everything has settled — the reviewer's second copy
      survived settlement, so settlement is part of the claim. */
@@ -1179,7 +1191,10 @@ test("an admitted row is not adopted by an equal-text record whose identity reso
   host.remove();
 });
 
-test("a delivered Claude record waits for its native id while the ledger read is open, then takes its row", async () => {
+for (const [name, recordLine] of [
+  ["a delivered Claude record", claudeSdkUserLine],
+  ["a Claude delivery absorbed mid-turn", claudeQueuedCommandLine],
+] as const) test(`${name} waits for its native id while the ledger read is open, then takes its row`, async () => {
   /* The record's words no longer bind it to an admitted row, and nothing in
      the browser can compute its engine id's owner. So while the ledger has
      not answered, the record waits: the operator keeps exactly one copy of
@@ -1207,7 +1222,7 @@ test("a delivered Claude record waits for its native id while the ledger read is
   });
   observer.observe(host, { childList: true, subtree: true, attributes: true, characterData: true });
 
-  await settle(() => { lines = [claudeSdkUserLine(new Date(submittedAt + 3_000).toISOString(), uuid, TEXT)]; });
+  await settle(() => { lines = [recordLine(new Date(submittedAt + 3_000).toISOString(), uuid, TEXT)]; });
   await settle(() => root.render(feed()));
   expect(provenance.asked()).toBeGreaterThan(0);
   const held = reading(host);

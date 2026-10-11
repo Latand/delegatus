@@ -1,0 +1,306 @@
+[
+  {
+    "locale": "en",
+    "width": 1440,
+    "panes": [
+      [
+        {
+          "id": "mid-turn-voice",
+          "count": 1,
+          "top": 291,
+          "left": 337,
+          "right": 991,
+          "bubble": false,
+          "voice": "From voice Delegatus · requested by you",
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-builder",
+          "count": 1,
+          "top": 476,
+          "left": 337,
+          "right": 991,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "builder",
+          "agentLabel": "Agent · Builder"
+        },
+        {
+          "id": "mid-turn-operator",
+          "count": 1,
+          "top": 661,
+          "left": 337,
+          "right": 991,
+          "bubble": true,
+          "voice": null,
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-tick",
+          "count": 1,
+          "top": 814,
+          "left": 337,
+          "right": 991,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "seat-tick",
+          "agentLabel": "Agent · Delegatus"
+        }
+      ],
+      [
+        {
+          "id": "mid-turn-voice",
+          "count": 1,
+          "top": 287,
+          "left": 516,
+          "right": 1420,
+          "bubble": false,
+          "voice": "From voice Delegatus · requested by you",
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-builder",
+          "count": 1,
+          "top": 472,
+          "left": 516,
+          "right": 1420,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "builder",
+          "agentLabel": "Agent · Builder"
+        },
+        {
+          "id": "mid-turn-operator",
+          "count": 1,
+          "top": 657,
+          "left": 516,
+          "right": 1420,
+          "bubble": true,
+          "voice": null,
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-tick",
+          "count": 1,
+          "top": 810,
+          "left": 516,
+          "right": 1420,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "seat-tick",
+          "agentLabel": "Agent · Delegatus"
+        }
+      ]
+    ],
+    "pageErrors": []
+  },
+  {
+    "locale": "en",
+    "width": 390,
+    "panes": [
+      [
+        {
+          "id": "mid-turn-voice",
+          "count": 1,
+          "top": 307,
+          "left": 13,
+          "right": 377,
+          "bubble": false,
+          "voice": "From voice Delegatus · requested by you",
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-builder",
+          "count": 1,
+          "top": 558,
+          "left": 13,
+          "right": 377,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "builder",
+          "agentLabel": "Agent · Builder"
+        },
+        {
+          "id": "mid-turn-operator",
+          "count": 1,
+          "top": 803,
+          "left": 13,
+          "right": 377,
+          "bubble": true,
+          "voice": null,
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-tick",
+          "count": 1,
+          "top": 1050,
+          "left": 13,
+          "right": 377,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "seat-tick",
+          "agentLabel": "Agent · Delegatus"
+        }
+      ]
+    ],
+    "pageErrors": []
+  },
+  {
+    "locale": "uk",
+    "width": 1440,
+    "panes": [
+      [
+        {
+          "id": "mid-turn-voice",
+          "count": 1,
+          "top": 291,
+          "left": 337,
+          "right": 991,
+          "bubble": false,
+          "voice": "Від голосового Delegatus · на ваше прохання",
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-builder",
+          "count": 1,
+          "top": 476,
+          "left": 337,
+          "right": 991,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "builder",
+          "agentLabel": "Агент · Розробник"
+        },
+        {
+          "id": "mid-turn-operator",
+          "count": 1,
+          "top": 661,
+          "left": 337,
+          "right": 991,
+          "bubble": true,
+          "voice": null,
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-tick",
+          "count": 1,
+          "top": 814,
+          "left": 337,
+          "right": 991,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "seat-tick",
+          "agentLabel": "Агент · Delegatus"
+        }
+      ],
+      [
+        {
+          "id": "mid-turn-voice",
+          "count": 1,
+          "top": 287,
+          "left": 516,
+          "right": 1420,
+          "bubble": false,
+          "voice": "Від голосового Delegatus · на ваше прохання",
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-builder",
+          "count": 1,
+          "top": 472,
+          "left": 516,
+          "right": 1420,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "builder",
+          "agentLabel": "Агент · Розробник"
+        },
+        {
+          "id": "mid-turn-operator",
+          "count": 1,
+          "top": 657,
+          "left": 516,
+          "right": 1420,
+          "bubble": true,
+          "voice": null,
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-tick",
+          "count": 1,
+          "top": 810,
+          "left": 516,
+          "right": 1420,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "seat-tick",
+          "agentLabel": "Агент · Delegatus"
+        }
+      ]
+    ],
+    "pageErrors": []
+  },
+  {
+    "locale": "uk",
+    "width": 390,
+    "panes": [
+      [
+        {
+          "id": "mid-turn-voice",
+          "count": 1,
+          "top": 307,
+          "left": 13,
+          "right": 377,
+          "bubble": false,
+          "voice": "Від голосового Delegatus · на ваше прохання",
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-builder",
+          "count": 1,
+          "top": 558,
+          "left": 13,
+          "right": 377,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "builder",
+          "agentLabel": "Агент · Розробник"
+        },
+        {
+          "id": "mid-turn-operator",
+          "count": 1,
+          "top": 803,
+          "left": 13,
+          "right": 377,
+          "bubble": true,
+          "voice": null,
+          "agentRole": null,
+          "agentLabel": null
+        },
+        {
+          "id": "mid-turn-tick",
+          "count": 1,
+          "top": 1050,
+          "left": 13,
+          "right": 377,
+          "bubble": false,
+          "voice": null,
+          "agentRole": "seat-tick",
+          "agentLabel": "Агент · Delegatus"
+        }
+      ]
+    ],
+    "pageErrors": []
+  }
+]
