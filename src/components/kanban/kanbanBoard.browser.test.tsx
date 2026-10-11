@@ -33,6 +33,12 @@ import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { autoRotationCardNotice, type AutoRotationAttempt } from "@/lib/monitor/seatAutoRotation";
 import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
+import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
+import { createProfileService } from "@/lib/memory/profileService";
+import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
+import type { RoleMemoryProjectView } from "@/lib/memory/roleTypes";
+import { directProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
+import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 
 /*
  * The one rendered-evidence driver for the kanban board. Every case here runs
@@ -60,6 +66,128 @@ const VIEWPORT = { width: 1440, height: 900 } as const;
 type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
+
+describe("memory profile", () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("direct-call timings reach the visible page", async () => {
+    // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
+    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView; credentialHome: string };
+    const credentials = readClaudeCredentials(input.credentialHome);
+    const token = credentials.state === "present" ? credentials.document.claudeAiOauth?.accessToken : null;
+    if (typeof token !== "string") throw Error("benchmark credential unavailable");
+    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const rows = new Map<string, ProfileRow>();
+    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: async () => directProfileCaller(token, MEMORY_PROFILE_MODEL) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(input.rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        if (request.method === "GET") return Response.json(service.read(input.rules.project, new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en"));
+        const body = await request.json(); const run = service.start(input.rules.project, body.locale);
+        const encoder = new TextEncoder(); let off: (() => void) | undefined; let closed = false;
+        return new Response(new ReadableStream({
+          start(controller) { off = run.subscribe(view => { if (!closed) controller.enqueue(encoder.encode(JSON.stringify(view) + "\n")); }); void run.done.then(() => { if (!closed) { closed = true; off?.(); controller.close(); } }); },
+          cancel() { closed = true; off?.(); },
+        }), { headers: { "Content-Type": "application/x-ndjson" } });
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const timings: unknown[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width: 1440, height: 900 }, "light", lang, "reduce");
+        try {
+          await page.locator("[data-profile-summarize]").waitFor();
+          for (const mode of ["cold", "cached"] as const) {
+            const started = performance.now();
+            await page.locator("[data-profile-summarize]").click();
+            await page.locator("[data-profile-ready]").first().waitFor();
+            const firstMs = Math.round(performance.now() - started);
+            await page.locator('[data-memory-profile][aria-busy="false"]').waitFor();
+            const totalMs = Math.round(performance.now() - started);
+            expect(service.read(input.rules.project, lang).run?.errors).toEqual([]);
+            timings.push({ lang, mode, model: MEMORY_PROFILE_MODEL, ruleCount: input.rules.scopes.reduce((n, scope) => n + scope.active.length, 0), firstMs, totalMs });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "timings.json"), JSON.stringify(timings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+  browserTest("summary, slices and states render at desktop and phone widths in both locales and schemes", async () => {
+    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const rules = sampleMemory();
+    const rows = new Map<string, ProfileRow>();
+    let calls = 0;
+    const service = createProfileService({ rules: () => structuredClone(rules), read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: "haiku", prepare: async () => async (_, locale) => {
+      calls++;
+      const answer = sampleAnswer(locale === "uk");
+      answer.topics[0]!.title = locale === "uk" ? "Перевірка кольорів дуже довгих і незручних зразків" : "Checking colors of particularly long and awkward samples";
+      return answer;
+    } });
+    let state: "none" | "ready" | "running" | "error" | "stale" | "empty" = "none";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(state === "empty" ? { ...rules, scopes: [] } : rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        const locale = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        if (request.method === "POST") {
+          const body = await request.json(); const run = service.start("garden", body.locale); await run.done;
+          state = "ready";
+          return new Response(JSON.stringify(run.latest) + "\n", { headers: { "Content-Type": "application/x-ndjson" } });
+        }
+        const view: MemoryProfileView = service.read("garden", locale);
+        if (state === "none") { view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null; }
+        if (state === "running" || state === "error") view.run = { state: state === "running" ? "running" : "failed", startedAt: "2026-01-01", errors: state === "error" ? [{ scope: "overall", code: "account" }] : [] };
+        if (state === "stale") { view.stale = true; view.changes = { added: 2, rewritten: 1, removed: 1 }; }
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const readings: unknown[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        state = "none";
+        const before = calls;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-memory-profile]").waitFor();
+          expect(calls).toBe(before);
+          await page.locator("[data-profile-summarize]").click();
+          await page.getByText(sampleAnswer(lang === "uk").headline, { exact: true }).first().waitFor();
+          await page.screenshot({ path: path.join(out, `ready-${width}-${scheme}-${lang}.png`) });
+          const geometry = await page.evaluate(() => {
+            const profile = document.querySelector<HTMLElement>("[data-memory-profile]")!;
+            const window = document.querySelector<HTMLElement>("[data-rules-window]")!;
+            const pills = [...profile.querySelectorAll<HTMLElement>("button.truncate")];
+            return { overflow: profile.scrollWidth - profile.clientWidth, left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
+              truncatedPills: pills.filter(pill => pill.scrollWidth > pill.clientWidth).length, pills: pills.map(pill => ({ width: pill.getBoundingClientRect().width, maxWidth: getComputedStyle(pill).maxWidth })) };
+          });
+          expect(geometry.overflow).toBeLessThanOrEqual(1); expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.truncatedPills).toBeGreaterThan(0);
+          readings.push({ width, scheme, lang, geometry });
+          await page.locator("[data-profile-slice] button").last().scrollIntoViewIfNeeded();
+          await page.locator("[data-profile-slice] button").last().click();
+          await page.locator("[data-rules-section]").waitFor();
+          await page.screenshot({ path: path.join(out, `rules-${width}-${scheme}-${lang}.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      for (const next of ["none", "running", "error", "stale", "empty"] as const) {
+        state = next;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width: 390, height: 844 }, "light", "uk", "reduce", true);
+        try {
+          await page.locator("[data-memory-profile]").waitFor();
+          if (next === "running") await page.getByRole("status").waitFor();
+          if (next === "error") await page.getByRole("alert").waitFor();
+          if (next === "stale") await page.locator("[data-profile-stale]").waitFor();
+          if (next === "empty") {
+            expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+            await page.getByText(translate("uk", "memoryProfile.emptyTitle"), { exact: true }).waitFor();
+          }
+          await page.screenshot({ path: path.join(out, `${next}-390-light-uk.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
 
 describe("finding recurrence (#2648)", () => {
   browserTest("quiet and held state lines keep the full recurrence visible at 1440, 1000 and 390 in en and uk", async () => {

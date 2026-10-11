@@ -10,6 +10,7 @@ import { BAR_MENU_ROW } from "@/components/ProjectBar";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStageReportEntry } from "@/lib/pipelines/types";
 import type { RoleMemoryProjectView, RuleView, ScopeKind, ScopeView, StageLessonView } from "@/lib/memory/roleTypes";
+import { MemoryProfile } from "./MemoryProfile";
 
 /* Role memory on the operator's surfaces (docs/design/role-memory.md §3.1).
    The operator chose the rules window and the rule line (2026-10-07) and then
@@ -109,7 +110,7 @@ export function LearnedRulesWindowHost() {
     return () => window.removeEventListener(OPEN_EVENT, open);
   }, []);
   const close = useCallback(() => setRequest(null), []);
-  return request ? <RulesWindow project={request.project} focusRule={request.focusRule} onClose={close} /> : null;
+  return request ? <RulesWindow key={`${request.project}/${request.focusRule ?? ""}`} project={request.project} focusRule={request.focusRule} onClose={close} /> : null;
 }
 
 /** Only a whole answer is drawn; anything else reads as a failed read. */
@@ -269,8 +270,9 @@ export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, r
 
 /** The rules window: the role, project and machine rules a new agent of the chosen role starts with, side by side on the desktop and stacked on the phone. */
 export function RulesWindow({ project, focusRule, onClose }: { project: string; focusRule?: string; onClose: () => void }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const { view, failed, act } = useProjectRules(project);
+  const [page, setPage] = useState<"profile" | "rules">(focusRule ? "rules" : "profile");
   const [chosenRole, setChosenRole] = useState<string | null>(null);
   const [undo, setUndo] = useState<Removed | null>(null);
   useEffect(() => {
@@ -322,8 +324,8 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         <header className="flex min-h-12 items-center gap-2 border-b border-border px-4 py-2">
           <SparkGlyph />
           <div className="flex min-w-0 flex-1 flex-col">
-            <h2 id="rules-window-title" className="m-0 truncate text-[15px] font-semibold">{t("roleMemory.window.title", { project: view?.project ?? project })}</h2>
-            <p data-rules-starts="" className="m-0 truncate text-[11.5px] leading-4 text-muted">{t("roleMemory.startsWith")}</p>
+            <h2 id="rules-window-title" className="m-0 truncate text-[15px] font-semibold">{t(page === "profile" ? "memoryProfile.title" : "roleMemory.window.title", { project: view?.project ?? project })}</h2>
+            <p data-rules-starts="" className="m-0 truncate text-[11.5px] leading-4 text-muted">{t(page === "profile" ? "memoryProfile.subtitle" : "roleMemory.startsWith")}</p>
           </div>
           <button type="button" data-rules-window-close="" autoFocus aria-label={t("roleMemory.window.close")} onClick={onClose}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] text-[20px] text-muted hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">×</button>
@@ -331,7 +333,11 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         {failed === "read" && !view ? <p role="alert" className="m-4 text-[13px] text-danger">{t("roleMemory.loadFailed")}</p> : null}
         {failed === "save" ? <p role="alert" className="m-0 border-b border-border px-4 py-1.5 text-[12px] text-danger">{t("roleMemory.saveFailed")}</p> : null}
         {view && !view.enabled ? <p data-rules-window-off="" className="m-0 border-b border-border bg-warning-soft px-4 py-1.5 text-[12px] text-primary">{t("roleMemory.off")}</p> : null}
-        {view ? (
+        <nav className="flex shrink-0 gap-2 border-b border-border px-3 py-2" aria-label={t("memoryProfile.navigation")}>
+          {(["profile", "rules"] as const).map(id => <button key={id} type="button" aria-pressed={page === id} onClick={() => setPage(id)} className={`min-h-8 rounded-full px-3 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11 ${page === id ? "bg-accent-soft text-accent" : "text-secondary hover:bg-sunken"}`}>{t(id === "profile" ? "memoryProfile.profile" : "memoryProfile.allRules")}</button>)}
+        </nav>
+        {view && page === "profile" ? <MemoryProfile key={`${view.project}/${locale}`} rules={view} renderRules={(scope, ids) => <RuleSection kind={scope.kind} title={ids ? t("memoryProfile.topicRules") : scope.kind === "role" ? roleNameById(t, scope.roleId ?? "") : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection")} subtitle={t("roleMemory.startsWith")} scope={ids ? { ...scope, active: scope.active.filter(rule => ids.includes(rule.id)), left: [] } : scope} removed={undo} onDelete={remove} onRestore={restore} />} /> : null}
+        {view && page === "rules" ? (
           <div className="grid min-h-0 flex-1 grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
             <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : t("roleMemory.roleSubtitle", { role: roleName })} scope={roleScope} picker={picker} focusRule={focusRule} removed={undo} onDelete={remove} onRestore={restore} />
             <RuleSection kind="project" title={t("roleMemory.projectSection")} subtitle={t("roleMemory.projectSubtitle")} scope={projectScope} focusRule={focusRule} removed={undo} onDelete={remove} onRestore={restore} />
