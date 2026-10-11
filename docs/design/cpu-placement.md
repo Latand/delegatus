@@ -139,6 +139,8 @@ when pressure allows it, or once its own queue wait reaches ten minutes.
 Admissions are separated by two seconds, including when pressure never drops.
 The pressure sensor holds at `some avg10` of 20% and releases after ten seconds
 below 10%; a failed sample permits the head. CPU quotas still bound admitted work.
+The displayed time is a worst-case bound from the durable queue clock, including
+spacing; a permissive sample does not make that bound jump when pressure rises.
 
 SQLite writer transactions preserve queue order, original wait timestamps and
 the last admission across Viewer restarts and across processes. Stage tickets
@@ -158,6 +160,11 @@ caption. A launched stage continues reconciliation without asking for admission.
 Heavy checks retain their ticket until a slot is locked and their admission is
 committed, so a younger check cannot overtake one waiting for a slot. Waiting
 uses no heavy slot. The owned runner's execution deadline starts after admission.
+On Linux, nested work continues its parent's existing admission only while the
+kernel proves the owner's start identity, lock inode and exclusive descriptor
+lock. The owned runner carries that proof through service handoff. This keeps
+dependent work from waiting for the slot its own parent holds; fresh jobs still
+join FIFO, and every command retains owned process cleanup.
 Nested waits report heartbeat intervals to private ledgers owned by bounded
 callers; concurrent intervals count once. The Git executor, hook plan and owned
 runner exclude those intervals from their finite execution budgets. Per-file
@@ -174,7 +181,7 @@ and hook budgets exclude admission waits.
 
 Operator sends, receipt reconciliation, staged-launch recovery, the delivery
 queue, publication reconciliation, update observation and setup and stage
-observation never consult admission. `DELEGATUS_CPU_PRESSURE=off` turns it off;
+observation never consult admission. `DELEGATUS_CPU_PRESSURE=off` bypasses the pressure hold;
 `DELEGATUS_CPU_PRESSURE_HOLD` and `DELEGATUS_CPU_PRESSURE_RELEASE` tune the
 thresholds. Tune them from measurements: while this change was built, the
 incident machine read 14–24% with dozens of agents and no incident.

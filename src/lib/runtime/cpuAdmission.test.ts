@@ -59,13 +59,17 @@ test("a stage and a heavy check share FIFO, even when pressure is low or samplin
   expect(q.check("command:two", true)).toBeNull();
 });
 
-test("a fresh pressure sample cannot understate an earlier held ticket's wait", () => {
+test("a permissive sample cannot understate the bound if pressure rises again before admission", () => {
   const f = fixture(), q = f.open();
   q.check("stage:one", false);
   f.at(300_000);
   expect(q.check("command:two", true)).toEqual({
-    since: 300_000, position: 2, remainingMs: 300_000 + CPU_QUEUE_SPACING_MS,
+    since: 300_000, position: 2, remainingMs: CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS,
   });
+  f.at(301_000);
+  expect(q.check("command:two", false)?.remainingMs).toBe(CPU_QUEUE_MAX_WAIT_MS - 1_000 + CPU_QUEUE_SPACING_MS);
+  f.at(302_000);
+  expect(q.check("command:two", true)?.remainingMs).toBe(CPU_QUEUE_MAX_WAIT_MS - 2_000 + CPU_QUEUE_SPACING_MS);
   f.at(CPU_QUEUE_MAX_WAIT_MS);
   expect(q.check("stage:one", false)).toBeNull();
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);

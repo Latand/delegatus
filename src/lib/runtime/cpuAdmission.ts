@@ -10,6 +10,34 @@ export const CPU_QUEUE_MAX_WAIT_MS = 10 * 60_000;
 export const CPU_QUEUE_SPACING_MS = 2_000;
 export type CpuQueueWait = { since: number; position: number; remainingMs: number };
 type Ticket = { seq: number; key: string; since: number; owner: string | null };
+export type CpuSlotLease = { owner: ProcessIdentity; slot: string };
+
+/** A continuation retains its parent's admission only while the kernel
+ * proves that exact process still holds the slot. Service handoff preserves
+ * this proof even though the worker is reparented to the user manager. */
+export function inheritedCpuSlot(env = process.env): CpuSlotLease | null {
+  if (process.platform !== "linux") return null;
+  try {
+    const lease = JSON.parse(env.LLV_GATE_SLOT_LEASE ?? "null") as CpuSlotLease | null;
+    if (!lease || typeof lease.slot !== "string" || !path.isAbsolute(lease.slot) || !lease.owner || !Number.isSafeInteger(lease.owner.pid) || lease.owner.pid < 1) return null;
+    const match = /^llv-heavy-gate\.slot([1-9]\d*)\.lock$/.exec(path.basename(lease.slot));
+    if (!match || Number(match[1]) > Number(env.LLV_GATE_SLOTS ?? 6) || path.dirname(lease.slot) !== path.resolve(env.LLV_GATE_LOCK_DIR ?? "/var/tmp")) return null;
+    if (processIdentityStatus(lease.owner) !== "alive") return null;
+    const descriptor = path.join("/proc", String(lease.owner.pid), "fd", "9");
+    const file = fs.statSync(lease.slot, { bigint: true }), fd = fs.statSync(descriptor, { bigint: true });
+    const info = fs.readFileSync(path.join("/proc", String(lease.owner.pid), "fdinfo", "9"), "utf8");
+    const inode = /^ino:\s+(\d+)$/m.exec(info)?.[1];
+    if (file.dev !== fd.dev || file.ino !== fd.ino || !inode || BigInt(inode) !== file.ino || !/^lock:.*\bFLOCK\b.*\bWRITE\b/m.test(info)) return null;
+    return processIdentityStatus(lease.owner) === "alive" && !procBackend.processExited(lease.owner.pid) ? lease : null;
+  } catch { return null; }
+}
+export function cpuSlotForOwner(owner: ProcessIdentity, env = process.env): CpuSlotLease | null {
+  if (process.platform !== "linux") return null;
+  try {
+    const slot = fs.readlinkSync(path.join("/proc", String(owner.pid), "fd", "9"));
+    return inheritedCpuSlot({ ...env, LLV_GATE_SLOT_LEASE: JSON.stringify({ owner, slot }) });
+  } catch { return null; }
+}
 
 const homeSymbol = Symbol.for("delegatus.cpuAdmission.home");
 const nativeHome = globalThis as typeof globalThis & { [homeSymbol]?: string };
@@ -71,9 +99,9 @@ export class CpuAdmissionQueue {
       const position = ahead.n;
       const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
-      const budget = pressureAllows ? 0 : Math.max(0, this.maxWaitMs - (now - ticket.since));
-      // Older callers may retain a hysteresis hold while this fresh sample
-      // permits pressure. Their durable clocks still bound the queue wait.
+      // Pressure may rise again before this queued ticket reaches the head.
+      // Display the durable worst-case bound even on a permissive sample.
+      const budget = Math.max(0, this.maxWaitMs - (now - ticket.since));
       const priorBudget = ahead.since === null ? 0 : Math.max(0, this.maxWaitMs - (now - ahead.since));
       if (position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
         if (consume) {

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { CpuPressureGate, cpuPressurePolicy, DEFAULT_CPU_PRESSURE_POLICY, parseCpuPressure } from "../src/lib/runtime/cpuPressure";
-import { machineCpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
+import { inheritedCpuSlot, machineCpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
 import { captureProcessIdentity, processIdentityStatus } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
@@ -17,8 +17,9 @@ const pressure = new CpuPressureGate({ ...(policy ?? DEFAULT_CPU_PRESSURE_POLICY
     catch { return null; }
   },
 });
-const queue = machineCpuAdmissionQueue();
 const [mode, key, pid] = process.argv.slice(2);
+if (mode === "--reuse-slot") process.exit(inheritedCpuSlot() ? 0 : 75);
+const queue = machineCpuAdmissionQueue();
 if (!key || !pid || !["--wait", "--claim"].includes(mode!)) throw new Error("cpu admission needs a mode, ticket and owner PID");
 const owner = captureProcessIdentity(Number(pid));
 if (mode === "--claim") {

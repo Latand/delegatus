@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
+import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { realExec } from "../src/lib/workflows/provision";
 import { runSteps } from "./local-gate";
 
@@ -44,6 +44,27 @@ test("gate-slot uses the ten-minute queue and preserves FIFO through slot acquis
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await Promise.allSettled(pending); f.close(); }
 }, 20_000);
 
+test.skipIf(process.platform !== "linux")("an admitted parent can finish nested work while a fresh job waits for its only slot", async () => {
+  const f = fixture(), controls = [new AbortController(), new AbortController()];
+  const pending: Promise<Awaited<ReturnType<typeof realExec>>>[] = [];
+  const env = { ...f.env, LLV_GATE_SLOTS: "1", LLV_OWNED_RUN_TIMEOUT_MS: "20000" };
+  const ready = path.join(f.dir, "ready"), go = path.join(f.dir, "go");
+  const script = `import fs from "node:fs"; import { inheritedCpuSlot } from ${JSON.stringify(path.join(process.cwd(), "src/lib/runtime/cpuAdmission.ts"))}; if (!inheritedCpuSlot()) throw new Error("parent slot was not retained"); fs.writeFileSync(${JSON.stringify(ready)}, process.env.LLV_GATE_SLOT_LEASE!); while (!fs.existsSync(${JSON.stringify(go)})) await Bun.sleep(10); const child = Bun.spawn(${JSON.stringify(f.command("nested"))}, { stdio: ["ignore", "inherit", "inherit"] }); process.exit(await child.exited);`;
+  const deadline = setTimeout(() => controls.forEach(c => c.abort()), 6_000);
+  try {
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "");
+    pending.push(Promise.resolve(realExec("bash", ["scripts/gate-slot.sh", process.execPath, "-e", script], process.cwd(), env, { timeoutMs: 10_000, signal: controls[0]!.signal })));
+    await until(() => fs.existsSync(ready));
+    pending.push(Promise.resolve(realExec("bash", f.command("fresh").slice(1), process.cwd(), { ...env, LLV_GATE_SLOT_LEASE: "" }, { timeoutMs: 10_000, signal: controls[1]!.signal })));
+    await until(() => f.count() === 1);
+    fs.writeFileSync(go, "go");
+    const results = await Promise.all(pending);
+    expect(results.map(r => r.code), JSON.stringify(results)).toEqual([0, 0]);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("nested\nfresh\n");
+    expect(inheritedCpuSlot({ ...env, LLV_GATE_SLOT_LEASE: fs.readFileSync(ready, "utf8") })).toBeNull();
+  } finally { clearTimeout(deadline); controls.forEach(c => c.abort()); await Promise.allSettled(pending); f.close(); }
+}, 20_000);
+
 test("pre-push keeps completed admission waits outside its budget across later steps", async () => {
   const f = fixture();
   let waiting: Promise<unknown> | undefined;
@@ -66,8 +87,10 @@ test("the owned runner keeps a nested queue wait outside its execution deadline"
   let pending: ReturnType<typeof realExec> | undefined;
   try {
     fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "");
-    const script = 'import fs from "node:fs"; fs.writeFileSync(process.env.LLV_GATE_PSI_FILE!, "some avg10=90.00 total=1\\n"); const child = Bun.spawn(["bash", "scripts/gate-slot.sh", "bash", "-c", "echo nested > \\\"$CPU_QUEUE_OUTPUT\\\""], { stdio: ["ignore", "inherit", "inherit"] }); process.exit(await child.exited);';
-    pending = realExec("bash", ["scripts/gate-slot.sh", process.execPath, "-e", script], process.cwd(), { ...f.env, LLV_OWNED_RUN_TIMEOUT_MS: "1200" }, { timeoutMs: 4000 });
+    // A different pool is a fresh admission; same-pool work retains its
+    // parent's existing reservation instead of waiting behind its own slot.
+    const script = `import fs from "node:fs"; fs.writeFileSync(process.env.LLV_GATE_PSI_FILE!, "some avg10=90.00 total=1\\n"); const child = Bun.spawn(["bash", "scripts/gate-slot.sh", "bash", "-c", "echo nested > \\\"$CPU_QUEUE_OUTPUT\\\""], { stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, LLV_GATE_LOCK_DIR: ${JSON.stringify(f.dir)} } }); process.exit(await child.exited);`;
+    pending = realExec("bash", ["scripts/gate-slot.sh", process.execPath, "-e", script], process.cwd(), { ...f.env, LLV_GATE_LOCK_DIR: path.join(f.dir, "parent-locks"), LLV_OWNED_RUN_TIMEOUT_MS: "1200" }, { timeoutMs: 4000 });
     await until(() => f.count() === 1);
     await Bun.sleep(1600); f.age();
     const result = await pending;

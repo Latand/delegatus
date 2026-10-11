@@ -28,6 +28,7 @@ test("private CPU wait ledgers do not invalidate a warm baseline", () => {
   for (const word of ["one", "two"]) {
     const ledger = path.join(f.dir, word); mkdirSync(ledger);
     f.env.LLV_CPU_WAIT_ROOTS = JSON.stringify([ledger]);
+    f.env.LLV_GATE_SLOT_LEASE = word;
     f.logs.length = 0;
     expect(f.run().introduced).toHaveLength(0);
   }

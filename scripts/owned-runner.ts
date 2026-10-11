@@ -9,6 +9,7 @@ import { procBackend } from "../src/lib/proc";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 import { cpuBudgetTimer, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
+import { cpuSlotForOwner, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 
 type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number };
 const args = process.argv.slice(2);
@@ -48,6 +49,8 @@ if (args[0] === "--budget") {
   const guardian = Bun.spawn([process.execPath, path.join(import.meta.dir, "test-child-guardian.ts"), ledger, JSON.stringify(captureProcessIdentity(process.pid))], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
   guardian.unref();
   const budget = cpuWaitBudget(process.env);
+  const slot = inheritedCpuSlot() ?? cpuSlotForOwner(captureProcessIdentity(process.pid));
+  if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
   const child = spawn(command[0]!, command.slice(1), { stdio: "inherit", env: budget.env });
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
   const close = new Promise<number>(resolve => {
@@ -72,6 +75,8 @@ if (args[0] === "--budget") {
   const notifySocket = process.env.NOTIFY_SOCKET;
   process.env = { ...launch.env, NOTIFY_SOCKET: notifySocket };
   const budget = cpuWaitBudget(launch.env);
+  const slot = inheritedCpuSlot(launch.env) ?? cpuSlotForOwner(launch.owner, launch.env);
+  if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
   const cgroup = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3);
   if (!cgroup?.endsWith(`/${launch.unit}`)) throw new Error("owned runner was not admitted to its declared service cgroup");
   const members = () => fs.readFileSync(path.join("/sys/fs/cgroup", cgroup, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number).filter(pid => pid > 0 && pid !== process.pid && !procBackend.processExited(pid));

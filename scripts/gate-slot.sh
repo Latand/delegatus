@@ -79,6 +79,9 @@ run() {
 lock_dir=${LLV_GATE_LOCK_DIR:-/var/tmp}
 mkdir -p "$lock_dir"
 admission="$(dirname "${BASH_SOURCE[0]}")/cpu-admission.ts"
+# A nested command continues an already admitted job. The helper validates
+# the parent start identity and its kernel-held slot before reusing it.
+if "${LLV_GATE_BUN:-bun}" "$admission" --reuse-slot; then run "$@"; fi
 queue_key="command:$$:$RANDOM:$RANDOM"
 while :; do
   "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$$"
