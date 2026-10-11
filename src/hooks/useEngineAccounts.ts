@@ -1025,6 +1025,7 @@ export function createEngineAccountsStore(
         return false;
       }
       settle("done");
+      patchSnapshot({ identityVersion: snapshot.identityVersion + 1 });
       await refresh();
       return true;
     });
@@ -1273,6 +1274,13 @@ export function useEngineAccounts(engine: Engine): EngineAccountsState {
     refreshLimits: store.refreshLimits,
     useResetCredit: store.useResetCredit,
   };
+}
+
+/** Moves whenever an engine's account set or choice changes (a removal, a
+    restore, a switch), for surfaces that keep their own account-derived read. */
+export function useAccountIdentityVersion(engine: Engine): number {
+  const store = stores[engine];
+  return useSyncExternalStore(store.subscribe, () => store.getSnapshot().identityVersion, () => store.getSnapshot().identityVersion);
 }
 
 /** The name an account goes by on every surface that names it: its label, or its

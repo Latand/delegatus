@@ -3043,12 +3043,17 @@ async function accountRemovalMain(): Promise<void> {
     await waitForServer(baseUrl, server);
     await waitForBoard(baseUrl, true);
     await Bun.sleep(3_000);
+    /* The telemetry notice sits where the footer panel opens. */
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 
-    /* Every DELETE is answered here and never reaches the server; the list read drops what a
-       stubbed success removed, the way the real one would. */
+    /* Every DELETE is answered here and never reaches the server; the list read and the project's
+       bindings read drop what a stubbed success removed, the way the real ones would. */
     const stubbed = async (context: Awaited<ReturnType<Browser["newContext"]>>) => {
       const gone = new Set<string>();
+      /* A removal drops the account's bindings for good; Show again lists it, not its bindings. */
+      const unbound = new Set<string>();
       let next: Answer | null = null;
       let hold: Promise<void> | null = null;
       const deletes: unknown[] = [];
@@ -3058,6 +3063,20 @@ async function accountRemovalMain(): Promise<void> {
           const response = await route.fetch();
           const body = await response.json() as { claude?: { accounts?: { id: string }[] } };
           if (body.claude?.accounts) body.claude.accounts = body.claude.accounts.filter((account) => !gone.has(account.id));
+          await route.fulfill({ response, json: body });
+        } catch {
+          /* the context is gone */
+        }
+      });
+      await context.route("**/api/account-project-bindings**", async (route) => {
+        try {
+          const response = await route.fetch();
+          const body = await response.json() as { engines?: Record<string, { allowed?: { accountId: string }[]; carrying?: { accountId: string }[] } | undefined> };
+          const claude = body.engines?.claude;
+          if (claude) {
+            claude.allowed = claude.allowed?.filter((account) => !unbound.has(account.accountId));
+            claude.carrying = claude.carrying?.filter((account) => !unbound.has(account.accountId));
+          }
           await route.fulfill({ response, json: body });
         } catch {
           /* the context is gone */
@@ -3075,7 +3094,7 @@ async function accountRemovalMain(): Promise<void> {
         deletes.push(request);
         if (hold) await hold;
         const answer = next ?? { status: 500, body: { code: "removal_failed" } };
-        if (answer.status === 200 && request.id) gone.add(request.id);
+        if (answer.status === 200 && request.id) { gone.add(request.id); unbound.add(request.id); }
         await route.fulfill({ status: answer.status, contentType: "application/json", body: JSON.stringify(answer.body) });
       });
       return {
@@ -3115,8 +3134,14 @@ async function accountRemovalMain(): Promise<void> {
     };
 
     const cases = [1440, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
+    /* A page adopts the language the server keeps, so each context writes its own first. */
+    const writeLocale = async (lang: "en" | "uk") => {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`writing the ${lang} locale answered ${localeWrite.status}`);
+    };
     for (const { width, lang, colorScheme } of cases) {
       const tag = `${width}-${lang}-${colorScheme}`;
+      await writeLocale(lang);
       const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
       await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
@@ -3298,6 +3323,7 @@ async function accountRemovalMain(): Promise<void> {
     for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) {
       for (const kind of ["refusal", "summary", "live", "hidden"] as const) {
         const tag = `390-${lang}-${colorScheme}-${kind}`;
+        await writeLocale(lang);
         const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, hasTouch: true, colorScheme, reducedMotion: "reduce" });
         await context.addInitScript(seedInit);
         await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
@@ -3335,7 +3361,7 @@ async function accountRemovalMain(): Promise<void> {
           const links = await page.evaluate((account: string) => document.querySelectorAll(`[data-account-refusal="${account}"] [data-account-refusal-sessions] a[href]`).length, id);
           must(links === 3, `${tag}: ${links} live-work links`);
         }
-        if (kind === "hidden") must(await page.evaluate(() => document.querySelector('[data-mobile2-account="default"]') === null), `${tag}: Main is still listed`);
+        if (kind === "hidden") must(await page.evaluate(() => document.querySelector('[data-mobile2-accounts-engine="claude"] [data-mobile2-account="default"]') === null), `${tag}: Claude Main is still listed`);
         if (kind === "summary" || kind === "hidden") {
           if (kind === "summary") must(reading.pathId?.text === id && reading.pathId.visible, `${tag}: the path's account id is ${JSON.stringify(reading.pathId)}`);
           const leads = await page.evaluate(() => {

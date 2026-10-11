@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { useAccountIdentityVersion } from "@/hooks/useEngineAccounts";
 
 import { EngineAccountSwitch, type EngineAccountSwitchAppearance } from "./EngineAccountSwitch";
 
@@ -74,10 +76,19 @@ export function parseProjectAccountsView(body: unknown): ProjectAccountsView | n
  */
 export function ProjectAccounts({ project, appearance }: { project: string; appearance?: EngineAccountSwitchAppearance }) {
   const [view, setView] = useState<ProjectAccountsView | null>(null);
+  /* A removal drops the account's bindings, so the strip reads again when an
+     engine's accounts change; it clears only for another project, so an
+     accounts panel open under it stays open through the re-read. */
+  const claudeAccounts = useAccountIdentityVersion("claude");
+  const codexAccounts = useAccountIdentityVersion("codex");
+  const shownProject = useRef<string | null>(null);
 
   useEffect(() => {
     let live = true;
-    setView(null);
+    if (shownProject.current !== project) {
+      shownProject.current = project;
+      setView(null);
+    }
     void (async () => {
       try {
         const response = await fetch(`/api/account-project-bindings?project=${encodeURIComponent(project)}`, { cache: "no-store" });
@@ -89,7 +100,7 @@ export function ProjectAccounts({ project, appearance }: { project: string; appe
       }
     })();
     return () => { live = false; };
-  }, [project]);
+  }, [project, claudeAccounts, codexAccounts]);
 
   return <ProjectAccountsStrip view={view} appearance={appearance} />;
 }
