@@ -2232,14 +2232,14 @@ test("stage reconciliation accepts squashed content, preserves the tree, and use
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["noreply", "no-reply", "forge-account", "forge-role"])("stage reconciliation preserves an admitted configured %s identity", async (role) => {
+test.each(["noreply", "no-reply", "forge-account", "forge-role", "mailbox-name"])("stage reconciliation preserves an admitted configured %s identity", async (role) => {
   const box = await isolatedIdentityRepo();
   try {
     const subject = pipeline(); subject.worktreeDir = box.repo; subject.branch = "main";
     const base = await box.run("rev-parse", "HEAD");
     const address = role === "forge-account" ? ["fixture-tool", "users.noreply.github.com"].join("@")
-      : role === "forge-role" ? ["support", "github.com"].join("@") : [role, "example.invalid"].join("@");
-    const configured = { GIT_AUTHOR_NAME: "Fixture Builder", GIT_AUTHOR_EMAIL: address,
+      : role === "forge-role" ? ["support", "github.com"].join("@") : [role === "mailbox-name" ? "noreply" : role, "example.invalid"].join("@");
+    const configured = { GIT_AUTHOR_NAME: role === "mailbox-name" ? `Fixture Builder ${address}` : "Fixture Builder", GIT_AUTHOR_EMAIL: address,
       GIT_COMMITTER_NAME: "Fixture Publisher", GIT_COMMITTER_EMAIL: address };
     fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
     await box.run("add", "source.ts");

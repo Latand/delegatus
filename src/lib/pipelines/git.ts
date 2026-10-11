@@ -1155,8 +1155,9 @@ function admittedPublicationIdentity(name: string, email: string, field: "author
   const mailbox = /^([a-z0-9.!#$%&'*+/=?^_`{|}~-]+)@((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63})$/i.exec(email);
   if (!mailbox) return false;
   const local = mailbox[1].toLowerCase(), domain = mailbox[2].toLowerCase();
-  if (local !== "noreply" && local !== "no-reply" && domain !== "users.noreply.github.com"
-    && !(local === "support" && domain === "github.com")) return false;
+  const admittedMailbox = (local: string, domain: string) => local === "noreply" || local === "no-reply"
+    || domain === "users.noreply.github.com" || (local === "support" && domain === "github.com");
+  if (!admittedMailbox(local, domain)) return false;
   // The forge's committer mailbox needs the same merge-graph proof as the
   // publication gate. An author's forge account remains independently read.
   if (local === "noreply" && domain === "github.com" && field === "committer" && parentCount < 2) return false;
@@ -1164,7 +1165,10 @@ function admittedPublicationIdentity(name: string, email: string, field: "author
   if (decoded.error) return false;
   const normalized = decoded.text.normalize("NFKC").toLocaleLowerCase("en-US");
   const decodedName = canonicalSensitiveText(name, true);
-  if (decodedName.error || mailboxPattern(true).test(decodedName.text)) return false;
+  if (decodedName.error) return false;
+  for (const mailbox of decodedName.text.normalize("NFKC").toLowerCase().matchAll(mailboxPattern(true))) {
+    if (!admittedMailbox(mailbox[1], mailbox[2])) return false;
+  }
   const findings = staticSensitiveClasses(normalized);
   if (findings.has("credential") || findings.has("home_path")) return false;
   const compact = compactSensitiveText(normalized);
