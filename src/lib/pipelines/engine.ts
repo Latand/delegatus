@@ -370,7 +370,7 @@ export interface PipelinePorts {
     /** Recheck the cut after delivery preflight; the runtime also fences its idle revision. */
     continuationAllowed?: () => Promise<boolean>;
     /** The delivery layer's refusal, retained by provider recovery when it parks. */
-    onRefused?: (reason: string) => void;
+    onRefused?: (reason: string, admission?: "refused") => void;
     project?: string;
     cwd?: string;
     /** Admission time of the attempt this message continues. An update drain
@@ -1693,7 +1693,7 @@ export function defaultPipelinePorts(
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       }, input.continuationAllowed ? { idleContinuationAllowed: input.continuationAllowed } : {});
       if (result?.ok !== true) {
-        input.onRefused?.(result?.error ?? "structured delivery is disabled or the conversation uses a legacy host");
+        input.onRefused?.(result?.error ?? "structured delivery is disabled or the conversation uses a legacy host", result?.admission);
         if (result?.transportUncertain === true) input.onUncertain?.();
       }
       return result?.ok === true;
@@ -1710,9 +1710,10 @@ export function defaultPipelinePorts(
         && generation && !runtimeTargetsEqual({ ...target, serviceTier: launchServiceTier(generation.launchProfile) ?? null }, target);
       const result = await dispatchStructuredControl({ conversationId, path, action, operationId,
         actor: { kind: "agent", conversationId },
+        ...(action === "reconfigure" && sameAccountTierChange ? { profileChanged: true } : {}),
         ...(action === "reconfigure" ? { reconfiguration: { model: target.model ?? undefined, effort: target.effort ?? undefined,
           fast: target.engine === "codex" ? !!target.serviceTier && !["default", "standard"].includes(target.serviceTier) : null,
-          ...(target.accountId && !sameAccountTierChange ? { accountId: target.accountId } : {}) } } : {}) });
+          ...(target.accountId ? { accountId: target.accountId } : {}) } } : {}) });
       return runtimeSwitchControlAcknowledgement(result);
     },
     runtimeSwitchOutcome: async (conversationId, operationId) => {
@@ -1737,7 +1738,8 @@ export function defaultPipelinePorts(
     },
     runtimeSwitchDelivery: async (conversationId, key) => {
       const admission = registry.deliveryAdmissionForKey(conversationId, key);
-      if (admission.outcome !== "admitted") return { state: "pending", admitted: false };
+      if (admission.outcome !== "admitted") return { state: "pending",
+        ...(admission.outcome === "not-executed" ? { admitted: false } : { duplicateRisk: true, error: admission.reason }) };
       const receipt = await resolveSendReceipt(admission.operationId, { registry, client: runtimeHostClient() });
       return { state: receipt?.state === "delivered" ? "delivered" : receipt?.state === "failed" ? "failed" : "pending",
         at: receipt?.acceptedAt ?? undefined, error: receipt?.reason ?? undefined, admitted: true, duplicateRisk: receipt?.duplicateRisk ?? true };
@@ -5883,9 +5885,9 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           const delivery = record.continuationDispatch
             ? await ports.runtimeSwitchDelivery?.(record.from.conversationId, record.continuationDispatch.key)
             : null;
-          const terminalDelivery = delivery?.state === "delivered"
+          const reconcileDelivery = delivery?.admitted === false || delivery?.state === "delivered"
             || (delivery?.state === "failed" && ["applied", "superseded", "failed"].includes(outcome?.state ?? ""));
-          if ((!outcome || !["applied", "superseded", "failed"].includes(outcome.state)) || !terminalDelivery) continue;
+          if ((!outcome || !["applied", "superseded", "failed"].includes(outcome.state)) || !reconcileDelivery) continue;
           switchFailed = outcome.state === "failed";
           const generation = attempt.conversationId ? ports.conversationGeneration?.(attempt.conversationId) : null;
           const expected = switchFailed ? record.from : record.to;
@@ -5893,7 +5895,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           if (switchFailed && record.phase === "continuing") {
             record.phase = "switching";
             await checkpoint();
-          } else if (record.phase === "switching" && outcome.state !== "failed") {
+          } else if (record.phase === "switching" && outcome.state !== "failed" && delivery?.admitted !== false) {
             record.phase = "continuing";
             if (outcome.state === "superseded") record.outcome = "superseded by another runtime selection";
             else if (!record.rollback) delete record.outcome;

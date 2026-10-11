@@ -19,11 +19,13 @@ export class RuntimeSwitchSuperseded extends Error {
   constructor() { super("runtime switch changed before dispatch or settlement"); }
 }
 
+class RuntimeSwitchAdmissionRefused extends Error {}
+
 export interface RuntimeSwitchDelivery {
   state: "pending" | "delivered" | "failed";
   at?: string;
   error?: string;
-  /** The durable reservation owns this key even without a readable journal. */
+  /** True owns the key; false proves no reservation; absent leaves history unknown. */
   admitted?: boolean;
   /** A terminal unknown cannot authorize a replacement continuation. */
   duplicateRisk?: boolean;
@@ -158,12 +160,21 @@ export async function driveRuntimeSwitch(
     // Admission already owns this key, including while its journal is offline.
     // Replaying it rearms the held delivery and moves its settlement deadline.
     if (existing?.admitted || existing?.at) return;
+    let refusal = "stage continuation was not accepted";
+    let refusedBeforeAdmission = false;
+    let uncertain = false;
     const admitted = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       // Native add stays paused after turn/interrupt. The managed send starts
       // an idle Codex turn under its current profile and preserves this key.
       clientMessageId: key, policy: attempt.effectiveRole.engine === "codex" ? "steer-or-queue" : "queue", project: pipeline.project, cwd: pipeline.worktreeDir, cohortAt: attempt.startedAt ?? undefined,
-      text: "Delegatus stopped your turn for a runtime switch. Continue the same stage on the available runtime in the current worktree, preserving every committed and uncommitted change, branch, attempt number and receipts. Report when complete." });
-    if (!admitted) throw new Error("stage continuation was not accepted");
+      text: "Delegatus stopped your turn for a runtime switch. Continue the same stage on the available runtime in the current worktree, preserving every committed and uncommitted change, branch, attempt number and receipts. Report when complete.",
+      onRefused: (reason, admission) => { refusal = reason; refusedBeforeAdmission = admission === "refused"; },
+      onUncertain: () => { uncertain = true; } });
+    if (!admitted) {
+      const delivery = await ports.runtimeSwitchDelivery?.(attempt.conversationId, key);
+      if (refusedBeforeAdmission && !uncertain && delivery?.admitted === false) throw new RuntimeSwitchAdmissionRefused(refusal);
+      throw new Error(uncertain || delivery?.duplicateRisk ? `stage continuation admission is unverified: ${refusal}` : refusal);
+    }
   };
   const continuationFloor = async (engine: EffectivePipelineRole["engine"], pathname: string | null, deliveredAt?: string): Promise<string | null> => {
     const admittedAt = record.continuationDispatch?.at ?? deliveredAt ?? record.requestedAt;
@@ -400,6 +411,13 @@ export async function driveRuntimeSwitch(
     }
   } catch (error) {
     if (error instanceof RuntimeSwitchSuperseded) throw error;
+    if (error instanceof RuntimeSwitchAdmissionRefused && record.mode === "fork") {
+      const outcome = await runtimeSwitchReconfigureOutcome(record, ports);
+      if (outcome?.state === "applied" || outcome?.state === "superseded") {
+        const reason = `runtime switch continuation was refused: ${error.message}`;
+        await settle("failed", reason); await park(reason); return;
+      }
+    }
     pipeline.stateDetail = `runtime switch waiting: ${String(error)}`;
     if (expired) await park(`stage stopped mid-turn; runtime switch could not complete: ${String(error)}`);
     else { await persist(); ports.scheduleTick?.(1000); }

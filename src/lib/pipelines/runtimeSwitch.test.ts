@@ -217,7 +217,8 @@ test("a same-account tier-only switch reaches the exact-tier reconfigure executo
       { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", accountId: "default", accountPinned: false });
     expect(requests).toHaveLength(1);
     expect(requests[0]!.reconfiguration).toMatchObject({ model: "gpt-6-astra", effort: "high", fast: true });
-    expect(requests[0]!.reconfiguration?.accountId).toBeUndefined();
+    expect(requests[0]!.reconfiguration?.accountId).toBe("default");
+    expect(requests[0]!.profileChanged).toBe(true);
   } finally { dispatch.mockRestore(); setAgentRegistryForTests(prior); }
 });
 
@@ -388,6 +389,66 @@ for (const parked of [false, true]) test(`a refused no-op continuation settles p
   }, h.ports);
   expect(retry.error).toBeUndefined();
 });
+for (const parked of [false, true]) test(`a no-op continuation refused before admission settles without waiting for its deadline (parked=${parked})`, async () => {
+  const h = switchHarness();
+  h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
+  h.setOutcome("pending");
+  h.ports.runtimeSwitchDelivery = () => ({ state: "pending", admitted: false });
+  let provenRefusal = !parked;
+  h.ports.resumeSeveredTurn = async input => {
+    h.continuations.push(input);
+    input.onRefused?.("fixture ownership is unavailable", provenRefusal ? "refused" : undefined);
+    return false;
+  };
+  const requested = await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  if (parked) {
+    const rows = loadPipelines();
+    expect(rows[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
+    rows[0]!.state = "needs_decision";
+    rows[0]!.runs[0]!.attempts[0]!.state = "needs_decision";
+    savePipelines(rows);
+  }
+  provenRefusal = true;
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("fixture ownership is unavailable") });
+  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "failed", settledAt: h.ports.now() });
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
+  const retry = await patchPipeline(requested.pipeline!.id, {
+    action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
+  }, h.ports);
+  expect(retry.error).toBeUndefined();
+});
+
+for (const proof of ["untracked", "transport-uncertain"] as const) test(`an uncertain no-op admission retains its fence after the deadline (${proof})`, async () => {
+  const h = switchHarness();
+  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { defaultPipelinePorts } = await import("./engine");
+  const prior = agentRegistry();
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "untracked-refusal-registry.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
+    h.ports.runtimeSwitchDelivery = proof === "untracked" ? defaultPipelinePorts().runtimeSwitchDelivery
+      : () => ({ state: "pending", admitted: false });
+    h.ports.resumeSeveredTurn = async input => {
+      input.onRefused?.("fixture admission is unverified", "refused");
+      if (proof === "transport-uncertain") input.onUncertain?.();
+      return false;
+    };
+    const requested = await requestSwitch(h);
+    await tickPipelines([], h.ports);
+    h.advance(11 * 60_000);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
+    h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
+    expect(await patchPipeline(requested.pipeline!.id, {
+      action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
+    }, h.ports)).toMatchObject({ status: 409 });
+  } finally { setAgentRegistryForTests(prior); }
+});
+
 test("persisted switching replays deterministic operations and owes only one continuation", async () => {
   const h = switchHarness(); h.setOutcome("pending"); await requestSwitch(h);
   await tickPipelines([], h.ports); await tickPipelines([], h.ports);
