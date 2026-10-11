@@ -15,6 +15,7 @@ import {
 } from "./provider";
 import { CodexAppServerError, type CodexAppServerClient } from "@/lib/accounts/codexAppServer";
 import { AgentRegistry, type ConversationObservation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { sessionKey, sessionKeyId } from "@/lib/agent/sessionKey";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
 import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
@@ -584,7 +585,7 @@ test("a migrated Claude successor whose Telegram grant is withdrawn while Telegr
   expect(engine.telegramDefinition).toBeNull();
 });
 
-test("a migrated Claude successor names itself by a fresh capability that resolves to the migrated conversation", async () => {
+test.each([false, true])("a migrated Claude successor preserves predecessor identity through publication and discard (restart: %s)", async (restart) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-successor-capability-"));
   roots.push(base);
   const source = accountRoot("claude", base, "source");
@@ -616,7 +617,7 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
     adoptOptions.push(options as { env?: NodeJS.ProcessEnv });
     return fakeHost;
   });
-  const provider = new RegisteredSuccessorProvider({
+  const dependencies: ProviderDependencies = {
     accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source },
     startCodex: async () => { throw new Error("unexpected Codex client"); },
     claudeStatus: async () => ({ loggedIn: true }),
@@ -624,7 +625,8 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
     cancelClaude: async () => "absent",
     registry,
     now: () => "2026-07-22T09:00:00.000Z",
-  });
+  };
+  const provider = new RegisteredSuccessorProvider(dependencies);
   const receipt: ProviderReceipt = {
     operationId: "claude-successor-capability",
     nativeId,
@@ -650,16 +652,18 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
     await provider.publishHost(receipt, input);
     expect(adoptOptions).toHaveLength(1);
     const capability = adoptOptions[0]!.env?.LLV_SPAWN_CAPABILITY ?? "";
-    /* Under stdio the successor was found by process ancestry; the shared HTTP
-       endpoint can find it only by this. The predecessor's is cleared. */
+    /* Both hosts can make HTTP calls until the successor commits. */
     expect(capability).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const digest = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
     expect(registry.conversationIdForSpawnCapabilityDigest(digest(capability))).toBe(launch.conversationId);
-    expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBeNull();
+    expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBe(launch.conversationId);
 
     /* The predecessor serves until the migration commits. A discarded
        successor hands its identity back. */
-    await provider.cleanup(receipt);
+    const cleanupProvider = restart
+      ? new RegisteredSuccessorProvider({ ...dependencies, registry: new AgentRegistry(registry.filename) })
+      : provider;
+    await cleanupProvider.cleanup(receipt);
     expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBe(launch.conversationId);
     expect(registry.conversationIdForSpawnCapabilityDigest(digest(capability))).toBeNull();
 
@@ -692,12 +696,115 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
   }
 });
 
+test("a second provider instance that republishes a successor discards its pending identity when it releases the host", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-successor-republish-"));
+  roots.push(base);
+  const source = accountRoot("claude", base, "source");
+  const target = accountRoot("claude", base, "target");
+  const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  const nativeId = "49494949-4949-\x34949-8949-494949494949";
+  const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+  fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+  const launch = registry.beginSpawn("claude", base, { cwd: base, title: "Migrated conversation" });
+  registry.settleSpawn(launch.launchId, {
+    key: { engine: "claude", sessionId: nativeId }, artifactPath: transcript, cwd: base, accountId: "target",
+    status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+  const before = registry.rotateSpawnCapabilityForReceipt(launch.launchId);
+  const fakeHost = {
+    identity: { sessionId: nativeId },
+    setWriterFence() {},
+    health: async () => ({
+      status: "idle", sessionKey: nativeId, endpoint: "stdio:successor", pid: process.pid, processStartIdentity: null,
+      eventCursor: 0, protocolVersion: "test-v1", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+    }),
+    onStateChange: () => () => {},
+    release: async () => {},
+  } as unknown as ClaudeStreamBrokerHost & EngineHost;
+  const adoptOptions: Array<{ env?: NodeJS.ProcessEnv }> = [];
+  const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(async (_sessionId, options) => {
+    adoptOptions.push(options as { env?: NodeJS.ProcessEnv });
+    return fakeHost;
+  });
+  const dependencies: ProviderDependencies = {
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source },
+    startCodex: async () => { throw new Error("unexpected Codex client"); },
+    claudeStatus: async () => ({ loggedIn: true }),
+    verifyClaudeHost: async () => true,
+    cancelClaude: async () => "absent",
+    registry,
+    now: () => "2026-07-22T09:00:00.000Z",
+  };
+  const receipt: ProviderReceipt = {
+    operationId: "claude-successor-republish",
+    nativeId,
+    path: transcript,
+    continuityPaths: [transcript],
+    historyHash: "claude-successor-republish-history",
+    host: { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-07-22T09:00:00.000Z" },
+  } as ProviderReceipt;
+  const input = {
+    engine: "claude" as const,
+    conversationId: launch.conversationId,
+    targetAccountId: "target",
+    launchProfile: emptyLaunchProfile({ cwd: base }),
+  };
+  const structuredFlag = process.env.LLV_STRUCTURED_HOSTS;
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  const controller = (process as typeof process & {
+    __llvStructuredDeliveryController?: {
+      registerActiveHost: ((item: unknown) => Promise<() => Promise<void>>) | null;
+      activeHosts: Map<string, EngineHost> | null;
+      releaseActiveHost: ((key: unknown) => Promise<boolean>) | null;
+    };
+  }).__llvStructuredDeliveryController!;
+  const originalRegister = controller.registerActiveHost;
+  const originalHosts = controller.activeHosts;
+  const originalRelease = controller.releaseActiveHost;
+  const hosts = new Map<string, EngineHost>();
+  const id = sessionKeyId(sessionKey("claude", nativeId)!);
+  controller.registerActiveHost = async () => { hosts.set(id, fakeHost); return async () => { hosts.delete(id); }; };
+  controller.activeHosts = hosts;
+  controller.releaseActiveHost = async () => hosts.delete(id);
+  try {
+    /* Instance A starts the successor and stages its identity. */
+    await new RegisteredSuccessorProvider(dependencies).publishHost(receipt, input);
+    expect(adoptOptions).toHaveLength(1);
+    const capability = adoptOptions[0]!.env?.LLV_SPAWN_CAPABILITY ?? "";
+    const digest = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+    expect(registry.conversationIdForSpawnCapabilityDigest(digest(capability))).toBe(launch.conversationId);
+
+    /* A later pass builds instance B, which finds the host already held and
+       adopts nothing; when ownership is lost it releases the host, and the
+       identity staged for that host goes with it. */
+    const second = new RegisteredSuccessorProvider(dependencies);
+    await second.publishHost(receipt, input);
+    expect(adoptOptions).toHaveLength(1);
+    await second.cleanup(receipt);
+    expect(hosts.size).toBe(0);
+    expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBe(launch.conversationId);
+    expect(registry.conversationIdForSpawnCapabilityDigest(digest(capability))).toBeNull();
+  } finally {
+    controller.registerActiveHost = originalRegister;
+    controller.activeHosts = originalHosts;
+    controller.releaseActiveHost = originalRelease;
+    adopt.mockRestore();
+    if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
+  }
+});
+
 test.each(["codex", "claude"] as const)("a %s migration successor runs in the CPU cell of its conversation's class, and work it cannot contain is refused before it starts", async (engine) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), `llv-provider-${engine}-successor-cpu-`));
   roots.push(base);
   const source = accountRoot(engine, base, "source");
   const target = accountRoot(engine, base, "target");
   const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  const { recordLessonRequest, leaveLessons } = await import("@/lib/memory/roleStore");
+  const lessonSource = { project: `successor-rules-${engine}`, pipelineId: `successor-rules-${engine}`, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_successor_rules" };
+  const rule = "Check the current owner before replaying a persisted acknowledgement.";
+  recordLessonRequest({ ...lessonSource, at: "2026-10-11T00:00:00.000Z" });
+  leaveLessons({ request: lessonSource, source: lessonSource, lessons: [{ scope: "role", rule, why: "An acknowledgement was replayed with a different owner." }], none: null });
   const fakeHost = {
     setWriterFence() {},
     health: async () => ({ status: "idle", sessionKey: "successor", endpoint: "stdio:successor", pid: process.pid, processStartIdentity: null,
@@ -706,8 +813,9 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
     release: async () => {},
   };
   const cells: Array<AgentMemoryCell | null> = [];
-  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null }) => {
+  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null; developerInstructions?: string; appendSystemPrompt?: string }) => {
     cells.push(options.memoryCell ?? null);
+    expect(engine === "codex" ? options.developerInstructions : options.appendSystemPrompt).toContain(rule);
     return { ...fakeHost, identity: engine === "codex" ? { threadId: sessionId } : { sessionId } };
   };
   const adopt = engine === "codex"
@@ -738,7 +846,7 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
       host: engine === "codex"
         ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" }
         : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" } } as ProviderReceipt;
-    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base }) });
+    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base, learnedRules: { project: lessonSource.project, roleId: lessonSource.roleId } }) });
   };
   const saved = { structured: process.env.LLV_STRUCTURED_HOSTS, cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
   Object.assign(process.env, { LLV_STRUCTURED_HOSTS: "1", LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off" });

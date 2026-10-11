@@ -7,6 +7,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, test } from "bun:test";
 
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { createTailscaleStub, hermeticTailscaleEnvironment, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 const fixtures = new Set<string>();
@@ -156,7 +158,7 @@ console.error("child quiet diagnostics: " + (process.env.LLV_QUIET_DIAGNOSTICS ?
 console.error("Error: fixture failure that must reach the terminal");
 `;
 
-async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
+async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
   const fixture = await mkdtemp(path.join(tmpdir(), "llv-cli-exposure-"));
   fixtures.add(fixture);
   const bin = path.join(fixture, "bin");
@@ -174,7 +176,9 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
   await Promise.all([
     /* The tailnet banner prints its QR code with it; without it the launcher
        died on the banner and left its Viewer and runtime host running. */
-    symlink(path.resolve("node_modules/qrcode-terminal"), path.join(fixture, "node_modules", "qrcode-terminal"), "dir"),
+    options.failQr
+      ? mkdir(path.join(fixture, "node_modules", "qrcode-terminal"))
+      : symlink(path.resolve("node_modules/qrcode-terminal"), path.join(fixture, "node_modules", "qrcode-terminal"), "dir"),
     copyFile(path.resolve("bin/cli.mjs"), path.join(bin, "cli.mjs")),
     copyFile(path.resolve("bin/telemetry-notice.mjs"), path.join(bin, "telemetry-notice.mjs")),
     copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(bin, "agent-binaries.mjs")),
@@ -202,6 +206,9 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/darwin-process-identity.mjs"), path.join(bin, "darwin-process-identity.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
     writeFile(path.join(nextBin, "next"), `${options.startupChatter ? STARTUP_CHATTER : ""}
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+writeFileSync(join(process.env.LLV_STATE_DIR, "web.pid"), String(process.pid));
 const hostnameIndex = process.argv.indexOf("--hostname");
 const hostname = ${options.ignoreHostname ? JSON.stringify("0.0.0.0") : "hostnameIndex === -1 ? \"0.0.0.0\" : process.argv[hostnameIndex + 1]"};
 const server = Bun.serve({
@@ -224,6 +231,7 @@ import net from "node:net";
 import path from "node:path";
 const socketPath = process.env.LLV_RUNTIME_HOST_SOCKET;
 const fencePath = process.env.LLV_RUNTIME_HOST_FENCE;
+writeFileSync(path.join(process.env.LLV_STATE_DIR, "runtime.pid"), String(process.pid));
 mkdirSync(path.dirname(socketPath), { recursive: true });
 rmSync(socketPath, { force: true });
 const server = net.createServer((socket) => socket.end());
@@ -241,6 +249,19 @@ process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 `),
   ]);
+  if (options.failQr) {
+    const qr = path.join(fixture, "node_modules", "qrcode-terminal");
+    await writeFile(path.join(qr, "package.json"), JSON.stringify({ type: "module", main: "index.js" }));
+    await writeFile(path.join(qr, "index.js"), `
+import ${JSON.stringify(pathToFileURL(path.resolve("src/lib/testing/fixtureLifetime.ts")).href)};
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const state = process.env.LLV_STATE_DIR;
+writeFileSync(join(state, "qr-ready"), "ready");
+while (!existsSync(join(state, "qr-fail"))) await new Promise(resolve => setTimeout(resolve, 25));
+throw new Error("fixture QR failure");
+`);
+  }
   /* Hermetic for the tailnet gate: a shell the Viewer spawned carries these,
      and never the host's Tailscale through the Docker shim. */
   const inherited = hermeticTailscaleEnvironment(process.env, path.join(fixture, "no-tailscale-shim", "tailscale"));
@@ -409,6 +430,135 @@ test("phone access remembered by the setup guide starts the real CLI in tailnet 
   expect(stub.calls()).not.toContain(`serve ${port}`);
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
 });
+
+async function blockingForegroundServe(fixture: { env: NodeJS.ProcessEnv }, stub: ReturnType<typeof createTailscaleStub>) {
+  const script = await readFile(path.join(stub.dir, "tailscale"), "utf8");
+  const serve = `await import(${JSON.stringify(pathToFileURL(path.resolve("src/lib/testing/fixtureLifetime.ts")).href)}); require("node:fs").writeFileSync(${JSON.stringify(path.join(fixture.env.LLV_STATE_DIR!, "serve.pid"))}, String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`;
+  await writeFile(path.join(stub.dir, "tailscale"), `#!/bin/sh
+if [ "$1" = "serve" ] && [ "$2" != "status" ]; then
+  exec '${process.execPath.replaceAll("'", "'\\''")}' --eval '${serve.replaceAll("'", "'\\''")}'
+fi
+${script.slice(script.indexOf("\n") + 1)}`, { mode: 0o755 });
+}
+
+test.each(["remembered", "foreground"] as const)("a tailnet banner failure ends the CLI's own processes: %s", async (mode) => {
+  const fixture = await checkoutFixture({ failQr: true });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const state = fixture.env.LLV_STATE_DIR!;
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  if (mode === "remembered") {
+    const config = path.join(fixture.env.XDG_CONFIG_HOME!, "agent-log-viewer");
+    await mkdir(config, { recursive: true });
+    await writeFile(path.join(config, "phone-access"), "tailscale\n");
+  } else {
+    await blockingForegroundServe(fixture, stub);
+  }
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port), ...(mode === "foreground" ? ["--tailscale"] : [])], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  const owned: ProcessIdentity[] = [];
+  try {
+    const deadline = Date.now() + 15_000;
+    const names = ["web", "runtime", ...(mode === "foreground" ? ["serve"] : [])];
+    for (;;) {
+      try {
+        await readFile(path.join(state, "qr-ready"));
+        const pids = await Promise.all(names.map(async name => Number(await readFile(path.join(state, `${name}.pid`), "utf8"))));
+        for (const pid of pids) {
+          expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+          owned.push(captureProcessIdentity(pid));
+        }
+        break;
+      } catch (error) {
+        if (Date.now() >= deadline) throw new Error(`fixture did not reach its failure barrier: ${String(error)}\n${output.text()}`);
+        await Bun.sleep(25);
+      }
+    }
+    expect(owned.every(identity => processIdentityStatus(identity) === "alive")).toBe(true);
+    await writeFile(path.join(state, "qr-fail"), "fail");
+    expect(await waitForExit(child, 10_000)).toBe(1);
+    expect(output.text()).toContain("fixture QR failure");
+    expect(owned.map(identity => processIdentityStatus(identity))).toEqual(names.map(() => "dead"));
+    expect(await probe("127.0.0.1", port)).toBe(0);
+  } finally {
+    // The red run must reap only the PIDs this fixture recorded before failing.
+    await stopFixtureProcess(child);
+    await Promise.all(owned.map(identity => stopFixtureIdentity(identity)));
+  }
+}, 30_000);
+
+test("a Viewer exit during the startup bind check awaits all owned processes and preserves its status", async () => {
+  const fixture = await checkoutFixture();
+  const root = path.dirname(path.dirname(fixture.cli));
+  const state = fixture.env.LLV_STATE_DIR!;
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  await blockingForegroundServe(fixture, stub);
+  const realRuntime = JSON.stringify(pathToFileURL(path.resolve("bin/server-runtime.mjs")).href);
+  const identityModule = JSON.stringify(pathToFileURL(path.resolve("src/lib/processIdentity.ts")).href);
+  await writeFile(path.join(root, "bin", "server-runtime.mjs"), `
+export * from ${realRuntime};
+import { readNonLoopbackBindState as read } from ${realRuntime};
+import { captureProcessIdentity, processIdentityStatus } from ${identityModule};
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const state = process.env.LLV_STATE_DIR;
+let calls = 0;
+export async function readNonLoopbackBindState(port) {
+  if (++calls === 2) {
+    const web = captureProcessIdentity(Number(readFileSync(join(state, "web.pid"), "utf8")));
+    writeFileSync(join(state, "bind-ready"), "ready");
+    while (processIdentityStatus(web) === "alive") await new Promise(resolve => setTimeout(resolve, 10));
+    // Give the launcher's exit event time to start its slow serve cleanup.
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return read(port);
+}
+`);
+  await writeFile(path.join(root, "node_modules", ".bin", "next"), `${await readFile(path.join(root, "node_modules", ".bin", "next"), "utf8")}
+import { existsSync } from "node:fs";
+setInterval(() => { if (existsSync(join(process.env.LLV_STATE_DIR, "bind-exit"))) process.exit(7); }, 10);
+`);
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port), "--tailscale"], {
+    cwd: root,
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  const owned: ProcessIdentity[] = [];
+  try {
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      try {
+        await readFile(path.join(state, "bind-ready"));
+        const pids = await Promise.all(["web", "runtime", "serve"].map(async name => Number(await readFile(path.join(state, `${name}.pid`), "utf8"))));
+        for (const pid of pids) {
+          expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+          owned.push(captureProcessIdentity(pid));
+        }
+        break;
+      } catch (error) {
+        if (Date.now() >= deadline) throw new Error(`fixture did not reach its bind barrier: ${String(error)}\n${output.text()}`);
+        await Bun.sleep(25);
+      }
+    }
+    expect(owned.every(identity => processIdentityStatus(identity) === "alive")).toBe(true);
+    await writeFile(path.join(state, "bind-exit"), "exit");
+    expect(await waitForExit(child, 10_000)).toBe(7);
+    expect(owned.map(identity => processIdentityStatus(identity))).toEqual(["dead", "dead", "dead"]);
+    expect(await probe("127.0.0.1", port)).toBe(0);
+  } finally {
+    await stopFixtureProcess(child);
+    await Promise.all(owned.map(identity => stopFixtureIdentity(identity)));
+  }
+}, 30_000);
 
 test("a remembered choice whose publish fails says so and advertises no tailnet link", async () => {
   const fixture = await checkoutFixture();

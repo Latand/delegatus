@@ -645,17 +645,43 @@ test("one accepted direct spawn produces one input after ledger and transcript i
   }
 });
 
-test("new semantic, empty, and image-only prompts require an explicit semantic title", async () => {
+test("a semantic prompt supplies a launch title; empty and image-only prompts still require one", async () => {
   const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex").toString("base64");
-  const post = async (body: Record<string, unknown>) => POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+  const post = async (body: Record<string, unknown>) => withSandboxRuntimeSocket(() => POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
     method: "POST",
     headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "sec-fetch-site": "same-origin" },
     body: JSON.stringify({ title: undefined, engine: "claude", cwd: routeSandbox, ...body }),
-  }), structuredRouteDependencies(routeSandbox));
+  }), { ...structuredRouteDependencies(routeSandbox), autonomousStructured: true, defer: () => {} }));
+
+  const named = await post({ prompt: "inspect the release", clientAttemptId: "prompt-derived-title" });
+  const result = await named.json();
+  expect({ status: named.status, error: result.error }).toEqual({ status: 202, error: undefined });
+  const { loadTasks } = await import("@/lib/tasks/store");
+  const card = loadTasks().find(task => task.assignments.some(row => row.launchId === result.launchId));
+  expect(card?.text).toBe("claude · inspect the release\ninspect the release");
+  expect(card?.origin?.refinement).toBe("titled");
+
+  const formatted = await post({ prompt: "---\nInspect export retry ownership.\nReport the unsafe transitions.", clientAttemptId: "formatted-prompt-title" });
+  const formattedResult = await formatted.json();
+  expect({ status: formatted.status, error: formattedResult.error }).toEqual({ status: 202, error: undefined });
+  expect(loadTasks().find(task => task.assignments.some(row => row.launchId === formattedResult.launchId))?.text)
+    .toBe("claude · Inspect export retry ownership.\nInspect export retry ownership.");
+
+  const operatorRequest = { title: "Operator-chosen export audit", prompt: "---\nInspect export retry ownership.", clientAttemptId: "operator-formatted-title" };
+  const operator = await post(operatorRequest);
+  const operatorResult = await operator.json();
+  expect(operator.status).toBe(202);
+  const operatorCard = loadTasks().find(task => task.assignments.some(row => row.launchId === operatorResult.launchId));
+  expect(operatorCard?.text).toBe("Operator-chosen export audit\nInspect export retry ownership.");
+  const replay = await post({ ...operatorRequest, title: undefined });
+  expect(replay.status).toBe(202);
+  expect(await replay.json()).toMatchObject({ launchId: operatorResult.launchId, conversationId: operatorResult.conversationId });
+  expect(loadTasks().find(task => task.id === operatorCard?.id)).toEqual(operatorCard);
+  expect((await post({ ...operatorRequest, title: "Another export audit" })).status).toBe(409);
 
   for (const body of [
-    { prompt: "inspect the release" },
     { prompt: "" },
+    { prompt: "---\n***\n" },
     { images: [{ base64: png, mime: "image/png" }] },
   ]) {
     const rejected = await post(body);

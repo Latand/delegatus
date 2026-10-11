@@ -41,16 +41,20 @@ export interface MembershipInput {
   origin: Pick<TaskOrigin, "kind" | "key">;
   /** Human title for a placeholder created by this admission (first prompt, pipeline task, …). */
   title?: string | null;
+  /** Concise human brief supplied by the launcher, separate from its scaffold. */
+  description?: string | null;
   identity: MembershipIdentity;
   /** Explicit targets from a task-local launch: all must exist, none is created. */
   explicitTaskIds?: readonly string[];
+  /** Pipeline targets removed since binding resolve to this container origin
+      inside the same snapshot transaction. Explicit operator targets omit it. */
+  fallbackOrigin?: Pick<TaskOrigin, "kind" | "key">;
   /** Participants whose recorded membership this launch joins (a reviewer joins
       the work it reviews). When none holds a task, the fallback placeholder
       binds them beside the launch itself. */
   inherit?: readonly MembershipIdentity[];
-  /** The placeholder is created already named: nothing will ever refine it (a
-      conversation that has ended, an orchestrator seat), so its admission
-      title is its title rather than a wait for a first action. */
+  /** Admission already carries a usable name (a fresh launch or a completed
+      conversation), so the first card displays it without waiting for refine. */
   titled?: boolean;
   /** Set by launch admission; the reconcile pass and delete replacements
       record conversations that already run and pass none. */
@@ -192,6 +196,13 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
   const keyed = tasks.filter((task) => task.assignments.some((assignment) => assignment.state !== "failed" && sameKey(assignment, input.identity)));
   const placeholderForKey = tasks.find((task) => task.project === (project || task.project) && task.origin?.kind === input.origin.kind && task.origin.key === input.origin.key);
   if (input.explicitTaskIds?.length) {
+    const fallbackOrigin = input.fallbackOrigin;
+    const recordedFallback = fallbackOrigin && tasks.find((task) => task.project === project
+      && task.origin?.kind === fallbackOrigin.kind && task.origin.key === fallbackOrigin.key
+      && task.assignments.some((assignment) => sameKey(assignment, input.identity)));
+    if (recordedFallback && keyed.every((task) => task.id === recordedFallback.id)) return ensureTaskMembership(existing, {
+      ...input, origin: fallbackOrigin!, explicitTaskIds: undefined, fallbackOrigin: undefined,
+    }, deps);
     const unique = [...new Set(input.explicitTaskIds)];
     if (placeholderForKey && !unique.includes(placeholderForKey.id)) {
       return { ok: false, error: "this launch was admitted without a task target; a retry cannot add one", status: 409 };
@@ -201,7 +212,12 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
     }
     const indexes = unique.map((id) => tasks.findIndex((task) => task.id === id));
     const missing = indexes.findIndex((index) => index < 0);
-    if (missing >= 0) return { ok: false, error: `task ${unique[missing]} is not available`, status: 404 };
+    if (missing >= 0) {
+      if (input.fallbackOrigin) return ensureTaskMembership(existing, {
+        ...input, origin: input.fallbackOrigin, explicitTaskIds: undefined, fallbackOrigin: undefined,
+      }, deps);
+      return { ok: false, error: `task ${unique[missing]} is not available`, status: 404 };
+    }
     const projects = new Set(indexes.map((index) => canonicalProject(tasks[index]!.project)));
     if (projects.size > 1 || (project && !projects.has(canonicalProject(project)))) return { ok: false, error: "explicit tasks must belong to the launch's project", status: 409 };
     const refused = input.admit?.(indexes.map((index) => tasks[index]!));
@@ -248,12 +264,10 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
     id,
     project,
     status: "inbox",
-    text: normalizeTitle(input.title),
+    text: [normalizeTitle(input.title), input.description?.trim()].filter(Boolean).join("\n"),
     placement: "unplaced",
-    /* The admission title (first prompt, pipeline goal) is a placeholder
-       title: the refinement stays pending until an agent's first action or an
-       operator edit names the task — unless the admission knows nothing will
-       ever refine it, and then that title is the task's name. */
+    /* Launches name their tasks before execution. Legacy scan admissions may
+       still need refinement when they have no usable title. */
     origin: { kind: input.origin.kind, key: input.origin.key, refinement: input.titled && input.title?.trim() ? "titled" : "pending" },
     assignments: [],
     createdAt: now,
