@@ -332,7 +332,7 @@ function createdRelay({ name = "Нічна Сова", fail = () => false }: { na
     return undefined;
   };
   sync();
-  return { fake, create, answer };
+  return { fake, create, answer, sync };
 }
 const writes = () => harness.calls.filter((call) => call.method === "PATCH" || call.method === "DELETE").map((call) => [call.method, call.url]);
 const ENGINE_PATCH = ["PATCH", BASE];
@@ -407,6 +407,68 @@ test("a setup write that fails once is retried by itself; one that keeps failing
   expect(card.querySelector("[data-clone-setup-failed]")).toBeNull();
   expect(card.querySelector("[data-clone-created]")?.textContent).toContain("This install answers it.");
 }, 20_000);
+
+test("an unfinished setup keeps Create away, survives reopening the settings, and Create returns once the setup succeeds", async () => {
+  let engineFailing = true;
+  const relayFake = createdRelay({ fail: (kind) => kind === "engine" && engineFailing });
+  relayFake.create();
+  route((url, init) => relayFake.answer(url, init));
+  const host = await mount(<ExternalRelaySection />);
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 3_300)));
+  await act(async () => settle(30));
+  expect(writes()).toEqual([ENGINE_PATCH, ENGINE_PATCH]);
+  expect(host.querySelector("[data-clone-setup-retry]")).toBeTruthy();
+  expect(host.querySelector("[data-clone-open]")).toBeNull();
+  expect(host.querySelector("[data-clone-form]")).toBeNull();
+  const { root } = mounted!;
+  await act(async () => root.unmount());
+  mounted!.host.remove();
+  mounted = null;
+
+  // Reopened, the card still holds the clone: it tries the setup again and still offers no second clone.
+  const again = await mount(<ExternalRelaySection />);
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 3_300)));
+  await act(async () => settle(30));
+  expect(writes()).toEqual([ENGINE_PATCH, ENGINE_PATCH, ENGINE_PATCH, ENGINE_PATCH]);
+  expect(relayFake.fake.record).not.toBeNull();
+  expect(relayFake.fake.fresh.engine).toBeNull();
+  expect(again.querySelector("[data-clone-setup-failed]")).toBeTruthy();
+  expect(again.querySelector("[data-clone-open]")).toBeNull();
+
+  engineFailing = false;
+  await click(again.querySelector("[data-clone-setup-retry]"));
+  await act(async () => settle(30));
+  expect(writes().slice(4)).toEqual([ENGINE_PATCH, ROUTE_PATCH, FORGET]);
+  expect(relayFake.fake.fresh).toMatchObject({ engine: "claude", answered_by: "install" });
+  expect(again.querySelector("[data-clone-setup-failed]")).toBeNull();
+  expect(again.querySelector("[data-clone-open]")).toBeTruthy();
+}, 20_000);
+
+test("a creation refused while another page's clone waits for its setup brings that clone into the card and sets it up", async () => {
+  const relayFake = createdRelay();
+  relayFake.fake.open = false;
+  relayFake.sync();
+  let posts = 0;
+  route((url, init) => {
+    if (url === `${BASE}/clone-requests` && init?.method === "POST") {
+      posts++;
+      relayFake.create();
+      return jsonResponse({ error: "clone_setup_pending" }, 409);
+    }
+    return relayFake.answer(url, init);
+  });
+  const host = await mount(<ExternalRelaySection />);
+  await click(host.querySelector("[data-clone-open]"));
+  await submit(host);
+  await act(async () => settle(30));
+  expect(posts).toBe(1);
+  expect(opened.map((win) => win.closed)).toEqual([true]);
+  expect(host.querySelector("[data-clone-form]")).toBeNull();
+  expect(host.querySelector("[data-clone-created]")).toBeTruthy();
+  expect(writes()).toEqual([ENGINE_PATCH, ROUTE_PATCH, FORGET]);
+  expect(relayFake.fake.fresh).toMatchObject({ engine: "claude", answered_by: "install" });
+  expect(host.querySelector("[data-clone-open]")).toBeTruthy();
+});
 
 test("the confirmation names the clone as Telegram confirmed it, in both languages", async () => {
   for (const [locale, text] of [

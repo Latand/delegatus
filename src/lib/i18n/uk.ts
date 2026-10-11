@@ -238,6 +238,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.clone.failed": "Сервіс не зміг створити клона.",
   "externalRelay.clone.again": "Спробувати ще раз",
   "externalRelay.error.cloneDailyLimit": "На сьогодні ліміт сервісу вичерпано. Спробуйте завтра.",
+  "externalRelay.error.cloneSetupPending": "Спершу завершіть налаштування попереднього клона.",
   "externalRelay.error.cloneUnsupported": "Цей сервіс поки не створює клонів звідси.",
   "externalRelay.error.photoUnreadable": "Не вдалося прочитати це зображення. Оберіть JPEG, PNG або WebP.",
   "externalRelay.error.photoTooLarge": "Зображення завелике. Оберіть файл до 8 МБ.",

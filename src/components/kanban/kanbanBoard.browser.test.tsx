@@ -28311,6 +28311,8 @@ describe("Celestia clone creation in the relay card", () => {
           await page.evaluate((name) => (window as unknown as Fake).cloneFake.create(name), name);
           await frame("setup-failed", "[data-clone-setup-failed]");
           expect(await card.locator("[data-clone-setup-failed] [role=alert]").textContent()).toBe(translate(lang, "externalRelay.clone.setupFailed", { error: translate(lang, "externalRelay.error.unreachable") }));
+          /* No second clone starts while this one is not set up. */
+          expect(await card.locator("[data-clone-open]").count()).toBe(0);
           await page.evaluate(() => (window as unknown as Fake).cloneFake.failSetup(false));
           await card.locator("[data-clone-setup-retry]").click();
           await card.locator("[data-clone-setup-failed]").waitFor({ state: "detached", timeout: 15_000 });
@@ -28322,6 +28324,7 @@ describe("Celestia clone creation in the relay card", () => {
           expect(await card.locator("[data-external-relay-no-account], [data-external-relay-running].text-warning").count()).toBe(0);
           await frame("created", "[data-clone-created]");
           expect(await card.locator("[data-clone-created]").textContent()).toContain(translate(lang, "externalRelay.clone.created", { name, username: lang === "uk" ? "nichna_sova_bot" : "night_owl_bot" }));
+          expect(await card.locator("[data-clone-open]").count()).toBe(1);
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
       }

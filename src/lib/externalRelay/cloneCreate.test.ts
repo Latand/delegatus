@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 
-import { ExternalRelayError } from "./client";
+import { ExternalRelayError, readRelayBytesUrl } from "./client";
 import {
   cancelCloneRequest,
   checkCloneRequest,
@@ -119,14 +119,40 @@ test("a created record outlives the page that missed the answer, takes the name 
     await checkCloneRequest("celestia", "req_1");
     await checkCloneRequest("celestia", "req_9");
     expect(stored().cloneCreated).toEqual(record);
-    // A new request keeps the earlier clone's record until its setup is done.
-    await createCloneRequest("celestia", { name: "Тихий Лис", username: "tykhyi_lys_bot", photo: null });
-    expect(stored().cloneCreated?.request_id).toBe("req_1");
+    // No second clone starts while the first one's setup is not done, so its record cannot be replaced.
     seen.length = 0;
+    const second = await refused(createCloneRequest("celestia", { name: "Тихий Лис", username: "tykhyi_lys_bot", photo: null }));
+    expect([second.code, second.status]).toEqual(["clone_setup_pending", 409]);
+    expect(seen).toEqual([]);
+    expect(stored().cloneCreated).toEqual(record);
+    expect(stored().cloneRequest).toBeUndefined();
     await cancelCloneRequest("celestia", "req_1");
     expect(seen).toEqual([]);
     expect(stored().cloneCreated).toBeUndefined();
+    await createCloneRequest("celestia", { name: "Тихий Лис", username: "tykhyi_lys_bot", photo: null });
     expect(stored().cloneRequest?.request_id).toBe("req_2");
+  } finally { await server.close(); }
+});
+
+test("a clone created while a second request was on the wire keeps its record, and the second request is cancelled on the relay", async () => {
+  const seen: string[] = [];
+  const server = await startTestRelay((req) => {
+    seen.push(`${req.method} ${req.url}`);
+    if (req.url === "/v1/clone-requests" && req.method === "POST") {
+      // Another page's poll records the first clone as created before this answer lands.
+      updateRelayStore((store) => ({ ...store, relays: store.relays.map((relay) => ({ ...relay,
+        cloneCreated: { request_id: "req_1", target_id: "fresh", name: "Нічна Сова", username: "nichna_sova_bot", photo_failed: false, createdAt: "2026-10-11T12:00:00Z" } })) }));
+      return { status: 201, body: { request_id: "req_2", create_url: CREATE_URL, expires_at: "2099-01-01T00:10:00Z" } };
+    }
+    if (req.method === "DELETE") return { status: 204 };
+    return { status: 500 };
+  });
+  try {
+    pair(server.origin);
+    expect((await refused(createCloneRequest("celestia", { name: "Тихий Лис", username: "tykhyi_lys_bot", photo: null }))).code).toBe("clone_setup_pending");
+    expect(seen).toEqual(["POST /v1/clone-requests", "DELETE /v1/clone-requests/req_2"]);
+    expect(stored().cloneCreated?.request_id).toBe("req_1");
+    expect(stored().cloneRequest).toBeUndefined();
   } finally { await server.close(); }
 });
 
@@ -261,6 +287,45 @@ test("generated candidates come back as small JPEG previews, an unreadable one l
     candidates = [];
     await expect(generateCloneAvatars("celestia", "owl")).rejects.toThrow();
     expect((await refused(generateCloneAvatars("celestia", "  "))).code).toBe("refused_here");
+  } finally { await server.close(); await images.stop(true); }
+});
+
+test("a candidate behind a signed URL is downloaded with its query and stays selectable", async () => {
+  const image = await png("#2f7d5b", 512);
+  const asked: string[] = [];
+  const bodies: unknown[] = [];
+  let host = "";
+  /* The image host answers only a request that carries the signature. */
+  const images = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request): Response => {
+    const url = new URL(request.url);
+    asked.push(url.pathname + url.search);
+    if (url.pathname === "/moved.png") return new Response(null, { status: 302, headers: { location: `${host}/1.png?signature=fixture` } });
+    return url.searchParams.get("signature") === "fixture" ? new Response(image) : new Response("unsigned", { status: 403 });
+  } });
+  host = `http://127.0.0.1:${images.port}`;
+  const server = await startTestRelay((req, body) => {
+    if (req.url === "/v1/clone-avatars") return { body: { candidates: [{ storage_key: "avatars/1.png", url: `${host}/1.png?signature=fixture&expires=1` }] } };
+    if (req.url === "/v1/clone-requests") { bodies.push(body); return { status: 201, body: { request_id: "req_1", create_url: CREATE_URL, expires_at: "2099-01-01T00:10:00Z" } }; }
+    return { status: 404 };
+  });
+  try {
+    pair(server.origin);
+    const result = await generateCloneAvatars("celestia", "owl");
+    expect(asked).toEqual(["/1.png?signature=fixture&expires=1"]);
+    expect(result.map((item) => item.storage_key)).toEqual(["avatars/1.png"]);
+    const meta = await sharp(Buffer.from(result[0]!.preview.replace(/^data:image\/jpeg;base64,/, ""), "base64")).metadata();
+    expect({ format: meta.format, width: meta.width }).toEqual({ format: "jpeg", width: 160 });
+    // The chosen candidate goes on as its storage key.
+    await createCloneRequest("celestia", { name: "Owl", username: "owl_bot", photo: { kind: "candidate", storage_key: result[0]!.storage_key } });
+    expect(bodies).toEqual([{ name: "Owl", username: "owl_bot", photo: { kind: "candidate", storage_key: "avatars/1.png" } }]);
+
+    // Only the candidate download admits a query; a redirect and an oversized image stay refused with one.
+    asked.length = 0;
+    await expect(readRelayBytesUrl(`${host}/1.png?signature=fixture`)).rejects.toMatchObject({ code: "invalid_address" });
+    await expect(readRelayBytesUrl(`${host}/1.png?signature=fixture#part`, 1_048_576, { query: true })).rejects.toMatchObject({ code: "invalid_address" });
+    await expect(readRelayBytesUrl(`${host}/moved.png?signature=fixture`, 1_048_576, { query: true })).rejects.toMatchObject({ code: "unreachable", status: 302 });
+    await expect(readRelayBytesUrl(`${host}/1.png?signature=fixture`, 64, { query: true })).rejects.toMatchObject({ code: "too_large" });
+    expect(asked).toEqual(["/moved.png?signature=fixture", "/1.png?signature=fixture"]);
   } finally { await server.close(); await images.stop(true); }
 });
 

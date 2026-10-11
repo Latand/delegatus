@@ -239,6 +239,7 @@ export const en = {
   "externalRelay.clone.failed": "The service could not create the clone.",
   "externalRelay.clone.again": "Try again",
   "externalRelay.error.cloneDailyLimit": "The service's limit for today is used up. Try again tomorrow.",
+  "externalRelay.error.cloneSetupPending": "Finish setting up the previous clone first.",
   "externalRelay.error.cloneUnsupported": "This service does not create clones from here yet.",
   "externalRelay.error.photoUnreadable": "This image could not be read. Choose a JPEG, PNG or WebP.",
   "externalRelay.error.photoTooLarge": "The image is too large. Choose a file up to 8 MB.",

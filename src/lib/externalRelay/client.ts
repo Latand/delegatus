@@ -23,7 +23,7 @@ export class ExternalRelayError extends Error {
 const bare = (host: string) => host.replace(/^\[|\]$/g, "");
 const loopback = (address: string) =>
   address === "::1" || (net.isIP(address) === 4 && address.startsWith("127."));
-async function target(input: string): Promise<{ url: URL; address: string }> {
+async function target(input: string, options: { query?: boolean } = {}): Promise<{ url: URL; address: string }> {
   let url: URL;
   try {
     url = new URL(input);
@@ -34,7 +34,7 @@ async function target(input: string): Promise<{ url: URL; address: string }> {
     !["http:", "https:"].includes(url.protocol) ||
     url.username ||
     url.password ||
-    url.search ||
+    (url.search && !options.query) ||
     url.hash
   )
     throw new ExternalRelayError("invalid_address");
@@ -165,9 +165,13 @@ export async function relayCall<T = unknown>(
     request.end(encoded ?? undefined);
   });
 }
-/** Bounded GET with DNS pinning and redirect refusal, without credentials. */
-export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576): Promise<Buffer> {
-  const { url, address } = await target(urlInput);
+/**
+ * Bounded GET with DNS pinning and redirect refusal, without credentials.
+ * `query` admits and sends a query string, for an image the relay hands out
+ * as a signed or parameterized URL; the relay's own documents are read without.
+ */
+export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, options: { query?: boolean } = {}): Promise<Buffer> {
+  const { url, address } = await target(urlInput, options);
   const transport = url.protocol === "https:" ? https : http;
   return await new Promise<Buffer>((resolve, reject) => {
     const request = transport.request(
@@ -177,7 +181,7 @@ export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576):
         servername: net.isIP(bare(url.hostname))
           ? undefined
           : bare(url.hostname),
-        path: url.pathname,
+        path: url.pathname + (options.query ? url.search : ""),
         method: "GET",
         agent: false,
         headers: { host: url.host, "Delegatus-Relay-Version": "1" },

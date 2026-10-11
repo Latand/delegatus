@@ -98,7 +98,8 @@ export function useCloneCreate({ relayId, stored, created, onChanged }: {
   useEffect(() => {
     if (!created || ended.current.has(created.request_id)) return;
     ended.current.add(created.request_id);
-    setPhase((current) => current.kind === "idle" || (current.kind === "waiting" && current.request.request_id === created.request_id) ? createdPhase(created) : current);
+    // An open form or an ended request gives way too: no other clone starts until this one is set up.
+    setPhase((current) => current.kind === "created" || (current.kind === "waiting" && current.request.request_id !== created.request_id) ? current : createdPhase(created));
   // The created record is read again only when it changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createdId]);
@@ -147,7 +148,12 @@ export function useCloneCreate({ relayId, stored, created, onChanged }: {
     const wire = photo.kind === "upload" ? { kind: "upload", data: photo.data } : photo.kind === "candidate" ? { kind: "candidate", storage_key: photo.storage_key } : null;
     const result = await call<{ request: CloneRequestView }>(`${base}/clone-requests`, "POST", { name: name.trim(), username, photo: wire });
     setBusy(false);
-    if (!result.ok) { win?.close(); setError(result.error); return; }
+    if (!result.ok) {
+      win?.close(); setError(result.error);
+      // Another page created a clone whose setup is not done: the read brings its record, which takes the card.
+      if (result.error === "clone_setup_pending") await onChanged();
+      return;
+    }
     const request = result.value.request;
     if (win && createUrlAllowed(request.create_url)) {
       try { win.location.href = request.create_url; } catch { win.close(); }
@@ -233,7 +239,8 @@ type SetupTarget = { id: string; engine: string | null; answered_by: "install" |
  * relay routes it elsewhere. Each step runs only while it is still needed, so
  * a retry after a partial success repeats only what failed. When both are
  * done the relay's created record is forgotten; until then a reopened card
- * runs the setup again.
+ * runs the setup again, and `settled` stays false so the card offers no new
+ * clone (the server refuses one too) that could take the record's place.
  */
 export function useCloneSetup({ relayId, phase, recorded, target, engine, onChanged }: {
   relayId: string;
@@ -266,10 +273,13 @@ export function useCloneSetup({ relayId, phase, recorded, target, engine, onChan
         const routed = await call(`${base}/targets/${encodeURIComponent(current.id)}`, "PATCH", { answered_by: "install" });
         if (!routed.ok) error = routed.error;
       }
+      if (!error && latest.current.recorded === id) {
+        const forgot = await call(`${base}/clone-requests/${encodeURIComponent(id)}`, "DELETE");
+        if (!forgot.ok && forgot.error !== "not_found") error = forgot.error;
+      }
       if (!alive.current) return;
       if (!error) {
         setState({ requestId: id, status: "done", error: null });
-        if (latest.current.recorded === id) await call(`${base}/clone-requests/${encodeURIComponent(id)}`, "DELETE");
         await latest.current.onChanged();
         return;
       }
@@ -292,6 +302,8 @@ export function useCloneSetup({ relayId, phase, recorded, target, engine, onChan
 
   const current = state && state.requestId === requestId ? state : null;
   return {
+    /** No created clone waits for its setup here; a clone the relay named no target for has nothing to set up. */
+    settled: phase.kind !== "created" || phase.targetId === null || current?.status === "done",
     failed: current?.status === "failed" ? current.error ?? "unavailable" : null,
     retry: () => { if (requestId && current?.status !== "running") void run(requestId); },
   };

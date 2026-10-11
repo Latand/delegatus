@@ -120,12 +120,18 @@ function setCloneRecords(relayId: string, change: (current: CloneRecords) => Clo
   }));
 }
 
-/** `POST /clone-requests`: one open request per owner on the relay's side, so a new one replaces the stored one here too. */
+/**
+ * `POST /clone-requests`: one open request per owner on the relay's side, so a
+ * new one replaces the stored one here too. A created clone whose setup the
+ * card has not finished is refused as `clone_setup_pending`, so a second
+ * creation never replaces the record that lets a reopened card finish it.
+ */
 export async function createCloneRequest(
   relayId: string,
   input: { name: string; username: string; photo: ClonePhotoInput },
 ): Promise<RelayCloneRequest> {
   const relay = pairedRelay(relayId);
+  if (relay.cloneCreated?.target_id) throw new ExternalRelayError("clone_setup_pending", 409);
   const name = input.name.trim();
   if (!validCloneName(name) || !validCloneUsername(input.username))
     throw new ExternalRelayError("refused_here", 400);
@@ -140,7 +146,16 @@ export async function createCloneRequest(
   const started = cloneRequestStartedSchema.parse(result.body);
   if (!createUrlAllowed(started.create_url)) throw new ExternalRelayError("malformed", result.status);
   const request: RelayCloneRequest = { ...started, name, username: input.username, requestedAt: new Date().toISOString() };
-  setCloneRecords(relayId, (current) => ({ ...current, cloneRequest: request }));
+  let displaced = false;
+  setCloneRecords(relayId, (current) => {
+    // A clone that reached created while the relay was answering keeps its record.
+    if (current.cloneCreated?.target_id) { displaced = true; return current; }
+    return { ...current, cloneRequest: request };
+  });
+  if (displaced) {
+    await cloneCall(relay, `/clone-requests/${encodeURIComponent(request.request_id)}`, "DELETE").catch(() => undefined);
+    throw new ExternalRelayError("clone_setup_pending", 409);
+  }
   return request;
 }
 
@@ -213,7 +228,7 @@ export async function generateCloneAvatars(relayId: string, prompt: string): Pro
   const { candidates } = cloneAvatarsSchema.parse(result.body);
   const previews = await Promise.all(candidates.map(async (candidate) => {
     try {
-      const bytes = await readRelayBytesUrl(candidate.url, CANDIDATE_MAX_BYTES);
+      const bytes = await readRelayBytesUrl(candidate.url, CANDIDATE_MAX_BYTES, { query: true });
       const jpeg = await sharp(bytes, { failOn: "warning" })
         .resize(PREVIEW_SIDE, PREVIEW_SIDE, { fit: "cover" })
         .flatten({ background: "#ffffff" })

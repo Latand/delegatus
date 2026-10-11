@@ -105,6 +105,7 @@ const ERROR_KEYS: Record<string, Parameters<TFunction>[0]> = {
   local_error: "externalRelay.error.local",
   clone_daily_limit: "externalRelay.error.cloneDailyLimit",
   clone_create_unsupported: "externalRelay.error.cloneUnsupported",
+  clone_setup_pending: "externalRelay.error.cloneSetupPending",
   photo_unreadable: "externalRelay.error.photoUnreadable",
   photo_too_large: "externalRelay.error.photoTooLarge",
   avatars_unreadable: "externalRelay.error.avatarsUnreadable",
@@ -629,7 +630,7 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
           {cloneable ? <ClonePendingRow clone={clone} /> : null}
           {cloneable && relay.targets.length ? (
             clone.phase.kind === "form" ? <CloneForm clone={clone} errorText={errorText} />
-              : clone.phase.kind === "idle" || clone.phase.kind === "created" ? <CloneCreateRow clone={clone} /> : null
+              : clone.phase.kind === "idle" || (clone.phase.kind === "created" && setup.settled) ? <CloneCreateRow clone={clone} /> : null
           ) : null}
         </div>
       ) : null}

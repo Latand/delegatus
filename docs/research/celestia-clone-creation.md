@@ -146,6 +146,11 @@ with no draft.
 by owner, so the new clone appears in Delegatus only when that account is the one paired with this
 install. The waiting state says which account is expected (the pairing's owner line).
 
+**One clone at a time until it is set up.** Delegatus keeps the created clone's record until the card
+has given it the default engine and the route to this install. Until then the card offers no
+«Створити клона», and the install refuses a new request with `clone_setup_pending`, so a failed or
+delayed setup stays retryable after a reload.
+
 ### Which part belongs to whom
 
 | Part | Delegatus | Celestia |
