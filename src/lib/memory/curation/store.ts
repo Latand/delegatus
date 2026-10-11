@@ -51,7 +51,31 @@ export function readPass(id: string): CuratorPass | null {
   for (const field of Object.keys(counts) as (keyof typeof counts)[]) counts[field] = [...calls.values()].reduce((n, call) => n + call[field], 0);
   return { ...row, counts };
 }
-function projectRow(project: string): ProjectRow | null { const row = collection()?.get(`p:${canonicalProject(project)}`); return row?.kind === "project" ? row : null; }
+function projectRows(project: string): ProjectRow[] {
+  const canonical = canonicalProject(project);
+  return collection()?.snapshot().flatMap(row => row.kind === "project" && canonicalProject(row.project) === canonical ? [row] : []) ?? [];
+}
+function combineProjectRows(project: string, rows: readonly ProjectRow[]): ProjectRow | null {
+  if (!rows.length) return null;
+  const passes = [...new Set(rows.flatMap(row => row.passes))].sort((a, b) => {
+    const left = readPass(a)?.claimedAt ?? "", right = readPass(b)?.claimedAt ?? "";
+    return left.localeCompare(right) || a.localeCompare(b);
+  });
+  const claimRevisions: Record<string, number> = {};
+  for (const row of rows) for (const [scope, revision] of Object.entries(row.claimRevisions ?? {})) {
+    const canonicalScopeName = canonicalScope(scope);
+    claimRevisions[canonicalScopeName] = Math.max(claimRevisions[canonicalScopeName] ?? 0, revision);
+  }
+  const current = rows.map(row => row.current).find(id => id && passIsLive(readPass(id))) ?? null;
+  return {
+    kind: "project", project: canonicalProject(project), current,
+    lastClaimAt: rows.map(row => row.lastClaimAt).sort().at(-1)!,
+    claimRevisions,
+    lastAt: rows.map(row => row.lastAt).filter((at): at is string => !!at).sort().at(-1) ?? null,
+    passes,
+  };
+}
+function projectRow(project: string): ProjectRow | null { return combineProjectRows(project, projectRows(project)); }
 export function currentPass(project: string) { const id = projectRow(project)?.current; return id ? readPass(id) : null; }
 export function machinePass() { const row = collection()?.get("machine"); return row?.kind === "machine" && row.current ? readPass(row.current) : null; }
 export function passForConversation(id: string): CuratorPass | null { const row = collection()?.get(`c:${id}`); return row?.kind === "conversation" ? readPass(row.pass) : null; }
@@ -80,6 +104,7 @@ export function curationStatus(project: string, now = Date.now()) {
 }
 export function claimPass(input: { project: string; repoDir: string | null; now: number }): CuratorPass | null {
   const project = canonicalProject(input.project);
+  const prior = projectRow(project);
   const status = curationStatus(project, input.now);
   if (!status.due) return null;
   const scopes = passScopes(project);
@@ -91,8 +116,9 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   return collection(true)!.boundedPatch(12, tx => {
     const machine = tx.get("machine");
     if (machine?.kind === "machine" && machine.current) { const pass = tx.get(`r:${machine.current}`); if (pass?.kind === "pass" && passIsLive(pass)) return null; }
-    const held = tx.get(`p:${project}`);
-    if (held?.kind === "project" && input.now - Date.parse(held.lastClaimAt) < CURATION_CLAIM_COOLDOWN_MS) return null;
+    const stored = tx.get(`p:${project}`);
+    const held = combineProjectRows(project, [...(prior ? [prior] : []), ...(stored?.kind === "project" ? [stored] : [])]);
+    if (held && input.now - Date.parse(held.lastClaimAt) < CURATION_CLAIM_COOLDOWN_MS) return null;
     const claimedAt = new Date(input.now).toISOString();
     const id = `curate_${createHash("sha256").update(`${project}:${claimedAt}`).digest("hex").slice(0, 24)}`;
     if (tx.get(`r:${id}`)) return null;
@@ -104,6 +130,8 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   });
 }
 export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass | null {
+  const original = readPass(id);
+  const projectRowsBefore = original ? projectRows(original.project) : [];
   return collection(true)!.boundedPatch(12, tx => {
     const held = tx.get(`r:${id}`); if (held?.kind !== "pass") return null;
     if (!passIsLive(held) && patch.state && ["claimed", "launching", "running"].includes(patch.state)) return held;
@@ -112,7 +140,10 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     if (next.conversationId) tx.put({ kind: "conversation", conversationId: next.conversationId, pass: id });
     if (!passIsLive(next)) {
       const machine = tx.get("machine"); if (machine?.kind === "machine" && machine.current === id) tx.put({ ...machine, current: null });
-      const project = tx.get(`p:${held.project}`); if (project?.kind === "project" && project.current === id) tx.put({ ...project, current: null, lastAt: next.endedAt ?? held.claimedAt });
+      const projectKey = canonicalProject(held.project), stored = tx.get(`p:${projectKey}`);
+      const project = combineProjectRows(projectKey, [...projectRowsBefore, ...(stored?.kind === "project" ? [stored] : [])]);
+      if (project) tx.put({ ...project, current: project.current === id ? null : project.current,
+        lastAt: [project.lastAt, next.endedAt ?? held.claimedAt].filter((at): at is string => !!at).sort().at(-1) ?? null });
     }
     return next;
   });

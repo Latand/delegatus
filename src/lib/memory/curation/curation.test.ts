@@ -7,9 +7,9 @@ import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { input as tickInput } from "@/lib/boardMaintenance/testFixture";
 import { roleIsClean } from "../eligibility";
 import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type RuleSource } from "../roleTypes";
-import { leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
+import { canonicalScope, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
-import { claimPass, curationStatus, machinePass, patchPass, readPass, type CuratorPass } from "./store";
+import { claimPass, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
 import { productionCurationController } from "./run";
@@ -19,6 +19,7 @@ import { runSeatTickCheck } from "@/lib/monitor/seatTickController";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import type { RoleMemoryRow } from "../roleTypes";
+import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -27,12 +28,13 @@ const why = "An earlier attempt applied guidance at the wrong level.";
 const text = "Inspect the requested scope before changing stored guidance.";
 let dir: string, previous: string | undefined;
 beforeEach(() => {
+  resetProjectAliasesForTests();
   previous = process.env.LLV_STATE_DIR;
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-curation-check-"));
   process.env.LLV_STATE_DIR = dir;
   fs.writeFileSync(path.join(dir, "AGENTS.md"), "Run the repository checks before publication.\n");
 });
-afterEach(() => { process.env.LLV_STATE_DIR = previous; if (previous === undefined) delete process.env.LLV_STATE_DIR; fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { process.env.LLV_STATE_DIR = previous; if (previous === undefined) delete process.env.LLV_STATE_DIR; fs.rmSync(dir, { recursive: true, force: true }); resetProjectAliasesForTests(); });
 function row(id: string): RoleMemoryRule {
   const held = roleMemoryCollection()!.get(`r:${id}`);
   if (held?.kind !== "rule") throw Error("rule missing");
@@ -129,7 +131,7 @@ test("curator reads and the window distinguish rewrites across the same clock in
 test.each([roleScope(PROJECT, "builder"), "role:*:builder"])("pass undo preserves a later agent rewrite at the same clock instant in %s", to => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: to === scope ? [one] : [], ...(to === scope ? {} : { [to]: [one] }) }, {
-    rewrite: [{ id: one, rule: "Inspect the scope readers before changing stored guidance.", note: why }], ...(to === scope ? {} : { move: [{ id: one, to }] }),
+    rewrite: [{ id: one, rule: "Inspect the scope readers before changing stored guidance.", note: why }], ...(to === scope ? {} : { move: [{ id: one, to, note: "The target scope has the same readers." }] }),
   }), at());
   const source: RuleSource = { project: PROJECT, pipelineId: "clock-undo", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "clock-writer" };
   recordLessonRequest({ ...source, at: at() });
@@ -214,6 +216,14 @@ test("moves and split parts refuse clean roles and foreign projects; widening ne
   }
   refusal(p, input({ [scope]: [], machine: [one] }, { move: [{ id: one, to: "machine" }] }), "CURATE_INVALID");
 });
+test("every pure move requires and retains its editorial reason", () => {
+  const source = roleScope(PROJECT, "builder"), target = "role:*:builder", one = fixture(source), p = pass();
+  refusal(p, input({ [source]: [], [target]: [one] }, { move: [{ id: one, to: target }] }), "CURATE_INVALID");
+  applyCuration(p, input({ [source]: [], [target]: [one] }, { move: [{ id: one, to: target, note: "This applies to builders across every project." }] }), at(100));
+  expect(row(one).scope).toBe(target);
+  expect(row(one).note).toBe("This applies to builders across every project.");
+  expect(projectView(PROJECT).scopes.find(scope => scope.scope === target)?.active.find(rule => rule.id === one)?.note).toBe("This applies to builders across every project.");
+});
 test("merge and move across scopes widens, saves versions and keeps the source recoverable", () => {
   const builder = roleScope(PROJECT, "builder"), critic = roleScope(PROJECT, "visual-critic"), project = projectScope(PROJECT);
   const one = fixture(builder), two = fixture(critic), p = pass();
@@ -296,9 +306,68 @@ test("pass undo skips a later writer, keeps new arrivals and reverses several ca
   patchPass(p.id, { revertedAt: undefined, skipped: undefined });
   expect(revertCuratorPass(p.id, at(5000))).toEqual(result);
 });
+test("pass undo crosses project succession without treating scope bookkeeping as a later edit", () => {
+  const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
+  const originalScope = row(one).scope;
+  applyCuration(p, input({ [scope]: [one] }, { rewrite: [{ id: one, rule: text + " Check the current revision.", note: "The revision identifies the current record." }] }), at(100));
+  const curatedVersion = row(one).versions![0]!;
+  ended(p);
+  expect(persistProjectAliases([{ source: PROJECT, target: "curation-renamed", displayName: "curation-renamed" }])).toBe(true);
+  expect(projectView("curation-renamed").scopes.flatMap(item => item.active).some(rule => rule.id === one)).toBe(true);
+
+  expect(revertCuratorPass(p.id, at(2000))).toEqual({ skipped: [] });
+  expect(row(one).rule).toBe(text);
+  expect(row(one).scope).toBe(originalScope);
+  expect(row(one).versions).toContain(curatedVersion);
+  expect(row(one).versions).toHaveLength(2);
+  const restoredScope = projectView("curation-renamed").scopes.find(item => item.scope === canonicalScope(originalScope));
+  expect(restoredScope?.active.some(rule => rule.id === one)).toBe(true);
+});
+test("project succession keeps completed pass history, undo and the next-run cooldown under both names", () => {
+  const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
+  applyCuration(p, input({ [scope]: [one] }, { rewrite: [{ id: one, rule: text + " Check the current revision.", note: "The revision identifies the current record." }] }), at(100));
+  ended(p);
+  const laterSource: RuleSource = { project: PROJECT, pipelineId: "after-curation", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_after_curation" };
+  recordLessonRequest({ ...laterSource, at: at(100) });
+  leaveLessons({ request: laterSource, source: laterSource, lessons: [{ scope: "role", rule: "Check stored guidance against each newly observed condition.", why },], none: null, now: at(100) });
+  expect(curationStatus(PROJECT, NOW + 200).newLessons).toBe(1);
+  expect(persistProjectAliases([{ source: PROJECT, target: "curation-renamed", displayName: "curation-renamed" }])).toBe(true);
+
+  const oldView = curationView(PROJECT, NOW + 1000);
+  const newView = curationView("curation-renamed", NOW + 1000);
+  expect(oldView.passes).toEqual(newView.passes);
+  expect(oldView.passes.map(item => item.id)).toContain(p.id);
+  expect(oldView.lastAt).toBe(at(1000));
+  expect(newView.lastAt).toBe(oldView.lastAt);
+  expect(newView.nextAt).toBe(oldView.nextAt);
+  expect(curationStatus("curation-renamed", NOW + 200).newLessons).toBe(1);
+  expect(curationStatus("curation-renamed", NOW + 1000 + CURATION_INTERVAL_MS - 1).due).toBe(false);
+  expect(claimPass({ project: "curation-renamed", repoDir: dir, now: NOW + 1000 + CURATION_INTERVAL_MS - 1 })).toBeNull();
+  projectView("curation-renamed");
+  for (let attempt = 2; attempt <= 10; attempt += 1) {
+    const source: RuleSource = { ...laterSource, project: "curation-renamed", attempt, pipelineId: "after-curation" };
+    recordLessonRequest({ ...source, at: at(100) });
+    leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: `Check stored guidance before changing condition ${attempt}.`, why }], none: null, now: at(100) });
+  }
+  expect(curationStatus("curation-renamed", NOW + 20 * 60_000).due).toBe(true);
+  expect(claimPass({ project: "curation-renamed", repoDir: dir, now: NOW + 20 * 60_000 })).toBeNull();
+  expect(revertCuratorPass(p.id, at(2000))).toEqual({ skipped: [] });
+});
+test("project succession keeps a live pass visible and owned through either project name", () => {
+  fixture(); const p = pass();
+  expect(persistProjectAliases([{ source: PROJECT, target: "curation-renamed", displayName: "curation-renamed" }])).toBe(true);
+  expect(claimPass({ project: "curation-renamed", repoDir: dir, now: NOW + 1 })).toBeNull();
+  expect(projectView(PROJECT).curation?.passes[0]?.id).toBe(p.id);
+  expect(projectView("curation-renamed").curation?.passes[0]?.id).toBe(p.id);
+  expect(machinePass()?.id).toBe(p.id);
+  ended(p);
+  expect(projectView(PROJECT).curation?.passes[0]?.state).toBe("succeeded");
+  expect(projectView("curation-renamed").curation?.passes[0]?.state).toBe("succeeded");
+  expect(projectView("curation-renamed").curation?.lastAt).toBe(at(1000));
+});
 test("the v1 row kinds and optional metadata survive an apply, and clean curator has no injected rules", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
-  applyCuration(p, input({ [scope]: [], "role:*:builder": [one] }, { move: [{ id: one, to: "role:*:builder" }], rewrite: [{ id: one, rule: text + " Read its revision.", note: "The revision identifies the current record." }] }), at(100));
+  applyCuration(p, input({ [scope]: [], "role:*:builder": [one] }, { move: [{ id: one, to: "role:*:builder", note: "Builders across projects use this guidance." }], rewrite: [{ id: one, rule: text + " Read its revision.", note: "The revision identifies the current record." }] }), at(100));
   const legacy = new SqliteStateCollection<RoleMemoryRow>(path.join(dir, "state.sqlite"), {
     collection: "role_memory", schemaVersion: 1, busyMessage: "fixture busy", clone: structuredClone,
     key: r => r.kind === "rule" ? `r:${r.id}` : r.kind === "scope" ? `s:${r.scope}` : `q:${r.pipelineId}:${r.stageId}:${r.attempt}`,

@@ -100,10 +100,9 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
     }
     const moved = new Set<string>();
     for (const item of input.move ?? []) {
-      const rule = get(item.id); target(item.to);
+      const rule = get(item.id); target(item.to); note(item.note);
       if (moved.has(item.id) || dispositions.has(item.id)) refuse("CURATE_PARTITION", "a rule has two moves");
-      if (scopeKind(rule.scope) === "role" && scopeKind(item.to) !== "role") note(item.note);
-      work.set(item.id, { ...work.get(item.id)!, scope: item.to, movedFrom: rule.scope, ...(item.note ? { note: note(item.note) } : {}) }); moved.add(item.id); touched.add(item.id);
+      work.set(item.id, { ...work.get(item.id)!, scope: item.to, movedFrom: rule.scope, note: note(item.note) }); moved.add(item.id); touched.add(item.id);
     }
     for (const item of input.split ?? []) {
       const rule = dispose(item.id, true); note(item.note);
@@ -200,6 +199,7 @@ export function revertCuratorPass(id: string, now = new Date().toISOString()) {
   const pass = readPass(id);
   if (!pass || passIsLive(pass)) refuse("CURATE_LIVE", "only a completed curator pass can be undone");
   if (pass.revertedAt) return { skipped: pass.skipped ?? [] };
+  joinMovedScopes(now);
   const held = roleMemoryCollection(true)!;
   let result: { skipped: string[] } = { skipped: [] };
   // A pass can contain many individually bounded calls. Prepare its whole undo
@@ -232,7 +232,7 @@ export function revertCuratorPass(id: string, now = new Date().toISOString()) {
       // including writes after a move and another curator's complete active partition.
       return !scope.history.some(change => change.revision > revision && (
         change.by === "curator" && row.state === "active" || change.prior?.some(prior => prior.id === rule) || change.created?.includes(rule)
-        || change.added.includes(rule) || change.merged.some(merge => merge.from === rule || merge.into === rule) || change.archived.includes(rule)
+        || change.by !== "succession" && change.added.includes(rule) || change.merged.some(merge => merge.from === rule || merge.into === rule) || change.archived.includes(rule)
         || change.restored?.includes(rule) || change.rewritten?.some(rewrite => rewrite.id === rule)
         || change.moved?.some(move => move.id === rule) || change.split?.some(split => split.id === rule || split.parts.includes(rule))));
     }).map(([rule]) => rule));

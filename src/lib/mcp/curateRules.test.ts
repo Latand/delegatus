@@ -47,4 +47,7 @@ test("MCP schema keeps read and apply fields separate and requires widening note
   expect(schema.safeParse({ clientRequestId: "fixture", action: "apply" }).success).toBe(false);
   expect(schema.safeParse({ clientRequestId: "fixture", action: "read", restore: ["one"] }).success).toBe(false);
   expect(schema.safeParse({ clientRequestId: "fixture", action: "apply", scopes: [{ scope: "machine", revision: -1, order: [] }] }).success).toBe(false);
+  const scopes = [{ scope: "role:fixture:builder", revision: 1, order: [] }];
+  expect(schema.safeParse({ clientRequestId: "fixture", action: "apply", scopes, move: [{ id: "rule-one", to: "role:*:builder" }] }).success).toBe(false);
+  expect(schema.safeParse({ clientRequestId: "fixture", action: "apply", scopes, move: [{ id: "rule-one", to: "role:*:builder", note: "Builders in every project use this." }] }).success).toBe(true);
 });
