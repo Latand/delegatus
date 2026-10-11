@@ -7,7 +7,7 @@ import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
 import { translate } from "@/lib/i18n";
-import { insertLearnedRules, lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
+import { lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
@@ -2079,7 +2079,7 @@ const tool = (secondsAgo: number, id: string, name: string, input: Record<string
   line(secondsAgo - 2, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }),
 ];
 /* Role memory's variant 5, the stage as its agent sees it (`&rolememory=1`): the
-   builder's launch message with its learned rules below the brief, its
+   builder's engine instructions and launch message, its
    stage_report and the lesson request in the answer, then its leave_lesson. The
    text is the product's own renderer's. */
 function roleMemoryStageTranscript(): string {
@@ -2093,18 +2093,16 @@ function roleMemoryStageTranscript(): string {
   const finding = "The delta chain is rebuilt on the request thread; the worker must own it.";
   const tool = (secondsAgo: number, id: string, name: string, input: Record<string, unknown>) => line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: `mcp__viewer__${name}`, input }] } });
   const result = (secondsAgo: number, id: string, answer: Record<string, unknown>) => line(secondsAgo, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: JSON.stringify(answer, null, 2) }] }] } });
-  const lessons = [
-    { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." },
-    { scope: "role", role: "visual-critic", rule: "Judge the 390 px Ukrainian frame first: Ukrainian labels run about a third longer than English, and clipping shows there first.", why: "A button clipped only at 390 px in Ukrainian." },
-  ];
+  const lesson = { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." };
   return `${[
-    asked(46 * 60, insertLearnedRules(brief, block)),
+    line(46 * 60 + 1, { type: "system", subtype: "init", systemPrompt: block }),
+    asked(46 * 60, brief),
     said(43 * 60, L("The worker owns the chain now; one check still fails on the request thread.", "Ланцюгом тепер володіє воркер; одна перевірка ще падає в потоці запиту.")),
     tool(41 * 60 + 5, "toolu_role_memory_report", "stage_report", { clientRequestId: "md-impl-report", verdict: "fail", findings: [{ severity: "P1", text: finding }], summary: finding }),
     result(41 * 60, "toolu_role_memory_report", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, replaced: false, report: { seq: 1, verdict: { status: "fail", findingCount: 1 } }, lessonRequest: lessonRequestLines(null) }),
-    tool(40 * 60 + 30, "toolu_role_memory_lesson", "leave_lesson", { clientRequestId: "md-impl-lesson", lessons }),
-    result(40 * 60 + 25, "toolu_role_memory_lesson", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, left: [{ id: "r_8c1e04b7", scope: "role:atlas:builder", state: "active", scopeChars: 606 }, { id: "r_2a7f9c13", scope: "role:atlas:visual-critic", state: "active", scopeChars: 214 }], none: null }),
-    said(40 * 60, L("Two lessons left; the stage itself is complete.", "Лишив два уроки; сам етап завершено.")),
+    tool(40 * 60 + 30, "toolu_role_memory_lesson", "leave_lesson", { clientRequestId: "md-impl-lesson", lesson }),
+    result(40 * 60 + 25, "toolu_role_memory_lesson", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, left: [{ id: "r_8c1e04b7", scope: "role:atlas:builder", state: "active", scopeChars: 606 }], none: null }),
+    said(40 * 60, L("One lesson left; the stage itself is complete.", "Лишив один урок; сам етап завершено.")),
   ].join("\n")}\n`;
 }
 

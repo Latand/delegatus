@@ -32,6 +32,8 @@ export interface McpProbeStdioParameters {
  */
 export class McpProbeStdioTransport implements Transport {
   private child?: ChildProcess;
+  private closing?: Promise<void>;
+  cleanupError?: Error;
   private closeHealthAdmission?: () => void;
   private readonly readBuffer = new ReadBuffer();
   private readonly stderrStream = new PassThrough();
@@ -108,24 +110,47 @@ export class McpProbeStdioTransport implements Transport {
     });
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    // Initialization failure starts closing in the SDK without awaiting it.
+    // Share cleanup, and retain failures for the probe's owned error boundary
+    // so that the SDK's first close cannot leak an unhandled rejection.
+    return this.closing ??= this.closeChild().catch((error: unknown) => {
+      this.cleanupError = error instanceof Error ? error : new Error(String(error));
+    }).finally(() => { this.closing = undefined; });
+  }
+
+  private async closeChild(): Promise<void> {
     const child = this.child;
-    if (child) {
-      this.child = undefined;
-      const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
-      try { child.stdin?.end(); } catch { /* already closed */ }
-      await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref())]);
-      if (child.exitCode === null) {
-        try { child.kill("SIGTERM"); } catch { /* already exited */ }
-        await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref())]);
+    try {
+      if (child?.pid !== undefined) {
+        this.child = undefined;
+        // Descendants can keep inherited pipes open after the owned child dies.
+        // Only exit (or its already-recorded status) establishes termination.
+        const exited = new Promise<void>((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) resolve();
+          else child.once("exit", () => resolve());
+        });
+        const waitForExit = () => new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 2_000).unref();
+          void exited.then(() => { clearTimeout(timer); resolve(true); });
+        });
+        try { child.stdin?.end(); } catch { /* already closed */ }
+        if (!await waitForExit()) {
+          try { child.kill("SIGTERM"); } catch { /* already exited */ }
+          if (!await waitForExit()) {
+            try { child.kill("SIGKILL"); } catch { /* already exited */ }
+            if (!await waitForExit()) throw new Error("MCP probe child did not exit after SIGKILL");
+          }
+        }
       }
-      if (child.exitCode === null) {
-        try { child.kill("SIGKILL"); } catch { /* already exited */ }
-      }
+    } finally {
+      child?.stdin?.destroy();
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
+      this.closeHealthAdmission?.();
+      this.closeHealthAdmission = undefined;
+      this.readBuffer.clear();
     }
-    this.closeHealthAdmission?.();
-    this.closeHealthAdmission = undefined;
-    this.readBuffer.clear();
   }
 
   async send(message: JSONRPCMessage): Promise<void> {

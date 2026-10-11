@@ -43,6 +43,7 @@ afterEach(async () => {
 function accountState(select: EngineAccountsState["select"]): EngineAccountsState {
   return {
     engine: "codex",
+    hidden: [],
     accounts: [
       {
         id: "account-north",
@@ -85,6 +86,7 @@ function accountState(select: EngineAccountsState["select"]): EngineAccountsStat
     cancelLogin: async () => true,
     retryLogin: async () => true,
     remove: async () => true,
+    restore: async () => true,
     cleanupOrphans: async () => true,
     copyTerminalCommand: async () => true,
     refreshLimits: async () => true,

@@ -181,6 +181,19 @@ does not hold and is refused by GitHub itself. Nothing here changes git or
 `gh` configuration on disk, so a person's own terminal behaves as before. The
 shims are POSIX shell; on Windows a launched agent keeps the environment it had.
 
+## Review exports
+
+From the lane, run `bun scripts/review-export.ts <reviewed-commit>` with the
+stage's `TMPDIR` set. It exports committed source into a new scratch checkout
+and returns its directory, resolved commit and dependency status as JSON.
+Matching manifests, Bun lockfiles and patch files let it borrow the lane's
+`node_modules` through a link. Reviewers treat that link as read-only; caches
+and build output belong in the scratch checkout. Never run an install there.
+Local or workspace dependencies, changed inputs and absent dependencies return
+`unavailable`, leaving the source ready for code review without an install.
+If a required check needs that incompatible graph, report the access gap.
+The stage's scratch teardown removes the export and its link together.
+
 ## Local hooks
 
 Enable once in each clone (linked worktrees inherit the setting):
@@ -321,6 +334,29 @@ them before deleting its temporary root. Direct and nested Linux test runners
 enter their own service before test modules load. Portable runs use an independent
 guardian. Fixtures with blocking barriers check their recorded
 parent identity within the barrier; asynchronous fixtures check it on a timer.
+
+Reviewers use the same baseline comparator directly, without invoking a push:
+
+```sh
+bash scripts/gate-slot.sh bun scripts/local-gate-tests.ts --base <captured-base-sha> <explicit-test-paths...>
+```
+
+Use the base commit captured for the review. For a PR without a captured base,
+resolve `git merge-base origin/main HEAD` once and record that SHA. Select the
+test files required by the changed behavior, including the file that failed;
+never pass a directory. The helper runs each file separately on the base and
+the current working tree in isolated environments. Its detached temporary
+clone leaves the review checkout, refs and worktree registration untouched.
+New test files have no base observations and are judged on the head alone.
+
+Retain the command, base/head commit lines and named outcomes as review
+evidence. Record any uncommitted reviewed changes separately: the head commit
+line identifies HEAD, while the head sample executes the working tree.
+`PRE-EXISTING` and `FLAKY` outcomes belong in review notes; a base failure alone
+does not warrant a finding or a failing PR verdict. `NEW` failures still
+block. Missing or incomplete comparison evidence is a check gap to resolve,
+never proof that a failure existed on the base. Other independently evidenced
+defects in the diff retain their findings.
 
 `LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns

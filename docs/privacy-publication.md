@@ -3,9 +3,42 @@
 Every pull request runs `privacy-publication` from the default branch through
 `pull_request_target`. The job checks out trusted scanner, test, workflow, and
 fingerprint files separately, then handles the pull-request checkout as opaque
-inspection input for the trusted scan. After the trusted verdict and cache
-writes, the candidate's privacy tests run without credentials under a 90-second
-timeout. The scan covers committed, staged, unstaged, and untracked changes
+inspection input for the trusted scan. Default-branch privacy self-tests run
+under GitHub's three-minute step timeout and report failures or timeouts as
+warnings, so a repair candidate can reach inspection when main's suite is
+broken. Trusted inspection must pass. After the trusted verdict and cache
+writes, the candidate's privacy tests must pass without credentials under their own
+130-second timeout; a failure or timeout refuses publication. Candidate code
+never supplies the scanner or fingerprint catalog for the trusted verdict.
+
+The trusted test command stays unchanged so main's candidate-ordering detector
+continues to pass during repair admission. Only that baseline step uses
+`continue-on-error`; its original failure outcome drives the warning. GitHub's
+step timeout bounds a stalled baseline, while the candidate keeps its separate
+130-second shell timeout and remains the last step.
+
+Privacy fixtures are released by the final serial test, after every concurrent
+CLI check has returned. Cleanup has its own 30-second timeout inside the unchanged
+suite deadline. Deleting hundreds of Git fixtures previously ran in an `afterAll`
+hook with Bun's five-second default, producing an unnamed hook timeout under
+slow storage despite passing detector assertions. Cleanup errors still fail the
+suite and now name the cleanup test.
+
+Run privacy self-tests with the workflow's pinned Bun 1.3.3: the source-bound
+placeholder generator requires that runtime. Use
+`bash scripts/gate-slot.sh bun test scripts/privacy-publication-gate.test.ts`
+with isolated home, configuration, state and temporary directories.
+
+The cleanup regression was checked with Bun 1.3.3, a filesystem worker and a
+preload adding 10 ms before each recursive deletion of a privacy fixture root
+(597 roots). The original hook failed after 6.73 seconds with all 641 detector
+tests passing. Ten runs of the final serial cleanup each passed 642 tests with
+zero hook timeouts and the same 131,163 assertions. Cleanup took
+6.52–6.71 seconds; complete suite times were 83.61–100.17 seconds.
+Each run used an explicit test path through the gate slot and a fresh isolated
+home, configuration, state and temporary directory.
+
+The scan covers committed, staged, unstaged, and untracked changes
 relative to the exact base SHA.
 Diagnostics expose finding classes and counts. Matched values, OCR text,
 metadata values, and file paths remain suppressed.

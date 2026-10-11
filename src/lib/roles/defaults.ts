@@ -62,6 +62,10 @@ const FINDINGS_RULE =
 const REVIEW_VERDICT =
   "Verdict: pass when nothing blocks, with any notes in the summary; fail when at least one finding stands, WRONG-PREMISE and OVER-BUILT included; needs_decision when a finding or an acceptance criterion cannot be judged without something only the operator can give, when the pinned specification contradicts the quoted requirement, or when the change's own description calls a premise unverified, assumed or synthetic. A needs_decision carries no findings: the question, the options and your recommendation go in the summary.";
 
+/** Both reviewer launch paths use the project's comparison mechanism. */
+export const REVIEW_BASELINE_RULE =
+  "Test baseline comparison: before attributing a failing test to the change, compare the same explicit test file on the captured review base and the reviewed head with equivalent isolated state, interpreter and dependencies. Use the project's documented baseline comparison helper when available. Retain the command, exact base/head commits, full test identity and both outcomes as evidence. A matching failure also observed on the base is pre-existing: put it in Notes; it alone never warrants a finding or a failing verdict. New head-only failures still block; new tests have no base observations. Missing, skipped or incomplete runs provide no passing evidence for unobserved cases; a pre-existing label requires matching base evidence. Resolve a material comparison gap before approving the change. Independently evidenced defects in the diff still warrant findings.";
+
 // #1770 — a read-only research stage cleaned up its probe stubs by port and
 // killed an unrelated local server of the operator's. access: read-only governs
 // repository mutation only, so no stage contract spoke to this. Every scaffold
@@ -82,6 +86,8 @@ export const FIX_ROUND_FINISH_LINE = "You are done when every handed finding and
     completes is stated once per launch path (the stage wrapper, the spawn
     line) and never in a scaffold. */
 const SHARED_RULES = [MISSING_ACCESS, PROJECT_RULES, SEARCH_PRIOR_CONVERSATIONS, HUMAN_IN_THE_LOOP, PROCESS_CLEANUP_RULE].join(" ");
+
+const REVIEW_DEPENDENCIES = "Prefer the project's review-export helper when it has one. Reuse the lane's installed dependencies only when the exported head has matching manifests, lockfiles and patches and no local dependency links into the live checkout. Borrowed dependencies are read-only: never install into or edit them. A code-only review needs no dependency install; when a required check needs an incompatible graph, report that gap under the missing-access rule.";
 
 /** The same rules for an orchestrator launched without the mandate (a child
     spawn, a pipeline stage): its scaffold already carries process cleanup,
@@ -198,7 +204,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "parallelN", label: "Parallel passes", description: "Independent review passes.", kind: "integer", min: 1, max: 8 },
       SIZE_PARAMETER,
     ],
-    promptScaffold: `You are a fresh-context Reviewer. Review the change the brief names; when it names none, review the commits in this worktree since the base commit the stage or the brief names. Lens: {{lens}}. Run {{parallelN}} independent pass(es) and keep their axes separate. Outside a pipeline, report the commit you reviewed.\nChange under review: {{diffSource}}\n\nRun the project's own checks for what the change touches; when a check wants to write caches or build output into the checkout, point it at a scratch directory. Quote code in a finding only where the finding needs it. ${FINDINGS_RULE} ${REVIEW_VERDICT} ${SHARED_RULES} ${REVIEW_FRAME_RULES}`,
+    promptScaffold: `You are a fresh-context Reviewer. Review the change the brief names; when it names none, review the commits in this worktree since the base commit the stage or the brief names. Lens: {{lens}}. Run {{parallelN}} independent pass(es) and keep their axes separate. Outside a pipeline, report the commit you reviewed.\nChange under review: {{diffSource}}\n\nRun the project's own checks for what the change touches; when a check wants to write caches or build output into the checkout, point it at a scratch directory. ${REVIEW_BASELINE_RULE} Quote code in a finding only where the finding needs it. ${FINDINGS_RULE} ${REVIEW_VERDICT} ${SHARED_RULES} ${REVIEW_FRAME_RULES} ${REVIEW_DEPENDENCIES}`,
     safetyFences: REVIEWER_FENCES,
     capabilities: ["read-only"],
   },

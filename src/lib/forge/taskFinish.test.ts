@@ -104,8 +104,42 @@ describe("§5.2: when a marked lane finishes its task", () => {
     expect(h.moves).toHaveLength(1);
   });
 
-  test("setting on, no PR: the lane completing moves the task", async () => {
-    const h = harness({ lanes: [lane("marked", "completed", { finishesTaskIds: [TASK] })], setting: true, pr: false });
+  test("setting on, no PR: a completed lane with commits keeps the task open", async () => {
+    const h = harness({ lanes: [lane("marked", "completed", { finishesTaskIds: [TASK], baseRef: "b".repeat(40) })], setting: true, pr: false });
+    await h.sweep();
+    expect(h.status()).toBe("assigned");
+    expect(h.moves).toHaveLength(0);
+    expect(h.pipeline("marked").taskFinishes).toBeUndefined();
+  });
+
+  test("setting on, no PR: a lane proved unchanged from its base finishes without a merge", async () => {
+    const h = harness({ lanes: [lane("unchanged", "completed", { finishesTaskIds: [TASK], baseRef: "a".repeat(40) })], setting: true, pr: false });
+    await h.sweep();
+    expect(h.status()).toBe("done");
+    expect(h.moves).toHaveLength(1);
+  });
+
+  test("setting on, no PR: an unresolved base cannot prove a lane unchanged", async () => {
+    const h = harness({ lanes: [lane("legacy", "completed", { finishesTaskIds: [TASK], baseRef: "main" })], setting: true, pr: false });
+    await h.sweep();
+    expect(h.status()).toBe("assigned");
+    expect(h.moves).toHaveLength(0);
+  });
+
+  test("a recorded merge finishes the task even when the PR cache no longer resolves it", async () => {
+    const h = harness({ lanes: [lane("merged", "completed", { finishesTaskIds: [TASK], merge: merged() })], setting: true, pr: false });
+    await h.sweep();
+    expect(h.status()).toBe("done");
+  });
+
+  test("a recorded PR keeps the task open when its lookup disappears, until the cache observes its merge", async () => {
+    const h = harness({ lanes: [lane("awaiting-merge", "completed", {
+      finishesTaskIds: [TASK], baseRef: "a".repeat(40), merge: { ...merged(), state: "blocked", by: null },
+    })], setting: true, pr: false });
+    await h.sweep();
+    expect(h.status()).toBe("assigned");
+    expect(h.moves).toHaveLength(0);
+    h.ports.cachedState = () => "merged";
     await h.sweep();
     expect(h.status()).toBe("done");
     expect(h.moves).toHaveLength(1);

@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "2fa6519f486d85c973f71a2a2ea2514b9890ccac",
+  "candidateCommit": "dc0ef1ee9a6affac389f5e5b58fd1719af755de3",
+  "runtime": "Bun 1.4.0",
+  "isolation": {
+    "state": "synthetic private state",
+    "processes": "private PID namespace; only fixture processes"
+  },
+  "fixture": {
+    "pipelines": 120,
+    "pipelineJsonBytes": 44729661,
+    "registryConversations": 6000,
+    "transcriptMessages": 60,
+    "rounds": 3,
+    "tools": [
+      "list_pipelines (full)",
+      "get_pipeline (full)",
+      "conversation_messages",
+      "board_snapshot"
+    ]
+  },
+  "samples": {
+    "baseline": {
+      "before": {
+        "rss": 122138624,
+        "heapSize": 28437574,
+        "extraMemorySize": 7114438,
+        "objectCount": 357774
+      },
+      "after": {
+        "rss": 328466432,
+        "heapSize": 120321785,
+        "extraMemorySize": 78899017,
+        "objectCount": 765847
+      },
+      "collectedHeapGrowthBytes": 163668790
+    },
+    "candidate": {
+      "before": {
+        "rss": 112590848,
+        "heapSize": 25106648,
+        "extraMemorySize": 6327800,
+        "objectCount": 322533
+      },
+      "after": {
+        "rss": 144527360,
+        "heapSize": 29976707,
+        "extraMemorySize": 8306803,
+        "objectCount": 362595
+      },
+      "collectedHeapGrowthBytes": 6849062
+    }
+  },
+  "heapGraph": {
+    "baselineRetainer": "SqliteAgentRegistryStore.readOnlyCache.file.conversations; SqliteAgentRegistryStore.rowCache",
+    "baselineRetainedFixtureConversations": 6000,
+    "candidateRetainedFixtureConversations": 0
+  },
+  "interpretation": "One sample per revision after synchronous collection. RSS includes allocator high-water effects; heapSize plus extraMemorySize measures collected live heap. Full pipeline and message answer sizes are preserved. Legacy ancestry-only clients and candidate health probes keep local reads."
+}

@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
-import type { AccountRemovalRefusal, AccountRemovalSummary, ClaudeLoginView, EngineAccountsState } from "@/hooks/useEngineAccounts";
+import { createEngineAccountsStore, type AccountRemovalRefusal, type AccountRemovalSummary, type ClaudeLoginView, type EngineAccountsState } from "@/hooks/useEngineAccounts";
 
 import { AccountsPanel } from "./AccountsPanel";
 import { formatQuotaAsOf, formatResetEta } from "./rateLimit";
@@ -32,6 +32,7 @@ const login = (over: Partial<ClaudeLoginView> = {}): ClaudeLoginView => ({
 function state(currentLogin: ClaudeLoginView, over: Partial<EngineAccountsState> = {}): EngineAccountsState {
   return {
     engine: "claude",
+    hidden: [],
     accounts: [{ id: "acc", label: "Acc", kind: "managed", authPresent: false, loginPending: true, loginState: "pending", deviceAuth: null, login: currentLogin }],
     active: "acc",
     identityVersion: 0,
@@ -49,6 +50,7 @@ function state(currentLogin: ClaudeLoginView, over: Partial<EngineAccountsState>
     cancelLogin: async () => true,
     retryLogin: async () => true,
     remove: async () => true,
+    restore: async () => true,
     cleanupOrphans: async () => true,
     copyTerminalCommand: async () => true,
     refreshLimits: async () => true,
@@ -329,7 +331,7 @@ const SUMMARY: AccountRemovalSummary = {
   accountId: "acc", label: "Account B",
   archive: archiveUnderHome("claude-b"),
   files: 1284, bytes: 2_100_000_000, conversations: 37, pins: 2, deliveries: 1, migrations: 1,
-  credential: "clean",
+  credential: "clean", bindings: 0, hiddenHome: null,
 };
 
 test("the summary renders after the row is gone, with every counted line, and no Force remove anywhere", async () => {
@@ -741,4 +743,122 @@ test("an action in flight marks its button busy and holds the other action until
   expect(use.disabled).toBeTrue();
   expect(refresh.disabled).toBeTrue();
   expect(refresh.getAttribute("aria-busy")).toBeNull();
+});
+
+/* Task d7759de2: every account is removed through the one remove control. */
+const mainAcc = { id: "default", label: "Main", kind: "legacy" as const, authPresent: true, loginPending: false, loginState: "authenticated" as const, deviceAuth: null, login: null };
+
+test("Main arms and confirms through the same remove control, saying its folder is kept", async () => {
+  let removed: string | null = null;
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [mainAcc, managedAcc], active: "acc", remove: async (id) => { removed = id; return true; } }));
+  mounted.push(view);
+  flushSync(() => { (view.host.querySelector('[data-account-remove="default"]') as HTMLButtonElement).click(); });
+  const armed = view.host.querySelector('[data-account-remove-armed="default"]')!;
+  expect(armed.textContent).toContain("Remove Main from Delegatus? Nothing in its own folder is deleted");
+  flushSync(() => { buttonNamed(armed as HTMLElement, "Remove")!.click(); });
+  expect(removed as unknown as string).toBe("default");
+});
+
+test("a live-session refusal names each conversation as a link that opens it", async () => {
+  const refusal: AccountRemovalRefusal = {
+    accountId: "acc", label: "Acc", reasons: ["live_sessions"], sessionCount: 4,
+    sessions: [
+      { conversationId: "conversation_one", path: null, title: "Fix the login form" },
+      { conversationId: null, path: "/sessions/2026/10/rollout-two.jsonl", title: null },
+    ],
+  };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc], removal: { kind: "refused", refusal } }));
+  mounted.push(view);
+  const links = [...view.host.querySelectorAll("[data-account-refusal-sessions] a")] as HTMLAnchorElement[];
+  expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+    ["Fix the login form", "#c=conversation_one"],
+    ["rollout-two.jsonl", "#f=%2Fsessions%2F2026%2F10%2Frollout-two.jsonl"],
+  ]);
+  expect(view.host.querySelector("[data-account-refusal-sessions]")!.textContent).toContain("Open each one to stop it or move it to another account");
+  expect(view.host.querySelector("[data-account-refusal-sessions]")!.textContent).toContain("and 2 more");
+});
+
+test("Main's summary says its files stay in place and offers Show again", async () => {
+  let restored: string | null = null;
+  const hidden: AccountRemovalSummary = { ...SUMMARY, accountId: "default", label: "Main", archive: null, files: 0, bytes: 0, conversations: 0, pins: 1, deliveries: 0, migrations: 0, bindings: 2, hiddenHome: ["", "home", "someone", ".claude"].join("/") };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc], removal: { kind: "removed", summary: hidden }, restore: async (id) => { restored = id; return true; } }));
+  mounted.push(view);
+  const card = view.host.querySelector('[data-account-removal-card="removed"]')!;
+  expect(card.textContent).toContain("Main removed from Delegatus");
+  expect(card.textContent).toContain("Left where they are");
+  expect(card.textContent).toContain("~/.claude");
+  expect(card.textContent).toContain("2 project bindings removed");
+  expect(card.textContent).not.toContain("Moved");
+  flushSync(() => { buttonNamed(card as HTMLElement, "Show Main again")!.click(); });
+  expect(restored as unknown as string).toBe("default");
+  await view.rerender(state(login({ phase: "authenticated" }), { accounts: [mainAcc, managedAcc], removal: { kind: "removed", summary: { ...hidden, restored: "done" } } }));
+  expect(view.host.querySelector('[data-account-removal-restore="done"]')?.textContent).toContain("Main is listed again.");
+});
+
+test("a sign-in refusal ends the open sign-in from the refusal itself", async () => {
+  let canceled: string | null = null;
+  const refusal: AccountRemovalRefusal = { accountId: "acc", label: "Acc", reasons: ["login_pending"] };
+  const view = await mount(state(login({ operationId: "op-open", phase: "awaiting_code" }), { removal: { kind: "refused", refusal }, cancelLogin: async (operationId) => { canceled = operationId; return true; } }));
+  mounted.push(view);
+  const block = view.host.querySelector('[data-account-refusal="acc"]') as HTMLElement;
+  flushSync(() => { buttonNamed(block, "Cancel sign-in")!.click(); });
+  expect(canceled as unknown as string).toBe("op-open");
+});
+
+/* The summary's Show again lasts only until its ✕, the panel closing or a
+   reload. A hidden Main stays reachable from account setup after that. */
+test("a hidden Main is shown again from account setup after the summary is closed and the page reloaded", async () => {
+  let hidden = false;
+  const calls: string[] = [];
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    calls.push(`${method} ${url}${init?.body ? ` ${String(init.body)}` : ""}`);
+    if (url === "/api/accounts") {
+      return json({ claude: { active: "acc", accounts: [...(hidden ? [] : [mainAcc]), managedAcc], hidden: hidden ? [{ id: "default", label: "Main" }] : [] } });
+    }
+    if (url === "/api/accounts/claude" && method === "DELETE") {
+      hidden = true;
+      return json({ removed: { id: "default" }, hidden: { home: ["", "home", "someone", ".claude"].join("/") }, cleanupPending: false, moved: { archive: null, files: 0, bytes: 0 } });
+    }
+    if (url === "/api/accounts/claude" && method === "POST" && JSON.parse(String(init?.body)).action === "restore") {
+      hidden = false;
+      return json({ restored: { id: "default" } });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const settle = async (store: ReturnType<typeof createEngineAccountsStore>) => {
+    for (let turn = 0; turn < 50 && store.getSnapshot().mutation !== null; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  const first = createEngineAccountsStore("claude", { fetcher });
+  await first.refresh();
+  const view = await mount(first);
+  mounted.push(view);
+  await first.remove("default");
+  await view.rerender(first);
+  // While the summary is up, it is the one place that offers Main back.
+  expect(view.host.querySelector('[data-account-removal-card="removed"]')).not.toBeNull();
+  expect(view.host.querySelector("[data-account-hidden-offer]")).toBeNull();
+  first.dismissRemoval();
+  await view.rerender(first);
+  expect(view.host.querySelector('[data-account-removal-card="removed"]')).toBeNull();
+  expect(view.host.querySelector('[data-account-hidden-offer="default"]')?.textContent).toContain("Main is removed from Delegatus");
+
+  // A reload starts from a fresh store: no summary, Main still offered.
+  const reloaded = createEngineAccountsStore("claude", { fetcher });
+  await reloaded.refresh();
+  await view.rerender(reloaded);
+  expect(view.host.querySelector('[data-account-remove="default"]')).toBeNull();
+  const offer = view.host.querySelector('[data-account-restore="default"]') as HTMLButtonElement;
+  expect(offer.textContent).toBe("Show Main again");
+  flushSync(() => { offer.click(); });
+  await settle(reloaded);
+  await view.rerender(reloaded);
+
+  expect(calls).toContain('POST /api/accounts/claude {"action":"restore","id":"default"}');
+  expect(hidden).toBeFalse();
+  expect(view.host.querySelector('[data-account-remove="default"]')).not.toBeNull();
+  expect(view.host.querySelector("[data-account-hidden-offer]")).toBeNull();
 });
