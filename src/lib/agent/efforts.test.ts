@@ -4,7 +4,7 @@ import { effortMeter, effortScale } from "./efforts";
 
 describe("effortScale", () => {
   test("claude models all share the CLI scale low through max", () => {
-    for (const model of ["fable-5", "opus-4-8", "sonnet-5", "haiku-4-5", null]) {
+    for (const model of ["fable-5", "opus-4-8", "sonnet-5", "haiku-4-5", "haiku", "claude-haiku-5-5", "haiku-5-5", null]) {
       expect(effortScale("claude", model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
     }
   });

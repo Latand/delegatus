@@ -10,6 +10,16 @@ const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 const note = (method, params) => send({ method, params });
 const threadId = "voice_thread";
 const readArgs = { project: null, statuses: null, openOnly: true, query: null, ids: null, cursor: null, limit: null, refresh: null };
+if (mode === "replay") {
+  let consumed = 0;
+  setInterval(() => {
+    const file = `${root}/replay`;
+    if (!fs.existsSync(file)) return;
+    const rows = fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
+    for (const row of rows.slice(consumed)) send(JSON.parse(row));
+    consumed = rows.length;
+  }, 10);
+}
 readline.createInterface({ input: process.stdin }).on("line", line => {
   const message = JSON.parse(line);
   fs.appendFileSync(`${root}/wire`, `${line}\n`);

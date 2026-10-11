@@ -106,7 +106,7 @@ A live fact always beats a declaration: a card with a hold whose agent starts wo
 
 ### What is left out of the derived set
 
-The issue also names "a PR waits for CI" and "merged but not deployed" as candidate derived states. The Viewer holds no live evidence for either: the pull request state on a stage report is a snapshot, and deployments are recorded per release, with no link to a task. Deriving them needs forge polling and a task-to-deployment relation. The operator's words do not ask for them. They are in [Deferred](#deferred--not-currently-justified); until then an agent declares them as a hold ("waits on PR #N").
+The issue also names "a PR waits for CI" and "merged but not deployed" as candidate derived states. The Viewer holds no live evidence for either: the pull request state on a stage report is a snapshot, and deployments are recorded per release, with no link to a task. Deriving them needs forge polling and a task-to-deployment relation. The operator's words do not ask for them. They are in [Deferred](#deferred--not-currently-justified); until then an agent can declare a CI wait as a hold ("waits on PR #N"). Deployment progress is a task note: maintenance preserves Done while deployment is pending or unread, and with `mergeOnReview` on, all PRs merged and nothing promised open means Done, subject to the live-agent and open-pipeline guards. With it off, open tasks follow the project's deployment requirement.
 
 ## Question 2. A structured reason for anything that is not moving
 
@@ -355,7 +355,7 @@ Every state has a glyph and a word; colour is never the only signal.
 
 ## Deferred — not currently justified
 
-- **Derived "PR waits for CI" and "merged, not deployed".** Needs forge polling and a task-to-deployment relation. Until then these are declared holds. Revisit when #1446 (durable task, PR and deployment relations) lands.
+- **Derived "PR waits for CI" and "merged, not deployed".** Needs forge polling and a task-to-deployment relation. CI waits can be declared holds; deployment progress is a note and does not reopen Done tasks. See the completion policy in [Board maintainer](board-maintainer.md#52-the-scaffold-text-final). Revisit when #1446 (durable task, PR and deployment relations) lands.
 - **Live issue and PR state on steps.** Same polling cost. A step's `ref` is a link for now.
 - **Holds that clear themselves** when the referenced task is done or the PR merges. Useful, and it needs the relations above. For now a fulfilled hold is cleared by the agent or the operator; a `task` hold whose target is already Done reads "Waiting for «…» (done)", which makes the stale hold visible.
 - **Motion over MCP.** Row state is computed in the browser. Serving it needs the same facts server-side; agents get `hold` and `steps` now.
