@@ -9,7 +9,7 @@ import { CLAUDE_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from ".
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
 import { withAccountMutationLock } from "./accountMutation";
 import { providerSecretsAtHome, retainProviderRedactionSecrets } from "./providerSecretRedaction";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -345,8 +345,10 @@ export function setActiveClaudeAccount(id: string): void {
 /** Transcript trees kept by removed accounts: the shared archive (issue #1857),
     or the home itself for accounts retired in place before it (issue #643). */
 export function retiredClaudeProjectRoots(): string[] { return readRegistry().registry.retired.map((item) => projectsDirFor(item.archived ? retiredAccountArchive("claude", item.id) : managedHome(item.id))); }
-/** Every Claude transcript root the scanner reads: live accounts first, then retained archives. */
-export function claudeProjectRoots(): string[] { return [...new Set([...listClaudeAccounts().map((item) => item.projectsDir), ...retiredClaudeProjectRoots()])]; }
+/** Every Claude transcript root the scanner reads: live accounts first,
+ * then the shared store and retained archives. The shared store survives the
+ * last account's projects link being removed during archive cleanup. */
+export function claudeProjectRoots(): string[] { return [...new Set([...listClaudeAccounts().map((item) => item.projectsDir), sharedClaudeProjectsRoot(), ...retiredClaudeProjectRoots()])]; }
 
 /** Why a transcript names no owning Claude account, or which one it names. */
 export type ClaudeTranscriptOwnership =
@@ -591,10 +593,6 @@ export function listSavedClaudeProviderModels(account: Pick<ClaudeAccount, "home
   return listClaudeProviderModels(runtime.config, runtime.token, runtime.headers);
 }
 
-function historyFitsRetainedProjects(report: AccountHistoryInventoryReport): boolean {
-  return report.artifacts.filter((artifact) => artifact.history).every((artifact) => artifact.path.startsWith(`projects${path.sep}`));
-}
-
 const CLAUDE_SIDECAR_SUFFIXES = [".lock"] as const;
 
 function cleanupClaudeSidecars(id: string): boolean {
@@ -622,12 +620,13 @@ function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewr
 /** The registry once `id` is removed: it leaves, a retired record points at
     its archive, and its journal record moves to `scrubbing`. */
 function withAccountRetired(registry: Registry, id: string): Registry {
-  const label = registry.accounts.find((item) => item.id === id)?.label ?? id;
+  const previous = registry.retired.find((item) => item.id === id);
+  const label = registry.accounts.find((item) => item.id === id)?.label ?? previous?.label ?? id;
   return {
     ...registry,
     active: registry.active === id ? DEFAULT_ID : registry.active,
     accounts: registry.accounts.filter((item) => item.id !== id),
-    retired: [...registry.retired.filter((item) => item.id !== id), { id, label, retiredAt: Date.now(), archived: true }],
+    retired: [...registry.retired.filter((item) => item.id !== id), { id, label, retiredAt: previous?.retiredAt ?? Date.now(), archived: true }],
     removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
   };
 }
@@ -645,6 +644,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         home: managedHome(entry.id),
         entry,
         listed: registry.accounts.some((item) => item.id === entry.id),
+        retiredInPlace: registry.retired.some((item) => item.id === entry.id && !item.archived),
         commitRetired: () => { write(withAccountRetired(mutable(), entry.id)); },
         clearJournal: () => writeJournal(entry.id, null),
       });
@@ -704,9 +704,26 @@ export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalRep
   });
 }
 
-/** Removes failed-login homes that have no registry owner. Only safe direct
- *  children qualify. Retired archives are never deleted — their transcripts are
- *  the point — but a strip left incomplete by an earlier removal is retried. */
+/** The caller holds the registry lock; the existing removal journal fences
+ * the move and registry rewrites of a home retired before shared archives. */
+function archiveRetiredClaudeHome(id: string): AccountArchiveRemovalReport {
+  const before = mutable();
+  return removeManagedAccountIntoArchive({
+    engine: "claude", accountId: id, home: managedHome(id),
+    homeIsSafe: () => managedClaudeHomeIsSafe(id, true),
+    unsafeHome: () => new UnsafeClaudeHomeError(),
+    rewrites: claudeArchiveRewrites,
+    registry: {
+      journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
+      commitRetired: () => write(withAccountRetired(before, id)),
+      restore: () => write(before),
+    },
+  });
+}
+
+/** Removes safe failed-login homes, moves retired-in-place homes into the
+ * shared archive, and retries incomplete credential cleanup. Archived
+ * transcripts remain retained. */
 export function cleanupOrphanedClaudeHomes(): AccountOrphanCleanupReport {
   return withRegistryLock(() => {
     /* A removal whose archive still holds its sign-in file stays journaled;
@@ -714,12 +731,12 @@ export function cleanupOrphanedClaudeHomes(): AccountOrphanCleanupReport {
     const recovery = recoverRemovalsLocked();
     const registry = mutable();
     const registered = new Set(registry.accounts.map((account) => account.id));
-    const retired = new Set(registry.retired.map((account) => account.id));
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(claudeAccountsRoot(), { withFileTypes: true }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { removed: [], unresolved: [...recovery.unresolved].sort() }; throw error; }
     const removed: string[] = [];
     const unresolved: string[] = [...recovery.unresolved];
+    const archived: NonNullable<AccountOrphanCleanupReport["archived"]> = [];
     const historyReports: Record<string, AccountHistoryInventoryReport> = {};
     const cleanupSidecar = (accountId: string): void => {
       const sidecars = cleanupAccountProviderSidecars(claudeAccountsRoot(), accountId, CLAUDE_SIDECAR_SUFFIXES);
@@ -740,35 +757,25 @@ export function cleanupOrphanedClaudeHomes(): AccountOrphanCleanupReport {
         continue;
       }
       if (registered.has(entry.name)) continue;
+      if (unresolved.includes(entry.name)) continue;
       if (accountRemovalBlockers("claude", entry.name).length > 0) { unresolved.push(entry.name); continue; }
       if (!entry.isDirectory() || !managedClaudeHomeIsSafe(entry.name, true)) { unresolved.push(entry.name); continue; }
+      const retired = registry.retired.find((account) => account.id === entry.name);
+      if (retired) {
+        if (retired.archived) { unresolved.push(entry.name); continue; }
+        try {
+          const report = archiveRetiredClaudeHome(entry.name);
+          archived.push({ id: entry.name, files: report.files, bytes: report.bytes });
+          if (report.cleanupPending) unresolved.push(entry.name);
+          cleanupSidecar(entry.name);
+        } catch { unresolved.push(entry.name); }
+        continue;
+      }
       let history: AccountHistoryInventoryReport;
       try { history = accountHistoryInventory("claude", entry.name, managedHome(entry.name)); }
       catch (error) {
         if (error instanceof AccountHistoryInventoryBlockedError) historyReports[entry.name] = error.report;
         unresolved.push(entry.name); continue;
-      }
-      if (retired.has(entry.name)) {
-        if (!history.artifacts.some((artifact) => artifact.history)) {
-          try {
-            if (removeHistoryFreeAccountHome("claude", entry.name, managedHome(entry.name))) removed.push(entry.name);
-            else unresolved.push(entry.name);
-          } catch (error) {
-            if (error instanceof AccountHistoryInventoryBlockedError) historyReports[entry.name] = error.report;
-            unresolved.push(entry.name);
-          }
-          continue;
-        }
-        if (!historyFitsRetainedProjects(history)) { historyReports[entry.name] = history; unresolved.push(entry.name); continue; }
-        try {
-          const scrub = scrubAccountHomeToRetainedHistory("claude", entry.name, managedHome(entry.name), "projects");
-          if (!scrub.complete) unresolved.push(entry.name);
-          else if (scrub.changed) removed.push(entry.name);
-        } catch (error) {
-          if (error instanceof AccountHistoryInventoryBlockedError) historyReports[entry.name] = error.report;
-          unresolved.push(entry.name);
-        }
-        continue;
       }
       if (history.artifacts.some((artifact) => artifact.history)) { historyReports[entry.name] = history; unresolved.push(entry.name); continue; }
       try {
@@ -793,6 +800,7 @@ export function cleanupOrphanedClaudeHomes(): AccountOrphanCleanupReport {
     return {
       removed: removed.sort(),
       unresolved: unresolved.sort(),
+      ...(archived.length > 0 ? { archived: archived.sort((left, right) => left.id.localeCompare(right.id)) } : {}),
       ...(Object.keys(historyReports).length > 0 ? { history: historyReports } : {}),
     };
   });
