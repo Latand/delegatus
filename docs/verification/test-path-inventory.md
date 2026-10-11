@@ -2238,3 +2238,30 @@ observed. The existing probe test file records the owned child and checks it
 is absent both when each shared close completes and when the probe returns.
 The regression passes in **4.53 seconds**, and the full file passes **13/0**
 under isolated state through the owned gate.
+
+### Probe exit with inherited stdio
+
+Supplemental review reproduced a cleanup rejection after the owned child had
+already exited: a descendant retained stdout and stderr, delaying the child's
+`close` event beyond the SIGKILL deadline. The SDK starts its first close
+without awaiting it, so that rejection escaped the probe's final cleanup.
+
+The transport now observes `exit` or an already-recorded termination status,
+then releases its own pipe handles in `finally`. Concurrent closes retain one
+cleanup promise. Cleanup failures are consumed there and included in the
+probe's redacted failure evidence after its final close.
+
+The existing test file retains the cooperative and SIGTERM-ignoring cases and
+adds an inherited-pipe case: the recorded parent is absent at every completed
+close and at probe return, while its recorded descendant is still alive. The
+fixture stops that descendant by its recorded PID. A separate fault injection
+refuses only the owned child's SIGKILL; the two-second deadline is reported in
+the probe evidence without an unhandled rejection, and the fixture then stops
+its child. Both cases preserve the eight-second total cleanup bound.
+
+The full isolated probe file passes **15/0**, with inherited-pipe cleanup in
+**4.54 seconds** and the refused-SIGKILL cleanup result in **6.55 seconds**.
+Types through the shared gate, changed-file lint, whitespace and the
+fingerprint-aware local privacy check with commit inspection pass. Pinned Bun
+1.4.0 runtime-host succession passes, with **27/27** responses on each endpoint
+over 15 seconds while 13 clients per endpoint abandon their replies.
