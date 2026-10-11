@@ -200,6 +200,33 @@ test("a failed read followed by a different native id never attributes this row"
 });
 
 for (const origin of ["operator", "agent"] as const) {
+  test(`a failed read adopts ${origin} evidence resolved by another mounted reader`, async () => {
+    setMessageProvenanceRetryScheduleForTests([10, 10]);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      if (++calls === 1) { await gate; return failedRead("503"); }
+      return globalThis.Response.json({ messages: { [ENGINE_MESSAGE_ID]: { origin } } });
+    }) as unknown as typeof fetch;
+    const first = await mount([deliveredEntry], deliveredEntry.item);
+    let second: Awaited<ReturnType<typeof mount>> | undefined;
+    try {
+      expect(first.text()).toBe("unresolved");
+      second = await mount([deliveredEntry], deliveredEntry.item);
+      expect(second.text()).toBe(origin);
+      await act(async () => { release(); });
+      expect(first.text()).toBe(origin);
+      expect(first.pending()).toBe("false");
+      await act(async () => { await sleep(50); });
+      expect(calls).toBe(2);
+    } finally {
+      release();
+      await first.unmount();
+      await second?.unmount();
+    }
+  });
+
   test(`cached ${origin} evidence survives failed revalidation of another row`, async () => {
     setMessageProvenanceRetryScheduleForTests([10, 10]);
     const other: FeedEntry = { ...deliveredEntry, key: "other-row", item: { ...deliveredEntry.item, deliveredMessage: { engineMessageId: "unresolved-native-id" } } as Item };

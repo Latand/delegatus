@@ -586,7 +586,6 @@ export function useDeliveredMessageProvenance(
             .filter(m => retry >= retryDelaysMs.length || !(Date.now() - m.tsMs < RECENT_ROW_MS)).map(m => m.key)])].slice(-1000),
         };
         provenanceCache.set(path, merged);
-        setData(merged);
       } catch {
         /* quiet: absence renders as today's row */
       } finally {
@@ -595,9 +594,11 @@ export function useDeliveredMessageProvenance(
           markMessagesRead(wanted);
         }
         if (alive) {
-          /* A failed read preserves evidence and uses the same relevance and
+          /* A failed read adopts cached evidence and uses the same relevance and
              retry bounds as an empty answer. Cleanup retires this attempt. */
-          const current = provenanceCache.get(path) ?? { messages: {}, occurrences: [], submissions: {}, senders: {} };
+          const cached = provenanceCache.get(path);
+          if (cached) setData(cached);
+          const current = cached ?? { messages: {}, occurrences: [], submissions: {}, senders: {} };
           if (retry < retryDelaysMs.length && unresolvedDrivers(wanted, current, true, Date.now())) {
             timer = setTimeout(() => void attempt(retry + 1), retryDelaysMs[retry]);
           } else settleMessages(wanted);
