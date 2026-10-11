@@ -7,6 +7,7 @@ import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, ty
 import { ownerRequest, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
 import { relayClaimCapabilities } from "./poller";
 import { setRelaySwitch } from "./switches";
+import { assertOwnerCaptureResponse } from "./ownerCapture.fixture";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -1712,6 +1713,11 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(run.rounds[1].prompt).not.toContain("2026-10-10T00:10:00Z");
         expect(run.rounds[1].prompt).toContain("nothing you can call confirms it");
         expect(run.rounds[1].schema).toEqual(answerSchema);
+      }
+      // The regeneration command selects this test alone. Refuse malformed
+      // R8 bodies here as well as in the committed-capture regression.
+      for (const call of calls) for (const attempt of call.attempts) {
+        if (attempt.response) assertOwnerCaptureResponse(attempt.response);
       }
       capture.push({ name, x1: { amendment_revision: "03de6455", amendment_sha256: "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
         claim: "claimed_tools_owner_tools.json", claim_source: "local I10 owner index over unchanged X1 2b claim", index: "owner-tools-index.json" }, calls,

@@ -112,6 +112,9 @@ retries, inner 404, lease loss and confirmation retain their X4 coverage.
 `ownerCapture.test.ts` validates every captured ToolCallResult envelope and
 every successful body with Draft 2020-12, including nested response items
 and formats, and checks the transport refusals, 204 and inner error bodies.
+The same response validator runs inside the existing X4 runner test before
+it writes a capture, so its regeneration command rejects invalid R8 bodies
+even when the standalone capture test is filtered out.
 `owner-tools-response-schemas.json` contains the 14 public operation response
 schemas and their reference closure, copied from the agreed OpenAPI revision
 and identified by its source path and digest. CI uses that public snapshot.
@@ -131,4 +134,5 @@ sides; this capture authorizes neither enablement nor deployment.
 | `owner-tools-off-v3-hashes.json` | 4760 | `bff586d8e1b96c2e3225d19b3227035c8da2c650d6c838dcc8ffa5814b4bde38` |
 | `owner-tools-off-runner-hashes.json` | 2879 | `709baf921762e4e9fdab4ab70eafd6141b0f7da7bac342d65ea7741374f9e9e2` |
 
-Install X4 capture: 22956 bytes, SHA-256 `791d1c97d8da0359927fb909dca6cc05839ff88e772ac2c65fd591695599367b`.
+Original X4 capture before the R8 correction: 22,956 bytes, SHA-256
+`791d1c97d8da0359927fb909dca6cc05839ff88e772ac2c65fd591695599367b`.
