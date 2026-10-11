@@ -14,6 +14,7 @@ import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/co
 /* The state dir must point at a sandbox before store.ts computes its
    module-level constants, so exec/store load dynamically after the env set. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-exec-test-"));
+const managedCodexHome = path.join(process.env.LLV_STATE_DIR, "managed-codex");
 const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
 const restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
 const { forgetHeadlessReview, headlessReviewStatus, reviewerCommand, scanEventStream, startHeadlessReview, terminateHeadlessReviewerGroup, terminateHeadlessReviewerGroupAndWait } = await import("./exec");
@@ -32,6 +33,8 @@ afterAll(async () => {
 test("headless exec argv carries delegation denial and disables unknown features", () => {
   const built = reviewerCommand({ engine: "codex", model: null, effort: null }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
   expect(built.args).toContain("agents.enabled=false");
+  expect(built.args).toContain("features.hooks=true");
+  expect(built.args.some(arg => arg.startsWith("hooks.PreToolUse=["))).toBe(true);
   expect(built.args).toContain('approvals_reviewer="user"');
   for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) {
     expect(built.args[built.args.indexOf(feature) - 1]).toBe("--disable");
@@ -80,7 +83,7 @@ test.each([
     expect([built.env.GIT_AUTHOR_NAME, built.env.GIT_AUTHOR_EMAIL, built.env.GIT_COMMITTER_NAME, built.env.GIT_COMMITTER_EMAIL])
       .toEqual([name, email, name, email]);
     if (engine === "claude") {
-      const settings = JSON.parse(built.args[built.args.indexOf("--settings") + 1]!);
+      const settings = JSON.parse(fs.readFileSync(built.args[built.args.indexOf("--settings") + 1]!, "utf8"));
       expect(settings.env).toEqual({ ...agentPublicationIdentityEnv(process.env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" });
     } else {
       expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
@@ -390,12 +393,12 @@ test("headless managed Codex reviewer fixes its account home and file credential
     "review prompt",
     "/out/review.md",
     "/repo",
-    { home: "/accounts/work", managed: true },
+    { home: managedCodexHome, managed: true },
     null,
     "B".repeat(43),
   );
 
-  expect(built.env.CODEX_HOME).toBe("/accounts/work");
+  expect(built.env.CODEX_HOME).toBe(managedCodexHome);
   expect(built.args).toContain("cli_auth_credentials_store=file");
   expect(built.env.LLV_TOKEN).toBeUndefined();
   expect(built.env.LLV_SPAWN_CAPABILITY).toBe("B".repeat(43));
@@ -412,7 +415,7 @@ test("a headless reviewer never inherits the Viewer's state owner claim", () => 
       const built = reviewerCommand({ engine, model: null, effort: null }, "review prompt", "/out/review.md", "/repo");
       expect(built.env.LLV_STATE_OWNER).toBeUndefined();
     }
-    const managed = reviewerCommand({ engine: "codex", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", { home: "/accounts/work", managed: true });
+    const managed = reviewerCommand({ engine: "codex", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", { home: managedCodexHome, managed: true });
     expect(managed.env.LLV_STATE_OWNER).toBeUndefined();
   } finally {
     if (held === undefined) delete process.env.LLV_STATE_OWNER;
@@ -581,7 +584,7 @@ test("restart reconstruction: dead run with no output at all times out past the 
 test("a headless Claude reviewer is a clean launch on every account path: auto memory off and no shared-memory hook", () => {
   const settingsOf = (built: ReturnType<typeof reviewerCommand>) => {
     const value = built.args[built.args.indexOf("--settings") + 1]!;
-    return JSON.parse(value.startsWith("{") ? value : fs.readFileSync(value, "utf8")) as { autoMemoryEnabled?: boolean; env: Record<string, string>; hooks?: { UserPromptSubmit?: unknown[] } };
+    return JSON.parse(value.startsWith("{") ? value : fs.readFileSync(value, "utf8")) as { autoMemoryEnabled?: boolean; env: Record<string, string>; hooks?: { UserPromptSubmit?: unknown[]; PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> } };
   };
   /* The hook would install for a launch holding a capability; the port is closed. */
   const saved = { capability: process.env.LLV_SPAWN_CAPABILITY, port: process.env.LLV_VIEWER_PORT };
@@ -598,6 +601,8 @@ test("a headless Claude reviewer is a clean launch on every account path: auto m
       expect(settings.autoMemoryEnabled).toBe(false);
       expect(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
       expect(JSON.stringify(settings.hooks?.UserPromptSubmit ?? [])).not.toContain("shared-memory-");
+      const cleanup = settings.hooks?.PreToolUse.find(group => group.matcher === "Bash");
+      expect(cleanup?.hooks[0].command.startsWith("LLV_MANAGED_PROCESS_CLEANUP_DENY=1 ")).toBe(true);
       expect(built.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
     }
   } finally {

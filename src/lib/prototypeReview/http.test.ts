@@ -18,6 +18,7 @@ import { injectStateWriteFaultForTests } from "@/lib/state/sqliteStateStore";
 import { roundDirectory, roundMedia } from "./store";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { prototypeWorld } from "./world";
+import { settlePrototypeDeliveriesForTests } from "./deliveryWorker";
 import { GET as tasksGET } from "@/app/api/tasks/route";
 import { PATCH as taskPATCH } from "@/app/api/tasks/[id]/route";
 import { DELETE as assignmentDELETE, PATCH as assignmentPATCH } from "@/app/api/tasks/[id]/assignment/route";
@@ -34,7 +35,7 @@ const MP4 = Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from("ftypisom"),Buffe
 const WEBM = Buffer.concat([Buffer.from([0x1a,0x45,0xdf,0xa3,0x42,0x82,0x84]),Buffer.from("webm")]);
 beforeEach(() => saveTasks([task()]));
 function task() { return { id: "task-prototype", project: "project-a", status: "inbox" as const, placement: "unplaced" as const, text: "Review layout", assignments: [], sources: [], createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }; }
-afterEach(async () => { injectStateWriteFaultForTests(null); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => { await settlePrototypeDeliveriesForTests(); injectStateWriteFaultForTests(null); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 function request(url: string, body?: unknown) {
   return new NextRequest(`http://localhost${url}`, { headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
@@ -132,7 +133,10 @@ test("no orchestrator keeps the decision, combination, exact comment and history
   expect(prototypeReviewSummary(loadTasks()[0]!.prototypeReviews!)?.decision?.chosen).toEqual([{number: 1,name: "Compact"},{number: 2,name: "Roomy"}]);
   const next = await publish(await fullInput("round-two")); expect((await read()).waitingReviewId).toBe(next); expect((await read()).rounds).toHaveLength(2);
   expect(prototypeReviewNotices(loadTasks())).toHaveLength(1);
-  const conflict = await reviewPOST(request("/review",{ reviewId: id,chosen: [1],comment: "Changed decision" }),"task-prototype"); expect(conflict.status).toBe(409);
+  // Nothing was ever handed to a seat, so a changed decision replaces the first one.
+  const changed = await reviewPOST(request("/review",{ reviewId: id,chosen: [1],comment: "Changed decision" }),"task-prototype"); expect(changed.status).toBe(200);
+  expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toMatchObject({ chosen: [1],comment: "Changed decision",revision: 2,delivery: { state: "no-orchestrator",clientMessageId: `prototype-decision:${id}:2` } });
+  expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.delivery.text).not.toContain("amended");
 });
 
 test("a decision on the newer of two rounds retires the older undecided one: nothing waits, history keeps it as superseded", async () => {
@@ -385,7 +389,10 @@ test("questions-only publication and answers round trip through operator and age
   }
   expect(prototypeReviewNotices(loadTasks())).toEqual([]);
   expect((await reviewPOST(request("/review", answer), "task-prototype")).status).toBe(200);
-  expect((await reviewPOST(request("/review", { ...answer, answers: expected.map(a => a.questionId === "place" ? { ...a, options: [0] } : a) }), "task-prototype")).status).toBe(409);
+  expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.revision).toBe(1);
+  const changed = expected.map(a => a.questionId === "place" ? { ...a, options: [0] } : a);
+  expect((await reviewPOST(request("/review", { ...answer, answers: changed }), "task-prototype")).status).toBe(200);
+  expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toMatchObject({ answers: changed, revision: 2 });
 });
 
 
@@ -416,14 +423,16 @@ test("skip takes server recommendations and delivers one durable answer message"
   const world = { ...prototypeWorld, orchestrator: () => "conversation_seat" };
   const id = await publish({ clientRequestId: "skip", taskId: "task-prototype", title: "Before work", questions }, world);
   const sent: string[] = [];
-  const delivery = { recover: async () => null, send: async (_request: NextRequest, decision: import("./types").PrototypeDecision) => { sent.push(decision.delivery.text); return { state: "sent" as const }; }, retry: async () => ({ state: "sent" as const }) };
+  const delivery = { recover: async () => null, send: async (decision: import("./types").PrototypeDecision) => { sent.push(decision.delivery.text); return { state: "sent" as const }; }, retry: async () => ({ state: "sent" as const }) };
   const payload = { reviewId: id, chosen: [], comment: "", skip: true };
   expect((await reviewPOST(request("/review", payload), "task-prototype", world, delivery)).status).toBe(200);
+  await settlePrototypeDeliveriesForTests();
   expect((await read()).rounds[0]!.decision).toMatchObject({ skipped: true, answers: questions.map(q => ({ questionId: q.id, options: [0] })), delivery: { state: "sent" } });
   expect(sent).toHaveLength(1);
   expect(sent[0]).toContain("Answers: skipped, use your recommendations.");
   for (const q of questions) expect(sent[0]).toContain(q.options[0]!.label + " (recommended)");
   expect((await reviewPOST(request("/review", payload), "task-prototype", world, delivery)).status).toBe(200);
+  await settlePrototypeDeliveriesForTests();
   expect(sent).toHaveLength(1);
 });
 
