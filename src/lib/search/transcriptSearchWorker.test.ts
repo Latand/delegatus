@@ -282,7 +282,32 @@ test("exit and malformed protocol fail cleanly and the next request starts a rep
   await expect(lane.search({ query: "malformed" })).rejects.toThrow("worker is unavailable");
   stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
   expect((await lane.search({ query: "repaired" })).total).toBe(0);
-});
+
+  for (const exitCode of [1, 0]) {
+    stub(`
+      if (frame.options.query === "prepare") {
+        const descendant = spawn(process.execPath, ["-e", 'setInterval(() => {}, 1000);'], { stdio: ["ignore", "inherit", "inherit"] });
+        fs.writeFileSync(${JSON.stringify(path.join(root, "pids"))}, JSON.stringify([process.pid, descendant.pid]));
+        process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");
+      } else { process.exit(${exitCode}); }`);
+    await lane.shutdown();
+    await lane.search({ query: "prepare" });
+    const identities = (JSON.parse(fs.readFileSync(path.join(root, "pids"), "utf8")) as number[]).map(pid => captureProcessIdentity(pid));
+    try {
+      const error = await lane.search({ query: "exit-with-descendant" }).catch(error => error);
+      expect(error.message).toBe("Transcript search worker is unavailable");
+      await lane.shutdown();
+      for (const identity of identities) {
+        expect(processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)).toBe(true);
+      }
+      stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
+      expect((await lane.search({ query: "replacement" })).total).toBe(0);
+    } finally {
+      for (const identity of identities.reverse()) await stopFixtureIdentity(identity);
+      await lane.shutdown();
+    }
+  }
+}, 40_000);
 
 test("a throwing trusted projector closes the read snapshot and remains retryable", async () => {
   await seed();
