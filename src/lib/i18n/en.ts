@@ -3337,8 +3337,10 @@ export const en = {
   /* «Готово» (docs/design/done-section.md §4): finished work that waits in
      the same panel until the operator accepts it. */
   "done.title": "Done",
-  "done.acceptAll": "Accept all {count}",
-  "done.acceptAllTitle": "Accept everything finished here; it leaves the count",
+  "done.acceptAll": "Seen all",
+  "done.acceptAllTitle": "Mark everything finished here as seen; it leaves the count",
+  "done.fold": "Fold «Done» · {count}",
+  "done.unfold": "Show «Done» · {count}",
   "done.accept": "Accept",
   "done.acceptCount": "Accept {count}",
   "done.acceptAria": "Accept: {title}",

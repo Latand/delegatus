@@ -52,9 +52,9 @@ import { PermissionActions } from "./PermissionActions";
  * the same on both surfaces. The wait gives way to an ellipsis before the age
  * does: the age is the one fact on the line that must stay whole.
  *
- * Below the queue, «Готово» (docs/design/done-section.md) lists the finished
- * work of the same slice still waiting to be accepted, the same section the
- * desktop panel ends with; the header's count holds both until it is
+ * At the top of the sheet, «Готово» (docs/design/done-section.md) lists the
+ * finished work of the same slice still waiting to be accepted, newest first,
+ * the same list the desktop panel and the report log pin at their tops; the header's count holds both until it is
  * accepted, and «Dismiss all» counts only the decisions it clears.
  *
  * A row is the phone's OPEN gesture (#1244): the conversation screen it pushes
@@ -232,6 +232,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
         </>
       ) : null}
     >
+      <DoneSection items={done} current={current} projectNames={projectNames} surface="phone" place="needs-you" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />
       {notices.length ? (
         <div className="flex flex-col" data-mobile2-notices={notices.length}>
           <MobileSheetSection>{t("notices.title")}</MobileSheetSection>
@@ -293,7 +294,6 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
       ) : notices.length || done.length ? null : (
         <div className="px-4 py-4 text-center text-ui text-muted" data-mobile2-attention-empty>{t("mobile2.attention.empty")}</div>
       )}
-      <DoneSection items={done} current={current} projectNames={projectNames} surface="phone" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />
     </MobileSheet>
   );
 }

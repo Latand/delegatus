@@ -46,9 +46,10 @@ import { PermissionActions } from "./PermissionActions";
  * `docked`: a column beside the board, whose head lines up with the board's
  * bar. `overlay`: the same list under the header control, over the board.
  *
- * «Готово» (docs/design/done-section.md) is the last block of the body: the
- * finished work waiting to be accepted, which the title counts with the
- * decisions until it is accepted. «Dismiss all» still counts what it clears.
+ * «Готово» (docs/design/done-section.md) is pinned under the head, above the
+ * decisions: the finished work waiting to be accepted, newest first, which the
+ * title counts with the decisions until it is accepted. «Dismiss all» still
+ * counts what it clears.
  */
 
 export type AttentionPanelPlacement = "docked" | "overlay";
@@ -254,14 +255,17 @@ export function AttentionPanel({
           </section>
         );
       })}
-      <DoneSection items={done} current={current} projectNames={projectNames} surface="desktop" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />
     </div>
   );
+  /* «Готово» is pinned under the head, above the scrolling decisions, in a
+     band of its own that scrolls inside itself. */
+  const doneSection = <DoneSection items={done} current={current} projectNames={projectNames} surface="desktop" place="needs-you" band="max-h-[42vh]" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />;
 
   if (docked) {
     return (
       <aside className="flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-card" aria-label={t("attention.panelAria")} data-needs-you-panel="docked">
         {head}
+        {doneSection}
         {body}
       </aside>
     );
@@ -274,6 +278,7 @@ export function AttentionPanel({
       className="absolute right-0 top-[calc(100%+6px)] z-50 flex max-h-[75vh] w-[360px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-1"
     >
       {head}
+      {doneSection}
       {body}
     </div>
   );

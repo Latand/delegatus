@@ -394,7 +394,7 @@ test("a questionnaire waiting row asks for an answer", async () => {
  * double that records them the way the server does.
  */
 
-const { resetDoneItemsForTests, useDoneItems } = await import("./doneItems");
+const { refreshDoneItems, resetDoneItemsForTests, useDoneItems } = await import("./doneItems");
 type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
 
 function doneItem(key: string, over: Partial<DoneItemV1> = {}): DoneItemV1 {
@@ -468,22 +468,24 @@ const doneRows = (host: HTMLElement) => [...host.querySelectorAll("[data-done-ro
   return `group:${row.getAttribute("data-done-group") ?? row.getAttribute("data-done-group-receipt")}`;
 });
 
-test("«Готово» follows every decision, in its own order, and the panel's title counts both", async () => {
+test("«Готово» is pinned above the decisions, newest first, and the panel's title counts both", async () => {
   doneServer = doneWorld();
   const host = await mountDone();
   const body = host.querySelector("[data-needs-you-body]")!;
   const section = host.querySelector("[data-done-section]")!;
-  expect(body.lastElementChild).toBe(section);
-  /* After every project section. */
-  expect([...body.children].indexOf(section)).toBeGreaterThan([...body.children].indexOf(host.querySelector(`[data-needs-you-section="${BETA}"]`)!));
+  /* Under the head and outside the decisions' scroller, so it never scrolls away. */
+  expect(body.contains(section)).toBe(false);
+  expect(section.nextElementSibling).toBe(body);
+  expect(section.getAttribute("data-done-place")).toBe("needs-you");
+  expect(section.querySelector("[data-done-list]")!.className).toContain("overflow-y-auto");
   expect(title(host)).toBe("Waiting for you · 12");
   expect(section.querySelector("[data-done-count]")!.textContent).toBe("6");
-  expect(section.querySelector("[data-done-accept-all]")!.textContent).toBe("Accept all 6");
+  expect(section.querySelector("[data-done-accept-all]")!.textContent).toBe("Seen all");
   /* «Dismiss all» still counts the decisions it clears. */
   expect(host.querySelector("[data-needs-you-dismiss-all]")!.textContent).toBe("Dismiss all 6");
-  /* Visible first, then deploys, then the technical group, the PR-less group, then limits. */
+  /* Newest first: a row at its own time, a group at its newest member's. */
   expect([...section.querySelectorAll("[data-done-row], [data-done-group]")].map((row) => row.getAttribute("data-done-row") ?? row.getAttribute("data-done-group")))
-    .toEqual(["pr:acme/widgets#2691", "deploy:d1", "technical", "closed", "limit:codex:acct-b:session:1"]);
+    .toEqual(["deploy:d1", "closed", "technical", "pr:acme/widgets#2691", "limit:codex:acct-b:session:1"]);
   const deploy = section.querySelector('[data-done-row="deploy:d1"]')!;
   expect(deploy.querySelector("[data-done-sentence]")!.textContent).toBe("Delegatus was updated");
   expect(deploy.querySelector("[data-done-meta]")!.textContent).toMatch(/^deploy · \d/);
@@ -514,8 +516,8 @@ test("«Accept» takes a row out of every count at once and leaves «… · acce
   /* The «·» is bound to the name, so a wrapped receipt never starts a line with it. */
   expect(receipt.querySelector("[data-done-receipt-text]")!.lastElementChild!.textContent).toBe("accepted");
   expect(receipt.querySelector("[data-done-receipt-text]")!.textContent).toBe("Delegatus was updated\u00a0· accepted");
-  /* In its place: the row it replaced was second. */
-  expect(doneRows(host)).toEqual(["pr:acme/widgets#2691", "receipt:deploy:d1", "group:technical", "group:closed", "limit:codex:acct-b:session:1"]);
+  /* In its place: the row it replaced was the newest, first. */
+  expect(doneRows(host)).toEqual(["receipt:deploy:d1", "group:closed", "group:technical", "pr:acme/widgets#2691", "limit:codex:acct-b:session:1"]);
   await click(receipt.querySelector("[data-done-undo]")!);
   expect(acknowledged[1]).toEqual({ keys: ["deploy:d1"], undo: true, surface: "desktop" });
   expect(title(host)).toBe("Waiting for you · 12");
@@ -572,6 +574,42 @@ test("a Ukrainian topic never ends on an adjective without its noun", async () =
   ]);
   expect(topics).toBe("Прибрано порожній лоток, мерджер приймає");
   expect(more).toBe("і ще 1");
+});
+
+test("a new outcome arrives at the top of the list, a technical one with its group", async () => {
+  doneServer = doneWorld();
+  const host = await mountDone();
+  const order = () => [...host.querySelectorAll("[data-done-section] [data-done-row], [data-done-section] [data-done-group]")].map((row) => row.getAttribute("data-done-row") ?? row.getAttribute("data-done-group"));
+  expect(order()[0]).toBe("deploy:d1");
+  doneServer.push(doneItem("report:r-new", { kind: "report", look: "incident", at: iso(60), title: "A lane stalled and was restarted" }));
+  await act(async () => { await refreshDoneItems(); });
+  expect(order()[0]).toBe("report:r-new");
+  doneServer.push(doneItem("pr:acme/widgets#2750", { at: iso(30), title: "Retries wait for the lock", refs: { pr: pr(2750) } }));
+  await act(async () => { await refreshDoneItems(); });
+  expect(order().slice(0, 2)).toEqual(["technical", "report:r-new"]);
+  expect(host.querySelector('[data-done-group="technical"] [data-done-group-line]')!.textContent).toMatch(/^Retries wait/);
+});
+
+test("the head folds the list to «Done · N» and remembers it; «Seen all» still works folded", async () => {
+  doneServer = doneWorld();
+  let host = await mountDone();
+  const fold = () => host.querySelector<HTMLElement>("[data-done-fold]")!;
+  expect(fold().getAttribute("aria-expanded")).toBe("true");
+  await click(fold());
+  expect(fold().getAttribute("data-done-fold")).toBe("folded");
+  expect(host.querySelector("[data-done-list]")).toBeNull();
+  expect(host.querySelector("[data-done-count]")!.textContent).toBe("6");
+  expect(dom.localStorage.getItem("llvDoneFolded:needs-you:desktop")).toBe("1");
+  /* Another mount on this device opens folded. */
+  await act(async () => { root?.unmount(); });
+  root = null;
+  host = await mountDone();
+  expect(fold().getAttribute("data-done-fold")).toBe("folded");
+  await click(host.querySelector("[data-done-accept-all]")!);
+  expect(acknowledged[0]!.keys).toHaveLength(6);
+  expect(title(host)).toBe("Waiting for you · 6");
+  await click(fold());
+  expect(host.querySelector("[data-done-all-accepted]")).not.toBeNull();
 });
 
 test("«Accept all» leaves only the decisions in the count, and one receipt takes the whole batch back", async () => {

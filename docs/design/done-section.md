@@ -32,13 +32,30 @@ The review's raw answers: variant 2 chosen; the trigger question answered
 «Other» with the comment quoted above; technical grouping, counter, scope and
 Telegram took the recommended options. On 2026-10-10 (task `a16e413e`) the
 operator had kept the panel to real decisions and turned down a «Вирішено без
-вас» section; this choice adds «Готово» on purpose, below the decisions and
-visually distinct from them.
+вас» section; this choice adds «Готово» on purpose, visually distinct from
+the decisions (the second round below pins it above them).
 
 What the answers change against the frames: the frames were drawn for the
 absence trigger the operator did not pick, so the section is titled «Готово»
 (not «Готово, поки вас не було») and the «Поки вас не було · 02:59 → 10:46»
 summary card is not built (§8).
+
+### Where the list is pinned (2026-10-11 ~17:35 Kyiv)
+
+A second round on the same task (`pr_04a76bbf34fe693924c2a04f7a2eee24`,
+«Список «Готово»: де він закріплений», every recommended option) moved the
+list and its order:
+
+> 1. The list of merged and deployed outcomes is always pinned at the top of
+>    the reports strip beside the orchestrator and at the top of «Чекають на
+>    вас».
+> 2. Every new outcome is added at the top of the list and stays until it is
+>    acknowledged.
+> 3. Acknowledgement: «Бачив усе» in one click, and a check mark on each row.
+
+This replaces "below the decisions" from the first round: «Готово» now opens
+the panel, the phone sheet and the report log (§4.3). Decisions stay their
+own sections under it, and the counter rule (§5) is unchanged.
 
 ## 1. What the existing panel already provides
 
@@ -46,8 +63,9 @@ Everything below is reused; the section adds rows to it and nothing beside it.
 
 | Piece | Where | Used for |
 | --- | --- | --- |
-| Desktop panel: head (title with count, Undo, «Зняти всі», dock/float, close), body of per-project sections, fold memory, `QUIET`/`ICON` controls | `src/components/attention/AttentionPanel.tsx` | «Готово» becomes the last block of the body, after every project section |
-| Phone sheet: `MobileSheet`/`MobileSheetSection`, header «Чекають на вас · n», «Зняти всі», receipts with Undo (`showReceipt`) | `src/components/attention/MobileAttentionSheet.tsx` | the same block at the bottom of the sheet; acknowledgement receipts |
+| Desktop panel: head (title with count, Undo, «Зняти всі», dock/float, close), body of per-project sections, fold memory, `QUIET`/`ICON` controls | `src/components/attention/AttentionPanel.tsx` | «Готово» is pinned between the head and the scrolling body |
+| Phone sheet: `MobileSheet`/`MobileSheetSection`, header «Чекають на вас · n», «Зняти всі», receipts with Undo (`showReceipt`) | `src/components/attention/MobileAttentionSheet.tsx` | the same block at the top of the sheet; acknowledgement receipts |
+| The orchestrator's report log, beside the seat's chat on the desktop and its own screen on the phone | `src/components/orchestrator/reportLog/ReportLog.tsx` | the same block pinned under its heading, above the questions bar and the entries |
 | Header control `AttentionIsland` (`count`), the phone bar's badge (`shellQueueCount`), the tab title | `src/components/Viewer.tsx:997-1050`, `:1319`, `:1561` | the counter rule (§5) |
 | Image viewer with before/after swap (`GalleryImage.before`) | `src/components/feed/Lightbox.tsx` | opening a thumbnail, unchanged |
 | Prototype frame pairs (`frame.original`) and their media route `/api/image?taskId=…&prototype=…&media=…` | `src/lib/prototypeReview/*`, `PrototypeReview.tsx:66-80` | thumbnails and before/after |
@@ -276,8 +294,23 @@ A press on the thumbnail opens `Lightbox` with `{ src, before }`, unchanged.
 
 ### 4.3 Layout inside the section
 
-The section head: «Готово · N» and the accent «Прийняти всі N». Below it, in
-this order:
+One component, `DoneSection`, draws the list in all three places from the one
+store (`useDoneItems`): the desktop panel (every project's items), the phone
+sheet (the badge's slice) and the report log (its project's items and those of
+no board). It is pinned: it sits outside the scroller of what follows it, and
+on the desktop and the report log its rows scroll inside their own band
+(`max-h` 42 vh in the panel, 45 % of the log's own height in the report log,
+whose column can be short beside the chat), so neither the decisions nor the
+reports scroll it away and the log keeps room for its entries.
+
+The section head: a chevron, «Готово · N», and the accent «Бачив усе», which
+accepts every item the list shows. Pressing the head folds the list to that
+line, count included; the fold is remembered per place and surface on the
+device (`llvDoneFolded:<place>:<surface>`).
+
+Below it, newest first: a single row stands at its own event time and a group
+at its newest member's, so every new outcome lands at the top and a technical
+fix lifts its group there. The row and group anatomy:
 
 1. Visible changes, each its own row: thumbnail (expand mark in its corner),
    the sentence, the meta line, and «Прийняти» at the row's right end as the
@@ -326,7 +359,7 @@ one:
   badge already uses, plus the items whose `project` is null.
 
 Unchanged and decisions-only: the rail's ⏸ per project, the head's «Зняти всі
-N» (it dismisses decisions; «Готово» has its own «Прийняти всі»), the
+N» (it dismisses decisions; «Готово» has its own «Бачив усе»), the
 needs-you MCP read and the board report. Once every item is acknowledged the
 counter is the decisions count again, which is the frames' «усе прийнято,
 Чекають 3». The frames' head showed «Зняти всі 19» over 3 decisions; that would
@@ -376,7 +409,7 @@ By path, under isolated state (one `mktemp -d` root holding HOME,
 - the route: GET projects and answers unacknowledged rows; POST acknowledges,
   undoes, refuses cross-origin and more than 200 keys;
 - `AttentionPanel.dom.test.tsx` and `MobileAttentionSheet.dom.test.tsx`: the
-  section after the decisions, the counter, row, group and all acknowledgement,
+  section pinned above the decisions, newest first, its fold, the counter, row, group and all acknowledgement,
   the collapsed receipt, a thumbnail opening `Lightbox` with `before`, a read
   that left before an acknowledgement or its undo arriving last;
 - `bunx tsc --noEmit` through `scripts/gate-slot.sh`;

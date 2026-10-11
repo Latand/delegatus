@@ -378,7 +378,7 @@ test("a questionnaire phone row asks the operator to answer", () => {
 });
 
 /* «Готово» on the phone (docs/design/done-section.md §4.3, §5): the same
-   section under the queue, the header counting both, the square check the
+   list pinned at the top of the sheet, the header counting both, the square check the
    frames draw, and the accepted row left in place with its Undo. */
 type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
 const { useState } = await import("react");
@@ -388,7 +388,7 @@ function doneItem(key: string, over: Partial<DoneItemV1> = {}): DoneItemV1 {
   return { key, kind: "task", look: "closed", project: PROJECT, at, createdAt: at, title: `Closed ${key}`, icon: null, refs: {}, frame: null, frameCheckedAt: at, acknowledgedAt: null, acknowledgedBy: null, ...over };
 }
 
-test("«Готово» sits under the queue, the header counts both, and a row's square check accepts it in place with Undo", async () => {
+test("«Готово» opens the sheet above the queue, the header counts both, and a row's square check accepts it in place with Undo", async () => {
   const calls: Array<{ keys: string[]; undo: boolean; surface: string }> = [];
   const initial = [
     doneItem("pr:acme/widgets#2691", { kind: "pr", look: "visible", title: "Landing cards no longer show through", refs: { pr: { repository: "acme/widgets", number: 2691, url: "https://github.com/acme/widgets/pull/2691" } },
@@ -410,8 +410,10 @@ test("«Готово» sits under the queue, the header counts both, and a row's
   expect(q(host, "[data-needs-you-dismiss-all]")!.textContent).toBe("Dismiss all 3");
   const list = q(host, "[data-mobile2-attention-list]")!;
   const section = q(host, '[data-done-section="phone"]')!;
-  expect(list.compareDocumentPosition(section as unknown as Node) & 4).toBe(4);
-  expect(q(section, "[data-done-accept-all]")!.textContent).toBe("Accept all 2");
+  /* Pinned first: the queue follows it. */
+  expect(section.compareDocumentPosition(list as unknown as Node) & 4).toBe(4);
+  expect(section.getAttribute("data-done-place")).toBe("needs-you");
+  expect(q(section, "[data-done-accept-all]")!.textContent).toBe("Seen all");
   const check = q(section, '[data-done-accept="pr:acme/widgets#2691"]')!;
   /* The square check: a whole finger's target and no word. */
   expect(check.textContent).toBe("");

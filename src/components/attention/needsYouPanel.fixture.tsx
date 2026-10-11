@@ -11,7 +11,7 @@
  *   &placement=overlay    the panel floating over the board
  *   &seat=beside          the orchestrator seat open beside the board
  *   &overview=1           the Overview instead of the delegatus board
- *   &done=1               «Готово» under the decisions (docs/design/done-section.md):
+ *   &done=1               «Готово» pinned above the decisions and the report log (docs/design/done-section.md):
  *                         a visible change with its before/after, a deploy, a
  *                         publication, ten technical fixes, three without a PR,
  *                         an incident and an account limit

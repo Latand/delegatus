@@ -10,6 +10,15 @@
       "scheme": "dark",
       "decisions": 6,
       "done": 17,
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
       "check": {
         "width": 44,
         "height": 44
@@ -17,11 +26,6 @@
       "right": 390,
       "overflow": false,
       "rows": [
-        {
-          "key": "pr:example/delegatus#2691",
-          "checkRight": 16,
-          "ownLine": false
-        },
         {
           "key": "deploy:fixture-deploy",
           "checkRight": 16,
@@ -38,6 +42,11 @@
           "ownLine": false
         },
         {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
           "key": "report:fixture-incident",
           "checkRight": 16,
           "ownLine": false
@@ -45,33 +54,42 @@
       ],
       "groupLines": [
         {
-          "text": "Автомердж чекає, мерджер приймає і ще 8",
-          "count": 10
-        },
-        {
           "text": "Аналіз моделей, порядок об’єднання",
           "count": 2
+        },
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
         }
       ],
       "heads": [
         {
-          "text": "Технічні виправлення · 10",
+          "text": "Без PR · 2",
           "lines": 1
         },
         {
-          "text": "Без PR · 2",
+          "text": "Технічні виправлення · 10",
           "lines": 1
         }
       ],
       "receipts": [
-        "Лендінг #2691 · прийнято",
-        "Технічні виправлення: 10 прийнято"
+        "Технічні виправлення: 10 прийнято",
+        "Лендінг #2691 · прийнято"
       ]
     },
     {
       "scheme": "light",
       "decisions": 6,
       "done": 17,
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
       "check": {
         "width": 44,
         "height": 44
@@ -79,11 +97,6 @@
       "right": 390,
       "overflow": false,
       "rows": [
-        {
-          "key": "pr:example/delegatus#2691",
-          "checkRight": 16,
-          "ownLine": false
-        },
         {
           "key": "deploy:fixture-deploy",
           "checkRight": 16,
@@ -100,6 +113,11 @@
           "ownLine": false
         },
         {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
           "key": "report:fixture-incident",
           "checkRight": 16,
           "ownLine": false
@@ -107,28 +125,74 @@
       ],
       "groupLines": [
         {
-          "text": "Автомердж чекає, мерджер приймає і ще 8",
-          "count": 10
-        },
-        {
           "text": "Аналіз моделей, порядок об’єднання",
           "count": 2
+        },
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
         }
       ],
       "heads": [
         {
-          "text": "Технічні виправлення · 10",
+          "text": "Без PR · 2",
           "lines": 1
         },
         {
-          "text": "Без PR · 2",
+          "text": "Технічні виправлення · 10",
           "lines": 1
         }
       ],
       "receipts": [
-        "Лендінг #2691 · прийнято",
-        "Технічні виправлення: 10 прийнято"
+        "Технічні виправлення: 10 прийнято",
+        "Лендінг #2691 · прийнято"
       ]
+    }
+  ],
+  "reports": [
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "pinned": true,
+      "bandHeight": 291,
+      "entriesHeight": 358,
+      "bounded": true,
+      "right": 390,
+      "overflow": false,
+      "foldedHeight": 45
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "pinned": true,
+      "bandHeight": 291,
+      "entriesHeight": 358,
+      "bounded": true,
+      "right": 390,
+      "overflow": false,
+      "foldedHeight": 45
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "pinned": true,
+      "bandHeight": 291,
+      "entriesHeight": 358,
+      "bounded": true,
+      "right": 390,
+      "overflow": false,
+      "foldedHeight": 45
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "pinned": true,
+      "bandHeight": 291,
+      "entriesHeight": 358,
+      "bounded": true,
+      "right": 390,
+      "overflow": false,
+      "foldedHeight": 45
     }
   ]
 }

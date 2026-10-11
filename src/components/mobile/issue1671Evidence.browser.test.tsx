@@ -7448,13 +7448,15 @@ describe("agent memory isolation", () => {
 /*
  * «Готово» in the phone's «Чекають на вас» sheet (docs/design/done-section.md
  * §4.3, §5) at 390 in Ukrainian, over the needs-you fixture with `&done=1`,
- * read against variant 2's phone frames: the sheet with the thumbnail and the
- * square check, the frame's pair in the existing viewer, technical fixes
- * accepted one by one with the group head counting what is left, then
- * everything accepted with the badge back to the decisions.
+ * read against variant 2's phone frames: the list pinned at the top of the
+ * sheet, newest first, with the thumbnail and the square check, the frame's
+ * pair in the existing viewer, technical fixes accepted one by one with the
+ * group head counting what is left, then «Бачив усе» with the badge back to
+ * the decisions. Then the same list pinned above the orchestrator's report
+ * log screen in uk and en, folded to its head.
  */
 describe("«Готово» in the phone sheet", () => {
-  browserTest("the sheet ends in «Готово»: square checks, groups, the viewer and the badge at 390 in uk", async () => {
+  browserTest("the sheet opens on «Готово»: square checks, groups, the viewer and the badge at 390 in uk; the report log pins it too", async () => {
     const out = path.resolve(".artifacts/done-section/phone");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
@@ -7484,6 +7486,11 @@ describe("«Готово» in the phone sheet", () => {
           expect(Number(shown)).toBe(doneCount - 1);
           expect(await badgeCount()).toBe(decisions + doneCount - 1);
           expect(await sheet.locator("h2").first().innerText()).toBe(`Чекають на вас · ${decisions + doneCount - 1}`);
+          expect(await section.locator("[data-done-accept-all]").innerText()).toBe("Бачив усе");
+          /* Pinned first: the decisions follow it. */
+          expect(await section.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector("[data-mobile2-attention-list]")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+          const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
+          expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
           const check = section.locator('[data-done-accept="pr:example/delegatus#2691"]');
           const box = (await check.boundingBox())!;
           expect(box.width).toBeGreaterThanOrEqual(44);
@@ -7581,13 +7588,68 @@ describe("«Готово» in the phone sheet", () => {
           await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
           await page.screenshot({ path: path.join(out, `${scheme}-6-all-accepted.png`) });
           expect(errors).toEqual([]);
-          readings.push({ scheme, decisions, done: doneCount - 1, check: { width: box.width, height: box.height }, ...geometry, rows: morning.rows, groupLines: morning.lines, heads: morning.heads, receipts: after.receipts.map((receipt) => receipt.text) });
+          readings.push({ scheme, decisions, done: doneCount - 1, order, check: { width: box.width, height: box.height }, ...geometry, rows: morning.rows, groupLines: morning.lines, heads: morning.heads, receipts: after.receipts.map((receipt) => receipt.text) });
         } finally { await context.close(); }
       }
+
+      /* The same list pinned above the report log screen, this board's slice. */
+      const reports: Record<string, unknown>[] = [];
+      for (const lang of ["uk", "en"] as const) {
+        for (const scheme of ["dark", "light"] as const) {
+          const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce" });
+          try {
+            await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+            const page = await context.newPage();
+            const errors: string[] = [];
+            page.on("pageerror", (error) => errors.push(error.message));
+            await page.goto(`${server.base}?lang=${lang}&done=1`);
+            await page.locator("[data-mobile2-seat-open]").waitFor({ timeout: 20_000 });
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator('[data-mobile2-open="reports"]').waitFor({ timeout: 10_000 });
+            await page.locator('[data-mobile2-open="reports"]').click();
+            const log = page.locator('[data-report-log][data-report-log-variant="screen"]');
+            await log.locator("[data-report-entry]").first().waitFor({ timeout: 10_000 });
+            const section = log.locator('[data-done-section="phone"][data-done-place="reports"]');
+            await section.waitFor({ timeout: 10_000 });
+            const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+            expect(Number(await section.locator("[data-done-count]").innerText())).toBe(doneCount - 1);
+            expect(await section.locator("[data-done-accept-all]").innerText()).toBe(translate(lang, "done.acceptAll"));
+            const layout = await log.evaluate((element) => {
+              const done = element.querySelector("[data-done-section]")!;
+              const scroller = element.querySelector("[data-report-log-entries]")!.parentElement!;
+              const band = done.querySelector("[data-done-list]")!.getBoundingClientRect();
+              return {
+                pinned: !scroller.contains(done) && Boolean(done.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING),
+                bandHeight: Math.round(band.height), entriesHeight: Math.round(scroller.getBoundingClientRect().height),
+                bounded: done.getBoundingClientRect().height <= element.getBoundingClientRect().height * 0.45 + 1,
+                right: Math.max(...[...done.querySelectorAll<HTMLElement>("*")].map((node) => node.getBoundingClientRect().right)),
+                overflow: document.documentElement.scrollWidth > innerWidth,
+              };
+            });
+            expect(layout.pinned).toBe(true);
+            expect(layout.bounded).toBe(true);
+            expect(layout.entriesHeight).toBeGreaterThan(150);
+            expect(layout.right).toBeLessThanOrEqual(390);
+            expect(layout.overflow).toBe(false);
+            const top = await section.evaluate((element) => element.getBoundingClientRect().top);
+            await log.locator("[data-report-log-entries]").evaluate((element) => { element.parentElement!.scrollTop = element.parentElement!.scrollHeight; });
+            expect(await section.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
+            const key = `${lang}-${scheme}`;
+            await page.screenshot({ path: path.join(out, `reports-${key}-1-pinned.png`) });
+            await section.locator("[data-done-fold]").click();
+            expect(await section.locator("[data-done-list]").count()).toBe(0);
+            const foldedHeight = Math.round((await section.boundingBox())!.height);
+            expect(foldedHeight).toBeLessThanOrEqual(48);
+            await page.screenshot({ path: path.join(out, `reports-${key}-2-folded.png`) });
+            expect(errors).toEqual([]);
+            reports.push({ lang, scheme, ...layout, foldedHeight });
+          } finally { await context.close(); }
+        }
+      }
       fs.mkdirSync("evidence/done-section", { recursive: true });
-      fs.writeFileSync("evidence/done-section/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", viewport: { width: 390, height: 844 }, lang: "uk", readings }, null, 2) + "\n");
+      fs.writeFileSync("evidence/done-section/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", viewport: { width: 390, height: 844 }, lang: "uk", readings, reports }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 180_000);
+  }, 420_000);
 });
 
 browserTest("stage agent row: conversations, parked questions and earlier attempts at phone and desktop widths", async () => {

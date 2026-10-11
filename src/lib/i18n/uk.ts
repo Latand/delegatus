@@ -3281,8 +3281,10 @@ export const uk: Record<keyof typeof en, Message> = {
   "attention.filterOffTouch": "Показати всі картки",
   /* «Готово» (docs/design/done-section.md §4). */
   "done.title": "Готово",
-  "done.acceptAll": "Прийняти всі {count}",
-  "done.acceptAllTitle": "Прийняти все зроблене тут; воно зникне з лічильника",
+  "done.acceptAll": "Бачив усе",
+  "done.acceptAllTitle": "Позначити все зроблене тут переглянутим; воно зникне з лічильника",
+  "done.fold": "Згорнути «Готово» · {count}",
+  "done.unfold": "Розгорнути «Готово» · {count}",
   "done.accept": "Прийняти",
   "done.acceptCount": "Прийняти {count}",
   "done.acceptAria": "Прийняти: {title}",

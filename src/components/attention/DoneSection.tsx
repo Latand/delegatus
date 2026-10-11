@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CheckCheck, ChevronDown, ChevronUp, CircleCheck, Expand, Gauge, GitMerge, Globe, Rocket, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, ChevronRight, ChevronUp, CircleCheck, Expand, Gauge, GitMerge, Globe, Rocket, TriangleAlert, type LucideIcon } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
@@ -12,21 +12,26 @@ import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 import { acknowledgeDone } from "./doneItems";
 
 /*
- * «Готово» (docs/design/done-section.md §4.3): the last block of «Чекають на
- * вас», on the desktop panel and in the phone sheet alike. Visible changes come
- * first, each with the frame its lane rendered; then deploys and publications;
- * then two groups, technical fixes and work finished without a PR, which one
- * button accepts whole and which open to their members; then incidents and
- * account limits. Decisions stay above it, and once everything here is
- * accepted the panel is the decisions list it was.
+ * «Готово» (docs/design/done-section.md §4.3): pinned at the top of «Чекають
+ * на вас» (the desktop panel and the phone sheet) and of the orchestrator's
+ * report log, the same list from the one store in every place. Newest first:
+ * a single row stands at its own time and a group at its newest member's, so
+ * each new outcome arrives at the top. Technical fixes and work finished
+ * without a PR stay two groups, which one button accepts whole and which open
+ * to their members. The head says «Готово · N» and «Бачив усе», and folds the
+ * list to itself; the list scrolls inside its own band, so it is never
+ * scrolled away under what follows.
  *
  * Accepting is one durable write per click (`acknowledgeDone`), gone from
- * every count at once. While the panel is open an accepted row stays where it
- * was as «… · прийнято» with «Повернути»; it leaves when the panel closes,
- * because this component holds those receipts and closes with it.
+ * every count and every place at once. While the list is open an accepted row
+ * stays where it was as «… · прийнято» with «Повернути»; it leaves when the
+ * surface closes, because this component holds those receipts and closes
+ * with it.
  */
 
 export type DoneSurface = "desktop" | "phone";
+/** Where the list is pinned: «Чекають на вас» or the report log. */
+export type DonePlace = "needs-you" | "reports";
 
 export interface DoneSectionProps {
   /** The items still waiting, newest first. */
@@ -35,8 +40,32 @@ export interface DoneSectionProps {
   current: string | null;
   projectNames: Readonly<Record<string, string>>;
   surface: DoneSurface;
+  place: DonePlace;
+  /** The section's height limit (a flex column's child), so its rows scroll
+      inside it under the head. Absent: the list takes its full height (the
+      phone sheet, which scrolls whole). */
+  band?: string;
   /** Test seam. */
   acknowledge?: typeof acknowledgeDone;
+}
+
+const FOLD_KEY = (place: DonePlace, surface: DoneSurface) => `llvDoneFolded:${place}:${surface}`;
+
+function readFolded(place: DonePlace, surface: DoneSurface): boolean {
+  try {
+    return window.localStorage.getItem(FOLD_KEY(place, surface)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeFolded(place: DonePlace, surface: DoneSurface, folded: boolean): void {
+  try {
+    if (folded) window.localStorage.setItem(FOLD_KEY(place, surface), "1");
+    else window.localStorage.removeItem(FOLD_KEY(place, surface));
+  } catch {
+    /* private mode: the fold lasts while the surface is open */
+  }
 }
 
 type GroupId = "technical" | "closed";
@@ -151,9 +180,15 @@ export function groupTopics(t: TFunction, locale: Locale, members: readonly Done
   return { topics: topics.join(", "), more: rest > 0 ? t("done.group.more", { count: rest }) : null };
 }
 
-export function DoneSection({ items, current, projectNames, surface, acknowledge = acknowledgeDone }: DoneSectionProps) {
+export function DoneSection({ items, current, projectNames, surface, place, band, acknowledge = acknowledgeDone }: DoneSectionProps) {
   const { t, locale } = useLocale();
   const phone = surface === "phone";
+  /* Folded to its head, remembered per place on this device. */
+  const [folded, setFolded] = useState(() => (typeof window === "undefined" ? false : readFolded(place, surface)));
+  const toggleFolded = () => {
+    writeFolded(place, surface, !folded);
+    setFolded(!folded);
+  };
   /* Accepted while this panel is open: drawn as receipts until it closes. */
   const [held, setHeld] = useState<ReadonlyMap<string, DoneItemV1>>(() => new Map());
   const [open, setOpen] = useState<ReadonlySet<GroupId>>(() => new Set());
@@ -371,13 +406,36 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
     );
   };
 
-  const looks = (wanted: ReadonlyArray<DoneItemV1["look"]>) => all.filter((item) => wanted.includes(item.look));
+  /* Newest first: a row at its own time, a group at its newest member's, so
+     a new outcome lands on top and an accepted one keeps its place. */
+  const blocks: Array<{ key: string; at: number; node: ReactNode }> = [];
+  const groups: Record<GroupId, DoneItemV1[]> = { technical: [], closed: [] };
+  for (const item of all) {
+    if (item.look === "technical" || item.look === "closed") groups[item.look].push(item);
+    else blocks.push({ key: item.key, at: Date.parse(item.at), node: single(item) });
+  }
+  for (const id of ["technical", "closed"] as const) {
+    const members = groups[id];
+    if (members.length) blocks.push({ key: `group:${id}`, at: Math.max(...members.map((member) => Date.parse(member.at))), node: group(id, members) });
+  }
+  blocks.sort((left, right) => right.at - left.at || left.key.localeCompare(right.key));
   const heldAll = items.length === 0;
+  const FoldIcon = folded ? ChevronRight : ChevronDown;
   const head = (
-    <div className={`flex min-w-0 items-center gap-1 ${phone ? "min-h-11 pl-4 pr-2" : "pl-1.5 pr-1"}`}>
-      <h3 className={`m-0 flex min-w-0 flex-1 items-center gap-1.5 ${phone ? "text-label" : "py-1.5 text-label"} font-semibold text-secondary`} data-done-title="">
-        <span className="min-w-0 truncate">{t("done.title")}</span>
-        <span className="text-caption font-semibold tabular-nums text-muted" data-done-count="">{items.length}</span>
+    <div className={`flex min-w-0 items-center gap-1 ${phone ? "min-h-11 pl-1 pr-2" : "pr-1"}`}>
+      <h3 className="m-0 flex min-w-0 flex-1" data-done-title="">
+        <button
+          type="button"
+          className={`flex min-w-0 flex-1 items-center gap-1.5 text-left text-label font-semibold text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${phone ? "min-h-11 rounded-[8px] pl-3" : "rounded-[6px] py-1.5 pl-1.5 hover:bg-canvas"}`}
+          aria-expanded={!folded}
+          aria-label={t(folded ? "done.unfold" : "done.fold", { count: items.length })}
+          data-done-fold={folded ? "folded" : "open"}
+          onClick={toggleFolded}
+        >
+          <FoldIcon className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+          <span className="min-w-0 truncate">{t("done.title")}</span>
+          <span className="text-caption font-semibold tabular-nums text-muted" data-done-count="">{items.length}</span>
+        </button>
       </h3>
       {items.length ? (
         <button
@@ -387,7 +445,7 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
           title={t("done.acceptAllTitle")}
           onClick={() => run(items)}
         >
-          {t("done.acceptAll", { count: items.length })}
+          {t("done.acceptAll")}
         </button>
       ) : null}
     </div>
@@ -404,17 +462,19 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
   })() : null;
 
   return (
-    <section className={phone ? "flex flex-col border-t border-border pt-1" : "mt-1 border-t border-border pt-1"} data-done-section={surface} aria-label={t("done.title")}>
+    <section
+      className={`flex min-h-0 shrink-0 flex-col border-b border-border ${phone ? "" : "mx-1.5 mt-0.5 pb-0.5"} ${band ?? ""}`}
+      data-done-section={surface}
+      data-done-place={place}
+      data-done-folded={folded ? "" : undefined}
+      aria-label={t("done.title")}
+    >
       {head}
-      {error ? <p className={`m-0 ${phone ? "px-4 py-1.5 text-label" : "px-2.5 py-1.5 text-[11px]"} text-danger`} role="status" data-done-error="">{error}</p> : null}
-      {heldAll ? receipt("all", t("done.allAccepted", { count: all.length }), () => run(all, true), { "data-done-all-accepted": "" }, null) : (
-        <>
-          {looks(["visible"]).map(single)}
-          {looks(["deploy", "publication"]).map(single)}
-          {group("technical", looks(["technical"]))}
-          {group("closed", looks(["closed"]))}
-          {looks(["incident", "limit"]).map(single)}
-        </>
+      {folded ? null : (
+        <div className={`min-h-0 ${band ? "flex-1 overflow-y-auto overscroll-y-contain" : ""}`} data-done-list="">
+          {error ? <p className={`m-0 ${phone ? "px-4 py-1.5 text-label" : "px-2.5 py-1.5 text-[11px]"} text-danger`} role="status" data-done-error="">{error}</p> : null}
+          {heldAll ? receipt("all", t("done.allAccepted", { count: all.length }), () => run(all, true), { "data-done-all-accepted": "" }, null) : blocks.map((block) => block.node)}
+        </div>
       )}
       {lightbox}
     </section>
