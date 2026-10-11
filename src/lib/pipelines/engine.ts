@@ -4398,6 +4398,10 @@ async function commitPassedStage(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  if (attempt.stageCommitWait) {
+    const remaining = unixMs(attempt.stageCommitWait.retryAt) - unixMs(ports.now());
+    if (remaining > 0) { ports.scheduleTick?.(remaining); return; }
+  }
   if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
   /* Every park after a requested repair keeps the refusal it was about. */
   const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
@@ -4418,6 +4422,20 @@ async function commitPassedStage(
     }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl)
     : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
+    if (result.commitTimeout) {
+      const failures = (attempt.stageCommitWait?.failures ?? 0) + 1;
+      const delay = Math.min(5 * 60_000, 30_000 * 2 ** Math.min(failures - 1, 4));
+      const retryAt = new Date(unixMs(ports.now()) + delay).toISOString();
+      const detail = `${result.error}; controller will retry the passed stage's commit at ${retryAt}`;
+      attempt.stageCommitWait = { retryAt, detail, failures };
+      // A controller expiry did not spend the repaired commit's hook verdict.
+      // The retry revalidates the worktree and its ownership receipt.
+      if (repair) delete repair.recommit;
+      pipeline.stateDetail = detail;
+      await persist();
+      ports.scheduleTick?.(delay);
+      return;
+    }
     if (result.deferred) {
       // Keep the durable committing cursor. The next tick repeats the forge
       // observation outside the mutation lease, then retries this settlement.
@@ -4431,6 +4449,10 @@ async function commitPassedStage(
     }
     parkStage(result.error);
     return;
+  }
+  if (attempt.stageCommitWait) {
+    if (pipeline.stateDetail === attempt.stageCommitWait.detail) pipeline.stateDetail = null;
+    delete attempt.stageCommitWait;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
     parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
@@ -9347,7 +9369,11 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait) return;
+        if (candidateAttempt.stageCommitWait) {
+          recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait);
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
         if (candidateAttempt.branchAdoption) recorded.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
         if (candidateAttempt.commitRepair) {
           recorded.commitRepair = structuredClone(candidateAttempt.commitRepair);
