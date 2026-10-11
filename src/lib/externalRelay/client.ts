@@ -165,11 +165,11 @@ export async function relayCall<T = unknown>(
     request.end(encoded ?? undefined);
   });
 }
-/** Bounded JSON transport with DNS pinning and redirect refusal, without credentials. */
-export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
+/** Bounded GET with DNS pinning and redirect refusal, without credentials. */
+export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576): Promise<Buffer> {
   const { url, address } = await target(urlInput);
   const transport = url.protocol === "https:" ? https : http;
-  const descriptor = await new Promise<unknown>((resolve, reject) => {
+  return await new Promise<Buffer>((resolve, reject) => {
     const request = transport.request(
       {
         hostname: address,
@@ -193,17 +193,11 @@ export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
-          if (size > 1_048_576)
+          if (size > maxBytes)
             response.destroy(new ExternalRelayError("too_large"));
           else chunks.push(chunk);
         });
-        response.on("end", () => {
-          try {
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          } catch {
-            reject(new ExternalRelayError("malformed"));
-          }
-        });
+        response.on("end", () => resolve(Buffer.concat(chunks)));
       },
     );
     request.on("error", reject);
@@ -212,7 +206,15 @@ export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
     );
     request.end();
   });
-  return descriptor;
+}
+/** Bounded JSON transport with DNS pinning and redirect refusal, without credentials. */
+export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
+  const bytes = await readRelayBytesUrl(urlInput);
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new ExternalRelayError("malformed");
+  }
 }
 export async function readRelayDescriptor(originInput: string): Promise<{ origin: string; descriptor: ExternalRelayDescriptor }> {
   const origin = await relayOrigin(originInput);

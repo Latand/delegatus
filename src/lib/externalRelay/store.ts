@@ -22,6 +22,15 @@ export type RelayTargetSettings = {
   /** Absent is off; only the operator can enable full owner agent runs. */
   ownerTier?: boolean;
 };
+/** The open «Створити клона» request (cloneCreate.ts), until it ends. */
+export type RelayCloneRequest = {
+  request_id: string;
+  create_url: string;
+  expires_at: string;
+  name: string;
+  username: string;
+  requestedAt: string;
+};
 export type PairedRelay = {
   id: string;
   origin: string;
@@ -39,6 +48,7 @@ export type PairedRelay = {
     max_answer_chars: number;
   };
   targets: RelayTargetSettings[];
+  cloneRequest?: RelayCloneRequest;
 };
 export type PendingRelay = {
   id: string;

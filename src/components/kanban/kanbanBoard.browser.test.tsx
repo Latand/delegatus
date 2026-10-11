@@ -28142,3 +28142,182 @@ describe("account chips with the weekly limit left: the launch chooser and the r
     }
   }, 300_000);
 });
+
+/*
+ * «Створити клона» in the Celestia card (docs/research/celestia-clone-creation.md,
+ * variant 1), in the real relay settings dialog: with no clones, with clones,
+ * the form with Celestia's generated candidates, waiting for Telegram, and the
+ * created clone marked «Новий» — 1440 and 390, both themes, uk and en. The
+ * relay is a fake inside the page: Celestia's endpoints are not live, and the
+ * driver answers the shapes the design doc names. Each frame records overflow,
+ * clipped or off-screen controls, and on the phone every control's height.
+ */
+describe("Celestia clone creation in the relay card", () => {
+  browserTest("empty, list, form, waiting and created states on desktop and phone, light and dark, uk and en", async () => {
+    const out = path.resolve(".artifacts/celestia-clone-create");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const portrait = async (from: string, to: string) => {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient></defs><rect width="160" height="160" fill="url(#g)"/><circle cx="80" cy="70" r="34" fill="#ffffff" fill-opacity="0.85"/><rect x="38" y="112" width="84" height="40" rx="20" fill="#ffffff" fill-opacity="0.85"/></svg>`;
+      return `data:image/jpeg;base64,${(await sharp(Buffer.from(svg)).jpeg({ quality: 80 }).toBuffer()).toString("base64")}`;
+    };
+    const candidates = await Promise.all([["#3b4a8f", "#8a6fd1"], ["#173b4f", "#3c8fb0"], ["#7a3a1c", "#e08a3c"], ["#24563a", "#7cc08a"]]
+      .map(async ([from, to], index) => ({ storage_key: `avatars/${index + 1}.png`, preview: await portrait(from!, to!) })));
+    const combos = [
+      { width: 1440, scheme: "light", lang: "uk" }, { width: 1440, scheme: "dark", lang: "en" },
+      { width: 390, scheme: "dark", lang: "uk" }, { width: 390, scheme: "light", lang: "en" },
+    ] as const;
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const { width, scheme, lang } of combos) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          await context.addInitScript(({ lang, candidates }) => {
+            localStorage.setItem("llv_lang", lang);
+            const names = lang === "uk" ? ["Помічник чату «Ліга»", "Модератор Бета"] : ["League chat helper", "Beta moderator"];
+            const target = (id: string, name: string, over: Record<string, unknown> = {}) => ({ id, name, answered_by: "install", fallback: "service", enabled: true,
+              engine: "claude", model: "opus", effort: "high", project: null, concurrency: 1, hardCapMinutes: 30, ...over });
+            const fake = {
+              relay: { id: "celestia", origin: "https://celestia.example", name: "Celestia", description: "", features: ["requester_context", "clone_create"],
+                owner: { namespace: "telegram", id: "owner", display_name: lang === "uk" ? "Власник" : "Owner", handle: "@owner" },
+                pairedAt: "2026-10-11T11:02:00.000Z", paused: false, targets: [] as ReturnType<typeof target>[], cloneRequest: undefined as unknown },
+              status: { status: "pending" } as Record<string, unknown>,
+              opened: [] as string[],
+            };
+            const json = (body: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+            const relayFetch = async (url: URL, init?: RequestInit): Promise<Response | null> => {
+              const method = (init?.method ?? "GET").toUpperCase();
+              const base = "/api/external-relay/relays/celestia";
+              if (url.pathname === "/api/external-relay") return json({ relays: [fake.relay], pending: [],
+                status: [{ id: "celestia", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: "2026-10-11T11:20:00.000Z", lastProgress: null }, running: {} }] });
+              if (url.pathname === "/api/external-relay/known") return json({ known: [] });
+              if (url.pathname === "/api/accounts" && method === "GET") return json({
+                claude: { active: "main", accounts: [{ id: "main", label: "Account A", kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null }] },
+                codex: { active: "", accounts: [] } });
+              if (url.pathname === `${base}/clone-avatars`) { await new Promise((resolve) => setTimeout(resolve, 150)); return json({ candidates }); }
+              if (url.pathname === `${base}/clone-requests` && method === "POST") {
+                const body = JSON.parse(String(init?.body)) as { name: string; username: string };
+                const request = { request_id: "req-1", create_url: `https://t.me/newbot/celestia_bot/${body.username}?name=${encodeURIComponent(body.name)}`,
+                  expires_at: new Date(Date.now() + 600_000).toISOString(), name: body.name, username: body.username, requestedAt: new Date().toISOString() };
+                fake.relay.cloneRequest = request;
+                return json({ request }, 201);
+              }
+              if (url.pathname === `${base}/clone-requests/req-1`) {
+                if (method === "DELETE") { fake.relay.cloneRequest = undefined; return json(null, 204); }
+                if (fake.status.status !== "pending") fake.relay.cloneRequest = undefined;
+                return json({ request: fake.status });
+              }
+              if (url.pathname === base && method === "PATCH") {
+                const patch = (JSON.parse(String(init?.body)) as { target: { id: string } }).target;
+                fake.relay.targets = fake.relay.targets.map((item) => item.id === patch.id ? { ...item, ...patch } : item);
+                return json({ relay: fake.relay });
+              }
+              if (url.pathname.startsWith(`${base}/targets/`) && method === "PATCH") {
+                const id = decodeURIComponent(url.pathname.split("/").at(-1)!);
+                fake.relay.targets = fake.relay.targets.map((item) => item.id === id ? { ...item, answered_by: "install" } : item);
+                return json({ target: {} });
+              }
+              return null;
+            };
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                  const url = new URL(String(input), location.origin);
+                  const own = url.pathname.startsWith("/api/external-relay") || url.pathname === "/api/accounts" ? await relayFetch(url, init) : null;
+                  return own ?? (url.pathname.startsWith("/api/external-relay") ? json({ error: "not_found" }, 404) : next(input, init));
+                }) as typeof fetch;
+              },
+            });
+            /* The window «Створити в Telegram» opens in its click: recorded, never shown. */
+            window.open = (() => {
+              const win = { opener: null as unknown, document: { body: { textContent: "" } }, close() {},
+                location: { set href(value: string) { fake.opened.push(value); }, get href() { return fake.opened.at(-1) ?? "about:blank"; } } };
+              return win;
+            }) as unknown as typeof window.open;
+            Object.assign(window, { cloneFake: {
+              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!)]; },
+              create: (name: string) => {
+                fake.relay.targets = [...fake.relay.targets, target("fresh", name, { engine: null, model: null, effort: null, answered_by: "install" })];
+                fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
+              },
+              opened: () => fake.opened,
+              fresh: () => fake.relay.targets.find((item) => item.id === "fresh"),
+            } });
+          }, { lang, candidates });
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const dialog = page.locator("[data-external-relay-settings]");
+          await dialog.waitFor();
+          const card = dialog.locator("[data-external-relay='celestia']");
+          type Fake = { cloneFake: { withClones(): void; create(name: string): void; opened(): string[]; fresh(): { engine: string | null; model: string | null; answered_by: string } | undefined } };
+          const frame = async (state: string, ready: string) => {
+            await card.locator(ready).first().waitFor({ timeout: 15_000 });
+            await page.waitForTimeout(150);
+            const reading = await card.evaluate((element, phone) => {
+              const viewport = document.documentElement.clientWidth;
+              const controls = [...element.querySelectorAll<HTMLElement>("button, a, input")].filter((node) => node.getClientRects().length > 0 && !(node as HTMLInputElement).hidden).map((node) => {
+                const box = node.getBoundingClientRect();
+                return { control: node.dataset.cloneOpen !== undefined ? "open" : Object.keys(node.dataset)[0] ?? node.getAttribute("aria-label") ?? node.tagName.toLowerCase(),
+                  label: (node.textContent ?? "").trim().slice(0, 60), clipped: node.tagName !== "INPUT" && node.scrollWidth > node.clientWidth + 1,
+                  inside: box.left >= -0.5 && box.right <= viewport + 0.5, height: Math.round(box.height), width: Math.round(box.width) };
+              });
+              const texts = [...element.querySelectorAll<HTMLElement>("p, span")].filter((node) => node.childElementCount === 0 && node.getClientRects().length > 0 && getComputedStyle(node).textOverflow !== "ellipsis")
+                .filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => (node.textContent ?? "").slice(0, 60));
+              return { overflow: element.scrollWidth > element.clientWidth + 1, cutText: texts, controls,
+                shortTargets: phone ? controls.filter((control) => control.height < 44 && control.control !== "externalRelayAnsweredBy").map((control) => `${control.control}:${control.height}`) : [] };
+            }, phone);
+            expect(reading.overflow).toBe(false);
+            expect(reading.cutText).toEqual([]);
+            for (const control of reading.controls) { expect(control.clipped).toBe(false); expect(control.inside).toBe(true); }
+            expect(reading.shortTargets).toEqual([]);
+            await card.screenshot({ path: path.join(out, `${lang}-${width}-${scheme}-${state}.png`) });
+            readings.push({ lang, width, scheme, state, overflow: reading.overflow, cutText: reading.cutText, shortTargets: reading.shortTargets, controls: reading.controls.length });
+          };
+
+          await frame("empty", "[data-clone-empty]");
+          expect(await card.locator("[data-clone-empty]").textContent()).toContain(translate(lang, "externalRelay.clone.emptyLead", { name: "Celestia" }));
+
+          await page.evaluate(() => (window as unknown as Fake).cloneFake.withClones());
+          await frame("list", "[data-external-relay-target='beta']");
+          expect(await card.locator("[data-clone-open]").textContent()).toBe(translate(lang, "externalRelay.clone.create"));
+
+          await card.locator("[data-clone-open]").click();
+          const name = lang === "uk" ? "Нічна Сова" : "Night Owl";
+          await card.locator("[data-clone-name]").fill(name);
+          expect(await card.locator("[data-clone-username]").inputValue()).toBe(lang === "uk" ? "nichna_sova_bot" : "night_owl_bot");
+          await card.locator("[data-clone-generate]").click();
+          await card.locator("[data-clone-candidate='3']").waitFor();
+          expect(await card.locator("[data-clone-candidate='0']").getAttribute("aria-pressed")).toBe("true");
+          await frame("form", "[data-clone-form]");
+
+          await card.locator("[data-clone-submit]").click();
+          await frame("waiting", "[data-clone-waiting]");
+          expect(await card.locator("[data-clone-owner]").textContent()).toBe(translate(lang, "externalRelay.clone.waitingLead", { owner: `${lang === "uk" ? "Власник" : "Owner"} (@owner)` }));
+          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.opened())).toEqual([expect.stringMatching(/^https:\/\/t\.me\/newbot\/celestia_bot\//)]);
+
+          await page.evaluate((name) => (window as unknown as Fake).cloneFake.create(name), name);
+          await card.locator("[data-external-relay-target='fresh'][data-fresh] [data-external-relay-fresh]").waitFor({ timeout: 15_000 });
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-answered-by='install']").waitFor({ timeout: 15_000 });
+          /* The new clone takes the signed-in engine with its default model, answered here. */
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Opus 5.5" }).waitFor({ timeout: 15_000 });
+          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "claude", model: "opus", answered_by: "install" });
+          expect(await card.locator("[data-external-relay-no-account], [data-external-relay-running].text-warning").count()).toBe(0);
+          await frame("created", "[data-clone-created]");
+          expect(await card.locator("[data-clone-created]").textContent()).toContain(translate(lang, "externalRelay.clone.created", { name, username: lang === "uk" ? "nichna_sova_bot" : "night_owl_bot" }));
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/celestia-clone-create/geometry.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
