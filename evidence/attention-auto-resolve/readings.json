@@ -1,0 +1,2269 @@
+{
+  "readings": {
+    "uk/before": {
+      "title": "Чекають на вас · 17",
+      "count": 17,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "ask:retired-3",
+          "kind": "conversation",
+          "sentence": "Агент питає «Залишити старий вебхук до понеділка?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "ask:retired-2",
+          "kind": "conversation",
+          "sentence": "Агент питає «Закривати старі лейни після злиття автоматично?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "ask:retired-1",
+          "kind": "conversation",
+          "sentence": "Агент питає «Чи переносити нічні звіти на 08:00?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "ask:analyst-september",
+          "kind": "conversation",
+          "sentence": "Агент питає «Рахувати повернення в цьому звіті чи окремо?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-limit",
+          "kind": "pipeline",
+          "sentence": "Етап «review» попросив рішення, не назвавши його тут; відкрийте процес, прочитайте запитання й дайте відповідь, і етап продовжиться.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "Агент питає «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 142.5
+        },
+        {
+          "id": "ask:deployer-rollout",
+          "kind": "conversation",
+          "sentence": "Агент питає «Викочувати 1.9 зараз, поки черга порожня, чи чекати вечора?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Дозвольте Bash: rm -rf .next один раз або відхиліть; агент виконає це один раз або змінить підхід.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 127.5
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання агента в його розмові; він продовжить з вашим вибором.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 127.5
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Агент питає «Яким провайдером розстрочки користуватися?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Прийміть останнє виправлення етапу «implement» без повторного рев’ю або залиште процес на паузі; після прийняття він продовжиться з цієї версії.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724647",
+          "kind": "conversation",
+          "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
+          "options": [
+            "1.Знімати автоматично, з Undoрекомендовано",
+            "2.Лише позначати"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 224.5
+        }
+      ]
+    },
+    "uk/1440x900-light": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Чекають на вас · 11",
+      "count": 11,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "Агент питає «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 142.5
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Дозвольте Bash: rm -rf .next один раз або відхиліть; агент виконає це один раз або змінить підхід.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 127.5
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання агента в його розмові; він продовжить з вашим вибором.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 127.5
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
+          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
+          "options": [
+            "1.Банк-партнеррекомендовано",
+            "2.Швидший сервіс"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 206.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Прийміть останнє виправлення етапу «implement» без повторного рев’ю або залиште процес на паузі; після прийняття він продовжиться з цієї версії.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724650",
+          "kind": "conversation",
+          "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
+          "options": [
+            "1.Знімати автоматично, з Undoрекомендовано",
+            "2.Лише позначати"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 224.5
+        }
+      ]
+    },
+    "uk/1440x900-dark": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Чекають на вас · 11",
+      "count": 11,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "Агент питає «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 142.5
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Дозвольте Bash: rm -rf .next один раз або відхиліть; агент виконає це один раз або змінить підхід.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 127.5
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання агента в його розмові; він продовжить з вашим вибором.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 127.5
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
+          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
+          "options": [
+            "1.Банк-партнеррекомендовано",
+            "2.Швидший сервіс"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 206.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Прийміть останнє виправлення етапу «implement» без повторного рев’ю або залиште процес на паузі; після прийняття він продовжиться з цієї версії.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724654",
+          "kind": "conversation",
+          "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
+          "options": [
+            "1.Знімати автоматично, з Undoрекомендовано",
+            "2.Лише позначати"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 224.5
+        }
+      ]
+    },
+    "uk/1000x900-light": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Чекають на вас · 11",
+      "count": 11,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "Агент питає «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Дозвольте Bash: rm -rf .next один раз або відхиліть; агент виконає це один раз або змінить підхід.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання агента в його розмові; він продовжить з вашим вибором.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
+          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
+          "options": [
+            "1.Банк-партнеррекомендовано",
+            "2.Швидший сервіс"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 188.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Прийміть останнє виправлення етапу «implement» без повторного рев’ю або залиште процес на паузі; після прийняття він продовжиться з цієї версії.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724658",
+          "kind": "conversation",
+          "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
+          "options": [
+            "1.Знімати автоматично, з Undoрекомендовано",
+            "2.Лише позначати"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 172
+        }
+      ]
+    },
+    "uk/1000x900-dark": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Чекають на вас · 11",
+      "count": 11,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "Агент питає «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Дозвольте Bash: rm -rf .next один раз або відхиліть; агент виконає це один раз або змінить підхід.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання агента в його розмові; він продовжить з вашим вибором.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
+          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
+          "options": [
+            "1.Банк-партнеррекомендовано",
+            "2.Швидший сервіс"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 188.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Прийміть останнє виправлення етапу «implement» без повторного рев’ю або залиште процес на паузі; після прийняття він продовжиться з цієї версії.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724662",
+          "kind": "conversation",
+          "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
+          "options": [
+            "1.Знімати автоматично, з Undoрекомендовано",
+            "2.Лише позначати"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 172
+        }
+      ]
+    },
+    "uk/390x844-light": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Чекають на вас · 11",
+      "count": null,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": null,
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": null,
+          "sentence": "Агент питає «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 134.75
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": null,
+          "sentence": "Дозвольте Bash: rm -rf .next один раз або відхиліть; агент виконає це один раз або змінить підхід.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "report-merge-order",
+          "kind": null,
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": null,
+          "sentence": "Дайте відповідь на запитання агента в його розмові; він продовжить з вашим вибором.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 121.75
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": null,
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": null,
+          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
+          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
+          "options": [
+            "1.Банк-партнеррекомендовано",
+            "2.Швидший сервіс"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 193.25
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": null,
+          "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "lane-digest",
+          "kind": null,
+          "sentence": "Прийміть останнє виправлення етапу «implement» без повторного рев’ю або залиште процес на паузі; після прийняття він продовжиться з цієї версії.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724666",
+          "kind": null,
+          "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 134.75
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": null,
+          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
+          "options": [
+            "1.Знімати автоматично, з Undoрекомендовано",
+            "2.Лише позначати"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 176.75
+        }
+      ]
+    },
+    "uk/390x844-dark": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Чекають на вас · 11",
+      "count": null,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": null,
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": null,
+          "sentence": "Агент питає «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; дайте відповідь у його розмові, і він продовжить з нею.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 134.75
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": null,
+          "sentence": "Дозвольте Bash: rm -rf .next один раз або відхиліть; агент виконає це один раз або змінить підхід.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "report-merge-order",
+          "kind": null,
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": null,
+          "sentence": "Дайте відповідь на запитання агента в його розмові; він продовжить з вашим вибором.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 121.75
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": null,
+          "sentence": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": null,
+          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
+          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
+          "options": [
+            "1.Банк-партнеррекомендовано",
+            "2.Швидший сервіс"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 193.25
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": null,
+          "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "lane-digest",
+          "kind": null,
+          "sentence": "Прийміть останнє виправлення етапу «implement» без повторного рев’ю або залиште процес на паузі; після прийняття він продовжиться з цієї версії.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724669",
+          "kind": null,
+          "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 134.75
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": null,
+          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
+          "options": [
+            "1.Знімати автоматично, з Undoрекомендовано",
+            "2.Лише позначати"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 176.75
+        }
+      ]
+    },
+    "uk/card-cleared": {
+      "kind": "system",
+      "text": "Знято · Delegatus: ви відповіли в розмові · 1 хв",
+      "undo": true
+    },
+    "en/before": {
+      "title": "Waiting for you · 17",
+      "count": 17,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "ask:retired-3",
+          "kind": "conversation",
+          "sentence": "The agent asks «Keep the old webhook until Monday?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "ask:retired-2",
+          "kind": "conversation",
+          "sentence": "The agent asks «Close old lanes automatically after a merge?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "ask:retired-1",
+          "kind": "conversation",
+          "sentence": "The agent asks «Move the nightly reports to 08:00?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "ask:analyst-september",
+          "kind": "conversation",
+          "sentence": "The agent asks «Count returns in this report or separately?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-limit",
+          "kind": "pipeline",
+          "sentence": "The review stage asked for a decision without stating it here; open the lane to read the question and answer it, and the stage resumes.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "The agent asks «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 142.5
+        },
+        {
+          "id": "ask:deployer-rollout",
+          "kind": "conversation",
+          "sentence": "The agent asks «Roll 1.9 out now while the queue is empty, or wait for the evening?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Allow Bash: rm -rf .next once or deny it; the agent runs it once or changes its approach.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Answer the agent's question in its conversation; it continues with your choice.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "The agent asks «Which instalment provider should I use?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Accept the last fix of the implement stage without another review, or leave the lane paused; accepting continues the lane on this head.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724675",
+          "kind": "conversation",
+          "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
+          "question": "Clear rows the server proved settled on their own, or only mark them?",
+          "options": [
+            "1.Clear them, with Undorecommended",
+            "2.Only mark them"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 190
+        }
+      ]
+    },
+    "en/1440x900-light": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Waiting for you · 11",
+      "count": 11,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "The agent asks «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 142.5
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Allow Bash: rm -rf .next once or deny it; the agent runs it once or changes its approach.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Answer the agent's question in its conversation; it continues with your choice.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
+          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
+          "options": [
+            "1.The partner bankrecommended",
+            "2.The faster service"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 188.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Accept the last fix of the implement stage without another review, or leave the lane paused; accepting continues the lane on this head.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724679",
+          "kind": "conversation",
+          "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
+          "question": "Clear rows the server proved settled on their own, or only mark them?",
+          "options": [
+            "1.Clear them, with Undorecommended",
+            "2.Only mark them"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 190
+        }
+      ]
+    },
+    "en/1440x900-dark": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Waiting for you · 11",
+      "count": 11,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "The agent asks «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 142.5
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Allow Bash: rm -rf .next once or deny it; the agent runs it once or changes its approach.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Answer the agent's question in its conversation; it continues with your choice.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
+          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
+          "options": [
+            "1.The partner bankrecommended",
+            "2.The faster service"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 188.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Accept the last fix of the implement stage without another review, or leave the lane paused; accepting continues the lane on this head.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724683",
+          "kind": "conversation",
+          "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
+          "question": "Clear rows the server proved settled on their own, or only mark them?",
+          "options": [
+            "1.Clear them, with Undorecommended",
+            "2.Only mark them"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 190
+        }
+      ]
+    },
+    "en/1000x900-light": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Waiting for you · 11",
+      "count": 11,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "The agent asks «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Allow Bash: rm -rf .next once or deny it; the agent runs it once or changes its approach.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Answer the agent's question in its conversation; it continues with your choice.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
+          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
+          "options": [
+            "1.The partner bankrecommended",
+            "2.The faster service"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 188.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Accept the last fix of the implement stage without another review, or leave the lane paused; accepting continues the lane on this head.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724687",
+          "kind": "conversation",
+          "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
+          "question": "Clear rows the server proved settled on their own, or only mark them?",
+          "options": [
+            "1.Clear them, with Undorecommended",
+            "2.Only mark them"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 172
+        }
+      ]
+    },
+    "en/1000x900-dark": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Waiting for you · 11",
+      "count": 11,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": "conversation",
+          "sentence": "The agent asks «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 126
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": "conversation",
+          "sentence": "Allow Bash: rm -rf .next once or deny it; the agent runs it once or changes its approach.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 93
+        },
+        {
+          "id": "report-merge-order",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": "conversation",
+          "sentence": "Answer the agent's question in its conversation; it continues with your choice.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 115
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": "conversation",
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 111
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": "conversation",
+          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
+          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
+          "options": [
+            "1.The partner bankrecommended",
+            "2.The faster service"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 188.5
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": "conversation",
+          "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-digest",
+          "kind": "pipeline",
+          "sentence": "Accept the last fix of the implement stage without another review, or leave the lane paused; accepting continues the lane on this head.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724691",
+          "kind": "conversation",
+          "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 109.5
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": "pipeline",
+          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
+          "question": "Clear rows the server proved settled on their own, or only mark them?",
+          "options": [
+            "1.Clear them, with Undorecommended",
+            "2.Only mark them"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 172
+        }
+      ]
+    },
+    "en/390x844-light": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Waiting for you · 11",
+      "count": null,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": null,
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": null,
+          "sentence": "The agent asks «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 134.75
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": null,
+          "sentence": "Allow Bash: rm -rf .next once or deny it; the agent runs it once or changes its approach.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "report-merge-order",
+          "kind": null,
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": null,
+          "sentence": "Answer the agent's question in its conversation; it continues with your choice.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 121.75
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": null,
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": null,
+          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
+          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
+          "options": [
+            "1.The partner bankrecommended",
+            "2.The faster service"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 193.25
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": null,
+          "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "lane-digest",
+          "kind": null,
+          "sentence": "Accept the last fix of the implement stage without another review, or leave the lane paused; accepting continues the lane on this head.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724695",
+          "kind": null,
+          "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": null,
+          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
+          "question": "Clear rows the server proved settled on their own, or only mark them?",
+          "options": [
+            "1.Clear them, with Undorecommended",
+            "2.Only mark them"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 176.75
+        }
+      ]
+    },
+    "en/390x844-dark": {
+      "ids": {
+        "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
+        "replied": "conversation_delegatus-20",
+        "deployer": "ask:deployer-rollout",
+        "escalated": "ask:builder-instalments"
+      },
+      "title": "Waiting for you · 11",
+      "count": null,
+      "overflow": 0,
+      "rootOverflow": 0,
+      "rows": [
+        {
+          "id": "report-weekend-digest",
+          "kind": null,
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Слати нічний дайджест і у вихідні?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "kind": null,
+          "sentence": "The agent asks «Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?»; reply in its conversation and it continues with your answer.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 134.75
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "kind": null,
+          "sentence": "Allow Bash: rm -rf .next once or deny it; the agent runs it once or changes its approach.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "report-merge-order",
+          "kind": null,
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Що зливаємо першим: ліміт задач чи перемикання розмов?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118
+        },
+        {
+          "id": "toolu-ask-1",
+          "kind": null,
+          "sentence": "Answer the agent's question in its conversation; it continues with your choice.",
+          "question": "Злити #2246 зараз чи після ревʼю?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 121.75
+        },
+        {
+          "id": "report-shop-limit",
+          "kind": null,
+          "sentence": "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+          "question": "Підняти ліміт вкладень до 100 МБ чи лишити 25?",
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118
+        },
+        {
+          "id": "ask:builder-instalments",
+          "kind": null,
+          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
+          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
+          "options": [
+            "1.The partner bankrecommended",
+            "2.The faster service"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 193.25
+        },
+        {
+          "id": "toolu-plan-1",
+          "kind": null,
+          "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "lane-digest",
+          "kind": null,
+          "sentence": "Accept the last fix of the implement stage without another review, or leave the lane paused; accepting continues the lane on this head.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791724697",
+          "kind": null,
+          "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "lane-diagnose",
+          "kind": null,
+          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
+          "question": "Clear rows the server proved settled on their own, or only mark them?",
+          "options": [
+            "1.Clear them, with Undorecommended",
+            "2.Only mark them"
+          ],
+          "recommended": 0,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 176.75
+        }
+      ]
+    },
+    "en/card-cleared": {
+      "kind": "system",
+      "text": "Cleared · Delegatus: you replied in the conversation · 1m",
+      "undo": true
+    }
+  },
+  "failures": []
+}

@@ -85,5 +85,5 @@ export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: r
       const route = laneRouteNow(pipeline);
       return route?.owner === "seat" ? [{ key: route.key, id: pipeline.id, label: clip(laneLine(pipeline), LABEL_MAX) }] : [];
     });
-  return [...asks.map(({ since: _since, ...ask }) => ask), ...lanes];
+  return [...asks.map((ask) => ({ key: ask.key, id: ask.id, label: ask.label })), ...lanes];
 }

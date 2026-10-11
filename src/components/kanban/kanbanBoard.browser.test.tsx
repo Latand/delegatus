@@ -14411,7 +14411,8 @@ describe("attention auto resolve", () => {
     const check = (frame: string, ok: boolean, what: string) => { if (!ok) failures.push(`${frame}: ${what}`); };
     const open = async (query: string, size: { width: number; height: number }, scheme: Scheme, lang: "uk" | "en") => {
       const phone = size.width < 768;
-      const opened = await openFixture(browser, `${server.base}?lang=${lang}&scenario=auto-resolve${query}`, size, scheme, lang, "reduce", phone);
+      /* The phone's sheet lists the project behind it; its Overview lists every project, as the desktop panel does. */
+      const opened = await openFixture(browser, `${server.base}?lang=${lang}&scenario=auto-resolve${phone ? "&overview=1" : ""}${query}`, size, scheme, lang, "reduce", phone);
       await opened.page.waitForSelector(phone ? "[data-mobile2-bar]" : "[data-attention-count]", { timeout: 20_000 });
       await opened.page.waitForTimeout(700);
       const toast = opened.page.locator("[data-attention-toast-dismiss]");
@@ -14433,16 +14434,17 @@ describe("attention auto resolve", () => {
         const opener = row.querySelector("button") as HTMLElement | null;
         const sentence = row.querySelector("[data-needs-you-sentence]");
         const question = row.querySelector("[data-needs-you-question]");
+        const asking = row.querySelector("[data-needs-you-question-title]");
         const options = [...row.querySelectorAll("[data-needs-you-option]")];
         const buttons = [...row.querySelectorAll("button")].map((button) => button.getBoundingClientRect());
         return {
           id: row.getAttribute("data-needs-you-row"),
           kind: row.getAttribute("data-needs-you-kind"),
           sentence: sentence?.textContent ?? null,
-          question: question?.textContent ?? null,
+          question: question?.textContent ?? asking?.textContent ?? null,
           options: options.map((option) => option.textContent),
           recommended: options.findIndex((option) => option.hasAttribute("data-recommended")),
-          cut: [sentence, question, ...options].some(cut),
+          cut: [sentence, question, asking, ...options].some(cut),
           inside: box.left >= -0.5 && box.right <= width + 0.5,
           buttonsVisible: buttons.every((button) => button.width > 0 && button.height > 0 && button.left >= -0.5 && button.right <= width + 0.5),
           openerHeight: opener ? opener.getBoundingClientRect().height : 0,
@@ -14466,12 +14468,16 @@ describe("attention auto resolve", () => {
       if (phone) {
         await page.locator('[data-mobile2-open="attention"]').click();
         await page.waitForSelector('[data-mobile2-sheet="attention"]', { timeout: 10_000 });
-        /* Every project's section open, so every row is read. */
-        for (const fold of await page.locator('[data-mobile2-sheet="attention"] [data-needs-you-section][data-folded] [data-needs-you-fold]').all()) await fold.click();
       } else {
         if (!(await page.locator("[data-needs-you-panel]").count())) await page.locator("[data-attention-count]").click();
         await page.waitForSelector("[data-needs-you-panel]", { timeout: 10_000 });
-        for (const fold of await page.locator("[data-needs-you-panel] [data-needs-you-section][data-folded] [data-needs-you-fold]").all()) await fold.click();
+      }
+      /* Every project's section open, so every row is read. An opened
+         section stops matching, so the first folded one is opened each time. */
+      const folded = page.locator(`${phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]"} [data-needs-you-section][data-folded] [data-needs-you-fold]`);
+      for (let guard = 0; guard < 8 && await folded.count(); guard += 1) {
+        await folded.first().click();
+        await page.waitForTimeout(150);
       }
       await page.waitForTimeout(300);
     };
@@ -14484,7 +14490,7 @@ describe("attention auto resolve", () => {
           await openList(opened.page, false);
           before = await rowsReading(opened.page, false);
           readings[`${lang}/before`] = before;
-          check(`${lang}/before`, before.count === 16, `the control counts ${before.count} before, expected 16`);
+          check(`${lang}/before`, before.count === 17, `the control counts ${before.count} before, expected 17`);
           await shot(opened.page, `${lang}/1440x900-light-before`);
         } finally { await opened.context.close(); }
 
@@ -14502,7 +14508,7 @@ describe("attention auto resolve", () => {
               if (!opened.phone) check(frame, after.count === 11, `the control counts ${after.count} after, expected 11`);
               check(frame, after.rows.length === 11, `${after.rows.length} rows after, expected 11: ${JSON.stringify(rowIds)}`);
               /* Cleared on evidence, and routed to the seat: none of them asks the operator. */
-              for (const gone of ["ask:retired-1", "ask:retired-2", "ask:retired-3", ids.deployer, "lane-limit"]) check(frame, !rowIds.includes(gone ?? ""), `${gone} still asks the operator`);
+              for (const gone of ["ask:retired-1", "ask:retired-2", "ask:retired-3", "ask:analyst-september", ids.deployer, "lane-limit"]) check(frame, !rowIds.includes(gone ?? ""), `${gone} still asks the operator`);
               /* The seat's escalation: its question, its options, what happens next. */
               const escalated = after.rows.find((row) => row.id === ids.escalated);
               check(frame, Boolean(escalated && escalated.question && escalated.options.length === 2 && escalated.recommended === 0
@@ -14521,24 +14527,30 @@ describe("attention auto resolve", () => {
               }
               check(frame, after.overflow <= 1 && (after.rootOverflow ?? 0) <= 1, `overflow ${after.overflow}px, list ${after.rootOverflow}px`);
               await shot(page, frame);
+              /* The stage's own question, scrolled into the list's view. */
+              await page.locator('[data-needs-you-row="lane-diagnose"]').scrollIntoViewIfNeeded();
+              await shot(page, `${frame}-stage-question`);
             } finally { await opened.context.close(); }
           }
         }
 
-        /* The old seat's card says Delegatus cleared it and why, and Undo is there. */
+        /* The answered ask's card says Delegatus cleared it and why, with
+           Undo. Seats handed on draw no tile (#1841); their clears are in the
+           project read's cleared list. */
         opened = await open("", SIZES[0], "light", lang);
         try {
           const page = opened.page;
-          const cleared = await page.evaluate(() => [...document.querySelectorAll("[data-foot-cleared]")].map((foot) => ({
-            kind: foot.getAttribute("data-foot-cleared"),
-            text: foot.textContent,
-            undo: Boolean(foot.parentElement?.querySelector("[data-undo-dismiss]")),
-          })));
-          readings[`${lang}/cards-cleared`] = cleared;
-          const system = cleared.filter((foot) => foot.kind === "system");
-          check(`${lang}/cards-cleared`, system.length === 3 && system.every((foot) => foot.undo && foot.text?.includes(translate(lang, "needs.clearedRule.retired-seat"))), `cleared feet ${JSON.stringify(cleared)}`);
-          const first = page.locator('[data-kanban-board] .card[data-id="task:t-old-seat-1"]');
-          if (await first.count()) await first.scrollIntoViewIfNeeded();
+          const card = page.locator('[data-kanban-board] .card[data-id="task:t-september"]');
+          await card.waitFor({ timeout: 10_000 });
+          await card.scrollIntoViewIfNeeded();
+          const foot = await card.evaluate((element) => {
+            const cleared = element.querySelector("[data-foot-cleared]");
+            const undo = element.querySelector("[data-undo-dismiss]") as HTMLElement | null;
+            const box = undo?.getBoundingClientRect();
+            return { kind: cleared?.getAttribute("data-foot-cleared") ?? null, text: cleared?.textContent ?? null, undo: Boolean(box && box.width > 0 && box.height > 0) };
+          });
+          readings[`${lang}/card-cleared`] = foot;
+          check(`${lang}/card-cleared`, foot.kind === "system" && foot.undo && Boolean(foot.text?.includes(translate(lang, "needs.clearedRule.operator-replied"))), `the card's foot reads ${JSON.stringify(foot)}`);
           await shot(page, `${lang}/1440x900-light-cleared-card`);
         } finally { await opened.context.close(); }
       }

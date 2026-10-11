@@ -325,6 +325,7 @@ function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: n
 function ConversationRow({ item, now, current, onOpen, role }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void; role?: FrameRole }) {
   const { t } = useLocale();
   /* An orchestrator's question in the report log is its own title. */
+  const asksInTitle = Boolean(role && item.reason.report?.body);
   const title = (role && item.reason.report?.body) || cleanTitle(item.file.title, 90);
   /* What it asks, whole, in the desktop panel's words
      (docs/design/attention-auto-resolve.md): the question, its choices and
@@ -345,7 +346,13 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
       {role ? null : <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         {role ? <RoleTag role={role} /> : null}
-        <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
+        {/* An orchestrator's question is its own title, so it wraps whole. */}
+        <span
+          className={`min-w-0 ${asksInTitle ? "[overflow-wrap:anywhere]" : "truncate"} text-body font-semibold leading-[1.25] text-primary`}
+          data-needs-you-question-title={asksInTitle ? "" : undefined}
+        >
+          {title}
+        </span>
         <NeedsYouAskText ask={ask} size="touch" />
         <span className={META}>
           <span data-attention-age className="shrink-0">{fmtAgeSeconds(Math.max(0, now - item.since))}</span>

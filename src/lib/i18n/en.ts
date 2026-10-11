@@ -3409,7 +3409,7 @@ export const en = {
   "needs.ask.memory": "{memory}: resume the agent or close its work; resuming continues its turn under the same memory limit.",
   "needs.ask.askNamed": "The agent asks «{ask}»; reply in its conversation and it continues with your answer.",
   "needs.ask.ask": "The agent's last message asks you something; reply in its conversation and it continues with your answer.",
-  "needs.ask.laneOptions": "Choose one of the options of the {stage} stage below; the stage resumes with your choice.",
+  "needs.ask.laneOptions": "Choose one of the options of the {stage} stage; the stage resumes with your choice.",
   "needs.ask.laneQuestion": "Answer the question of the {stage} stage on its lane; the stage resumes with your answer.",
   "needs.ask.laneStopped": "The {stage} stage stopped: {detail}. Retry the stage or close the lane; a retry starts a fresh attempt.",
   "needs.ask.laneUnstated": "The {stage} stage asked for a decision without stating it here; open the lane to read the question and answer it, and the stage resumes.",

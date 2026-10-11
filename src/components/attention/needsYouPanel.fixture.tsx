@@ -259,6 +259,8 @@ const AUTO = params.get("scenario") === "auto-resolve";
 const AUTO_AFTER = params.get("state") !== "before";
 const say = (uk: string, en: string) => (LANG === "en" ? en : uk);
 const AUTO_IDS: Record<string, string> = {};
+/* Seats handed on draw no tile (#1841): the seat record lists them. */
+const AUTO_RETIRED_PATHS: string[] = [];
 if (AUTO) {
   const asked = (path: string, id: string, gist: string, ago: number) => {
     const entry = files.find((file) => file.path === path)!;
@@ -276,10 +278,15 @@ if (AUTO) {
   ].map((gist, index) => {
     const path = conversation(D, say(`Оркестратор, попередній ${index + 1}`, `Orchestrator, previous ${index + 1}`), { ...role("orchestrator"), proc: "done", mtime: now - (6 + index) * 3_600 });
     const entry = asked(path, `ask:retired-${index + 1}`, gist, (6 + index) * 3_600);
-    task(D, `t-old-seat-${index + 1}`, "assigned", say(`Оркестратор delegatus (попередній ${index + 1})`, `delegatus orchestrator (previous ${index + 1})`), { assignments: [assign(path)], icon: "compass" });
+    AUTO_RETIRED_PATHS.push(path);
     return entry.conversationId!;
   });
   AUTO_IDS.retired = retired.join(",");
+  /* A session the operator started, whose prose ask they have since answered
+     in the conversation: its card keeps the reason, cleared, with Undo. */
+  const replied = conversation(D, say("Звіт про продажі за вересень", "September sales report"), { ...role("builder") });
+  AUTO_IDS.replied = asked(replied, "ask:analyst-september", say("Рахувати повернення в цьому звіті чи окремо?", "Count returns in this report or separately?"), 50 * MIN).conversationId!;
+  task(D, "t-september", "assigned", say("Звіт про продажі за вересень", "September sales report"), { assignments: [assign(replied)], icon: "chart-column" });
   /* A deployer the seat spawned asks the operator what its seat can decide. */
   const deployer = conversation(D, say("Викатка релізу 1.9", "Roll out release 1.9"), {
     durableLineage: { kind: "spawn", role: "deployer", depth: 1, parentConversationId: idOf(seatDelegatus), reviewsConversationId: null, memberships: [] },
@@ -314,7 +321,8 @@ if (AUTO) {
   if (AUTO_AFTER) {
     /* What the reconciliation proves and writes, on the board's own clock. */
     const retiredSeats = new Set(retired);
-    for (const clear of attentionSystemClears(files, now, { canonicalConversationId: (id) => id, retiredSeats, operatorWroteAt: new Map(), pipeline: (id) => pipelines.find((row) => row.id === id) ?? null })) {
+    const operatorWroteAt = new Map([[AUTO_IDS.replied!, (now - 20 * MIN) * 1_000]]);
+    for (const clear of attentionSystemClears(files, now, { canonicalConversationId: (id) => id, retiredSeats, operatorWroteAt, pipeline: (id) => pipelines.find((row) => row.id === id) ?? null })) {
       const entry = files.find((file) => file.path === clear.path)!;
       entry.attentionDismissal = { at: iso(2 * MIN), by: { kind: "system", rule: clear.rule }, reasonId: clear.reasonId };
     }
@@ -415,7 +423,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     if (url.searchParams.get("scope") === "all") {
       const all = Object.values(seats);
-      return json({ all: { conversationIds: all.map(idOf), paths: all, previous: { conversationIds: [], paths: [] } } });
+      return json({ all: { conversationIds: all.map(idOf), paths: all, previous: { conversationIds: AUTO_RETIRED_PATHS.map(idOf), paths: AUTO_RETIRED_PATHS } } });
     }
     const project = url.searchParams.get("project") ?? D;
     const path = seats[project];

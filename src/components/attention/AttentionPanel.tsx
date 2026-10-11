@@ -284,6 +284,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
   const { title, line, question, options, recommended } = needsYouRowText(t, entry);
+  const asksInTitle = entry.kind === "conversation" && Boolean(entry.item.reason.report?.body);
   const permission = entry.kind === "conversation" && entry.item.reason.kind === "permission" && entry.item.file.pendingPermission ? entry.item.file : null;
   return (
     <div
@@ -305,7 +306,14 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
             <RoleTag role={role} />
             {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">· {fmtAge(since)}</span> : null}
           </span>
-          <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{title}</span>
+          {/* An orchestrator's question is its own title, so it is shown whole. */}
+          <span
+            className={`${asksInTitle ? "" : "line-clamp-2 "}w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]`}
+            data-needs-you-title-line=""
+            data-needs-you-question-title={asksInTitle ? "" : undefined}
+          >
+            {title}
+          </span>
           <NeedsYouAskText ask={{ question, options, recommended, sentence: line }} />
         </button>
         <button
