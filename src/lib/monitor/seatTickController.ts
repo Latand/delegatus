@@ -358,10 +358,10 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         /* The condition is on the board either way; only its wording is stale. */
         : unchanged;
     }
-    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation") && card.state === "open") {
-      /* A recovered outage has a completed card and a durable create receipt.
-         Reopen that project's card on a later outage of the same seat: creating
-         with the old receipt would replay the completed task instead. */
+    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation" || card.kind === "host-recovery") && card.state === "open") {
+      /* Reopen the same card after a later outage or when a recovery's terminal
+         outcome follows a closed intermediate notice. Creating with its durable
+         receipt would replay the completed task without updating the notice. */
       const completed = state.tasks.findLast((task) =>
         canonicalOrchestratorProject(task.project) === project
         && task.status === "done"

@@ -870,11 +870,12 @@ test("a failed revival notice stays owed across controller restart until the boa
   expect(rotations).toBe(1);
 });
 
-test("a pending recovery after restart updates one production card before recording the failure as told", async () => {
+test.each([false, true])("a pending recovery after restart updates one production card before recording the failure as told (closed: %s)", async closed => {
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "recovery-board-"));
   try {
-    const { loadTasks } = await import("@/lib/tasks/store");
+    const { loadTasks, mutateTasksFile } = await import("@/lib/tasks/store");
+    const { patchTask } = await import("@/lib/tasks/commands");
     const { seatHostRecoveryKey } = await import("./seatHostRecovery");
     const stateFile = statePath("seat-tick.json");
     writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, accounting: undefined,
@@ -901,6 +902,14 @@ test("a pending recovery after restart updates one production card before record
         seatRecovery: { rotate: async () => {
           rotations += 1;
           pendingCards = cards();
+          if (closed) {
+            mutateTasksFile(state => {
+              const done = patchTask(state.tasks, pendingCards[0]!.id, { status: "done" });
+              if (!done.ok) throw new Error(done.error);
+              return { state: { ...state, tasks: done.tasks }, result: undefined };
+            }, statePath("tasks.json"));
+            expect(cards()[0]!.status).toBe("done");
+          }
           return { status: 503, body: { error: "replacement unavailable" } };
         } },
       });
@@ -911,6 +920,7 @@ test("a pending recovery after restart updates one production card before record
     const terminal = cards();
     expect(terminal).toHaveLength(1);
     expect(terminal[0]!.id).toBe(pendingCards[0]!.id);
+    expect(terminal[0]!.status).toBe("inbox");
     expect(terminal[0]!.text).toContain("Відновлення та ротація не вдалися");
     expect(terminal[0]!.details).toContain(`${new Date(NOW).toISOString()}: failed; replacement unavailable`);
     expect(terminal[0]!.details).toContain("monitor-ref: seat-host-recovery-");
