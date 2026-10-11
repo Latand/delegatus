@@ -3,10 +3,10 @@ import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import {
   InvalidTranscriptSearchCursorError,
   TranscriptSearchPageTooLargeError,
-  searchTranscripts,
   type TranscriptSearchItem,
   type TranscriptSpeaker,
 } from "@/lib/search/transcriptSearch";
+import { searchTranscriptsInWorker } from "@/lib/search/transcriptSearchWorker";
 import { cleanTitle } from "@/lib/title";
 
 /** A search result carries the conversation's own title so a row can name the
@@ -57,7 +57,7 @@ export async function transcriptSearchPage(request: Request, redactText?: (text:
   if (order !== "newest" && order !== "relevance") return Response.json({ error: "order must be relevance or newest" }, { status: 400 });
   let page;
   try {
-    page = searchTranscripts({
+    page = await searchTranscriptsInWorker({
       query,
       redactText,
       order,
@@ -65,7 +65,7 @@ export async function transcriptSearchPage(request: Request, redactText?: (text:
       speaker,
       cursor: url.searchParams.get("cursor"),
       limit: pageLimit(url.searchParams.get("limit")),
-    });
+    }, request.signal);
   } catch (error) {
     if (error instanceof InvalidTranscriptSearchCursorError || error instanceof TranscriptSearchPageTooLargeError) {
       return Response.json({ error: error.message }, { status: 400 });

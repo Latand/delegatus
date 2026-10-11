@@ -26,6 +26,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
+import { codexProcessCleanupArgs, codexProcessCleanupConfig } from "@/lib/agent/processCleanupPolicy";
 import { nativeCodexActivityMethod } from "./codexSubagentDetection";
 import { installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
@@ -1324,7 +1325,7 @@ export class CodexAppServerHost implements EngineHost {
   private readonly attentions = new Map<string, PendingAttention>();
   private readonly stateListeners = new Set<(state: HostState) => void>();
   private readonly preRestoreEvents: UnsequencedEvent[] = [];
-  private readonly preRestoreMessages: Array<{ message: JsonObject; bytes: number }> = [];
+  private readonly preRestoreMessages: Array<{ message: JsonObject; bytes: number; receivedAt: string }> = [];
   private readonly bufferedTerminalTurnIds = new Set<string>();
   private bufferedActiveTurnId: string | null = null;
   private bufferedNotificationOverlap: string[] = [];
@@ -1442,7 +1443,11 @@ export class CodexAppServerHost implements EngineHost {
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
     let features: ReturnType<typeof readCodexFeatures>;
-    try { features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env); }
+    let cleanupArgs: string[];
+    try {
+      features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
+      cleanupArgs = codexProcessCleanupArgs(options.codexHome);
+    }
     catch (error) { options.releaseCleanup?.(); throw error; }
     const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
     const granted = grantedPlugins(options.plugins);
@@ -1453,6 +1458,7 @@ export class CodexAppServerHost implements EngineHost {
       "-c", `agents.enabled=${options.allowSubagents === true}`,
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
       ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
+      ...cleanupArgs,
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
         ? [
@@ -1532,6 +1538,9 @@ export class CodexAppServerHost implements EngineHost {
         options.cleanMemory === true,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      const cleanup = codexProcessCleanupConfig(options.codexHome);
+      Object.assign(config.features as Record<string, unknown>, cleanup.features);
+      config.hooks = cleanup.hooks;
       if (memoryHook) {
         const hookSetupDeadline = performance.now() + Math.min(250, provisional.requestTimeoutMs);
         try {
@@ -3595,7 +3604,7 @@ export class CodexAppServerHost implements EngineHost {
       const turnId = stringField(turn, "id");
       return turnId ? [[turnId, turn] as const] : [];
     }));
-    for (const { message, bytes } of this.preRestoreMessages.splice(0)) {
+    for (const { message, bytes, receivedAt } of this.preRestoreMessages.splice(0)) {
       this.preRestoreBytes -= bytes;
       if (message.method === "turn/completed") {
         const params = record(message.params) ?? {};
@@ -3603,7 +3612,7 @@ export class CodexAppServerHost implements EngineHost {
         const turn = turnId ? turns.get(turnId) : null;
         if (turn) this.reconcileTurnHistory(turn);
       }
-      this.acceptParsedMessage(message, true);
+      this.acceptParsedMessage(message, true, receivedAt);
       if (this.dead || this.releasing || this.released) break;
     }
     this.preRestoreBytes = 0;
@@ -3831,6 +3840,7 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private acceptMessage(line: string): void {
+    const receivedAt = new Date().toISOString();
     let message: JsonObject | null;
     try { message = record(JSON.parse(line)); } catch { message = null; }
     if (!message) {
@@ -3844,14 +3854,14 @@ export class CodexAppServerHost implements EngineHost {
         this.fail(new Error("Codex app-server pre-restore notification buffer exceeded its bounded capacity"));
         return;
       }
-      this.preRestoreMessages.push({ message, bytes });
+      this.preRestoreMessages.push({ message, bytes, receivedAt });
       this.preRestoreBytes += bytes;
       return;
     }
-    this.acceptParsedMessage(message);
+    this.acceptParsedMessage(message, false, receivedAt);
   }
 
-  private acceptParsedMessage(message: JsonObject, reconcileBufferedLifecycle = false): void {
+  private acceptParsedMessage(message: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
     const id = message.id;
     const method = typeof message.method === "string" ? message.method : null;
     if ((typeof id === "number" || typeof id === "string") && !method) {
@@ -3893,7 +3903,7 @@ export class CodexAppServerHost implements EngineHost {
       this.nativeQueueRevision++;
       this.emit({ kind: "native-queue-changed", threadId: this.identity.threadId });
     }
-    this.acceptNotification(method, params, reconcileBufferedLifecycle);
+    this.acceptNotification(method, params, reconcileBufferedLifecycle, receivedAt);
   }
 
   /**
@@ -3928,7 +3938,7 @@ export class CodexAppServerHost implements EngineHost {
     return threadId !== null && threadId !== this.identity.threadId;
   }
 
-  private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false): void {
+  private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
     /* #1629: the canonical transcript. These are the app-server's own
        notifications, so they survive a data-channel drop and are what the
        thread's committed timeline is built from. Answered before the pending
@@ -4064,12 +4074,15 @@ export class CodexAppServerHost implements EngineHost {
       const voiceResponse = phase === "completed" && eventTurnId
         ? this.finalizeVoiceStreamItem(eventTurnId, params.item)
         : undefined;
+      const user = record(params.item);
+      const operationId = user?.type === "userMessage" ? stringField(user, "clientId") : null;
       this.emit({
         kind: "item",
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
+        ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt } } : {}),
       });
       /* #862: the compaction item is the completion signal for a manual
          compact control. It is read after the emit so the durable event ledger

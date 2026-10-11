@@ -80,8 +80,21 @@ test("a read answers every role's config and variants, the revision, the health 
   expect(Object.keys(builder.variants!)).toContain("frontend");
   expect(Object.keys(registry.roles.find((role) => role.id === "reviewer")!.variants!)).toEqual(["trivial"]);
   expect(registry.choices.claude!["claude-sonnet-5-5"]).toContain("high");
+  expect(registry.choices.claude!["claude-haiku-5-5"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  expect(registry.choices.claude!["claude-haiku-4-5"]).toContain("low");
   expect(Object.keys(registry.choices.codex!)).toContain("gpt-6.1-sol");
   expect(fs.existsSync(stateFile("role-presets.json"))).toBe(false);
+});
+
+test("role_presets persists pinned Haiku 5.5 for trivial builder work", async () => {
+  const config = { engine: "claude", model: "claude-haiku-5-5", effort: "max" };
+  const answer = await tools(SEAT).role_presets({
+    clientRequestId: "haiku-preset",
+    overrides: { builder: { variants: { trivial: config } } },
+  }) as { changed: boolean };
+  expect(answer.changed).toBe(true);
+  expect((await read()).roles.find((role) => role.id === "builder")!.variants!.trivial).toEqual(config);
+  expect(JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8")).overrides.builder.variants.trivial).toEqual(config);
 });
 
 test("the seat writes a full config, and the row, the revision and an independent read agree", async () => {

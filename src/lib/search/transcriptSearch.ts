@@ -821,14 +821,14 @@ function newestPage(groups: Iterable<CollapsedHit>, cursor: SearchCursor | null,
   return heap.sort(compare);
 }
 
-function pageItems(
+function* pageItems(
   db: Database,
   query: string,
   page: readonly CollapsedHit[],
   files: ReadonlyMap<string, TranscriptFileRow>,
   tokens = 24,
   redactText?: (text: string) => string,
-): TranscriptSearchItem[] {
+): Generator<string, TranscriptSearchItem[], string> {
   if (!page.length) return [];
   const ids = page.map((group) => group.newest.id);
   /* `+rowid` keeps FTS5 from turning the id list into one doclist seek per row,
@@ -846,7 +846,7 @@ function pageItems(
   for (const [id, snippet] of snippetRows) {
     // A trusted projection sees the complete highlighted source, including a
     // credential spanning match markers, before either end of the excerpt cuts it.
-    const safe = redactText ? redactText(snippet) : snippet;
+    const safe = redactText ? (yield snippet) : snippet;
     if (!redactText) { snippets.set(id, safe); continue; }
     const scalars = Array.from(safe);
     const match = scalars.indexOf(SNIPPET_MATCH_OPEN);
@@ -1058,14 +1058,14 @@ function validCursorUnit(unit: QueryUnit): boolean {
   return unit.expression === literal;
 }
 
-function relevanceSearch(
+function* relevanceSearch(
   db: Database,
   options: TranscriptSearchOptions,
   stats: TranscriptCorpusStats,
   projectScope?: ProjectScope,
   /** Second pass: widen the units that have a wider form; null when none has. */
   widen = false,
-): TranscriptSearchResult | null {
+): Generator<string, TranscriptSearchResult | null, string> {
   const scope = cursorScope(options.query.trim() + "\0relevance", options.project, options.speaker);
   let cursor: RelevanceCursor | undefined;
   let seen = new Set<number>();
@@ -1268,7 +1268,7 @@ function relevanceSearch(
   const pageGroups = groupRows.slice(0, limit);
   // Snippet work stays bounded by this page and its at-most-three fragments.
   const messages = pageGroups.flatMap((group) => group[0]!.fragments);
-  const snippets = pageItems(db, expression, messages.map((m) => ({ newest: m, duplicateCount: 1 })), files, 16, options.redactText);
+  const snippets = yield* pageItems(db, expression, messages.map((m) => ({ newest: m, duplicateCount: 1 })), files, 16, options.redactText);
   const byId = new Map(messages.map((m, i) => [m.id, snippets[i]]));
   const items: TranscriptSearchItem[] = [];
   for (const group of pageGroups) {
@@ -1317,7 +1317,10 @@ function relevanceSearch(
   return page;
 }
 
-export function searchTranscripts(options: TranscriptSearchOptions): TranscriptSearchResult {
+/** The query and its read snapshot stay with the iterator. A worker can await
+    a trusted caller's redactor on complete highlighted text before excerpts
+    or page budgets are applied; offline callers drive the same steps inline. */
+export function* transcriptSearchSteps(options: TranscriptSearchOptions): Generator<string, TranscriptSearchResult, string> {
   const db = openQueryDatabase();
   try {
     db.exec("BEGIN");
@@ -1329,12 +1332,12 @@ export function searchTranscripts(options: TranscriptSearchOptions): TranscriptS
         options = { ...options, project: projectScope.resolved ?? undefined };
       }
       if (options.order === "relevance") {
-        let page = relevanceSearch(db, options, stats, projectScope)!;
+        let page = (yield* relevanceSearch(db, options, stats, projectScope))!;
         if (!options.cursor && !page.strongTotal) {
           // No strong match: compound terms and identifiers get one wider pass.
           // Its page replaces the literal one only when it holds a strong match.
           try {
-            const wider = relevanceSearch(db, options, stats, projectScope, true);
+            const wider = yield* relevanceSearch(db, options, stats, projectScope, true);
             if (wider?.strongTotal) page = wider;
           } catch (error) {
             // A wider page that cannot fit never costs the literal answer.
@@ -1416,7 +1419,7 @@ export function searchTranscripts(options: TranscriptSearchOptions): TranscriptS
       const ranked = newestPage(groups.values(), cursor, limit + 1);
       const total = groups.size;
       const page = ranked.slice(0, limit);
-      const items = pageItems(db, query, page, files, 24, options.redactText);
+      const items = yield* pageItems(db, query, page, files, 24, options.redactText);
       return {
         items,
         nextCursor: ranked.length > limit ? encodeCursor(page.at(-1)!.newest, throughId, scope) : null,
@@ -1430,5 +1433,16 @@ export function searchTranscripts(options: TranscriptSearchOptions): TranscriptS
     }
   } finally {
     db.close();
+  }
+}
+
+export function searchTranscripts(options: TranscriptSearchOptions): TranscriptSearchResult {
+  const steps = transcriptSearchSteps(options);
+  try {
+    let step = steps.next();
+    while (!step.done) step = steps.next(options.redactText!(step.value));
+    return step.value;
+  } finally {
+    steps.return(undefined as never);
   }
 }

@@ -178,20 +178,32 @@ export class UpdateRunner {
       let exitCode: number | null = null;
       let failure: StepFailure | null = null;
       let timer: ReturnType<typeof setTimeout> | null = null;
+      let exitTurn: ReturnType<typeof setImmediate> | null = null;
       let liveness: ReturnType<typeof setInterval> | null = null;
       try {
         const limit = this.config.stepTimeoutMs?.[name] ?? STEP_TIMEOUT_MS[name];
         exitCode = await Promise.race([
           this.runStep(name, push),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              // PID disappearance cannot settle a pending exit notification.
-              // Bound that wait by the step deadline, then classify the loss.
+            const expire = () => {
               const alive = this.ports.childAlive?.();
               this.ports.abort?.();
-              reject(alive === null || alive === false
+              reject(alive === false
                 ? new StepError({ kind: "interrupted" }, `${name} child process ended without an exit status before the deadline`)
                 : new StepError({ kind: "timeout", minutes: limit / 60_000 }, `${name} did not finish within ${limit / 60_000} min`));
+            };
+            timer = setTimeout(() => {
+              // Give queued I/O a turn before bounding an unreported exit.
+              // Timer callbacks alone cannot establish completion or loss.
+              if (this.ports.childAlive?.() === null) {
+                // A lost child supplies no I/O to wake an unreferenced turn.
+                // Keep this turn scheduled so its bounded grace can start.
+                exitTurn = setImmediate(() => {
+                  exitTurn = null;
+                  timer = setTimeout(expire, this.config.livenessPollMs ?? 1_000);
+                  timer.unref?.();
+                });
+              } else expire();
             }, limit);
             timer.unref?.();
           }),
@@ -218,6 +230,7 @@ export class UpdateRunner {
         }
       } finally {
         if (timer) clearTimeout(timer);
+        if (exitTurn) clearImmediate(exitTurn);
         if (liveness) clearInterval(liveness);
         accepting = false;
         closeSync(fd);
@@ -378,7 +391,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       if (completion === null) return true;
       if (completion.ended) return completion.code !== null;
       // Missing-PID polls carry no exit status, however often they run.
-      // Wait for exit/close, or let the deadline settle an unreported loss.
+      // Wait for exit/close; the deadline bounds an unreported completion.
       return !current || sameProcess(current) ? true : null;
     },
     memAvailableMb,

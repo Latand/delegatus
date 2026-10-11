@@ -27,6 +27,7 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, persistCodexHost, st
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
+import { codexProcessCleanupArgs } from "@/lib/agent/processCleanupPolicy";
 import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
 import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -149,9 +150,14 @@ test("fresh and adopted app-server hosts enforce native delegation with Telegram
     const host = resumed ? await CodexAppServerHost.adopt("policy-thread", options) : await CodexAppServerHost.start(options);
     try {
       expect(captured.args).toContain(`agents.enabled=${allowed}`);
+      expect(captured.args).toContain("features.hooks=true");
+      expect(captured.args?.some(arg => arg.startsWith("hooks.PreToolUse=["))).toBe(true);
       expect(captured.args?.includes('approvals_reviewer="user"')).toBe(!allowed);
       const params = server.requests.find((request) => request.method === (resumed ? "thread/resume" : "thread/start"))?.params as Record<string, unknown> | undefined;
       const config = params?.config;
+      const cleanup = config as { features: { hooks: boolean }; hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> } };
+      expect(cleanup.features.hooks).toBe(true);
+      expect(cleanup.hooks.PreToolUse[0].hooks[0].command.startsWith("LLV_MANAGED_PROCESS_CLEANUP_DENY=1 ")).toBe(true);
       expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed },
         mcp_servers: { viewer: { enabled: true }, telegram: { enabled: connected } } });
       expect(captured.options?.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBe(session?.connectorToken);
@@ -749,7 +755,7 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
 
-    expect(captured.args).toEqual([...DENIED_FEATURE_ARGS, "app-server", "--enable", "realtime_conversation"]);
+    expect(captured.args).toEqual([...DENIED_FEATURE_ARGS, ...codexProcessCleanupArgs(), "app-server", "--enable", "realtime_conversation"]);
     expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({
       config: {
         mcp_servers: {
@@ -782,6 +788,7 @@ describe("CodexAppServerHost", () => {
 
       expect(captured.args).toEqual([
         ...DENIED_FEATURE_ARGS,
+        ...codexProcessCleanupArgs(),
         "-c", `default_permissions=${JSON.stringify(permissionProfile)}`,
         "-c", permissionProfileConfig,
         "app-server", "--enable", "realtime_conversation",
@@ -1762,9 +1769,10 @@ describe("CodexAppServerHost", () => {
     const server = new FakeAppServer();
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
     const blockedCredential = ["must", "stay", "private"].join("-");
+    const codexHome = path.join(metadataState, "codex-home");
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      codexHome: "/codex-home",
+      codexHome,
       env: {
         NODE_ENV: "test",
         PATH: process.env.PATH,
@@ -1786,7 +1794,7 @@ describe("CodexAppServerHost", () => {
     expect(captured.options?.env).toEqual({
       NODE_ENV: "test",
       PATH: process.env.PATH,
-      CODEX_HOME: "/codex-home",
+      CODEX_HOME: codexHome,
       ...agentPublicationIdentityEnv({}),
       GIT_AUTHOR_NAME: "Delegatus",
       GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
@@ -2186,22 +2194,24 @@ describe("CodexAppServerHost", () => {
       "telegram-readonly": { command: "uv", enabled: true },
     };
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const codexHome = path.join(metadataState, "managed-codex-home");
     const host = await CodexAppServerHost.adopt("managed-thread", {
       cwd: "/repo",
-      codexHome: "/managed-codex-home",
+      codexHome,
       fileAuthCredentials: true,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server, captured),
     });
     expect(captured.args).toEqual([
       ...DENIED_FEATURE_ARGS,
+      ...codexProcessCleanupArgs(codexHome),
       "-c",
       "cli_auth_credentials_store=file",
       "app-server",
       "--enable",
       "realtime_conversation",
     ]);
-    expect(captured.options?.env?.CODEX_HOME).toBe("/managed-codex-home");
+    expect(captured.options?.env?.CODEX_HOME).toBe(codexHome);
     expect(captured.options?.detached).toBeTrue();
     expect(server.requests.some((request) => request.method === "thread/resume")).toBeTrue();
     const resume = server.requests.find((request) => request.method === "thread/resume");
@@ -4817,7 +4827,7 @@ describe("CodexAppServerHost", () => {
       joined("generic", "-secret-value"),
       joined("eyJabcdefghijk", ".abcdefghijk", ".abcdefghijk"),
       joined("sk", "-ant-", "abcdefghijklmnopqrstuvwxyz"),
-      joined("gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890"),
+      joined("gh", "p_", "a".repeat(36)),
     ];
     const redacted = redactCodexHostDiagnostic([
       `${["oauth", "token"].join("_")}=${secrets[0]}`,
@@ -5670,13 +5680,20 @@ test.each([false, true, undefined, null, "false"])("native question flag %j reta
 
 test("Codex stdout preserves Unicode split inside a completed user echo", async () => {
   const server = new FakeAppServer("unicode-wire");
-  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const eventStore = new MemoryEventStore();
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
   await host.send({ id: "unicode-original", text: "Привіт 🌍" });
   const encoded = encodeCodexStructuredUserText("Привіт 🌍", undefined, undefined, undefined, deliveryDedup("unicode-original"));
   const bytes = Buffer.from(JSON.stringify({ method: "item/completed", params: { threadId: "unicode-wire", turnId: "turn-1", item: { type: "userMessage", id: "unicode-item", clientId: "unicode-original", content: [{ type: "text", text: encoded }] } } }) + "\n");
   const split = bytes.indexOf(Buffer.from("П")) + 1;
+  const beforeEcho = Date.now();
   server.stdout.write(bytes.subarray(0, split)); server.stdout.write(bytes.subarray(split));
   expect(await host.send({ id: "unicode-original", text: "Привіт 🌍" })).toMatchObject({ turnId: "turn-1" });
+  const echo = eventStore.load("unicode-wire").findLast(event => event.kind === "item" && event.phase === "completed") as { deliveryEcho?: { operationId: string; at: string } };
+  expect(echo.deliveryEcho?.operationId).toBe("unicode-original");
+  expect(echo.deliveryEcho?.at).toBeString();
+  expect(Date.parse(echo.deliveryEcho!.at)).toBeGreaterThanOrEqual(beforeEcho);
+  expect(Date.parse(echo.deliveryEcho!.at)).toBeLessThanOrEqual(Date.now());
   await expect(host.send({ id: "unicode-original", text: "wrong payload" })).rejects.toThrow("different payload");
   await host.release();
 });

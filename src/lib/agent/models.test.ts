@@ -107,8 +107,8 @@ test("a card names a Claude model by its CLI display name and leaves other ids a
 });
 
 test("a live conversation's launch alias reads like the resolved id its transcript records later", () => {
-  expect(modelDisplayName("claude", "haiku")).toBe(modelDisplayName("claude", "haiku-4-5"));
-  expect(modelDisplayName("claude", "haiku")).toBe("Haiku 4.5");
+  expect(modelDisplayName("claude", "haiku")).toBe(modelDisplayName("claude", "haiku-5-5"));
+  expect(modelDisplayName("claude", "haiku")).toBe("Haiku 5.5");
   expect(modelDisplayName("claude", "opus")).toBe("Opus 5.5");
   expect(modelDisplayName("codex", "haiku")).toBe("haiku");
 });
@@ -154,7 +154,7 @@ test("the provider's own label names the row, and a codenamed bucket is never sh
 
 test("Claude Sonnet 5.5 is a pinned catalog row that launches and displays as Sonnet 5.5", () => {
   const ids = ENGINE_MODELS.claude.map((option) => option.id);
-  expect(ids).toEqual(["opus", "fable", "sonnet", "claude-sonnet-5-5", "haiku"]);
+  expect(ids).toEqual(["opus", "fable", "sonnet", "claude-sonnet-5-5", "haiku", "claude-haiku-5-5", "claude-haiku-4-5"]);
   expect(ENGINE_MODELS.claude.find((option) => option.id === "claude-sonnet-5-5")).toEqual({
     id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement",
   });
@@ -176,4 +176,19 @@ test("claudeCatalogModelId keeps a pinned catalog id and folds every other id to
   expect(claudeCatalogModelId("gpt-5.6-sol")).toBeNull();
   expect(claudeCatalogModelId(null)).toBeNull();
   expect(claudeCatalogModelId(undefined)).toBeNull();
+});
+
+test("Haiku 5.5 and the previous Haiku launch with pinned ids and keep their display identities", () => {
+  for (const [model, label] of [["claude-haiku-5-5", "Haiku 5.5"], ["claude-haiku-4-5", "Haiku 4.5"]]) {
+    expect(ENGINE_MODELS.claude.find((option) => option.id === model)).toEqual({ id: model, label, shortLabel: label, use: "general" });
+    expect(validateLaunchModel("claude", model)).toEqual({ model });
+    expect(modelFromBody({ model })).toEqual({ model });
+    expect(modelDisplayName("claude", model)).toBe(label);
+    expect(claudeCatalogModelId(model)).toBe(model);
+    expect(normalizeClaudeLaunchModel(model)).toBe("haiku");
+    expect(claudeSpawnTier(model)).toBe("haiku");
+  }
+  expect(modelDisplayName("claude", "haiku-5-5")).toBe("Haiku 5.5");
+  expect(modelDisplayName("claude", "haiku-5-5[1m]")).toBe("Haiku 5.5 (1M)");
+  expect(claudeCatalogModelId("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
 });

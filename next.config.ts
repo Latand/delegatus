@@ -29,6 +29,7 @@ const nextConfig: NextConfig = {
       ".next/server/state-backup-worker.js",
       ".next/server/self-update-work-worker.js",
       ".next/server/transcript-search-index-worker.js",
+      ".next/server/transcript-search-query-worker.js",
       ".next/server/chunks/**",
     ],
   },
@@ -44,6 +45,7 @@ const nextConfig: NextConfig = {
         "state-backup-worker": "./src/lib/stateBackup.worker.ts",
         "self-update-work-worker": "./src/lib/selfUpdateWork.worker.ts",
         "transcript-search-index-worker": "./src/lib/transcriptSearchIndex.worker.ts",
+        "transcript-search-query-worker": "./src/lib/transcriptSearchQuery.worker.ts",
       });
     }
     return config;

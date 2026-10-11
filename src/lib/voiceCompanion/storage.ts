@@ -48,6 +48,7 @@ export interface StoredProposal {
 }
 export type SessionStarter = { memberId: string } | { operator: true };
 export interface StoredSession {
+  backend?: "codex";
   startedBy?: SessionStarter;
   currentProject?: string | null;
   reportWatermarks?: Record<string, number>;
@@ -67,7 +68,7 @@ export interface StoredSession {
   mintRequestId?: string;
   mintDigest?: string;
   answerSdp?: string;
-  usage?: { seconds: number; responses: Record<string, { usd: number | null; complete: boolean; tokens?: BackendTokens; responseId?: string }> };
+  usage?: { seconds: number; codexTokens?: Record<string, number>; responses: Record<string, { usd: number | null; complete: boolean; tokens?: BackendTokens; responseId?: string }> };
   id: string;
   project: string;
   locale: Locale;
@@ -98,6 +99,9 @@ function sessionValid(key: string, session: unknown): boolean {
     || !Number.isSafeInteger(session.seq) || (session.seq as number) < 0 || !Array.isArray(session.inputs)
     || !Array.isArray(session.events) || session.events.length > 512 || !record(session.proposals)) return false;
   if (session.authority !== undefined && session.authority !== "live-model") return false;
+  if (session.backend !== undefined && session.backend !== "codex") return false;
+  if (record(session.usage) && session.usage.codexTokens !== undefined && (!record(session.usage.codexTokens)
+    || Object.values(session.usage.codexTokens).some(n => !Number.isSafeInteger(n) || (n as number) < 0))) return false;
   if (session.currentProject !== undefined && session.currentProject !== null && !identifier(session.currentProject)) return false;
   if (session.startedBy !== undefined && (!record(session.startedBy)
     || !(Object.keys(session.startedBy).length === 1 && (identifier(session.startedBy.memberId) || session.startedBy.operator === true)))) return false;
