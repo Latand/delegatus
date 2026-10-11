@@ -33,7 +33,6 @@ import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHA
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
-import { LESSON_MATCH_MIN_CHARS } from "@/lib/memory/roleConsolidate";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
