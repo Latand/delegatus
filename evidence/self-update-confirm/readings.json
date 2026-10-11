@@ -120,17 +120,17 @@
         "disabled": false,
         "top": 703,
         "bottom": 743,
-        "left": 719,
-        "right": 815,
+        "left": 666,
+        "right": 762,
         "height": 40
       },
       {
         "action": "confirm-apply",
-        "label": "Оновити зараз",
+        "label": "Перезапустити лаунчер",
         "disabled": false,
         "top": 703,
         "bottom": 743,
-        "left": 823,
+        "left": 770,
         "right": 943,
         "height": 40
       }
@@ -406,17 +406,17 @@
         "disabled": false,
         "top": 703,
         "bottom": 743,
-        "left": 719,
-        "right": 815,
+        "left": 666,
+        "right": 762,
         "height": 40
       },
       {
         "action": "confirm-apply",
-        "label": "Оновити зараз",
+        "label": "Перезапустити лаунчер",
         "disabled": false,
         "top": 703,
         "bottom": 743,
-        "left": 823,
+        "left": 770,
         "right": 943,
         "height": 40
       }
@@ -698,7 +698,7 @@
       },
       {
         "action": "confirm-apply",
-        "label": "Оновити зараз",
+        "label": "Перезапустити лаунчер",
         "disabled": false,
         "top": 727,
         "bottom": 775,
@@ -984,7 +984,7 @@
       },
       {
         "action": "confirm-apply",
-        "label": "Оновити зараз",
+        "label": "Перезапустити лаунчер",
         "disabled": false,
         "top": 727,
         "bottom": 775,
@@ -1264,17 +1264,17 @@
         "disabled": false,
         "top": 703,
         "bottom": 743,
-        "left": 762,
-        "right": 835,
+        "left": 735,
+        "right": 808,
         "height": 40
       },
       {
         "action": "confirm-apply",
-        "label": "Update now",
+        "label": "Restart launcher",
         "disabled": false,
         "top": 703,
         "bottom": 743,
-        "left": 843,
+        "left": 816,
         "right": 943,
         "height": 40
       }
@@ -1550,17 +1550,17 @@
         "disabled": false,
         "top": 703,
         "bottom": 743,
-        "left": 762,
-        "right": 835,
+        "left": 735,
+        "right": 808,
         "height": 40
       },
       {
         "action": "confirm-apply",
-        "label": "Update now",
+        "label": "Restart launcher",
         "disabled": false,
         "top": 703,
         "bottom": 743,
-        "left": 843,
+        "left": 816,
         "right": 943,
         "height": 40
       }
@@ -1842,7 +1842,7 @@
       },
       {
         "action": "confirm-apply",
-        "label": "Update now",
+        "label": "Restart launcher",
         "disabled": false,
         "top": 727,
         "bottom": 775,
@@ -2128,7 +2128,7 @@
       },
       {
         "action": "confirm-apply",
-        "label": "Update now",
+        "label": "Restart launcher",
         "disabled": false,
         "top": 727,
         "bottom": 775,

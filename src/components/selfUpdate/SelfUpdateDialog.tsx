@@ -99,9 +99,11 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
   /* The question names what it applies: the action's own words, else the
      target it updates to. */
+  const actionWords = () => confirming === "install-action" && s?.action?.button ? t(`selfUpdate.actionButton.${s.action.id}` as MessageKey) : null;
   const confirmTitle = () => {
     if (!s) return "";
-    if (confirming === "install-action" && s.action?.button) return t("selfUpdate.confirmApply.actionTitle", { action: t(`selfUpdate.actionButton.${s.action.id}` as MessageKey) });
+    const action = actionWords();
+    if (action) return t("selfUpdate.confirmApply.actionTitle", { action });
     if (confirming === "retry") return t("selfUpdate.confirmApply.retryTitle");
     if (s.available && s.check.state === "update-available") return t("selfUpdate.confirmApply.title", { target: targetText(s.available.short, s.available.version || null) });
     return t("selfUpdate.confirmApply.nowTitle");
@@ -225,7 +227,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
   /* Portaled to the body: here only so it closes with this dialog. */
   const confirm = s && confirming
-    ? <SelfUpdateConfirm snapshot={s} title={confirmTitle()} lead={confirmLead()} onConfirm={apply} onCancel={() => setConfirming(null)} />
+    ? <SelfUpdateConfirm snapshot={s} title={confirmTitle()} lead={confirmLead()} goLabel={actionWords()} onConfirm={apply} onCancel={() => setConfirming(null)} />
     : null;
 
   if (isMobile) {

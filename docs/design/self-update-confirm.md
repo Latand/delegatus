@@ -288,8 +288,11 @@ one pinned footer it stays usable at the server's 20-item cap.
   fine, but the build may lift it to a shared place under the same name if a
   reviewer objects to the import path. Its markup must not change.
 - **One confirmation for three actions.** `update`, `retry` and
-  `installAction` open the same modal. Only the title changes, and «Оновити
-  зараз» runs the action that opened it. The action stays exactly as it is
+  `installAction` open the same modal. Only the title changes, and the
+  primary button runs the action that opened it, in that action's words:
+  «Оновити зараз» for update and retry, «Перезапустити лаунчер» (the title's
+  own verb) for the install action, which restarts the launcher and updates
+  nothing. The action stays exactly as it is
   now: the server still reads its own fresh drain admission, and the list is
   display only (`types.ts:177`).
 - **No new strings where keys exist.** «Оркестратор», «Агент {engine}», the

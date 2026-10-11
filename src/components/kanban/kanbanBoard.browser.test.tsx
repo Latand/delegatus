@@ -842,6 +842,10 @@ describe("self-update confirmation modal", () => {
           const installed = await ask("ready", "action");
           expect(installed.title).toBe(translate(lang, "selfUpdate.confirmApply.actionTitle", { action: translate(lang, "selfUpdate.actionButton.restart-service") }));
           expect(installed.titleCut).toBe(false);
+          /* The primary button repeats the title's verb: the action restarts the launcher and updates nothing. */
+          const goes = (reading: typeof installed) => reading.buttons.find((button) => button.action === "confirm-apply")?.label;
+          expect(goes(installed)).toBe(translate(lang, "selfUpdate.actionButton.restart-service"));
+          expect(goes(retried)).toBe(translate(lang, "selfUpdate.confirmApply.go"));
           await dismiss();
 
           const pending = await ask("pending");

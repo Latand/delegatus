@@ -15,7 +15,8 @@ import { groupWorkRows, useBlockerNames, wantBlockerNames, workNamesWanted, work
  * and named by its card and its role, said once to resume after the restart.
  * Centred on the desktop and a bottom sheet on the phone, with the buttons
  * pinned to the bottom so a long list scrolls under them. The list is display
- * only: «Update now» runs the action as before, and the server reads its own
+ * only: the primary button runs the action as before (in the install action's
+ * own words for it), and the server reads its own
  * fresh admission.
  */
 
@@ -26,7 +27,7 @@ function KindIcon({ kind }: { kind: WorkRow["kind"] }) {
   return <Icon className="mt-[3px] h-4 w-4 shrink-0 text-muted" aria-hidden />;
 }
 
-export function SelfUpdateConfirm({ snapshot: s, title, lead, onConfirm, onCancel }: { snapshot: Snapshot; title: string; lead?: string | null; onConfirm: () => void; onCancel: () => void }) {
+export function SelfUpdateConfirm({ snapshot: s, title, lead, goLabel, onConfirm, onCancel }: { snapshot: Snapshot; title: string; lead?: string | null; goLabel?: string | null; onConfirm: () => void; onCancel: () => void }) {
   const { t } = useLocale();
   const names = useBlockerNames();
   const evidence = s.workEvidence;
@@ -111,7 +112,7 @@ export function SelfUpdateConfirm({ snapshot: s, title, lead, onConfirm, onCance
         {/* The dialog's one scroller keeps the buttons on its bottom edge. */}
         <div data-confirm-buttons="" className="sticky bottom-[-16px] z-[1] -mx-4 -mb-4 flex justify-end gap-2 border-t border-border bg-card px-4 py-3 max-sm:flex-col-reverse max-sm:pb-[max(12px,env(safe-area-inset-bottom))]">
           <button type="button" data-action="cancel-apply" onClick={onCancel} className={BUTTON.secondary}>{t("common.cancel")}</button>
-          <button type="button" data-action="confirm-apply" onClick={onConfirm} className={BUTTON.primary}>{t("selfUpdate.confirmApply.go")}</button>
+          <button type="button" data-action="confirm-apply" onClick={onConfirm} className={BUTTON.primary}>{goLabel ?? t("selfUpdate.confirmApply.go")}</button>
         </div>
       </div>
     </TeamDialog>

@@ -263,6 +263,20 @@ describe("the Update dialog asks before it applies", () => {
     expect(Object.keys(first.posts[0]!.body as object)).toEqual(["key"]);
   });
 
+  test("the install action's primary button repeats the action's own words and posts the action", async () => {
+    const needsRestart = (work: WorkEvidence["state"]): Snapshot => ({
+      ...snapshot(work),
+      action: { id: "restart-service", button: true },
+    } as unknown as Snapshot);
+    const { posts } = await open("ready", needsRestart, "install-action");
+    expect(confirmDialog()!.getAttribute("aria-label")).toBe("Restart launcher?");
+    const go = button(confirmDialog(), "[data-action='confirm-apply']");
+    expect(go.textContent).toBe("Restart launcher");
+    expect(text()).not.toContain(translate("en", "selfUpdate.confirmApply.go"));
+    await act(async () => { go.click(); });
+    expect(posts.map((post) => post.path)).toEqual(["/api/self-update/action"]);
+  });
+
   test("Retry asks with a short title, names the target in the body and posts the retry", async () => {
     const failed = (work: WorkEvidence["state"]): Snapshot => {
       const base = snapshot(work);
