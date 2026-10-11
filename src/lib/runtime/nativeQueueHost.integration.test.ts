@@ -173,7 +173,7 @@ plugins = false
      rather than satisfied, and the mode named here is the one the Viewer's own
      spawn path already asks for in production. */
   const options = { cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model", sandbox: "danger-full-access",
-    ...(scenario === "runtime-switch" ? { serviceTier: "priority" } : {}),
+    ...(scenario.startsWith("runtime-switch") ? { serviceTier: "priority" } : {}),
     /* The background-history case uses the production timeout. The other two
        inject a lost acknowledgement, and the host's request budget is what
        ends that one deliberately unanswered request — it is spent exactly
