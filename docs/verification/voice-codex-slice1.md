@@ -16,6 +16,15 @@ selected only by `LLV_VOICE_BACKEND=codex`; there is no new UI control.
    held by the same provider; a refused hangup keeps the open flag until a
    later recovery confirms cleanup. An error immediately after SDP in the
    same stdout chunk rejects start and reaps the stub too.
+   The reap-deadline regression holds stdout in an owned descendant outside
+   the app-server's process group for longer than five seconds. Before the
+   fix, recovery still stored `remoteOpen: true` after both processes exited.
+   Hangup now discards a rejected stop promise while keeping the call closed
+   to attachment and tools. A later recovery confirms reaping, removes the
+   scratch directory, stores `remoteOpen: false` and admits a new start.
+   Closed notifications, event-queue overflow and disposal also handle their
+   background hangup rejections. The deadline still starts after the stop RPC
+   and transport close, and its timer is cleared when reaping settles.
 2. **Registry and read ledger.** Two `item/tool/call` requests for `list_tasks`
    in separate backing turns produce one store read. The second result has
    `repeated: true` and `readSecondsAgo: 0`, through the existing 120-second
@@ -96,7 +105,9 @@ Tests run by explicit file path through `scripts/gate-slot.sh`, with `HOME`,
 XDG configuration, `TMPDIR` and `LLV_STATE_DIR` under one private temporary
 root, and `LLV_VIEWER_CONTROL_URL` set to a closed loopback port. TypeScript,
 changed-file ESLint and the local publication privacy gate use the project's
-gates. The ten explicit test files cover 363 tests; the final pre-push gate
+gates. The initial ten explicit test files covered 363 tests. The hangup fix's
+focused provider file passes all 13 tests, including three new cases that
+cross the real five-second reap deadline; the final pre-push gate
 also compares touched files against the merge base. No runtime-host source
 changes are part of this slice.
 

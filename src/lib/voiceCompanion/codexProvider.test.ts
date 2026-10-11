@@ -20,6 +20,12 @@ async function until(check: () => boolean) {
   const deadline = Date.now() + 5000;
   while (!check()) { if (Date.now() > deadline) throw new Error("fixture deadline"); await Bun.sleep(10); }
 }
+async function releaseHolder(root: string) {
+  if (!fs.existsSync(root)) return;
+  fs.writeFileSync(path.join(root, "release-holder"), "ready");
+  const file = path.join(root, "holder-pid");
+  if (fs.existsSync(file)) await until(() => gone(Number(fs.readFileSync(file, "utf8"))));
+}
 function fixture(mode = "sdp") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-codex-")); roots.push(root);
   const binary = path.join(root, "codex");
@@ -111,6 +117,55 @@ test("start waits for the SDP notification after the RPC acknowledgement", async
     expect(await pending).toEqual({ id: "voice_thread", sdp: "v=0\r\nanswer\r\n" });
   } finally { await f.provider.hangup("voice_thread", ""); await pending.catch(() => {}); }
 });
+
+test("a timed-out Codex hangup can recover after reaping and admit a new start", async () => {
+  const f = fixture("hangup-timeout"); fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  const { storage, service } = sessions(f.root, f.provider);
+  const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  const pid = Number(fs.readFileSync(path.join(f.root, "pid"), "utf8"));
+  const scratch = path.join(f.root, "state/scratch/voice-codex");
+  const callDirectory = path.join(scratch, fs.readdirSync(scratch)[0]);
+  try {
+    await service.close(session.sessionId);
+    expect(storage.read().sessions[session.sessionId]).toMatchObject({ closed: true, remoteOpen: true });
+    expect(gone(pid)).toBe(true);
+    const holderPid = Number(fs.readFileSync(path.join(f.root, "holder-pid"), "utf8"));
+    expect(gone(holderPid)).toBe(false);
+    expect(fs.existsSync(callDirectory)).toBe(true);
+    await expect(f.provider.attach(session.providerId, "", () => {}, () => {})).rejects.toThrow("PROVIDER_ERROR");
+    fs.writeFileSync(path.join(f.root, "release-holder"), "ready");
+    await until(() => gone(holderPid));
+    await service.recover();
+    expect(storage.read().sessions[session.sessionId]).toMatchObject({ closed: true, remoteOpen: false });
+    expect(fs.existsSync(callDirectory)).toBe(false);
+    const next = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    await service.close(next.sessionId);
+    expect(storage.read().sessions[next.sessionId]).toMatchObject({ closed: true, remoteOpen: false });
+  } finally {
+    await releaseHolder(f.root);
+    await service.close(session.sessionId);
+    await f.provider.hangup(session.providerId, "").catch(() => {});
+  }
+}, 20000);
+
+test.each(["closed", "overflow"])("a background Codex hangup after %s handles its reap timeout", async trigger => {
+  const f = fixture(`hangup-timeout-${trigger}`); fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  const call = await f.provider.create("", "en", "v=0");
+  try {
+    fs.writeFileSync(path.join(f.root, "notify-close"), "ready");
+    await until(() => fs.existsSync(path.join(f.root, "holder-pid")));
+    await expect(f.provider.hangup(call.id, "")).rejects.toThrow("PROVIDER_ERROR");
+    await expect(f.provider.attach(call.id, "", () => {}, () => {})).rejects.toThrow("PROVIDER_ERROR");
+    const holderPid = Number(fs.readFileSync(path.join(f.root, "holder-pid"), "utf8"));
+    expect(gone(holderPid)).toBe(false);
+    fs.writeFileSync(path.join(f.root, "release-holder"), "ready");
+    await until(() => gone(holderPid));
+    await f.provider.hangup(call.id, "");
+  } finally {
+    await releaseHolder(f.root);
+    await f.provider.hangup(call.id, "").catch(() => {});
+  }
+}, 15000);
 
 test("an error before SDP and non-subscription auth refuse and reap the process", async () => {
   for (const [mode, code] of [["error", "PROVIDER_ERROR"], ["limit", "CODEX_LIMIT_REACHED"], ["auth", "CODEX_AUTH_REQUIRED"]]) {

@@ -107,7 +107,7 @@ export class CodexLiveProvider implements LiveProvider {
         if (request.method !== "item/tool/call" || params?.threadId !== id || typeof params.tool !== "string" || typeof params.callId !== "string" || typeof params.turnId !== "string"
           || !COMPANION_TOOL_REGISTRY.some(tool => tool.class !== "delegation" && tool.name === params.tool))
           return { contentItems: [{ type: "inputText", text: "Tool is unavailable in this voice slice." }], success: false };
-        if (!active.tool || active.stopping) return { contentItems: [{ type: "inputText", text: "Voice session is unavailable." }], success: false };
+        if (!active.tool || active.stopping || active.failed) return { contentItems: [{ type: "inputText", text: "Voice session is unavailable." }], success: false };
         const result = await active.tool(params.tool, params.arguments, params.callId, params.turnId);
         return { contentItems: [{ type: "inputText", text: JSON.stringify(result) }], success: true };
       });
@@ -157,7 +157,7 @@ export class CodexLiveProvider implements LiveProvider {
   private emit(call: Call, event: unknown) {
     if (call.event) call.event(event);
     else if (call.events.length < 1024) call.events.push(event);
-    else void this.hangup(call.id, "");
+    else if (!call.stopping) void this.hangup(call.id, "").catch(() => call.lost?.());
   }
   private notification(call: Call, notification: AppServerNotification) {
     const params = jsonObject(notification.params)!;
@@ -170,7 +170,7 @@ export class CodexLiveProvider implements LiveProvider {
     } else if (notification.method === "thread/realtime/closed" || notification.method === "thread/realtime/error") {
       if (!call.stopping) {
         this.emit(call, { type: notification.method.endsWith("error") ? "error" : "session.closed" });
-        void this.hangup(call.id, "");
+        void this.hangup(call.id, "").catch(() => call.lost?.());
       }
     } else if (notification.method === "turn/completed" && jsonObject(params.turn)?.status === "failed") {
       void call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text: "The board could not be read just now." }).catch(() => call.lost?.());
@@ -198,18 +198,33 @@ export class CodexLiveProvider implements LiveProvider {
     return { send: command => {
       if (command.type === "session.close") void this.hangup(id, "").then(() => event({ type: "session.closed" }), lost);
       // Reports, context and interruption are added in slice 2.
-    }, dispose: () => { call.event = undefined; call.lost = undefined; call.tool = undefined; void this.hangup(id, ""); } };
+    }, dispose: () => {
+      call.event = undefined; call.lost = undefined; call.tool = undefined;
+      // Session recovery retains the open flag until hangup confirms reaping.
+      void this.hangup(id, "").catch(() => {});
+    } };
   }
   async hangup(id: string, _key: string): Promise<void> {
     void _key;
     const call = this.calls.get(id); if (!call) return;
     if (call.stopping) return call.stopping;
+    // Shutdown is irreversible even if reaping misses this attempt's deadline.
+    call.failed = true;
     return call.stopping = (async () => {
       try { await call.client.request("thread/realtime/stop", { threadId: id }); } catch { /* closing stdio ends a failed call too */ }
       call.client.close();
-      await Promise.race([call.reaped, new Promise<void>((_, reject) => setTimeout(() => reject(new CodexVoiceError("PROVIDER_ERROR")), 5000))]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([call.reaped, new Promise<void>((_, reject) => {
+          timer = setTimeout(() => reject(new CodexVoiceError("PROVIDER_ERROR")), 5000);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
       this.calls.delete(id); fs.rmSync(call.cwd, { recursive: true, force: true });
-    })();
+    })().catch(error => {
+      // Keep the call for recovery, but let the next hangup await reaping anew.
+      call.stopping = undefined;
+      throw error;
+    });
   }
   async respond(): Promise<never> { throw new CodexVoiceError("CODEX_UNSUPPORTED"); }
 }
