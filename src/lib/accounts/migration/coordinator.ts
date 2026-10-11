@@ -7,6 +7,7 @@ import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import {
   agentRegistry,
+  deliveryHasDurableClaimOwner,
   RegistryWriterBusyError,
   type AgentRegistry,
   type ConversationObservation,
@@ -130,27 +131,6 @@ function unactuatedFailure(delivery: HeldDelivery, cause: string, now: number): 
   const acceptedAt = Date.parse(delivery.createdAt);
   if (Number.isFinite(acceptedAt) && now - acceptedAt < SEND_SETTLEMENT_WINDOW_MS) return null;
   return `not delivered in ${Math.round(SEND_SETTLEMENT_WINDOW_MS / 60_000)} min: ${cause}`;
-}
-
-const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
-
-function deliveryHasDurableClaimOwner(
-  snapshot: RegistryFile,
-  conversation: RegistryConversation,
-  delivery: HeldDelivery,
-): boolean {
-  const current = conversation.generations.at(-1);
-  if (!current || delivery.generationId !== current.id) return false;
-  if (current.host !== null && current.host !== undefined) return true;
-  if (Object.values(snapshot.entries).some((entry) =>
-    entry.key.engine === conversation.engine
-    && entry.key.sessionId === current.id
-    && entry.artifactPath === current.path
-    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
-  return Object.values(snapshot.receipts).some((receipt) =>
-    receipt.engine === conversation.engine
-    && receipt.conversationId === conversation.id
-    && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
 }
 
 function engineOf(entry: FileEntry): MigrationEngine | null {
@@ -1426,11 +1406,13 @@ export async function reconcileMigrations(
              and this conversation is not drained this pass: nothing it would
              have cancelled may be delivered first. */
           if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
-            () => registry.terminalizeHeldDelivery(item.id, orphanedDeliveryReason))) return;
+            () => registry.terminalizeOrphanedHeldDelivery(item, orphanedDeliveryReason))) return;
         }
       }
-      if (pending.some((item) =>
-        (item.state === "assigned" && deliveryHasDurableClaimOwner(before, conversation, item))
+      const latest = registry.readOnlySnapshot();
+      const current = latest.conversations[conversation.id] ?? conversation;
+      if (registry.pendingDeliveries(conversation.id).some((item) =>
+        (item.state === "assigned" && deliveryHasDurableClaimOwner(latest, current, item))
         || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
         await drainHeldDeliveries(conversation.id, delivery, registry);
       }
