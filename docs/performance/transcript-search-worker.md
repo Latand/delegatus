@@ -31,7 +31,7 @@ and recovery after a late confirmed exit. Crash and normal exit cases wait
 for a descendant holding inherited output, then require clean failure,
 shutdown and replacement before test cleanup, while an unrelated peer stays
 alive. These exit cases use a Node guardian behind a Bun bridge that waits
-for pipe closure, with a detached Node descendant, so runtime-provided child
+for pipe closure, with a Node descendant detached on Windows, so runtime-provided child
 cleanup cannot mask a missing lease cleanup. A native Windows case also
 hard-kills the guardian itself. The busy
 tests emulate unhandled Windows termination on Unix, and the same file runs on the native Windows CI

@@ -59,7 +59,9 @@ async function seed(): Promise<void> {
 
 test("worker preserves every page, order, scope, copies and redaction before excerpts", async () => {
   await seed();
-  const lane = worker({ timeoutMs: 5000 });
+  // Cold native Windows startup includes establishing the guardian's job.
+  // Parity uses the production deadline; the timeout cases below test bounds.
+  const lane = worker();
   for (const order of ["newest", "relevance"] as const) {
     for (const speaker of [undefined, "user", "assistant"] as const) {
       for (const project of [undefined, "north", "unknown"]) {
@@ -85,7 +87,7 @@ test("worker preserves every page, order, scope, copies and redaction before exc
   const invalidCursor = await lane.search({ query: "cobalt", cursor: "invalid" }).catch((error: unknown) => error);
   expect(invalidCursor).toBeInstanceOf(InvalidTranscriptSearchCursorError);
   expect((await lane.search({ query: "cobalt" })).total).toBeGreaterThan(0);
-}, 20_000);
+}, 60_000);
 
 function stub(body: string): { executable: string; workerPath: string } {
   const workerPath = path.join(root, "stub.mjs");
