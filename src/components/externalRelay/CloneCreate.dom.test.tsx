@@ -183,6 +183,7 @@ test("a stored request resumes the wait, and cancel deletes it and returns to th
 test("created: the new row is marked New, takes Claude with its default model, and is answered here; Open in Telegram links the bot", async () => {
   state = { relays: [relay({ cloneRequest: request() })], pending: [], status: [] };
   route((url, init) => {
+    if (url === `${BASE}/clone-requests/req-1` && init?.method === "DELETE") return new Response(null, { status: 204 });
     if (url === `${BASE}/clone-requests/req-1`) {
       state = { relays: [relay({ targets: [target(), target({ id: "fresh", name: "Нічна Сова", engine: null, model: null, answered_by: "service" })] })], pending: [], status: [] };
       return jsonResponse({ request: { status: "created", target_id: "fresh", username: "nichna_sova_bot" } });
@@ -282,4 +283,154 @@ test("an upload over 8 MB is refused before it is read; a readable one shows as 
   await click(host.querySelector("[data-clone-cancel]"));
   await click(host.querySelector("[data-clone-no-photo]"));
   expect(host.querySelector("[data-clone-photo]")?.getAttribute("data-clone-photo")).toBe("none");
+});
+
+/**
+ * A relay as the server side keeps it once Telegram created the clone: the
+ * open request turns into a created record, the new target is listed with no
+ * engine and routed to the service, and the PATCHes and the record's DELETE
+ * change it the way the routes do. `fail` answers a write with 500 while it
+ * returns true.
+ */
+function createdRelay({ name = "Нічна Сова", fail = () => false }: { name?: string; fail?: (kind: "engine" | "route") => boolean } = {}) {
+  const fake = {
+    fresh: target({ id: "fresh", name, engine: null, model: null, answered_by: "service" }),
+    record: null as null | Record<string, unknown>,
+    open: true,
+  };
+  const sync = () => {
+    state = { relays: [relay({
+      targets: fake.open ? [target()] : [target(), fake.fresh],
+      ...(fake.open ? { cloneRequest: request() } : {}),
+      ...(fake.record ? { cloneCreated: fake.record } : {}),
+    })], pending: [], status: [] };
+  };
+  const create = () => {
+    fake.open = false;
+    fake.record = { request_id: "req-1", target_id: "fresh", name, username: "silver_fox_bot", photo_failed: false, createdAt: new Date().toISOString() };
+    sync();
+  };
+  const answer = (url: string, init: RequestInit | undefined): Response | undefined => {
+    if (url === BASE && init?.method === "PATCH") {
+      if (fail("engine")) return jsonResponse({ error: "unavailable" }, 500);
+      const body = JSON.parse(String(init.body)) as { target: Record<string, unknown> };
+      fake.fresh = { ...fake.fresh, ...body.target };
+      sync();
+      return jsonResponse({ relay: state.relays[0] });
+    }
+    if (url === `${BASE}/targets/fresh` && init?.method === "PATCH") {
+      if (fail("route")) return jsonResponse({ error: "unreachable" }, 502);
+      fake.fresh = { ...fake.fresh, answered_by: "install" };
+      sync();
+      return jsonResponse({ target: {} });
+    }
+    if (url === `${BASE}/clone-requests/req-1` && init?.method === "DELETE") {
+      fake.record = null;
+      sync();
+      return new Response(null, { status: 204 });
+    }
+    return undefined;
+  };
+  sync();
+  return { fake, create, answer };
+}
+const writes = () => harness.calls.filter((call) => call.method === "PATCH" || call.method === "DELETE").map((call) => [call.method, call.url]);
+const ENGINE_PATCH = ["PATCH", BASE];
+const ROUTE_PATCH = ["PATCH", `${BASE}/targets/fresh`];
+const FORGET = ["DELETE", `${BASE}/clone-requests/req-1`];
+
+test("closing the settings while the status read is on the wire still sets the clone up when they open again", async () => {
+  const relayFake = createdRelay();
+  let release = () => {};
+  route((url, init) => {
+    if (url === `${BASE}/clone-requests/req-1` && (init?.method ?? "GET") === "GET")
+      return new Promise<Response>((resolve) => {
+        release = () => { relayFake.create(); resolve(jsonResponse({ request: { status: "created", target_id: "fresh", username: "silver_fox_bot" } })); };
+      });
+    return relayFake.answer(url, init);
+  });
+  await mount(<ExternalRelaySection />);
+  expect(harness.calls.some((call) => call.url === `${BASE}/clone-requests/req-1`)).toBe(true);
+  const { root, host } = mounted!;
+  await act(async () => root.unmount());
+  host.remove();
+  mounted = null;
+  release();
+  await act(async () => settle(20));
+  expect(writes()).toEqual([]);
+  expect(relayFake.fake.fresh.engine).toBeNull();
+
+  const again = await mount(<ExternalRelaySection />);
+  await act(async () => settle(30));
+  expect(writes()).toEqual([ENGINE_PATCH, ROUTE_PATCH, FORGET]);
+  expect(relayFake.fake.fresh).toMatchObject({ engine: "claude", model: expect.any(String), answered_by: "install" });
+  expect(relayFake.fake.record).toBeNull();
+  expect(again.querySelector("[data-external-relay-target='fresh'] [data-external-relay-fresh]")).toBeTruthy();
+  expect(again.querySelector("[data-clone-created]")?.textContent).toContain("This install answers it.");
+  expect(again.querySelector("[data-clone-waiting]")).toBeNull();
+});
+
+test("a setup write that fails once is retried by itself; one that keeps failing says so and retries on request", async () => {
+  let engineFailures = 1;
+  let routeFailing = false;
+  const relayFake = createdRelay({ fail: (kind) => kind === "engine" ? engineFailures-- > 0 : routeFailing });
+  relayFake.create();
+  route((url, init) => relayFake.answer(url, init));
+  const host = await mount(<ExternalRelaySection />);
+  expect(writes()).toEqual([ENGINE_PATCH]);
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 3_300)));
+  await act(async () => settle(30));
+  expect(writes()).toEqual([ENGINE_PATCH, ENGINE_PATCH, ROUTE_PATCH, FORGET]);
+  expect(host.querySelector("[data-clone-setup-failed]")).toBeNull();
+  expect(host.querySelector("[data-clone-created]")?.textContent).toContain("This install answers it.");
+  const { root } = mounted!;
+  await act(async () => root.unmount());
+  mounted!.host.remove();
+  mounted = null;
+
+  // The engine goes through and the route keeps failing: only the route is tried again, then the card says so.
+  const stuck = createdRelay({ fail: (kind) => kind === "route" && routeFailing });
+  routeFailing = true;
+  stuck.create();
+  route((url, init) => stuck.answer(url, init));
+  const card = await mount(<ExternalRelaySection />);
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 3_300)));
+  await act(async () => settle(30));
+  expect(writes()).toEqual([ENGINE_PATCH, ROUTE_PATCH, ROUTE_PATCH]);
+  const failed = card.querySelector("[data-clone-setup-failed]")!;
+  expect(failed.querySelector("[role=alert]")?.textContent).toBe("The clone was created, but setting it up to be answered by this install failed. The relay service could not be reached.");
+  expect(stuck.fake.record).not.toBeNull();
+  routeFailing = false;
+  await click(failed.querySelector("[data-clone-setup-retry]"));
+  await act(async () => settle(30));
+  expect(writes()).toEqual([ENGINE_PATCH, ROUTE_PATCH, ROUTE_PATCH, ROUTE_PATCH, FORGET]);
+  expect(card.querySelector("[data-clone-setup-failed]")).toBeNull();
+  expect(card.querySelector("[data-clone-created]")?.textContent).toContain("This install answers it.");
+}, 20_000);
+
+test("the confirmation names the clone as Telegram confirmed it, in both languages", async () => {
+  for (const [locale, text] of [
+    ["uk", "Клона «Silver Fox» створено: @silver_fox_bot. Відповідає ця інсталяція."],
+    ["en", "Clone “Silver Fox” created: @silver_fox_bot. This install answers it."],
+  ] as const) {
+    setLocale(locale);
+    const relayFake = createdRelay({ name: "Silver Fox" });
+    route((url, init) => {
+      if (url === `${BASE}/clone-requests/req-1` && (init?.method ?? "GET") === "GET") {
+        // The relay's own record keeps the requested name; the listed target carries the confirmed one.
+        relayFake.create();
+        relayFake.fake.record = null;
+        return jsonResponse({ request: { status: "created", target_id: "fresh", username: "silver_fox_bot" } });
+      }
+      return relayFake.answer(url, init);
+    });
+    const host = await mount(<ExternalRelaySection />);
+    await act(async () => settle(30));
+    expect(host.querySelector("[data-external-relay-target='fresh']")?.textContent).toContain("Silver Fox");
+    expect(host.querySelector("[data-clone-created] [role=status]")?.textContent).toBe(text);
+    const { root } = mounted!;
+    await act(async () => root.unmount());
+    mounted!.host.remove();
+    mounted = null;
+  }
 });

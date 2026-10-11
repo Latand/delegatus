@@ -58,7 +58,7 @@ test("a relay whose descriptor lacks clone_create gets no clone call", async () 
   } finally { await server.close(); }
 });
 
-test("request, poll and creation: the upload goes as a square JPEG, the new target is listed and the request leaves the store", async () => {
+test("request, poll and creation: the upload goes as a square JPEG, the new target is listed and the request turns into a created record", async () => {
   const seen: Seen[] = [];
   let status: Record<string, unknown> = { status: "pending" };
   let targets = [{ target_id: "old", name: "Old", answered_by: "install", fallback: "service" }];
@@ -92,7 +92,41 @@ test("request, poll and creation: the upload goes as a square JPEG, the new targ
     targets = [...targets, { target_id: "fresh", name: "Нічна Сова", answered_by: "install", fallback: "service" }];
     expect(await checkCloneRequest("celestia", "req_1")).toEqual({ status: "created", target_id: "fresh", username: "nichna_sova_bot" });
     expect(stored().cloneRequest).toBeUndefined();
+    expect(stored().cloneCreated).toMatchObject({ request_id: "req_1", target_id: "fresh", name: "Нічна Сова", username: "nichna_sova_bot", photo_failed: false });
     expect(stored().targets.map((target) => [target.id, target.engine, target.answered_by])).toEqual([["old", "claude", "install"], ["fresh", null, "install"]]);
+  } finally { await server.close(); }
+});
+
+test("a created record outlives the page that missed the answer, takes the name confirmed in Telegram, and only the card's DELETE forgets it", async () => {
+  const seen: string[] = [];
+  let posts = 0;
+  const server = await startTestRelay((req) => {
+    seen.push(`${req.method} ${req.url}`);
+    if (req.url === "/v1/clone-requests" && req.method === "POST")
+      return { status: 201, body: { request_id: `req_${++posts}`, create_url: CREATE_URL, expires_at: "2099-01-01T00:10:00Z" } };
+    if (req.url === "/v1/clone-requests/req_1" && req.method === "GET") return { body: { status: "created", target_id: "fresh", username: "silver_fox_bot", reason: "photo_failed" } };
+    if (req.url === "/v1/clone-requests/req_9" && req.method === "GET") return { body: { status: "created", target_id: "other" } };
+    if (req.url === "/v1/targets") return { body: { targets: [{ target_id: "old", name: "Old", answered_by: "install", fallback: "service" }, { target_id: "fresh", name: "Silver Fox", answered_by: "service", fallback: "service" }] } };
+    return { status: 500 };
+  });
+  try {
+    pair(server.origin);
+    await createCloneRequest("celestia", { name: "Нічна Сова", username: "nichna_sova_bot", photo: null });
+    await checkCloneRequest("celestia", "req_1");
+    const record = stored().cloneCreated;
+    expect(record).toMatchObject({ request_id: "req_1", target_id: "fresh", name: "Silver Fox", username: "silver_fox_bot", photo_failed: true });
+    // A second read of the same answer, and an answer for a request never open here, leave the record as it is.
+    await checkCloneRequest("celestia", "req_1");
+    await checkCloneRequest("celestia", "req_9");
+    expect(stored().cloneCreated).toEqual(record);
+    // A new request keeps the earlier clone's record until its setup is done.
+    await createCloneRequest("celestia", { name: "Тихий Лис", username: "tykhyi_lys_bot", photo: null });
+    expect(stored().cloneCreated?.request_id).toBe("req_1");
+    seen.length = 0;
+    await cancelCloneRequest("celestia", "req_1");
+    expect(seen).toEqual([]);
+    expect(stored().cloneCreated).toBeUndefined();
+    expect(stored().cloneRequest?.request_id).toBe("req_2");
   } finally { await server.close(); }
 });
 

@@ -230,6 +230,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.clone.created": "Клона «{name}» створено: @{username}. Відповідає ця інсталяція.",
   "externalRelay.clone.createdByService": "Клона «{name}» створено: @{username}.",
   "externalRelay.clone.photoFailed": "Фото поставити не вдалося. Його можна змінити в Telegram.",
+  "externalRelay.clone.setupFailed": "Клона створено, але налаштувати відповіді цієї інсталяції не вдалося. {error}",
+  "externalRelay.clone.setupRetry": "Повторити налаштування",
   "externalRelay.clone.fresh": "Новий",
   "externalRelay.clone.openBot": "Відкрити в Telegram",
   "externalRelay.clone.expired": "Час на створення в Telegram минув, клона не створено.",

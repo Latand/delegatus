@@ -43,6 +43,16 @@
     "lang": "uk",
     "width": 1440,
     "scheme": "light",
+    "state": "setup-failed",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 10
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "scheme": "light",
     "state": "created",
     "overflow": false,
     "cutText": [],
@@ -93,6 +103,16 @@
     "lang": "en",
     "width": 1440,
     "scheme": "dark",
+    "state": "setup-failed",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 10
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "scheme": "dark",
     "state": "created",
     "overflow": false,
     "cutText": [],
@@ -143,6 +163,16 @@
     "lang": "uk",
     "width": 390,
     "scheme": "dark",
+    "state": "setup-failed",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 10
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "scheme": "dark",
     "state": "created",
     "overflow": false,
     "cutText": [],
@@ -188,6 +218,16 @@
     "cutText": [],
     "shortTargets": [],
     "controls": 7
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "scheme": "light",
+    "state": "setup-failed",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 10
   },
   {
     "lang": "en",

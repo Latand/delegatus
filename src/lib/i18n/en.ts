@@ -231,6 +231,8 @@ export const en = {
   "externalRelay.clone.created": "Clone “{name}” created: @{username}. This install answers it.",
   "externalRelay.clone.createdByService": "Clone “{name}” created: @{username}.",
   "externalRelay.clone.photoFailed": "The photo could not be set. You can change it in Telegram.",
+  "externalRelay.clone.setupFailed": "The clone was created, but setting it up to be answered by this install failed. {error}",
+  "externalRelay.clone.setupRetry": "Retry setup",
   "externalRelay.clone.fresh": "New",
   "externalRelay.clone.openBot": "Open in Telegram",
   "externalRelay.clone.expired": "The time to create it in Telegram ran out; no clone was created.",

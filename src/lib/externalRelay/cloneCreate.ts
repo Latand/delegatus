@@ -101,15 +101,21 @@ async function cloneCall<T>(relay: PairedRelay, route: string, method: "GET" | "
   }
 }
 
-function setCloneRequest(relayId: string, change: (current: RelayCloneRequest | undefined) => RelayCloneRequest | undefined) {
+type CloneRecords = Pick<PairedRelay, "cloneRequest" | "cloneCreated">;
+/** Rewrites the relay's open request and created record together; an absent field leaves the store. */
+function setCloneRecords(relayId: string, change: (current: CloneRecords) => CloneRecords) {
   updateRelayStore((store) => ({
     ...store,
     relays: store.relays.map((relay) => {
       if (relay.id !== relayId) return relay;
-      const next = change(relay.cloneRequest);
-      if (next === relay.cloneRequest) return relay;
-      const { cloneRequest: _dropped, ...rest } = relay;
-      return next ? { ...rest, cloneRequest: next } : rest;
+      const next = change({ cloneRequest: relay.cloneRequest, cloneCreated: relay.cloneCreated });
+      if (next.cloneRequest === relay.cloneRequest && next.cloneCreated === relay.cloneCreated) return relay;
+      const { cloneRequest: _request, cloneCreated: _created, ...rest } = relay;
+      return {
+        ...rest,
+        ...(next.cloneRequest ? { cloneRequest: next.cloneRequest } : {}),
+        ...(next.cloneCreated ? { cloneCreated: next.cloneCreated } : {}),
+      };
     }),
   }));
 }
@@ -134,14 +140,15 @@ export async function createCloneRequest(
   const started = cloneRequestStartedSchema.parse(result.body);
   if (!createUrlAllowed(started.create_url)) throw new ExternalRelayError("malformed", result.status);
   const request: RelayCloneRequest = { ...started, name, username: input.username, requestedAt: new Date().toISOString() };
-  setCloneRequest(relayId, () => request);
+  setCloneRecords(relayId, (current) => ({ ...current, cloneRequest: request }));
   return request;
 }
 
 /**
- * `GET /clone-requests/{id}`. A request that ended leaves the store; a created
+ * `GET /clone-requests/{id}`. A request that ended leaves the store. A created
  * one refreshes the relay's targets first, so the settings page's next read
- * lists the new clone.
+ * lists the new clone, and leaves its record on the relay until the card has
+ * set the clone up (`cancelCloneRequest` forgets it).
  */
 export async function checkCloneRequest(relayId: string, requestId: string): Promise<CloneRequestStatus> {
   const relay = pairedRelay(relayId);
@@ -149,20 +156,45 @@ export async function checkCloneRequest(relayId: string, requestId: string): Pro
   const status = cloneRequestStatusSchema.parse(result.body);
   if (status.status !== "pending") {
     if (status.status === "created") await refreshRelayTargets(relayId);
-    setCloneRequest(relayId, (current) => current?.request_id === requestId ? undefined : current);
+    const targets = readRelayStore().relays.find((item) => item.id === relayId)?.targets ?? [];
+    setCloneRecords(relayId, (current) => {
+      // Only the request open here is recorded; a repeated read of one already recorded keeps it.
+      if (current.cloneRequest?.request_id !== requestId) return current;
+      if (status.status !== "created") return { ...current, cloneRequest: undefined };
+      const target = status.target_id ? targets.find((item) => item.id === status.target_id) : undefined;
+      return {
+        cloneRequest: undefined,
+        cloneCreated: {
+          request_id: requestId,
+          target_id: status.target_id ?? null,
+          name: target?.name || current.cloneRequest.name,
+          username: status.username || current.cloneRequest.username,
+          photo_failed: status.reason === "photo_failed",
+          createdAt: new Date().toISOString(),
+        },
+      };
+    });
   }
   return status;
 }
 
-/** `DELETE /clone-requests/{id}`; a request the relay no longer knows is gone either way. */
+/**
+ * `DELETE /clone-requests/{id}`: an open request is cancelled on the relay, and
+ * one the relay no longer knows is gone either way. For a created clone's
+ * record the card says its setup is done, so only the record is forgotten.
+ */
 export async function cancelCloneRequest(relayId: string, requestId: string): Promise<void> {
   const relay = pairedRelay(relayId);
+  if (relay.cloneCreated?.request_id === requestId && relay.cloneRequest?.request_id !== requestId) {
+    setCloneRecords(relayId, (current) => current.cloneCreated?.request_id === requestId ? { ...current, cloneCreated: undefined } : current);
+    return;
+  }
   try {
     await cloneCall(relay, `/clone-requests/${encodeURIComponent(requestId)}`, "DELETE");
   } catch (error) {
     if (!(error instanceof ExternalRelayError && error.status === 404)) throw error;
   }
-  setCloneRequest(relayId, (current) => current?.request_id === requestId ? undefined : current);
+  setCloneRecords(relayId, (current) => current.cloneRequest?.request_id === requestId ? { ...current, cloneRequest: undefined } : current);
 }
 
 export type CloneAvatarCandidate = { storage_key: string; preview: string };

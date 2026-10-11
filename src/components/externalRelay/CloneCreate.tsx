@@ -11,6 +11,7 @@ import {
   validCloneName,
   validCloneUsername,
 } from "@/lib/externalRelay/cloneNames";
+import { defaultModelFor } from "@/lib/agent/models";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { alertLine, call, Dot, FOCUS, HEAD, LINK, openBlankWindow, ownerLine, PRIMARY, QUIET } from "./relayUi";
@@ -32,6 +33,8 @@ const EXPIRY_GRACE_MS = 30_000;
 const UPLOAD_MAX_BYTES = 8 * 1024 * 1024;
 
 export type CloneRequestView = { request_id: string; create_url: string; expires_at: string; name: string; username: string; requestedAt: string };
+/** The relay's record of a clone created while its request was open here (store.ts `RelayCloneCreated`). */
+export type CloneCreatedView = { request_id: string; target_id: string | null; name: string; username: string; photo_failed: boolean; createdAt: string };
 type CloneStatus = { status: "pending" | "created" | "expired" | "failed"; target_id?: string; username?: string; reason?: string };
 type Photo =
   | { kind: "none" }
@@ -42,7 +45,7 @@ export type ClonePhase =
   | { kind: "idle" }
   | { kind: "form" }
   | { kind: "waiting"; request: CloneRequestView }
-  | { kind: "created"; name: string; username: string; targetId: string | null; photoFailed: boolean }
+  | { kind: "created"; requestId: string; name: string; username: string; targetId: string | null; photoFailed: boolean }
   | { kind: "ended"; status: "expired" | "failed"; reason: string | null };
 
 const FIELD = `h-8 min-w-0 rounded-control border border-border bg-card px-2 text-ui text-primary disabled:opacity-50 max-sm:h-11 max-sm:text-body ${FOCUS}`;
@@ -50,6 +53,9 @@ const ICON_BUTTON = `inline-flex h-8 w-8 shrink-0 items-center justify-center ro
 const SELECTED = "ring-2 ring-accent ring-offset-2 ring-offset-canvas";
 
 const telegramLink = (username: string) => `https://t.me/${encodeURIComponent(username)}`;
+const createdPhase = (created: CloneCreatedView): ClonePhase => ({
+  kind: "created", requestId: created.request_id, name: created.name, username: created.username, targetId: created.target_id, photoFailed: created.photo_failed,
+});
 
 async function readAsBase64(file: File): Promise<{ data: string; preview: string }> {
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -60,10 +66,16 @@ async function readAsBase64(file: File): Promise<{ data: string; preview: string
 }
 
 /** The block's state for one relay: the form's fields, the open request and how it ended. */
-export function useCloneCreate({ relayId, stored, onChanged }: { relayId: string; stored: CloneRequestView | null; onChanged: () => Promise<void> }) {
+export function useCloneCreate({ relayId, stored, created, onChanged }: {
+  relayId: string;
+  stored: CloneRequestView | null;
+  /** A created clone whose setup is not done yet: a page that missed the relay's answer picks it up here. */
+  created: CloneCreatedView | null;
+  onChanged: () => Promise<void>;
+}) {
   const { locale } = useLocale();
   const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}`;
-  const [phase, setPhase] = useState<ClonePhase>(() => stored ? { kind: "waiting", request: stored } : { kind: "idle" });
+  const [phase, setPhase] = useState<ClonePhase>(() => created ? createdPhase(created) : stored ? { kind: "waiting", request: stored } : { kind: "idle" });
   const [name, setNameValue] = useState("");
   const [username, setUsernameValue] = useState("");
   const [usernameTouched, setUsernameTouched] = useState(false);
@@ -82,6 +94,14 @@ export function useCloneCreate({ relayId, stored, onChanged }: { relayId: string
   // The stored request is read again only when it changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedId]);
+  const createdId = created?.request_id ?? null;
+  useEffect(() => {
+    if (!created || ended.current.has(created.request_id)) return;
+    ended.current.add(created.request_id);
+    setPhase((current) => current.kind === "idle" || (current.kind === "waiting" && current.request.request_id === created.request_id) ? createdPhase(created) : current);
+  // The created record is read again only when it changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createdId]);
 
   const setName = (value: string) => {
     setNameValue(value);
@@ -138,7 +158,7 @@ export function useCloneCreate({ relayId, stored, onChanged }: { relayId: string
   const finish = useCallback(async (request: CloneRequestView, status: CloneStatus) => {
     ended.current.add(request.request_id);
     if (status.status === "created") {
-      setPhase({ kind: "created", name: request.name, username: status.username || request.username, targetId: status.target_id ?? null, photoFailed: status.reason === "photo_failed" });
+      setPhase({ kind: "created", requestId: request.request_id, name: request.name, username: status.username || request.username, targetId: status.target_id ?? null, photoFailed: status.reason === "photo_failed" });
       // The next clone starts from a new name and no photo.
       setNameValue(""); setUsernameValue(""); setUsernameTouched(false); setPhoto({ kind: "none" }); setCandidates([]);
     } else setPhase({ kind: "ended", status: status.status === "expired" ? "expired" : "failed", reason: status.reason ?? null });
@@ -201,6 +221,82 @@ export function useCloneCreate({ relayId, stored, onChanged }: { relayId: string
   };
 }
 export type CloneCreateState = ReturnType<typeof useCloneCreate>;
+
+/** One automatic retry after a failed setup step, then the card says so and offers «Повторити». */
+const SETUP_TRIES = 2;
+const SETUP_RETRY_MS = 3_000;
+type SetupTarget = { id: string; engine: string | null; answered_by: "install" | "service" };
+
+/**
+ * Sets a created clone up to be answered here: the default engine with its
+ * default model while it has none, then the route to this install while the
+ * relay routes it elsewhere. Each step runs only while it is still needed, so
+ * a retry after a partial success repeats only what failed. When both are
+ * done the relay's created record is forgotten; until then a reopened card
+ * runs the setup again.
+ */
+export function useCloneSetup({ relayId, phase, recorded, target, engine, onChanged }: {
+  relayId: string;
+  phase: ClonePhase;
+  /** The request id of the relay's created record, while the settings read lists one. */
+  recorded: string | null;
+  /** The created clone's row, once the relay lists it. */
+  target: SetupTarget | null;
+  engine: "claude" | "codex" | null;
+  onChanged: () => Promise<void>;
+}) {
+  const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}`;
+  const requestId = phase.kind === "created" ? phase.requestId : null;
+  const [state, setState] = useState<{ requestId: string; status: "running" | "failed" | "done"; error: string | null } | null>(null);
+  const latest = useRef({ recorded, target, engine, onChanged });
+  useEffect(() => { latest.current = { recorded, target, engine, onChanged }; });
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+
+  const run = useCallback(async (id: string) => {
+    for (let attempt = 1; ; attempt++) {
+      setState({ requestId: id, status: "running", error: null });
+      const { target: current, engine: chosen } = latest.current;
+      let error: string | null = current && chosen ? null : "not_found";
+      if (current && chosen && current.engine === null) {
+        const set = await call(base, "PATCH", { target: { id: current.id, engine: chosen, model: defaultModelFor(chosen) } });
+        if (!set.ok) error = set.error;
+      }
+      if (!error && current && current.answered_by !== "install") {
+        const routed = await call(`${base}/targets/${encodeURIComponent(current.id)}`, "PATCH", { answered_by: "install" });
+        if (!routed.ok) error = routed.error;
+      }
+      if (!alive.current) return;
+      if (!error) {
+        setState({ requestId: id, status: "done", error: null });
+        if (latest.current.recorded === id) await call(`${base}/clone-requests/${encodeURIComponent(id)}`, "DELETE");
+        await latest.current.onChanged();
+        return;
+      }
+      // The next try starts from the relay's current row, so a step that went through is not repeated.
+      await latest.current.onChanged();
+      if (!alive.current) return;
+      if (attempt >= SETUP_TRIES) { setState({ requestId: id, status: "failed", error }); return; }
+      await new Promise((resolve) => window.setTimeout(resolve, SETUP_RETRY_MS));
+      if (!alive.current) return;
+    }
+  }, [base]);
+
+  const ready = target !== null && engine !== null;
+  const started = useRef<string | null>(null);
+  useEffect(() => {
+    if (!requestId || !ready || started.current === requestId) return;
+    started.current = requestId;
+    void run(requestId);
+  }, [requestId, ready, run]);
+
+  const current = state && state.requestId === requestId ? state : null;
+  return {
+    failed: current?.status === "failed" ? current.error ?? "unavailable" : null,
+    retry: () => { if (requestId && current?.status !== "running") void run(requestId); },
+  };
+}
+export type CloneSetupState = ReturnType<typeof useCloneSetup>;
 
 /** With no clones yet: one dashed block with the primary button, where «no targets» stood. */
 export function CloneEmpty({ relayName, clone }: { relayName: string; clone: CloneCreateState }) {
@@ -325,11 +421,14 @@ export function ClonePendingRow({ clone }: { clone: CloneCreateState }) {
 }
 
 /** Below the card's list: waiting for Telegram, created, or how the request ended. */
-export function CloneStatus({ clone, owner, here, errorText }: {
+export function CloneStatus({ clone, setup, owner, here, name, errorText }: {
   clone: CloneCreateState;
+  setup: CloneSetupState;
   owner: { display_name: string; handle: string | null };
-  /** Whether the new clone's row is answered by this install. */
+  /** Whether the new clone's row is answered by this install, with an engine to answer it. */
   here: boolean;
+  /** The new row's name as Telegram confirmed it; the requested name stands in until the relay lists it. */
+  name: string | null;
   errorText: (code: string) => string;
 }) {
   const { t } = useLocale();
@@ -352,8 +451,14 @@ export function CloneStatus({ clone, owner, here, errorText }: {
     return (
       <div data-clone-created={phase.targetId ?? ""} className="flex min-w-0 flex-col gap-1">
         <p role="status" className="flex items-start gap-1.5 text-ui text-primary"><Check className="mt-px h-3.5 w-3.5 shrink-0 text-success" aria-hidden />
-          <span className="min-w-0 break-words">{t(here ? "externalRelay.clone.created" : "externalRelay.clone.createdByService", { name: phase.name, username: phase.username })}</span>
+          <span className="min-w-0 break-words">{t(here ? "externalRelay.clone.created" : "externalRelay.clone.createdByService", { name: name || phase.name, username: phase.username })}</span>
         </p>
+        {setup.failed ? (
+          <div data-clone-setup-failed={setup.failed} className="flex min-w-0 flex-col gap-1 pl-5">
+            {alertLine(t("externalRelay.clone.setupFailed", { error: errorText(setup.failed) }))}
+            <button type="button" data-clone-setup-retry="" onClick={setup.retry} className={`${QUIET} self-start`}><RotateCcw className="h-3.5 w-3.5" aria-hidden />{t("externalRelay.clone.setupRetry")}</button>
+          </div>
+        ) : null}
         {phase.photoFailed ? <p data-clone-photo-failed="" className="pl-5 text-caption leading-4 text-warning">{t("externalRelay.clone.photoFailed")}</p> : null}
         <a href={telegramLink(phase.username)} target="_blank" rel="noopener noreferrer" data-clone-open-bot="" className={`${LINK} self-start pl-5 text-ui max-sm:min-h-11`}>{t("externalRelay.clone.openBot")}<ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden /></a>
       </div>

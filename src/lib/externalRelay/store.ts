@@ -31,6 +31,21 @@ export type RelayCloneRequest = {
   username: string;
   requestedAt: string;
 };
+/**
+ * A clone the relay reported created while its request was open here. It
+ * stays until the settings card has given the new target this install's
+ * engine and route and says so, so a page closed or reloaded while the
+ * relay answered still finishes the setup when it opens again.
+ */
+export type RelayCloneCreated = {
+  request_id: string;
+  target_id: string | null;
+  /** The target's name as Telegram confirmed it, else the requested one. */
+  name: string;
+  username: string;
+  photo_failed: boolean;
+  createdAt: string;
+};
 export type PairedRelay = {
   id: string;
   origin: string;
@@ -49,6 +64,7 @@ export type PairedRelay = {
   };
   targets: RelayTargetSettings[];
   cloneRequest?: RelayCloneRequest;
+  cloneCreated?: RelayCloneCreated;
 };
 export type PendingRelay = {
   id: string;

@@ -28188,6 +28188,7 @@ describe("Celestia clone creation in the relay card", () => {
                 pairedAt: "2026-10-11T11:02:00.000Z", paused: false, targets: [] as ReturnType<typeof target>[], cloneRequest: undefined as unknown },
               status: { status: "pending" } as Record<string, unknown>,
               opened: [] as string[],
+              failSetup: false,
             };
             const json = (body: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
             const relayFetch = async (url: URL, init?: RequestInit): Promise<Response | null> => {
@@ -28213,6 +28214,7 @@ describe("Celestia clone creation in the relay card", () => {
                 return json({ request: fake.status });
               }
               if (url.pathname === base && method === "PATCH") {
+                if (fake.failSetup) return json({ error: "unreachable" }, 502);
                 const patch = (JSON.parse(String(init?.body)) as { target: { id: string } }).target;
                 fake.relay.targets = fake.relay.targets.map((item) => item.id === patch.id ? { ...item, ...patch } : item);
                 return json({ relay: fake.relay });
@@ -28248,6 +28250,7 @@ describe("Celestia clone creation in the relay card", () => {
                 fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
               },
               opened: () => fake.opened,
+              failSetup: (on: boolean) => { fake.failSetup = on; },
               fresh: () => fake.relay.targets.find((item) => item.id === "fresh"),
             } });
           }, { lang, candidates });
@@ -28257,7 +28260,7 @@ describe("Celestia clone creation in the relay card", () => {
           const dialog = page.locator("[data-external-relay-settings]");
           await dialog.waitFor();
           const card = dialog.locator("[data-external-relay='celestia']");
-          type Fake = { cloneFake: { withClones(): void; create(name: string): void; opened(): string[]; fresh(): { engine: string | null; model: string | null; answered_by: string } | undefined } };
+          type Fake = { cloneFake: { withClones(): void; create(name: string): void; opened(): string[]; failSetup(on: boolean): void; fresh(): { engine: string | null; model: string | null; answered_by: string } | undefined } };
           const frame = async (state: string, ready: string) => {
             await card.locator(ready).first().waitFor({ timeout: 15_000 });
             await page.waitForTimeout(150);
@@ -28303,7 +28306,14 @@ describe("Celestia clone creation in the relay card", () => {
           expect(await card.locator("[data-clone-owner]").textContent()).toBe(translate(lang, "externalRelay.clone.waitingLead", { owner: `${lang === "uk" ? "Власник" : "Owner"} (@owner)` }));
           expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.opened())).toEqual([expect.stringMatching(/^https:\/\/t\.me\/newbot\/celestia_bot\//)]);
 
+          /* The engine write fails twice: the card says so with Retry setup, and the retry goes through. */
+          await page.evaluate(() => (window as unknown as Fake).cloneFake.failSetup(true));
           await page.evaluate((name) => (window as unknown as Fake).cloneFake.create(name), name);
+          await frame("setup-failed", "[data-clone-setup-failed]");
+          expect(await card.locator("[data-clone-setup-failed] [role=alert]").textContent()).toBe(translate(lang, "externalRelay.clone.setupFailed", { error: translate(lang, "externalRelay.error.unreachable") }));
+          await page.evaluate(() => (window as unknown as Fake).cloneFake.failSetup(false));
+          await card.locator("[data-clone-setup-retry]").click();
+          await card.locator("[data-clone-setup-failed]").waitFor({ state: "detached", timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'][data-fresh] [data-external-relay-fresh]").waitFor({ timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'] [data-external-relay-answered-by='install']").waitFor({ timeout: 15_000 });
           /* The new clone takes the signed-in engine with its default model, answered here. */

@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Pause, Play, RotateCcw, Unplug } from "lucide-react";
-import { useCallback, useEffect, useState, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { effortTierLabel } from "@/components/builderCopy";
 import { EngineRadioGroup } from "@/components/draft/AgentLaunchControls";
@@ -21,7 +21,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { offersCloneCreate } from "@/lib/externalRelay/cloneNames";
 
-import { CloneCreateRow, CloneEmpty, CloneForm, ClonePendingRow, CloneStatus, useCloneCreate, type CloneRequestView } from "./CloneCreate";
+import { CloneCreateRow, CloneEmpty, CloneForm, ClonePendingRow, CloneStatus, useCloneCreate, useCloneSetup, type CloneCreatedView, type CloneRequestView } from "./CloneCreate";
 import { alertLine, call, Dot, FOCUS, HEAD, LINK, openBlankWindow, ownerLine, PRIMARY, QUIET, safeLink } from "./relayUi";
 
 /**
@@ -64,6 +64,7 @@ export type RelayView = {
   /** What the relay's descriptor offers; "clone_create" shows the «Створити клона» block. */
   features?: string[];
   cloneRequest?: CloneRequestView;
+  cloneCreated?: CloneCreatedView;
 };
 export type PendingView = {
   id: string;
@@ -532,9 +533,9 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
 }
 
 /**
- * Gives unset targets an engine with its default model and, when `here`,
- * routes each to this install: a first pairing's targets and a clone created
- * from the card both start answered here.
+ * Gives a new pairing's unset targets an engine with its default model and,
+ * when `here`, routes each to this install. A clone created from the card is
+ * set up by `useCloneSetup` instead, which retries what failed.
  */
 async function adoptTargets(relayId: string, targets: Target[], engine: RelayEngine, here: boolean): Promise<void> {
   const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}`;
@@ -563,17 +564,11 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
   const [warned, setWarned] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const cloneable = offersCloneCreate(relay);
-  const clone = useCloneCreate({ relayId: relay.id, stored: relay.cloneRequest ?? null, onChanged });
+  const clone = useCloneCreate({ relayId: relay.id, stored: relay.cloneRequest ?? null, created: relay.cloneCreated ?? null, onChanged });
   const freshId = clone.phase.kind === "created" ? clone.phase.targetId : null;
   const fresh = freshId ? relay.targets.find((target) => target.id === freshId) ?? null : null;
-  const adopted = useRef(new Set<string>());
   const defaultEngine: RelayEngine | null = signedIn.claude ? "claude" : signedIn.codex ? "codex" : null;
-  useEffect(() => {
-    if (!fresh || !defaultEngine || adopted.current.has(fresh.id)) return;
-    adopted.current.add(fresh.id);
-    if (fresh.engine !== null) return;
-    void adoptTargets(relay.id, [fresh], defaultEngine, true).then(onChanged);
-  }, [fresh, defaultEngine, relay.id, onChanged]);
+  const setup = useCloneSetup({ relayId: relay.id, phase: clone.phase, recorded: relay.cloneCreated?.request_id ?? null, target: fresh, engine: defaultEngine, onChanged });
   const act = async (url: string, method: string, body?: object) => {
     setBusy(true); setError(null);
     const result = await call<{ warned?: boolean }>(url, method, body);
@@ -642,7 +637,7 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
         : !cloneable ? <p className="text-caption text-muted">{t("externalRelay.noTargets")}</p>
           : clone.phase.kind === "form" ? <CloneForm clone={clone} errorText={errorText} bare />
             : clone.phase.kind === "idle" ? <CloneEmpty relayName={relay.name} clone={clone} /> : null}
-      {cloneable ? <CloneStatus clone={clone} owner={relay.owner} here={fresh?.answered_by === "install"} errorText={errorText} /> : null}
+      {cloneable ? <CloneStatus clone={clone} setup={setup} owner={relay.owner} here={fresh?.answered_by === "install" && fresh.engine !== null} name={fresh?.name ?? null} errorText={errorText} /> : null}
       {error ? alertLine(relayErrorText(t, error)) : null}
       {warned ? <p role="status" className="flex items-start gap-1.5 text-caption leading-4 text-warning"><AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />{t("externalRelay.removeWarning")}</p> : null}
     </div>
