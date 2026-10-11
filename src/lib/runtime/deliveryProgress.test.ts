@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress } from "./deliveryProgress";
+import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
 
 /* Private temporary files only. */
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-progress-"));
@@ -62,7 +62,7 @@ test("recent completions cannot hide an open send after prune and restart or rep
     expect(reopened.get("open-send")).toEqual(before);
     const at = new Date(now).toISOString();
     reopened.note("open-send", "conversation", { waitReason: "dispatching", attempted: true });
-    const expected = { ...before, waitReason: "dispatching", detail: null, attempt: before.attempt + 1,
+    const expected: DeliveryProgressRecord = { ...before, waitReason: "dispatching", detail: null, attempt: before.attempt + 1,
       phaseSince: at, lastProgressAt: at, stalledSince: null, updatedAt: at,
       phaseHistory: [...before.phaseHistory!, { phase: "dispatching", reason: null, at }] };
     expect(reopened.get("open-send")).toEqual(expected);
