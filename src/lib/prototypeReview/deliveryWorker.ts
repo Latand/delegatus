@@ -128,7 +128,8 @@ async function tick(ports: PrototypeDeliveryPorts): Promise<void> {
     if (!rescan && ![...state.owed.keys()].some(reviewId => !state.running.has(reviewId) && (state.due.get(reviewId) ?? 0) <= now)) return;
     // A predecessor release left running beside its successor stops attempting; the successor's boot swept the store.
     if (!viewerReleaseOwnsTraffic()) return;
-    void sweepPrototypeDeliveries(ports, { rescan });
+    void sweepPrototypeDeliveries(ports, { rescan })
+      .catch(error => console.error("[prototype delivery] sweep failed", error instanceof Error ? error.message : String(error)));
   } catch (error) {
     console.error("[prototype delivery] sweep failed", error instanceof Error ? error.message : String(error));
   } finally { state.ticking = false; }

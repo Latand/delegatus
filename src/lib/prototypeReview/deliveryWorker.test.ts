@@ -6,7 +6,7 @@ import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { prototypeButtonState } from "@/components/prototypeReview/prototypeReviewStore";
 import { publishPOST, reviewGET, reviewPOST } from "./http";
 import { decidePrototype, type PrototypeDelivery, type PrototypeDeliveryPorts, type PrototypeDeliveryResult } from "./decision";
-import { PROTOTYPE_DELIVERY_BACKOFF_MS, resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
+import { PROTOTYPE_DELIVERY_BACKOFF_MS, PROTOTYPE_DELIVERY_IN_FLIGHT_MS, prototypeDeliveryDelay, resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { PROTOTYPE_DELIVERY_ATTENTION_MS, prototypeDeliveryPhase, prototypeReviewNotices, prototypeReviewReplica } from "./model";
 import { isPrototypeReplica } from "./replica";
 import { withPrototypeReviewSummaries } from "./read";
@@ -235,4 +235,50 @@ test("a decided round's replica for linked installations carries its state only:
   expect(isPrototypeReplica(replica, TASK, "project-a")).toBe(true);
   const wire = JSON.stringify(replica);
   for (const key of ["decidedBy", "revision", "dispatchedAt", "failures", "failingSince", "phase", "clientMessageId"]) expect(wire).not.toContain(key);
+});
+
+test("retries the runtime admits that each end failed keep their failure history: they back off and ask for attention under one identity", async () => {
+  const id = await publish("admitted-failing");
+  const { state, ports } = seat();
+  state.clock = Date.now() - PROTOTYPE_DELIVERY_ATTENTION_MS - 3_600_000;
+  ports.delivery.send = async decision => { state.sends.push(structuredClone(decision)); return { state: "pending", operationId: "operation-admitted" }; };
+  let recovers = 0;
+  ports.delivery.recover = async () => { recovers += 1; return { state: "failed", operationId: "operation-admitted" }; };
+  ports.delivery.retry = async () => { state.retries += 1; return { state: "pending", operationId: "operation-admitted" }; };
+  expect((await reviewPOST(request({ reviewId: id, chosen: [2], comment: "Two." }), TASK, ports.world, ports.delivery, ports.now)).status).toBe(200);
+  await settlePrototypeDeliveriesForTests();
+  expect(stored(id).delivery).toMatchObject({ state: "pending", operationId: "operation-admitted" });
+  expect(stored(id).delivery.failures).toBeUndefined();
+  const started = state.clock;
+  // Every later look finds the admitted attempt failed and the runtime admits another.
+  for (let n = 1; n <= 7; n += 1) {
+    state.clock += n === 1 ? PROTOTYPE_DELIVERY_IN_FLIGHT_MS : PROTOTYPE_DELIVERY_BACKOFF_MS[n - 2]!;
+    await sweepPrototypeDeliveries(ports);
+  }
+  expect(recovers).toBe(7);
+  expect(state.retries).toBe(7);
+  expect(state.sends).toHaveLength(1);
+  const delivery = stored(id).delivery;
+  expect(delivery).toMatchObject({ state: "pending", operationId: "operation-admitted", clientMessageId: `prototype-decision:${id}`, failures: 7 });
+  expect(Date.parse(delivery.failingSince!)).toBe(started + PROTOTYPE_DELIVERY_IN_FLIGHT_MS);
+  // The next attempt waits out the accumulated backoff, not the in-flight poll.
+  expect(prototypeDeliveryDelay(delivery)).toBe(PROTOTYPE_DELIVERY_BACKOFF_MS.at(-1)!);
+  state.clock += PROTOTYPE_DELIVERY_IN_FLIGHT_MS;
+  await sweepPrototypeDeliveries(ports);
+  expect(recovers).toBe(7);
+  // Surfaced on the review, the card and the needs-you list.
+  expect((await shown(id)).delivery.phase).toBe("attention");
+  const summary = withPrototypeReviewSummaries(loadTasks())[0]!.prototypeReview;
+  expect(prototypeButtonState(summary, new Set())).toBe("unsent");
+  expect(prototypeReviewNotices(loadTasks())).toEqual([expect.objectContaining({ id: `prototype-delivery:${id}`, undelivered: true })]);
+  // The operator's explicit retry clears the attention; a confirmed landing keeps it clear.
+  state.clock = Date.now();
+  expect((await reviewPOST(request({ reviewId: id, retry: true }), TASK, ports.world, ports.delivery, ports.now)).status).toBe(200);
+  await settlePrototypeDeliveriesForTests();
+  expect(prototypeReviewNotices(loadTasks())).toEqual([]);
+  ports.delivery.recover = async () => ({ state: "sent", operationId: "operation-admitted" });
+  await sweepPrototypeDeliveries(ports, { force: true });
+  expect(stored(id).delivery).toMatchObject({ state: "sent", operationId: "operation-admitted" });
+  expect(stored(id).delivery.failures).toBeUndefined(); expect(stored(id).delivery.failingSince).toBeUndefined();
+  expect((await shown(id)).delivery.phase).toBe("delivered");
 });

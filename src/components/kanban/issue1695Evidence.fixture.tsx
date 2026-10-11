@@ -2821,10 +2821,10 @@ if (PROTO) {
   }
   protoPublish();
   /* A driver's hands on the background delivery (`&proto=1`): `protoSavePhase`
-     answers a save as the Viewer does, with its message on its way;
-     `protoHoldSave()` keeps the next save's answer back until
-     `protoReleaseSave()`, so a frame shows the review before the server has
-     answered; `protoPhase(task, phase)` moves a decided round's delivery. */
+     answers a save as the Viewer does, its message saved or on its way;
+     `protoHoldSave()` keeps the next save unwritten and unanswered
+     until `protoReleaseSave()`, so a frame shows the review before the server
+     has written the decision; `protoPhase(task, phase)` moves a decided round's delivery. */
   let releaseSave: (() => void) | null = null;
   Object.assign(window, {
     protoPosts,
@@ -3170,6 +3170,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
+      /* A held save has not been written yet: the decision is recorded only once it is released. */
+      await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
       const held = rounds.find((entry) => entry.id === body.reviewId);
       if (!held) return json({ error: "prototype review not found" }, 404);
       const phase = (window as unknown as { protoSavePhase?: PrototypeDeliveryPhase }).protoSavePhase;
@@ -3179,11 +3181,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent", ...(phase ? { phase: state === "sent" ? "delivered" as const : "delivering" as const } : {}) } };
       }
       else if (!held.decision) {
-        const state = phase === "delivering" ? "pending" : protoSaveState[taskId] ?? "sent";
+        const state = phase === "saved" || phase === "delivering" ? "pending" : protoSaveState[taskId] ?? "sent";
         held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
       }
       protoPublish();
-      await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
     }
     return json({
       taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return { ...entry, ...(by ? { supersededBy: by } : {}), ...(protoHidden.has(entry.id) ? { hidden: protoHidden.get(entry.id) } : {}) }; }),

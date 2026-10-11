@@ -198,13 +198,19 @@ export async function attemptPrototypeDelivery(taskId: string,reviewId: string,p
         decision = update(held => { held.delivery.operationId = operationId; });
         result = await ports.delivery.retry(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" }));
       } else result = recovered;
+      /* An earlier attempt the journal shows failed is a failure even when the
+         runtime admits its retry: the history of failures ends only when the
+         message lands (or the operator asks again), so repeated admitted
+         attempts that each fail back off and reach attention. */
+      const failed = recovered?.state === "failed" || result.state === "failed" || result.state === "uncertain";
       return update(held => {
         held.delivery.state = result.state;
         if (result.operationId) held.delivery.operationId = result.operationId;
-        if (result.state === "failed" || result.state === "uncertain") {
+        if (result.state === "sent") { delete held.delivery.failures; delete held.delivery.failingSince; }
+        else if (failed) {
           held.delivery.failures = (held.delivery.failures ?? 0) + 1;
           held.delivery.failingSince ??= at();
-        } else { delete held.delivery.failures; delete held.delivery.failingSince; }
+        }
       });
     });
   } catch (error) {

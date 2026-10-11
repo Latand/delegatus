@@ -27238,10 +27238,11 @@ describe("prototype review: a decided round retires the earlier undecided rounds
 describe("prototype review: a decision answers at once and its message is delivered in the background", () => {
   /*
    * The operator chooses on the search task's review and saves while the
-   * server holds its answer back, as a seat that answers slowly once made it:
-   * the review collapses into the saved decision on the press itself, with
-   * nothing left to wait for and nothing asked on close. The answer then says
-   * the message is on its way, and the next read says it was delivered. The
+   * server holds the write back: the review keeps the choice and the words
+   * and claims nothing until the decision is written. The written answer
+   * collapses it into the saved decision, with nothing left to wait for and
+   * nothing asked on close; the background delivery then reads on its way and
+   * delivered. The
    * disk task's decision has kept failing: its review warns and offers to send
    * again, its card is marked, and the needs-you list carries it. At 1440 and
    * 390, in Ukrainian, light.
@@ -27256,7 +27257,7 @@ describe("prototype review: a decision answers at once and its message is delive
     { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
   ] as const;
 
-  browserTest("prototype review: saving collapses into the saved decision before the server answers; delivery reads saved, delivering, delivered, and a failing one asks for attention", async () => {
+  browserTest("prototype review: saving collapses into the saved decision once the server has written it; delivery reads saved, delivering, delivered, and a failing one asks for attention", async () => {
     const out = path.resolve(".artifacts/prototype-review");
     const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
     fs.mkdirSync(pngDir, { recursive: true });
@@ -27308,27 +27309,37 @@ describe("prototype review: a decision answers at once and its message is delive
           record("before", await footer());
           await shot("before-submit");
 
-          /* The press: the server holds its answer, and the review already shows the decision as saved. */
+          /* The press: the server holds the write, and the review keeps the choice and the words and claims nothing. */
           await page.evaluate(() => {
             const fixture = window as unknown as { protoSavePhase?: string; protoHoldSave: () => void };
-            fixture.protoSavePhase = "delivering";
+            fixture.protoSavePhase = "saved";
             fixture.protoHoldSave();
           });
-          const pressed = Date.now();
           await page.locator("[data-prototype-save]").click();
-          await page.waitForSelector('[data-prototype-delivery-phase="saved"]', { timeout: 5_000 });
-          const collapsedMs = Date.now() - pressed;
+          await page.waitForSelector("[data-prototype-save]:disabled", { timeout: 5_000 });
           await page.waitForTimeout(150);
-          const after = { ...await footer(), collapsedMs, held: await page.evaluate(() => Boolean((window as unknown as { protoHeldSave?: unknown }).protoHeldSave)) };
+          const saving = { ...await footer(), held: await page.evaluate(() => Boolean((window as unknown as { protoHeldSave?: unknown }).protoHeldSave)),
+            value: await page.locator(`${scope} [data-prototype-comment-field]`).inputValue().catch(() => null) };
+          record("saving", saving);
+          await shot("saving");
+          if (!saving.held) failures.push(`${label}: the server had already written the decision when the saving frame was taken`);
+          if (!saving.field || saving.phase !== null || saving.value !== comment) failures.push(`${label}: while the write is held the review reads ${JSON.stringify(saving)}, expected the choice and the words still in place`);
+
+          /* The written answer: the review collapses into the saved decision. */
+          const released = Date.now();
+          await page.evaluate(() => (window as unknown as { protoReleaseSave: () => void }).protoReleaseSave());
+          await page.waitForSelector('[data-prototype-delivery-phase="saved"]', { timeout: 5_000 });
+          const collapsedMs = Date.now() - released;
+          await page.waitForTimeout(150);
+          const after = { ...await footer(), collapsedMs };
           record("after-submit", after);
           await shot("after-submit");
-          if (!after.held) failures.push(`${label}: the server had already answered when the saved frame was taken`);
-          if (after.field || after.save || after.words !== tr("proto.saved.saved") || after.retry) failures.push(`${label}: right after the press the review reads ${JSON.stringify(after)}, expected the saved decision alone`);
+          if (after.field || after.save || after.words !== tr("proto.saved.saved") || after.retry) failures.push(`${label}: right after the write the review reads ${JSON.stringify(after)}, expected the saved decision alone`);
           if (JSON.stringify(after.chosen) !== JSON.stringify(["2", "3"]) || after.comment !== comment) failures.push(`${label}: the saved decision shows ${JSON.stringify(after)}`);
 
-          /* The answer: on its way. Then the next read: delivered. */
-          await page.evaluate(() => (window as unknown as { protoReleaseSave: () => void }).protoReleaseSave());
-          await page.waitForSelector('[data-prototype-delivery-phase="delivering"]', { timeout: 5_000 });
+          /* The background delivery: on its way, then delivered. */
+          await page.evaluate(() => (window as unknown as { protoPhase: (task: string, phase: string) => void }).protoPhase("t-search", "delivering"));
+          await page.waitForSelector('[data-prototype-delivery-phase="delivering"]', { timeout: 6_000 });
           await page.waitForTimeout(150);
           const delivering = await footer();
           record("delivering", delivering);

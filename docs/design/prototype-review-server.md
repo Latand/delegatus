@@ -100,9 +100,15 @@ save a decision or dispatch its message.
 
 Only the operator can decide. The decision answers as soon as it is recorded:
 the route validates it, writes it with its recipient and deterministic message
-key, and returns. The review collapses into the saved decision on the press
-itself and shows how its message goes in one quiet line: saved, on its way,
-delivered. Nothing the operator does waits on the seat.
+key, and returns. The review collapses into the saved decision as soon as that
+answer comes back, and shows how its message goes in one quiet line: saved, on
+its way, delivered. Nothing the operator does waits on the seat. Until the
+record is written the review claims nothing and keeps the choice and the words:
+a close pressed meanwhile waits for the answer and closes once the decision is
+written, or leaves the review open with the reason when the save is refused. A
+review closed by a second press or replaced by another task's review while its
+save is in flight keeps a refused save's choice, words and reason for that
+task's next opening.
 
 The message goes from the background delivery (`deliveryWorker.ts`). The route
 starts an attempt at once; the release that owns traffic sweeps every owed
@@ -118,7 +124,9 @@ failure the journal proves never ran goes again through the existing retry
 route under the same key, unknown delivery waits for evidence, and a message
 the seat holds behind its running turn is asked about every few seconds and
 never sent twice. Failed or unconfirmed attempts back off from 2 seconds to 5
-minutes. With no designated seat the decision stays saved as `no-orchestrator`
+minutes. An earlier attempt the journal shows failed counts as a failure even
+when the runtime admits its retry, so the count and the time the failures began
+end only when the message lands or the operator sends it again. With no designated seat the decision stays saved as `no-orchestrator`
 and goes once a seat exists.
 
 A message that keeps failing for five minutes asks for the operator's

@@ -13,6 +13,20 @@
       ],
       "comment": null
     },
+    "desktop-1440-uk-light-saving": {
+      "phase": null,
+      "words": null,
+      "retry": false,
+      "field": true,
+      "save": true,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": null,
+      "held": true,
+      "value": "Шапка з двох колонок, рядки з таблиці."
+    },
     "desktop-1440-uk-light-after-submit": {
       "phase": "saved",
       "words": "Рішення збережено",
@@ -24,8 +38,7 @@
         "3"
       ],
       "comment": "Шапка з двох колонок, рядки з таблиці.",
-      "collapsedMs": 40,
-      "held": true
+      "collapsedMs": 62
     },
     "desktop-1440-uk-light-delivering": {
       "phase": "delivering",
@@ -79,6 +92,20 @@
       ],
       "comment": null
     },
+    "phone-390-uk-light-saving": {
+      "phase": null,
+      "words": null,
+      "retry": false,
+      "field": true,
+      "save": true,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": null,
+      "held": true,
+      "value": "Шапка з двох колонок, рядки з таблиці."
+    },
     "phone-390-uk-light-after-submit": {
       "phase": "saved",
       "words": "Рішення збережено",
@@ -90,8 +117,7 @@
         "3"
       ],
       "comment": "Шапка з двох колонок, рядки з таблиці.",
-      "collapsedMs": 56,
-      "held": true
+      "collapsedMs": 61
     },
     "phone-390-uk-light-delivering": {
       "phase": "delivering",

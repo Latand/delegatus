@@ -39,6 +39,10 @@ interface Slide {
 
 interface Draft { chosen: number[]; comment: string; answers: PrototypeAnswer[] }
 const initialDraft = (round: PrototypeRoundView | null): Draft => ({ chosen: [], comment: "", answers: recommendedAnswers(round?.questions ?? []) });
+/* A save the server refused after its review was closed or replaced: the
+   choice and the exact words wait here, with the reason, for the task's
+   review to open again. */
+const refusedSaves = new Map<string, { drafts: Record<string, Draft>; error: string }>();
 
 /** A moment as the product writes one: day, month and a 24-hour clock, no seconds. */
 const when = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(at));
@@ -188,7 +192,11 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const { data } = review;
   const [picked, setPicked] = useState<string | null>(null);
   const [active, setActive] = useState<Record<string, number>>({});
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [drafts, setDrafts] = useState<Record<string, Draft>>(() => refusedSaves.get(taskId)?.drafts ?? {});
+  const [refused, setRefused] = useState<string | null>(() => refusedSaves.get(taskId)?.error ?? null);
+  useEffect(() => { refusedSaves.delete(taskId); }, [taskId]);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [pairMode, setPairMode] = useState<PairMode | null>(null);
   const [split, setSplit] = useState(50);
   /* The picture opened full screen, the press's own side of a pair, and the variant's pictures the viewer steps through. */
@@ -276,8 +284,15 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const unsaved = answersChanged || rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "") || Boolean(dictation.liveText) || dictation.phase !== "idle";
   /* The guard names what is lost: changed answers, else the comment. */
   const guardKind = answersChanged ? "answers" : "comment";
+  /* A held key repeats before the first request has redrawn anything. */
+  const saveInFlight = useRef(false);
+  /* A save in flight is no decision yet: the first close waits for the
+     server's word and closes once the decision is written, or stays with the
+     choice, the words and the reason when it is refused. */
+  const closeOnSave = useRef(false);
   const requestClose = useCallback(() => {
     if (guard) setGuard(false);
+    else if (saveInFlight.current && !closeOnSave.current) closeOnSave.current = true;
     else if (unsaved) setGuard(true);
     else onClose();
   }, [guard, unsaved, onClose]);
@@ -364,15 +379,22 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   }
   const canSend = open && !review.saving && dictation.phase === "idle";
   const savable = Boolean(round) && (hasQuestions ? answersValid : draft.chosen.length > 0) && canSend;
-  /* A held key repeats before the first request has redrawn anything. */
-  const saveInFlight = useRef(false);
   const save = async (skip = false) => {
     if (!round || !(skip ? hasQuestions && canSend : savable) || saveInFlight.current) return;
     saveInFlight.current = true;
+    setRefused(null);
+    const sent = draft;
     try {
-      const saved = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment,
+      const result = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment,
         ...(hasQuestions ? skip ? { skip: true as const } : { answers: draft.answers } : {}) });
-      if (saved) setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
+      const closing = closeOnSave.current;
+      closeOnSave.current = false;
+      if (!mounted.current) {
+        if (!result.ok) refusedSaves.set(taskId, { drafts: { ...drafts, [round.id]: sent }, error: result.error });
+      } else if (result.ok) {
+        setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
+        if (closing) onClose();
+      }
     } finally {
       saveInFlight.current = false;
     }
@@ -384,9 +406,9 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   const banners = (
     <>
-      {review.error ? (
+      {review.error ?? refused ? (
         <p role="alert" data-prototype-error="" className="m-0 flex items-start gap-2 border-b border-danger/30 bg-danger-soft px-4 py-2 text-label font-semibold text-danger">
-          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden /> {review.error}
+          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden /> {review.error ?? refused}
         </p>
       ) : null}
       {elsewhere ? (

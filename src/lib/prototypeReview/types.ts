@@ -75,7 +75,7 @@ export interface PrototypeDecision {
     operationId?: string;
     /** Written before the message is first handed to the send path: from then on a change goes as an amendment. */
     dispatchedAt?: string;
-    /** Failed or unconfirmed attempts since the seat last admitted the message, and when that run began. */
+    /** Failed or unconfirmed attempts, including admitted ones the journal later showed failed, and when that run began. Cleared when the message lands or the operator retries. */
     failures?: number;
     failingSince?: string;
   };
