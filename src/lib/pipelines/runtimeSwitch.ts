@@ -18,6 +18,18 @@ export class RuntimeSwitchSuperseded extends Error {
   constructor() { super("runtime switch changed before dispatch or settlement"); }
 }
 
+class RuntimeSwitchAdmissionRefused extends Error {}
+
+export interface RuntimeSwitchDelivery {
+  state: "pending" | "delivered" | "failed";
+  at?: string;
+  error?: string;
+  /** True owns the key; false proves no reservation; absent leaves history unknown. */
+  admitted?: boolean;
+  /** A terminal unknown cannot authorize a replacement continuation. */
+  duplicateRisk?: boolean;
+}
+
 /** A native no-op has no journal receipt to reconcile. */
 export function runtimeSwitchControlAcknowledgement(result: StructuredControlResult | null): "already-current" | void {
   if (!result || !("ok" in result.body) || result.body.ok !== true) throw new Error(result && "error" in result.body ? result.body.error : "structured control unavailable");
@@ -27,6 +39,11 @@ export function runtimeSwitchControlAcknowledgement(result: StructuredControlRes
 const OPEN = new Set(["requested", "cutting", "switching", "continuing"]);
 const BUDGET = 10 * 60_000;
 export const openRuntimeSwitch = (attempt: PipelineStageAttempt) => attempt.runtimeSwitches?.find(item => OPEN.has(item.phase));
+/** Receipt-free native controls already proved the selected profile current. */
+export async function runtimeSwitchReconfigureOutcome(record: PipelineRuntimeSwitch, ports: PipelinePorts) {
+  return record.reconfigureNoop ? { state: "applied" as const }
+    : await ports.runtimeSwitchOutcome?.(record.from.conversationId, switchOperationKey(record, "reconfigure"));
+}
 export function currentRuntimeSeat(attempt: PipelineStageAttempt): PipelineRuntimeSeat {
   return { engine: attempt.effectiveRole.engine, model: attempt.effectiveRole.model, effort: attempt.effectiveRole.effort,
     serviceTier: attempt.effectiveRole.serviceTier ?? null, accountId: attempt.accountId ?? null };
@@ -135,14 +152,29 @@ export async function driveRuntimeSwitch(
   const continueKey = record.continuationKey ?? switchOperationKey(record, "continue");
   const resume = async (key: string) => {
     if (!ports.resumeSeveredTurn || !attempt.agentPath || !attempt.conversationId) throw new Error("stage continuation unavailable");
+    const existing = await ports.runtimeSwitchDelivery?.(attempt.conversationId, key);
     if (record.continuationDispatch?.key !== key) {
-      const existing = await ports.runtimeSwitchDelivery?.(attempt.conversationId, key);
       record.continuationDispatch = { key, at: existing?.at ?? ports.now() }; await persist();
     }
+    // Admission already owns this key, including while its journal is offline.
+    // Replaying it rearms the held delivery and moves its settlement deadline.
+    if (existing?.admitted || existing?.at) return;
+    let refusal = "stage continuation was not accepted";
+    let refusedBeforeAdmission = false;
+    let uncertain = false;
     const admitted = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
-      clientMessageId: key, policy: "queue", project: pipeline.project, cwd: pipeline.worktreeDir, cohortAt: attempt.startedAt ?? undefined,
-      text: "Delegatus stopped your turn for a runtime switch. Continue the same stage on the available runtime in the current worktree, preserving every committed and uncommitted change, branch, attempt number and receipts. Report when complete." });
-    if (!admitted) throw new Error("stage continuation was not accepted");
+      // Native add stays paused after turn/interrupt. The managed send waits
+      // for idle, then starts a new turn under the current profile with this key.
+      clientMessageId: key, policy: attempt.effectiveRole.engine === "codex" ? "steer-or-queue" : "queue", project: pipeline.project, cwd: pipeline.worktreeDir, cohortAt: attempt.startedAt ?? undefined,
+      ...(attempt.effectiveRole.engine === "codex" ? { turnId: null } : {}),
+      text: "Delegatus stopped your turn for a runtime switch. Continue the same stage on the available runtime in the current worktree, preserving every committed and uncommitted change, branch, attempt number and receipts. Report when complete.",
+      onRefused: (reason, admission) => { refusal = reason; refusedBeforeAdmission = admission === "refused"; },
+      onUncertain: () => { uncertain = true; } });
+    if (!admitted) {
+      const delivery = await ports.runtimeSwitchDelivery?.(attempt.conversationId, key);
+      if (refusedBeforeAdmission && !uncertain && delivery?.admitted === false) throw new RuntimeSwitchAdmissionRefused(refusal);
+      throw new Error(uncertain || delivery?.duplicateRisk ? `stage continuation admission is unverified: ${refusal}` : refusal);
+    }
   };
   const continuationFloor = async (engine: EffectivePipelineRole["engine"], pathname: string | null, deliveredAt?: string): Promise<string | null> => {
     const admittedAt = record.continuationDispatch?.at ?? deliveredAt ?? record.requestedAt;
@@ -163,13 +195,16 @@ export async function driveRuntimeSwitch(
     // held reconfigure is being withdrawn, and neither a new key nor a reused
     // continuation may run on a revoked source account.
     if (!await rollbackAccountAllowed()) return;
+    const previous = await ports.runtimeSwitchDelivery?.(record.from.conversationId, continueKey);
+    if (previous?.state === "failed" && previous.duplicateRisk) {
+      await park(`runtime switch rollback fenced: continuation arrival is unverified: ${previous.error ?? "delivery outcome unknown"}`); return;
+    }
     Object.assign(attempt, { conversationId: record.from.conversationId, launchId: record.from.launchId,
       sessionId: record.from.sessionId, agentPath: record.from.agentPath, accountId: record.from.accountId });
     Object.assign(attempt.effectiveRole, { engine: record.from.engine, model: record.from.model, effort: record.from.effort, serviceTier: record.from.serviceTier ?? undefined });
     record.rollback = true; record.outcome = reason; record.phase = "continuing";
     // Cancelling a migration rearms its held message on the source. Reuse
     // that admission; a new key is safe only after a terminal send failure.
-    const previous = await ports.runtimeSwitchDelivery?.(record.from.conversationId, continueKey);
     record.continuationKey = previous?.state === "failed" ? switchOperationKey(record, "rollback") : continueKey; await persist();
     await resume(record.continuationKey);
   };
@@ -217,7 +252,7 @@ export async function driveRuntimeSwitch(
       }
       // Queue ordering puts reconfigure before the engagement that performs an account move.
       await resume(continueKey);
-      const outcome = record.reconfigureNoop ? { state: "applied" as const } : await ports.runtimeSwitchOutcome?.(record.from.conversationId, reconfigureKey);
+      const outcome = await runtimeSwitchReconfigureOutcome(record, ports);
       if (!outcome || outcome.state === "pending") {
         if (expired) {
           if (!await rollbackAccountAllowed()) return;
@@ -230,6 +265,9 @@ export async function driveRuntimeSwitch(
       }
       if (outcome.state === "failed") {
         const delivery = await ports.runtimeSwitchDelivery?.(record.from.conversationId, continueKey);
+        if (delivery?.state === "failed" && delivery.duplicateRisk) {
+          await park(`runtime switch rollback fenced: continuation arrival is unverified: ${delivery.error ?? "delivery outcome unknown"}`); return;
+        }
         if (delivery?.state === "delivered") {
           if (!await rollbackAccountAllowed()) return;
           const generation = ports.conversationGeneration?.(attempt.conversationId!);
@@ -353,11 +391,18 @@ export async function driveRuntimeSwitch(
         await settle(record.rollback ? "rolled-back" : record.outcome ? "superseded" : "committed", record.outcome ?? `continued on ${generation.engine}/${generation.model}`);
       } else if (delivered?.state === "failed") {
         const outcome = record.mode === "fork"
-          ? await ports.runtimeSwitchOutcome?.(record.from.conversationId, reconfigureKey)
+          ? await runtimeSwitchReconfigureOutcome(record, ports)
           : null;
-        const operationSettled = outcome && ["applied", "superseded", "failed"].includes(outcome.state);
+        const operationSettled = record.mode !== "fork" || (outcome && ["applied", "superseded", "failed"].includes(outcome.state));
         const alreadyRetried = record.continuationKey === switchOperationKey(record, "continue-2");
-        if (alreadyRetried || (record.continuationKey && !operationSettled)) {
+        if (delivered.duplicateRisk) {
+          await park(`runtime switch continuation is unverified: ${delivered.error ?? "arrival is unknown; replacement is fenced"}`); return;
+        }
+        if (!operationSettled) {
+          await park(`runtime switch continuation failed; waiting for its runtime outcome: ${delivered.error ?? "delivery failed"}`); return;
+        }
+        if (alreadyRetried) {
+          await settle("failed", `runtime switch continuation failed: ${delivered.error ?? "delivery failed"}`);
           await park(`runtime switch continuation failed: ${delivered.error ?? "delivery failed"}`); return;
         }
         record.continuationKey = switchOperationKey(record, "continue-2"); await persist(); await resume(record.continuationKey);
@@ -366,6 +411,13 @@ export async function driveRuntimeSwitch(
     }
   } catch (error) {
     if (error instanceof RuntimeSwitchSuperseded) throw error;
+    if (error instanceof RuntimeSwitchAdmissionRefused && record.mode === "fork") {
+      const outcome = await runtimeSwitchReconfigureOutcome(record, ports);
+      if (outcome && ["applied", "superseded", "failed"].includes(outcome.state)) {
+        const reason = `runtime switch continuation was refused: ${error.message}`;
+        await settle("failed", reason); await park(reason); return;
+      }
+    }
     pipeline.stateDetail = `runtime switch waiting: ${String(error)}`;
     if (expired) await park(`stage stopped mid-turn; runtime switch could not complete: ${String(error)}`);
     else { await persist(); ports.scheduleTick?.(1000); }

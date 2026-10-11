@@ -526,8 +526,20 @@ A marked pipeline finishes its tasks when:
 | Merge setting | Lane has a PR | Finishes when |
 |---|---|---|
 | off | any | the lane is `completed` (the PR stays open) |
-| on | no | the lane is `completed` |
+| on | no, exact base/head equality proves no commits | the lane is `completed` |
+| on | no, commits remain or the base is unproved | waits for its PR to be opened or attached and merged |
 | on | yes | the lane is `completed` **and** `merge.state` is `merged` (by the runner or anyone) |
+
+A completed reviewed lane with changes and no uniquely linked PR records a
+blocked merge with `prNumber: null` and the reason to open or attach its PR.
+The existing merge attention and retry action expose that wait. A retry with
+no PR returns to the block without calling GitHub; after a PR is attached,
+the retry resolves its number and uses the usual reviewed-head and green-check
+gates. Missing or symbolic legacy bases cannot prove that a lane is unchanged.
+An existing merge record retains its PR identity when the usual lookup loses
+it, so the task still waits for that PR to merge.
+The board-maintenance report keeps tasks with unsettled merge records out of
+its recommendations to close finished work, even when no open PR is found.
 
 `needs_review`, `needs_decision`, `paused` and `closed` never finish a task. A
 blocked merge leaves the task where it is until the PR merges.

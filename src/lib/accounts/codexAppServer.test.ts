@@ -117,6 +117,31 @@ test("account-management app-server retains zero-MCP process isolation", async (
   client.close();
 });
 
+test("a caller can choose app-server arguments and send experimental requests", async () => {
+  const child = new FakeChild();
+  child.onWrite = message => { if (message.id) child.respond(requestId(message), {}); };
+  let args: readonly string[] = [];
+  const client = await CodexAppServerClient.start({ home: "/managed/home", args: ["--enable", "realtime_conversation", "app-server"],
+    spawn: (_home, passed) => { args = passed; return child as never; } });
+  try {
+    expect(args).toEqual(["--enable", "realtime_conversation", "app-server"]);
+    expect(await client.request("thread/realtime/stop", { threadId: "fixture" })).toEqual({});
+  } finally { client.close(); }
+});
+
+test("a server tool finishing after close writes nothing to the ended transport", async () => {
+  const f = clientWith((child, message) => { if (message.method === "initialize") child.respond(requestId(message), {}); });
+  const client = await f.start();
+  let finish!: (value: unknown) => void;
+  client.onRequest(() => new Promise(resolve => { finish = resolve; }));
+  f.child.output(JSON.stringify({ id: "late-tool", method: "item/tool/call", params: {} }) + "\n");
+  client.close();
+  const writes = f.child.writes.length;
+  finish({ contentItems: [{ type: "inputText", text: "Done" }], success: true });
+  await Bun.sleep(5);
+  expect(f.child.writes).toHaveLength(writes);
+});
+
 test("JSON-RPC initialization frames lines, correlates ids, and sends initialized", async () => {
   const { child, start } = clientWith((fake, message) => {
     if (message.method === "initialize") fake.respond(requestId(message), { serverInfo: { name: "codex" } });

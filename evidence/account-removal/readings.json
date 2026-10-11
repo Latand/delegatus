@@ -1,0 +1,5857 @@
+{
+  "commit": "0654c906d727d92eb80706876c0772f1d430b218",
+  "1440-en-light": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 646,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Remove Account B? Its files move to the shared archive and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 565.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 674.15625
+        },
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 07:15Refresh5h88%left· reset in 3h · 10:15Week72%left· reset in 4d · Oct 15 01:15Copy CLIRemoving…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxAuthenticated72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Re-read limits for Account B",
+            "w": 65.25,
+            "h": 24
+          },
+          {
+            "name": "Copy the agent command for Account B",
+            "w": 78.09375,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 682,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 682,
+          "w": 354,
+          "h": 111.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "The archive folder for Account B already exists or is on another disk:~/.config/agent-log-viewer/shared/claude/retired/account-bMove it away, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "liveWork": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 562,
+          "w": 354,
+          "h": 239.375
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "An agent is still running on Account B. Stop it or wait for it to finish, then remove the account. Nothing was changed.A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonland 4 more",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 287,
+            "h": 31.875
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 216.421875,
+            "h": 22
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 711.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 64.109375,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 381.5,
+            "bottom": 801.5
+          },
+          "block": {
+            "top": 711.75,
+            "bottom": 793.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 641.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 381.5,
+            "bottom": 801.5
+          },
+          "block": {
+            "top": 641.75,
+            "bottom": 801.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 800.21875,
+          "w": 398,
+          "h": 188.625
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 710.34375
+        },
+        "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settled",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 649.46875,
+          "w": 398,
+          "h": 148.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 519.71875
+        },
+        "text": "Account C removedPast conversations stay readable.Moved3 files · 812 KBArchive~/.config/agent-log-viewer/shared/claude/retired/account-cThe sign-in file could not be deleted from the archive.Finish clean-up",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Finish clean-up",
+            "w": 95.015625,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 649.46875,
+          "w": 398,
+          "h": 220.78125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 591.75
+        },
+        "text": "Some leftovers need a lookDeleted3 empty foldersArchived2 retired accounts · 412 files · 96.0 MBNeeds a lookclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 moreThese failed a safety check and were left untouched. Inspect and remove them by hand.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "mainArmed": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 495.25,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 607.0625
+        },
+        "text": "Remove Main from Delegatus? Nothing in its own folder is deleted, past conversations stay readable, and you can show it again.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 28
+          }
+        ]
+      },
+      "mainHidden": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 479.21875,
+          "w": 398,
+          "h": 194.6875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 395.40625
+        },
+        "text": "Main removed from DelegatusIt is no longer listed or picked for any launch. Past conversations stay readable.FilesLeft where they are~/.claudePins cleared1Projects1 project binding removedRemoved by mistake?Show Main again",
+        "clipped": [],
+        "pathId": {
+          "text": ".claude",
+          "visible": true
+        },
+        "pathShown": "~/.claude",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the folder path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Show Main again",
+            "w": 103.1875,
+            "h": 24
+          }
+        ]
+      },
+      "mainOffer": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 410,
+          "w": 398,
+          "h": 44.875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 245.59375
+        },
+        "text": "Main is removed from Delegatus. Its folder is untouched.Show Main again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Show Main again",
+            "w": 103.1875,
+            "h": 24
+          }
+        ]
+      },
+      "mainRestored": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 361,
+          "w": 398,
+          "h": 50.25
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 350.46875
+        },
+        "text": "MaindefaultmaxAuthenticated39%active",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": []
+      },
+      "copilotArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 748.6875,
+          "w": 201,
+          "h": 67.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 569.4375,
+          "w": 247,
+          "h": 298.5625
+        },
+        "text": "Remove Work? Its sign-in file is deleted; its folder and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 19.75
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotRefusal": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 540.625,
+          "w": 201,
+          "h": 275.125
+        },
+        "panel": {
+          "x": 0,
+          "y": 337.625,
+          "w": 247,
+          "h": 530.375
+        },
+        "text": "An agent is still running on Work. Stop it or wait for it to finish, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonland 1 more",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 134,
+            "h": 63.75
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 134,
+            "h": 31.875
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "textColumn": 134
+      },
+      "copilotDefaultArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 671.25,
+          "w": 201,
+          "h": 81.5
+        },
+        "panel": {
+          "x": 0,
+          "y": 555,
+          "w": 247,
+          "h": 313
+        },
+        "text": "Remove Default from Delegatus? Nothing in its own folder is deleted, past conversations stay readable, and you can show it again.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 19.75
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotDefaultHidden": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 798.125,
+          "w": 219,
+          "h": 59.875
+        },
+        "panel": {
+          "x": 0,
+          "y": 611.875,
+          "w": 247,
+          "h": 256.125
+        },
+        "text": "Default is removed from Delegatus. Its folder is untouched.Show Default again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Show Default again",
+            "w": 114.84375,
+            "h": 24
+          }
+        ]
+      },
+      "copilotDefaultRestored": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 704.75,
+          "w": 219,
+          "h": 55
+        },
+        "panel": {
+          "x": 0,
+          "y": 616.75,
+          "w": 247,
+          "h": 251.25
+        },
+        "text": "Defaultsigned in as demo-userUseRemove",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Use",
+            "w": 31.265625,
+            "h": 15.75
+          },
+          {
+            "name": "Remove Default",
+            "w": 52.859375,
+            "h": 19.75
+          }
+        ]
+      }
+    },
+    "deletes": 12
+  },
+  "1440-en-dark": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 646,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Remove Account B? Its files move to the shared archive and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 565.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 674.15625
+        },
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 07:15Refresh5h88%left· reset in 3h · 10:15Week72%left· reset in 4d · Oct 15 01:15Copy CLIRemoving…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxAuthenticated72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Re-read limits for Account B",
+            "w": 65.25,
+            "h": 24
+          },
+          {
+            "name": "Copy the agent command for Account B",
+            "w": 78.09375,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 682,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 682,
+          "w": 354,
+          "h": 111.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "The archive folder for Account B already exists or is on another disk:~/.config/agent-log-viewer/shared/claude/retired/account-bMove it away, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "liveWork": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 562,
+          "w": 354,
+          "h": 239.375
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "An agent is still running on Account B. Stop it or wait for it to finish, then remove the account. Nothing was changed.A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonland 4 more",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 287,
+            "h": 31.875
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 216.421875,
+            "h": 22
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 711.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 64.109375,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 381.5,
+            "bottom": 801.5
+          },
+          "block": {
+            "top": 711.75,
+            "bottom": 793.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 641.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 381.5,
+            "bottom": 801.5
+          },
+          "block": {
+            "top": 641.75,
+            "bottom": 801.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 800.21875,
+          "w": 398,
+          "h": 188.625
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 710.34375
+        },
+        "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settled",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 649.46875,
+          "w": 398,
+          "h": 148.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 519.71875
+        },
+        "text": "Account C removedPast conversations stay readable.Moved3 files · 812 KBArchive~/.config/agent-log-viewer/shared/claude/retired/account-cThe sign-in file could not be deleted from the archive.Finish clean-up",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Finish clean-up",
+            "w": 95.015625,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 649.46875,
+          "w": 398,
+          "h": 220.78125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 591.75
+        },
+        "text": "Some leftovers need a lookDeleted3 empty foldersArchived2 retired accounts · 412 files · 96.0 MBNeeds a lookclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 moreThese failed a safety check and were left untouched. Inspect and remove them by hand.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "mainArmed": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 495.25,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 607.0625
+        },
+        "text": "Remove Main from Delegatus? Nothing in its own folder is deleted, past conversations stay readable, and you can show it again.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 28
+          }
+        ]
+      },
+      "mainHidden": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 479.21875,
+          "w": 398,
+          "h": 194.6875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 395.40625
+        },
+        "text": "Main removed from DelegatusIt is no longer listed or picked for any launch. Past conversations stay readable.FilesLeft where they are~/.claudePins cleared1Projects1 project binding removedRemoved by mistake?Show Main again",
+        "clipped": [],
+        "pathId": {
+          "text": ".claude",
+          "visible": true
+        },
+        "pathShown": "~/.claude",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the folder path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Show Main again",
+            "w": 103.1875,
+            "h": 24
+          }
+        ]
+      },
+      "mainOffer": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 410,
+          "w": 398,
+          "h": 44.875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 245.59375
+        },
+        "text": "Main is removed from Delegatus. Its folder is untouched.Show Main again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Show Main again",
+            "w": 103.1875,
+            "h": 24
+          }
+        ]
+      },
+      "mainRestored": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 361,
+          "w": 398,
+          "h": 50.25
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 350.46875
+        },
+        "text": "MaindefaultmaxAuthenticated39%active",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": []
+      },
+      "copilotArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 748.6875,
+          "w": 201,
+          "h": 67.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 569.4375,
+          "w": 247,
+          "h": 298.5625
+        },
+        "text": "Remove Work? Its sign-in file is deleted; its folder and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 19.75
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotRefusal": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 540.625,
+          "w": 201,
+          "h": 275.125
+        },
+        "panel": {
+          "x": 0,
+          "y": 337.625,
+          "w": 247,
+          "h": 530.375
+        },
+        "text": "An agent is still running on Work. Stop it or wait for it to finish, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonland 1 more",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 134,
+            "h": 63.75
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 134,
+            "h": 31.875
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "textColumn": 134
+      },
+      "copilotDefaultArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 671.25,
+          "w": 201,
+          "h": 81.5
+        },
+        "panel": {
+          "x": 0,
+          "y": 555,
+          "w": 247,
+          "h": 313
+        },
+        "text": "Remove Default from Delegatus? Nothing in its own folder is deleted, past conversations stay readable, and you can show it again.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 19.75
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotDefaultHidden": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 798.125,
+          "w": 219,
+          "h": 59.875
+        },
+        "panel": {
+          "x": 0,
+          "y": 611.875,
+          "w": 247,
+          "h": 256.125
+        },
+        "text": "Default is removed from Delegatus. Its folder is untouched.Show Default again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Show Default again",
+            "w": 114.84375,
+            "h": 24
+          }
+        ]
+      },
+      "copilotDefaultRestored": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 704.75,
+          "w": 219,
+          "h": 55
+        },
+        "panel": {
+          "x": 0,
+          "y": 616.75,
+          "w": 247,
+          "h": 251.25
+        },
+        "text": "Defaultsigned in as demo-userUseRemove",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Use",
+            "w": 31.265625,
+            "h": 15.75
+          },
+          {
+            "name": "Remove Default",
+            "w": 52.859375,
+            "h": 19.75
+          }
+        ]
+      }
+    },
+    "deletes": 12
+  },
+  "1440-uk-light": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 646,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Видалити Account B? Його файли перейдуть до спільного архіву, а минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 565.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 674.15625
+        },
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 07:15Оновити5 год88%лишилось· скид через 3 год · 10:15Тиждень72%лишилось· скид через 4 д · 15 жовт. 01:15Копіювати CLIВидалення…",
+        "clipped": [
+          "SPAN: ellipsis «· скид через 4 д · 15 жовт. 01:15»",
+          "SPAN: overflow «· скид через 4 д · 15 жовт. 01:15»"
+        ],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxАвторизовано72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Перечитати ліміти для Account B",
+            "w": 71.28125,
+            "h": 24
+          },
+          {
+            "name": "Скопіювати команду агента для Account B",
+            "w": 106.640625,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 682,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 682,
+          "w": 354,
+          "h": 95.8125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Архівна тека для Account B вже існує або лежить на іншому диску:~/.config/agent-log-viewer/shared/claude/retired/account-bПриберіть її, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "liveWork": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 530,
+          "w": 354,
+          "h": 271.25
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "На Account B ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonlі ще 4",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 287,
+            "h": 31.875
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 216.421875,
+            "h": 22
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 711.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 118.828125,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 381.5,
+            "bottom": 801.5
+          },
+          "block": {
+            "top": 711.75,
+            "bottom": 793.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 625.75,
+          "w": 354,
+          "h": 175.4375
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 381.5,
+            "bottom": 801.5
+          },
+          "block": {
+            "top": 625.75,
+            "bottom": 801.1875
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 800.21875,
+          "w": 398,
+          "h": 203.125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 724.84375
+        },
+        "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закрито",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 649.46875,
+          "w": 398,
+          "h": 148.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 519.71875
+        },
+        "text": "Account C видаленоМинулі розмови лишаються доступними.Перенесено3 файли · 812 КБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-cФайл входу не вдалося видалити з архіву.Завершити очищення",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Завершити очищення",
+            "w": 130.921875,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 649.46875,
+          "w": 398,
+          "h": 220.78125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 591.75
+        },
+        "text": "Частина залишків потребує увагиВидалено3 порожні текиЗаархівовано2 видалені акаунти · 412 файлів · 96,0 МБПотребує увагиclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 щеВони не пройшли перевірку безпеки й лишилися без змін. Перевірте та приберіть їх вручну.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "mainArmed": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 495.25,
+          "w": 398,
+          "h": 65.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 621.5
+        },
+        "text": "Прибрати Main з Delegatus? З його власної папки нічого не видаляється, минулі розмови лишаються доступними, і його можна повернути.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 28
+          }
+        ]
+      },
+      "mainHidden": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 479.21875,
+          "w": 398,
+          "h": 194.6875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 395.40625
+        },
+        "text": "Main прибрано з DelegatusЙого більше немає у списках і жоден запуск його не вибере. Минулі розмови лишаються доступними.ФайлиЛишилися на місці~/.claudeЗнято прив'язок1Проєкти1 прив'язку до проєкту знятоПрибрали помилково?Повернути Main",
+        "clipped": [],
+        "pathId": {
+          "text": ".claude",
+          "visible": true
+        },
+        "pathShown": "~/.claude",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до папки",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Повернути Main",
+            "w": 101.28125,
+            "h": 24
+          }
+        ]
+      },
+      "mainOffer": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 410,
+          "w": 398,
+          "h": 37
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 237.71875
+        },
+        "text": "Main прибрано з Delegatus. Його папку не чіпали.Повернути Main",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Повернути Main",
+            "w": 101.28125,
+            "h": 24
+          }
+        ]
+      },
+      "mainRestored": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 361,
+          "w": 398,
+          "h": 50.25
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 350.46875
+        },
+        "text": "MaindefaultmaxАвторизовано39%активний",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": []
+      },
+      "copilotArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 748.6875,
+          "w": 201,
+          "h": 67.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 569.4375,
+          "w": 247,
+          "h": 298.5625
+        },
+        "text": "Видалити Work? Файл входу буде видалено, а папка й минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 19.75
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotRefusal": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 524.6875,
+          "w": 201,
+          "h": 291.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 321.6875,
+          "w": 247,
+          "h": 546.3125
+        },
+        "text": "На Work ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonlі ще 1",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 134,
+            "h": 63.75
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 134,
+            "h": 31.875
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "textColumn": 134
+      },
+      "copilotDefaultArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 671.25,
+          "w": 201,
+          "h": 81.5
+        },
+        "panel": {
+          "x": 0,
+          "y": 555,
+          "w": 247,
+          "h": 313
+        },
+        "text": "Прибрати Default з Delegatus? З його власної папки нічого не видаляється, минулі розмови лишаються доступними, і його можна повернути.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 19.75
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotDefaultHidden": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 798.125,
+          "w": 219,
+          "h": 59.875
+        },
+        "panel": {
+          "x": 0,
+          "y": 611.875,
+          "w": 247,
+          "h": 256.125
+        },
+        "text": "Default прибрано з Delegatus. Його папку не чіпали.Повернути Default",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Повернути Default",
+            "w": 112.953125,
+            "h": 24
+          }
+        ]
+      },
+      "copilotDefaultRestored": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 704.75,
+          "w": 219,
+          "h": 55
+        },
+        "panel": {
+          "x": 0,
+          "y": 616.75,
+          "w": 247,
+          "h": 251.25
+        },
+        "text": "Defaultувійшли як demo-userВикористатиВидалити",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Використати",
+            "w": 78.859375,
+            "h": 15.75
+          },
+          {
+            "name": "Видалити Default",
+            "w": 63.265625,
+            "h": 19.75
+          }
+        ]
+      }
+    },
+    "deletes": 12
+  },
+  "1440-uk-dark": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 646,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Видалити Account B? Його файли перейдуть до спільного архіву, а минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 565.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 674.15625
+        },
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 07:15Оновити5 год88%лишилось· скид через 3 год · 10:15Тиждень72%лишилось· скид через 4 д · 15 жовт. 01:15Копіювати CLIВидалення…",
+        "clipped": [
+          "SPAN: ellipsis «· скид через 4 д · 15 жовт. 01:15»",
+          "SPAN: overflow «· скид через 4 д · 15 жовт. 01:15»"
+        ],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxАвторизовано72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Перечитати ліміти для Account B",
+            "w": 71.28125,
+            "h": 24
+          },
+          {
+            "name": "Скопіювати команду агента для Account B",
+            "w": 106.640625,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 682,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 682,
+          "w": 354,
+          "h": 95.8125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Архівна тека для Account B вже існує або лежить на іншому диску:~/.config/agent-log-viewer/shared/claude/retired/account-bПриберіть її, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "liveWork": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 530,
+          "w": 354,
+          "h": 271.25
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "На Account B ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonlі ще 4",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 287,
+            "h": 31.875
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 216.421875,
+            "h": 22
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 711.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 118.828125,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 381.5,
+            "bottom": 801.5
+          },
+          "block": {
+            "top": 711.75,
+            "bottom": 793.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 1004,
+          "y": 625.75,
+          "w": 354,
+          "h": 175.4375
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 381.5,
+            "bottom": 801.5
+          },
+          "block": {
+            "top": 625.75,
+            "bottom": 801.1875
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 800.21875,
+          "w": 398,
+          "h": 203.125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 724.84375
+        },
+        "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закрито",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 649.46875,
+          "w": 398,
+          "h": 148.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 519.71875
+        },
+        "text": "Account C видаленоМинулі розмови лишаються доступними.Перенесено3 файли · 812 КБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-cФайл входу не вдалося видалити з архіву.Завершити очищення",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Завершити очищення",
+            "w": 130.921875,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 649.46875,
+          "w": 398,
+          "h": 220.78125
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 591.75
+        },
+        "text": "Частина залишків потребує увагиВидалено3 порожні текиЗаархівовано2 видалені акаунти · 412 файлів · 96,0 МБПотребує увагиclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 щеВони не пройшли перевірку безпеки й лишилися без змін. Перевірте та приберіть їх вручну.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "mainArmed": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 495.25,
+          "w": 398,
+          "h": 65.75
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 621.5
+        },
+        "text": "Прибрати Main з Delegatus? З його власної папки нічого не видаляється, минулі розмови лишаються доступними, і його можна повернути.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 28
+          }
+        ]
+      },
+      "mainHidden": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 479.21875,
+          "w": 398,
+          "h": 194.6875
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 395.40625
+        },
+        "text": "Main прибрано з DelegatusЙого більше немає у списках і жоден запуск його не вибере. Минулі розмови лишаються доступними.ФайлиЛишилися на місці~/.claudeЗнято прив'язок1Проєкти1 прив'язку до проєкту знятоПрибрали помилково?Повернути Main",
+        "clipped": [],
+        "pathId": {
+          "text": ".claude",
+          "visible": true
+        },
+        "pathShown": "~/.claude",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до папки",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Повернути Main",
+            "w": 101.28125,
+            "h": 24
+          }
+        ]
+      },
+      "mainOffer": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 410,
+          "w": 398,
+          "h": 37
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 237.71875
+        },
+        "text": "Main прибрано з Delegatus. Його папку не чіпали.Повернути Main",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Повернути Main",
+            "w": 101.28125,
+            "h": 24
+          }
+        ]
+      },
+      "mainRestored": {
+        "found": true,
+        "rect": {
+          "x": 974,
+          "y": 361,
+          "w": 398,
+          "h": 50.25
+        },
+        "panel": {
+          "x": 973,
+          "y": 279.5,
+          "w": 400,
+          "h": 350.46875
+        },
+        "text": "MaindefaultmaxАвторизовано39%активний",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": []
+      },
+      "copilotArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 748.6875,
+          "w": 201,
+          "h": 67.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 569.4375,
+          "w": 247,
+          "h": 298.5625
+        },
+        "text": "Видалити Work? Файл входу буде видалено, а папка й минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 19.75
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotRefusal": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 524.6875,
+          "w": 201,
+          "h": 291.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 321.6875,
+          "w": 247,
+          "h": 546.3125
+        },
+        "text": "На Work ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonlі ще 1",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 134,
+            "h": 63.75
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 134,
+            "h": 31.875
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "textColumn": 134
+      },
+      "copilotDefaultArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 671.25,
+          "w": 201,
+          "h": 81.5
+        },
+        "panel": {
+          "x": 0,
+          "y": 555,
+          "w": 247,
+          "h": 313
+        },
+        "text": "Прибрати Default з Delegatus? З його власної папки нічого не видаляється, минулі розмови лишаються доступними, і його можна повернути.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 19.75
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotDefaultHidden": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 798.125,
+          "w": 219,
+          "h": 59.875
+        },
+        "panel": {
+          "x": 0,
+          "y": 611.875,
+          "w": 247,
+          "h": 256.125
+        },
+        "text": "Default прибрано з Delegatus. Його папку не чіпали.Повернути Default",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Повернути Default",
+            "w": 112.953125,
+            "h": 24
+          }
+        ]
+      },
+      "copilotDefaultRestored": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 704.75,
+          "w": 219,
+          "h": 55
+        },
+        "panel": {
+          "x": 0,
+          "y": 616.75,
+          "w": 247,
+          "h": 251.25
+        },
+        "text": "Defaultувійшли як demo-userВикористатиВидалити",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Використати",
+            "w": 78.859375,
+            "h": 15.75
+          },
+          {
+            "name": "Видалити Default",
+            "w": 63.265625,
+            "h": 19.75
+          }
+        ]
+      }
+    },
+    "deletes": 12
+  },
+  "1280-en-light": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 646.5,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Remove Account B? Its files move to the shared archive and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 565.6875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 674.15625
+        },
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 07:15Refresh5h88%left· reset in 3h · 10:15Week72%left· reset in 4d · Oct 15 01:15Copy CLIRemoving…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxAuthenticated72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Re-read limits for Account B",
+            "w": 65.25,
+            "h": 24
+          },
+          {
+            "name": "Copy the agent command for Account B",
+            "w": 78.09375,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 682.5,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 682.5,
+          "w": 354,
+          "h": 111.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "The archive folder for Account B already exists or is on another disk:~/.config/agent-log-viewer/shared/claude/retired/account-bMove it away, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "liveWork": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 562.5,
+          "w": 354,
+          "h": 239.375
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "An agent is still running on Account B. Stop it or wait for it to finish, then remove the account. Nothing was changed.A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonland 4 more",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 287,
+            "h": 31.875
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 216.421875,
+            "h": 22
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 712.25,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 64.109375,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 382,
+            "bottom": 802
+          },
+          "block": {
+            "top": 712.25,
+            "bottom": 794.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 642.25,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 382,
+            "bottom": 802
+          },
+          "block": {
+            "top": 642.25,
+            "bottom": 801.75
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 800.71875,
+          "w": 398,
+          "h": 188.625
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 710.34375
+        },
+        "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settled",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 649.96875,
+          "w": 398,
+          "h": 148.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 519.71875
+        },
+        "text": "Account C removedPast conversations stay readable.Moved3 files · 812 KBArchive~/.config/agent-log-viewer/shared/claude/retired/account-cThe sign-in file could not be deleted from the archive.Finish clean-up",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Finish clean-up",
+            "w": 95.015625,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 649.96875,
+          "w": 398,
+          "h": 220.78125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 591.75
+        },
+        "text": "Some leftovers need a lookDeleted3 empty foldersArchived2 retired accounts · 412 files · 96.0 MBNeeds a lookclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 moreThese failed a safety check and were left untouched. Inspect and remove them by hand.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "mainArmed": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 495.75,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 607.0625
+        },
+        "text": "Remove Main from Delegatus? Nothing in its own folder is deleted, past conversations stay readable, and you can show it again.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 28
+          }
+        ]
+      },
+      "mainHidden": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 479.71875,
+          "w": 398,
+          "h": 194.6875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 395.40625
+        },
+        "text": "Main removed from DelegatusIt is no longer listed or picked for any launch. Past conversations stay readable.FilesLeft where they are~/.claudePins cleared1Projects1 project binding removedRemoved by mistake?Show Main again",
+        "clipped": [],
+        "pathId": {
+          "text": ".claude",
+          "visible": true
+        },
+        "pathShown": "~/.claude",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the folder path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Show Main again",
+            "w": 103.1875,
+            "h": 24
+          }
+        ]
+      },
+      "mainOffer": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 410.5,
+          "w": 398,
+          "h": 44.875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 245.59375
+        },
+        "text": "Main is removed from Delegatus. Its folder is untouched.Show Main again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Show Main again",
+            "w": 103.1875,
+            "h": 24
+          }
+        ]
+      },
+      "mainRestored": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 361.5,
+          "w": 398,
+          "h": 50.25
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 350.46875
+        },
+        "text": "MaindefaultmaxAuthenticated39%active",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": []
+      },
+      "copilotArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 748.6875,
+          "w": 201,
+          "h": 67.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 569.4375,
+          "w": 247,
+          "h": 298.5625
+        },
+        "text": "Remove Work? Its sign-in file is deleted; its folder and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 19.75
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotRefusal": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 540.625,
+          "w": 201,
+          "h": 275.125
+        },
+        "panel": {
+          "x": 0,
+          "y": 337.625,
+          "w": 247,
+          "h": 530.375
+        },
+        "text": "An agent is still running on Work. Stop it or wait for it to finish, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonland 1 more",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 134,
+            "h": 63.75
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 134,
+            "h": 31.875
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "textColumn": 134
+      },
+      "copilotDefaultArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 671.25,
+          "w": 201,
+          "h": 81.5
+        },
+        "panel": {
+          "x": 0,
+          "y": 555,
+          "w": 247,
+          "h": 313
+        },
+        "text": "Remove Default from Delegatus? Nothing in its own folder is deleted, past conversations stay readable, and you can show it again.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 19.75
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotDefaultHidden": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 798.125,
+          "w": 219,
+          "h": 59.875
+        },
+        "panel": {
+          "x": 0,
+          "y": 611.875,
+          "w": 247,
+          "h": 256.125
+        },
+        "text": "Default is removed from Delegatus. Its folder is untouched.Show Default again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Show Default again",
+            "w": 114.84375,
+            "h": 24
+          }
+        ]
+      },
+      "copilotDefaultRestored": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 704.75,
+          "w": 219,
+          "h": 55
+        },
+        "panel": {
+          "x": 0,
+          "y": 616.75,
+          "w": 247,
+          "h": 251.25
+        },
+        "text": "Defaultsigned in as demo-userUseRemove",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Use",
+            "w": 31.265625,
+            "h": 15.75
+          },
+          {
+            "name": "Remove Default",
+            "w": 52.859375,
+            "h": 19.75
+          }
+        ]
+      }
+    },
+    "deletes": 12
+  },
+  "1280-en-dark": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 646.5,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Remove Account B? Its files move to the shared archive and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 565.6875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 674.15625
+        },
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 07:15Refresh5h88%left· reset in 3h · 10:15Week72%left· reset in 4d · Oct 15 01:15Copy CLIRemoving…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxAuthenticated72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Re-read limits for Account B",
+            "w": 65.25,
+            "h": 24
+          },
+          {
+            "name": "Copy the agent command for Account B",
+            "w": 78.09375,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 682.5,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 682.5,
+          "w": 354,
+          "h": 111.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "The archive folder for Account B already exists or is on another disk:~/.config/agent-log-viewer/shared/claude/retired/account-bMove it away, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "liveWork": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 562.5,
+          "w": 354,
+          "h": 239.375
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "An agent is still running on Account B. Stop it or wait for it to finish, then remove the account. Nothing was changed.A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonland 4 more",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 287,
+            "h": 31.875
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 216.421875,
+            "h": 22
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 712.25,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 64.109375,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 382,
+            "bottom": 802
+          },
+          "block": {
+            "top": 712.25,
+            "bottom": 794.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 642.25,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 382,
+            "bottom": 802
+          },
+          "block": {
+            "top": 642.25,
+            "bottom": 801.75
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 800.71875,
+          "w": 398,
+          "h": 188.625
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 710.34375
+        },
+        "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settled",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 649.96875,
+          "w": 398,
+          "h": 148.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 519.71875
+        },
+        "text": "Account C removedPast conversations stay readable.Moved3 files · 812 KBArchive~/.config/agent-log-viewer/shared/claude/retired/account-cThe sign-in file could not be deleted from the archive.Finish clean-up",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Finish clean-up",
+            "w": 95.015625,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 649.96875,
+          "w": 398,
+          "h": 220.78125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 591.75
+        },
+        "text": "Some leftovers need a lookDeleted3 empty foldersArchived2 retired accounts · 412 files · 96.0 MBNeeds a lookclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 moreThese failed a safety check and were left untouched. Inspect and remove them by hand.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "mainArmed": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 495.75,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 607.0625
+        },
+        "text": "Remove Main from Delegatus? Nothing in its own folder is deleted, past conversations stay readable, and you can show it again.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 28
+          }
+        ]
+      },
+      "mainHidden": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 479.71875,
+          "w": 398,
+          "h": 194.6875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 395.40625
+        },
+        "text": "Main removed from DelegatusIt is no longer listed or picked for any launch. Past conversations stay readable.FilesLeft where they are~/.claudePins cleared1Projects1 project binding removedRemoved by mistake?Show Main again",
+        "clipped": [],
+        "pathId": {
+          "text": ".claude",
+          "visible": true
+        },
+        "pathShown": "~/.claude",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the folder path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Show Main again",
+            "w": 103.1875,
+            "h": 24
+          }
+        ]
+      },
+      "mainOffer": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 410.5,
+          "w": 398,
+          "h": 44.875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 245.59375
+        },
+        "text": "Main is removed from Delegatus. Its folder is untouched.Show Main again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Show Main again",
+            "w": 103.1875,
+            "h": 24
+          }
+        ]
+      },
+      "mainRestored": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 361.5,
+          "w": 398,
+          "h": 50.25
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 350.46875
+        },
+        "text": "MaindefaultmaxAuthenticated39%active",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": []
+      },
+      "copilotArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 748.6875,
+          "w": 201,
+          "h": 67.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 569.4375,
+          "w": 247,
+          "h": 298.5625
+        },
+        "text": "Remove Work? Its sign-in file is deleted; its folder and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 19.75
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotRefusal": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 540.625,
+          "w": 201,
+          "h": 275.125
+        },
+        "panel": {
+          "x": 0,
+          "y": 337.625,
+          "w": 247,
+          "h": 530.375
+        },
+        "text": "An agent is still running on Work. Stop it or wait for it to finish, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonland 1 more",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 134,
+            "h": 63.75
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 134,
+            "h": 31.875
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "textColumn": 134
+      },
+      "copilotDefaultArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 671.25,
+          "w": 201,
+          "h": 81.5
+        },
+        "panel": {
+          "x": 0,
+          "y": 555,
+          "w": 247,
+          "h": 313
+        },
+        "text": "Remove Default from Delegatus? Nothing in its own folder is deleted, past conversations stay readable, and you can show it again.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 56.859375,
+            "h": 19.75
+          },
+          {
+            "name": "Cancel",
+            "w": 50.4375,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotDefaultHidden": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 798.125,
+          "w": 219,
+          "h": 59.875
+        },
+        "panel": {
+          "x": 0,
+          "y": 611.875,
+          "w": 247,
+          "h": 256.125
+        },
+        "text": "Default is removed from Delegatus. Its folder is untouched.Show Default again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Show Default again",
+            "w": 114.84375,
+            "h": 24
+          }
+        ]
+      },
+      "copilotDefaultRestored": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 704.75,
+          "w": 219,
+          "h": 55
+        },
+        "panel": {
+          "x": 0,
+          "y": 616.75,
+          "w": 247,
+          "h": 251.25
+        },
+        "text": "Defaultsigned in as demo-userUseRemove",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Use",
+            "w": 31.265625,
+            "h": 15.75
+          },
+          {
+            "name": "Remove Default",
+            "w": 52.859375,
+            "h": 19.75
+          }
+        ]
+      }
+    },
+    "deletes": 12
+  },
+  "1280-uk-light": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 646.5,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Видалити Account B? Його файли перейдуть до спільного архіву, а минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 565.6875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 674.15625
+        },
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 07:15Оновити5 год88%лишилось· скид через 3 год · 10:15Тиждень72%лишилось· скид через 4 д · 15 жовт. 01:15Копіювати CLIВидалення…",
+        "clipped": [
+          "SPAN: ellipsis «· скид через 4 д · 15 жовт. 01:15»",
+          "SPAN: overflow «· скид через 4 д · 15 жовт. 01:15»"
+        ],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxАвторизовано72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Перечитати ліміти для Account B",
+            "w": 71.28125,
+            "h": 24
+          },
+          {
+            "name": "Скопіювати команду агента для Account B",
+            "w": 106.640625,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 682.5,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 682.5,
+          "w": 354,
+          "h": 95.8125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Архівна тека для Account B вже існує або лежить на іншому диску:~/.config/agent-log-viewer/shared/claude/retired/account-bПриберіть її, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "liveWork": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 530.5,
+          "w": 354,
+          "h": 271.25
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "На Account B ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonlі ще 4",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 287,
+            "h": 31.875
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 216.421875,
+            "h": 22
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 712.25,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 118.828125,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 382,
+            "bottom": 802
+          },
+          "block": {
+            "top": 712.25,
+            "bottom": 794.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 626.25,
+          "w": 354,
+          "h": 175.4375
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 382,
+            "bottom": 802
+          },
+          "block": {
+            "top": 626.25,
+            "bottom": 801.6875
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 800.71875,
+          "w": 398,
+          "h": 203.125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 724.84375
+        },
+        "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закрито",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 649.96875,
+          "w": 398,
+          "h": 148.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 519.71875
+        },
+        "text": "Account C видаленоМинулі розмови лишаються доступними.Перенесено3 файли · 812 КБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-cФайл входу не вдалося видалити з архіву.Завершити очищення",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Завершити очищення",
+            "w": 130.921875,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 649.96875,
+          "w": 398,
+          "h": 220.78125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 591.75
+        },
+        "text": "Частина залишків потребує увагиВидалено3 порожні текиЗаархівовано2 видалені акаунти · 412 файлів · 96,0 МБПотребує увагиclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 щеВони не пройшли перевірку безпеки й лишилися без змін. Перевірте та приберіть їх вручну.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "mainArmed": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 495.75,
+          "w": 398,
+          "h": 65.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 621.5
+        },
+        "text": "Прибрати Main з Delegatus? З його власної папки нічого не видаляється, минулі розмови лишаються доступними, і його можна повернути.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 28
+          }
+        ]
+      },
+      "mainHidden": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 479.71875,
+          "w": 398,
+          "h": 194.6875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 395.40625
+        },
+        "text": "Main прибрано з DelegatusЙого більше немає у списках і жоден запуск його не вибере. Минулі розмови лишаються доступними.ФайлиЛишилися на місці~/.claudeЗнято прив'язок1Проєкти1 прив'язку до проєкту знятоПрибрали помилково?Повернути Main",
+        "clipped": [],
+        "pathId": {
+          "text": ".claude",
+          "visible": true
+        },
+        "pathShown": "~/.claude",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до папки",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Повернути Main",
+            "w": 101.28125,
+            "h": 24
+          }
+        ]
+      },
+      "mainOffer": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 410.5,
+          "w": 398,
+          "h": 37
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 237.71875
+        },
+        "text": "Main прибрано з Delegatus. Його папку не чіпали.Повернути Main",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Повернути Main",
+            "w": 101.28125,
+            "h": 24
+          }
+        ]
+      },
+      "mainRestored": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 361.5,
+          "w": 398,
+          "h": 50.25
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 350.46875
+        },
+        "text": "MaindefaultmaxАвторизовано39%активний",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": []
+      },
+      "copilotArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 748.6875,
+          "w": 201,
+          "h": 67.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 569.4375,
+          "w": 247,
+          "h": 298.5625
+        },
+        "text": "Видалити Work? Файл входу буде видалено, а папка й минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 19.75
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotRefusal": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 524.6875,
+          "w": 201,
+          "h": 291.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 321.6875,
+          "w": 247,
+          "h": 546.3125
+        },
+        "text": "На Work ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonlі ще 1",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 134,
+            "h": 63.75
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 134,
+            "h": 31.875
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "textColumn": 134
+      },
+      "copilotDefaultArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 671.25,
+          "w": 201,
+          "h": 81.5
+        },
+        "panel": {
+          "x": 0,
+          "y": 555,
+          "w": 247,
+          "h": 313
+        },
+        "text": "Прибрати Default з Delegatus? З його власної папки нічого не видаляється, минулі розмови лишаються доступними, і його можна повернути.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 19.75
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotDefaultHidden": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 798.125,
+          "w": 219,
+          "h": 59.875
+        },
+        "panel": {
+          "x": 0,
+          "y": 611.875,
+          "w": 247,
+          "h": 256.125
+        },
+        "text": "Default прибрано з Delegatus. Його папку не чіпали.Повернути Default",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Повернути Default",
+            "w": 112.953125,
+            "h": 24
+          }
+        ]
+      },
+      "copilotDefaultRestored": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 704.75,
+          "w": 219,
+          "h": 55
+        },
+        "panel": {
+          "x": 0,
+          "y": 616.75,
+          "w": 247,
+          "h": 251.25
+        },
+        "text": "Defaultувійшли як demo-userВикористатиВидалити",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Використати",
+            "w": 78.859375,
+            "h": 15.75
+          },
+          {
+            "name": "Видалити Default",
+            "w": 63.265625,
+            "h": 19.75
+          }
+        ]
+      }
+    },
+    "deletes": 12
+  },
+  "1280-uk-dark": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 646.5,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Видалити Account B? Його файли перейдуть до спільного архіву, а минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 565.6875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 674.15625
+        },
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 07:15Оновити5 год88%лишилось· скид через 3 год · 10:15Тиждень72%лишилось· скид через 4 д · 15 жовт. 01:15Копіювати CLIВидалення…",
+        "clipped": [
+          "SPAN: ellipsis «· скид через 4 д · 15 жовт. 01:15»",
+          "SPAN: overflow «· скид через 4 д · 15 жовт. 01:15»"
+        ],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxАвторизовано72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Перечитати ліміти для Account B",
+            "w": 71.28125,
+            "h": 24
+          },
+          {
+            "name": "Скопіювати команду агента для Account B",
+            "w": 106.640625,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 682.5,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 682.5,
+          "w": 354,
+          "h": 95.8125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Архівна тека для Account B вже існує або лежить на іншому диску:~/.config/agent-log-viewer/shared/claude/retired/account-bПриберіть її, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "liveWork": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 530.5,
+          "w": 354,
+          "h": 271.25
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "На Account B ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonlі ще 4",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 287,
+            "h": 31.875
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 216.421875,
+            "h": 22
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 712.25,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 118.828125,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 382,
+            "bottom": 802
+          },
+          "block": {
+            "top": 712.25,
+            "bottom": 794.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 844,
+          "y": 626.25,
+          "w": 354,
+          "h": 175.4375
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 641.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 382,
+            "bottom": 802
+          },
+          "block": {
+            "top": 626.25,
+            "bottom": 801.6875
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 800.71875,
+          "w": 398,
+          "h": 203.125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 724.84375
+        },
+        "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закрито",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 649.96875,
+          "w": 398,
+          "h": 148.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 519.71875
+        },
+        "text": "Account C видаленоМинулі розмови лишаються доступними.Перенесено3 файли · 812 КБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-cФайл входу не вдалося видалити з архіву.Завершити очищення",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Завершити очищення",
+            "w": 130.921875,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 649.96875,
+          "w": 398,
+          "h": 220.78125
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 591.75
+        },
+        "text": "Частина залишків потребує увагиВидалено3 порожні текиЗаархівовано2 видалені акаунти · 412 файлів · 96,0 МБПотребує увагиclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 щеВони не пройшли перевірку безпеки й лишилися без змін. Перевірте та приберіть їх вручну.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "mainArmed": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 495.75,
+          "w": 398,
+          "h": 65.75
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 621.5
+        },
+        "text": "Прибрати Main з Delegatus? З його власної папки нічого не видаляється, минулі розмови лишаються доступними, і його можна повернути.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 28
+          }
+        ]
+      },
+      "mainHidden": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 479.71875,
+          "w": 398,
+          "h": 194.6875
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 395.40625
+        },
+        "text": "Main прибрано з DelegatusЙого більше немає у списках і жоден запуск його не вибере. Минулі розмови лишаються доступними.ФайлиЛишилися на місці~/.claudeЗнято прив'язок1Проєкти1 прив'язку до проєкту знятоПрибрали помилково?Повернути Main",
+        "clipped": [],
+        "pathId": {
+          "text": ".claude",
+          "visible": true
+        },
+        "pathShown": "~/.claude",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до папки",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Повернути Main",
+            "w": 101.28125,
+            "h": 24
+          }
+        ]
+      },
+      "mainOffer": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 410.5,
+          "w": 398,
+          "h": 37
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 237.71875
+        },
+        "text": "Main прибрано з Delegatus. Його папку не чіпали.Повернути Main",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Повернути Main",
+            "w": 101.28125,
+            "h": 24
+          }
+        ]
+      },
+      "mainRestored": {
+        "found": true,
+        "rect": {
+          "x": 814,
+          "y": 361.5,
+          "w": 398,
+          "h": 50.25
+        },
+        "panel": {
+          "x": 813,
+          "y": 280,
+          "w": 400,
+          "h": 350.46875
+        },
+        "text": "MaindefaultmaxАвторизовано39%активний",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": []
+      },
+      "copilotArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 748.6875,
+          "w": 201,
+          "h": 67.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 569.4375,
+          "w": 247,
+          "h": 298.5625
+        },
+        "text": "Видалити Work? Файл входу буде видалено, а папка й минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 19.75
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotRefusal": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 524.6875,
+          "w": 201,
+          "h": 291.0625
+        },
+        "panel": {
+          "x": 0,
+          "y": 321.6875,
+          "w": 247,
+          "h": 546.3125
+        },
+        "text": "На Work ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonlі ще 1",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+            "w": 134,
+            "h": 63.75
+          },
+          {
+            "name": "Review",
+            "w": 37.921875,
+            "h": 22
+          },
+          {
+            "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+            "w": 134,
+            "h": 31.875
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "textColumn": 134
+      },
+      "copilotDefaultArmed": {
+        "found": true,
+        "rect": {
+          "x": 23,
+          "y": 671.25,
+          "w": 201,
+          "h": 81.5
+        },
+        "panel": {
+          "x": 0,
+          "y": 555,
+          "w": 247,
+          "h": 313
+        },
+        "text": "Прибрати Default з Delegatus? З його власної папки нічого не видаляється, минулі розмови лишаються доступними, і його можна повернути.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 67.265625,
+            "h": 19.75
+          },
+          {
+            "name": "Скасувати",
+            "w": 70.125,
+            "h": 19.75
+          }
+        ]
+      },
+      "copilotDefaultHidden": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 798.125,
+          "w": 219,
+          "h": 59.875
+        },
+        "panel": {
+          "x": 0,
+          "y": 611.875,
+          "w": 247,
+          "h": 256.125
+        },
+        "text": "Default прибрано з Delegatus. Його папку не чіпали.Повернути Default",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Повернути Default",
+            "w": 112.953125,
+            "h": 24
+          }
+        ]
+      },
+      "copilotDefaultRestored": {
+        "found": true,
+        "rect": {
+          "x": 14,
+          "y": 704.75,
+          "w": 219,
+          "h": 55
+        },
+        "panel": {
+          "x": 0,
+          "y": 616.75,
+          "w": 247,
+          "h": 251.25
+        },
+        "text": "Defaultувійшли як demo-userВикористатиВидалити",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Використати",
+            "w": 78.859375,
+            "h": 15.75
+          },
+          {
+            "name": "Видалити Default",
+            "w": 63.265625,
+            "h": 19.75
+          }
+        ]
+      }
+    },
+    "deletes": 12
+  },
+  "390-en-light-refusal": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 83.75
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Close this message",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-light-summary": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 275.625
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settledThe sign-in file could not be deleted from the archive.Finish clean-up",
+    "clipped": [],
+    "pathId": {
+      "text": "account-b",
+      "visible": true
+    },
+    "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+    "targets": [
+      {
+        "name": "Close the summary",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Copy the archive path",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Finish clean-up",
+        "w": 95.015625,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-light-live": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 239.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "An agent is still running on Account B. Stop it or wait for it to finish, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonl",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+        "w": 253,
+        "h": 44
+      },
+      {
+        "name": "Review",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+        "w": 216.421875,
+        "h": 44
+      },
+      {
+        "name": "Close this message",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-light-hidden-offer": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 252,
+      "w": 366,
+      "h": 44
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Main is removed from Delegatus. Its folder is untouched.Show Main again",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Show Main again",
+        "w": 103.1875,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-light-hidden": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 249.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Main removed from DelegatusIt is no longer listed or picked for any launch. Past conversations stay readable.FilesLeft where they are~/.claudePins cleared1Projects1 project binding removedRemoved by mistake?Show Main again",
+    "clipped": [],
+    "pathId": {
+      "text": ".claude",
+      "visible": true
+    },
+    "pathShown": "~/.claude",
+    "targets": [
+      {
+        "name": "Close the summary",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Copy the folder path",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Show Main again",
+        "w": 103.1875,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-dark-refusal": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 83.75
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Close this message",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-dark-summary": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 275.625
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settledThe sign-in file could not be deleted from the archive.Finish clean-up",
+    "clipped": [],
+    "pathId": {
+      "text": "account-b",
+      "visible": true
+    },
+    "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+    "targets": [
+      {
+        "name": "Close the summary",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Copy the archive path",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Finish clean-up",
+        "w": 95.015625,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-dark-live": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 239.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "An agent is still running on Account B. Stop it or wait for it to finish, then remove the account. Nothing was changed.Open each one to stop it or move it to another account:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonl",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+        "w": 253,
+        "h": 44
+      },
+      {
+        "name": "Review",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+        "w": 216.421875,
+        "h": 44
+      },
+      {
+        "name": "Close this message",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-dark-hidden-offer": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 252,
+      "w": 366,
+      "h": 44
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Main is removed from Delegatus. Its folder is untouched.Show Main again",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Show Main again",
+        "w": 103.1875,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-dark-hidden": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 249.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Main removed from DelegatusIt is no longer listed or picked for any launch. Past conversations stay readable.FilesLeft where they are~/.claudePins cleared1Projects1 project binding removedRemoved by mistake?Show Main again",
+    "clipped": [],
+    "pathId": {
+      "text": ".claude",
+      "visible": true
+    },
+    "pathShown": "~/.claude",
+    "targets": [
+      {
+        "name": "Close the summary",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Copy the folder path",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Show Main again",
+        "w": 103.1875,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-light-refusal": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 99.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Закрити повідомлення",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-light-summary": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 310.0625
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закритоФайл входу не вдалося видалити з архіву.Завершити очищення",
+    "clipped": [],
+    "pathId": {
+      "text": "account-b",
+      "visible": true
+    },
+    "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+    "targets": [
+      {
+        "name": "Закрити підсумок",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Скопіювати шлях до архіву",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Завершити очищення",
+        "w": 130.921875,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-light-live": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 239.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "На Account B ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonl",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+        "w": 253,
+        "h": 44
+      },
+      {
+        "name": "Review",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+        "w": 216.421875,
+        "h": 44
+      },
+      {
+        "name": "Закрити повідомлення",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-light-hidden-offer": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 252,
+      "w": 366,
+      "h": 44
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Main прибрано з Delegatus. Його папку не чіпали.Повернути Main",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Повернути Main",
+        "w": 101.28125,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-light-hidden": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 249.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Main прибрано з DelegatusЙого більше немає у списках і жоден запуск його не вибере. Минулі розмови лишаються доступними.ФайлиЛишилися на місці~/.claudeЗнято прив'язок1Проєкти1 прив'язку до проєкту знятоПрибрали помилково?Повернути Main",
+    "clipped": [],
+    "pathId": {
+      "text": ".claude",
+      "visible": true
+    },
+    "pathShown": "~/.claude",
+    "targets": [
+      {
+        "name": "Закрити підсумок",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Скопіювати шлях до папки",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Повернути Main",
+        "w": 101.28125,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-dark-refusal": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 99.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Закрити повідомлення",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-dark-summary": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 310.0625
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закритоФайл входу не вдалося видалити з архіву.Завершити очищення",
+    "clipped": [],
+    "pathId": {
+      "text": "account-b",
+      "visible": true
+    },
+    "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+    "targets": [
+      {
+        "name": "Закрити підсумок",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Скопіювати шлях до архіву",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Завершити очищення",
+        "w": 130.921875,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-dark-live": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 239.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "На Account B ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Відкрийте кожну, щоб зупинити її або перенести на інший акаунт:Rewrite the onboarding copy for the accounts panel and its phone screenReviewrollout-2026-10-11T02-25-00-capture.jsonl",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Rewrite the onboarding copy for the accounts panel and its phone screen",
+        "w": 253,
+        "h": 44
+      },
+      {
+        "name": "Review",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "rollout-2026-10-11T02-25-00-capture.jsonl",
+        "w": 216.421875,
+        "h": 44
+      },
+      {
+        "name": "Закрити повідомлення",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-dark-hidden-offer": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 252,
+      "w": 366,
+      "h": 44
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Main прибрано з Delegatus. Його папку не чіпали.Повернути Main",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Повернути Main",
+        "w": 101.28125,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-dark-hidden": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 249.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Main прибрано з DelegatusЙого більше немає у списках і жоден запуск його не вибере. Минулі розмови лишаються доступними.ФайлиЛишилися на місці~/.claudeЗнято прив'язок1Проєкти1 прив'язку до проєкту знятоПрибрали помилково?Повернути Main",
+    "clipped": [],
+    "pathId": {
+      "text": ".claude",
+      "visible": true
+    },
+    "pathShown": "~/.claude",
+    "targets": [
+      {
+        "name": "Закрити підсумок",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Скопіювати шлях до папки",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Повернути Main",
+        "w": 101.28125,
+        "h": 44
+      }
+    ]
+  },
+  "failures": [
+    "1440-uk-light in flight: text is cut: SPAN: ellipsis «· скид через 4 д · 15 жовт. 01:15»; SPAN: overflow «· скид через 4 д · 15 жовт. 01:15»",
+    "1440-uk-dark in flight: text is cut: SPAN: ellipsis «· скид через 4 д · 15 жовт. 01:15»; SPAN: overflow «· скид через 4 д · 15 жовт. 01:15»",
+    "1280-uk-light in flight: text is cut: SPAN: ellipsis «· скид через 4 д · 15 жовт. 01:15»; SPAN: overflow «· скид через 4 д · 15 жовт. 01:15»",
+    "1280-uk-dark in flight: text is cut: SPAN: ellipsis «· скид через 4 д · 15 жовт. 01:15»; SPAN: overflow «· скид через 4 д · 15 жовт. 01:15»"
+  ]
+}

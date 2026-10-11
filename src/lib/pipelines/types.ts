@@ -595,6 +595,24 @@ export type PipelineStageAttempt = {
         this head; a refused recommit checkpoints a rejected outcome. */
     recommit?: { at: string; head: string };
   };
+  /** One post-accept publication repair, delivered to the recorded producer. The
+      refused SHA remains accepted until committedSha is adopted. baseSha
+      fences history repair to the unpublished suffix. A changed reviewed
+      tree returns to its gate with the original budget activation. */
+  publicationRepair?: NonNullable<PipelineStageAttempt["commitRepair"]> & {
+    sha: string;
+    baseSha: string;
+    operationId: string;
+    stageId: string;
+    attempt: number;
+    commitStartedHead?: string;
+    committedSha?: string;
+    republishQueued?: true;
+    reviewRequired?: boolean;
+    /** The park the refusal would have caused (its cause and action on the
+        first line). Every park after the repair starts with that line. */
+    parkDetail?: string;
+  };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
@@ -1114,9 +1132,10 @@ export type PipelineMerge = {
   state: PipelineMergeState;
   /** Who merged it: the runner, or anyone else (the PR was seen merged). */
   by: "auto-merge" | "outside" | null;
-  /** `<owner>/<repo>`, lower-cased, and the pull request's number. */
+  /** `<owner>/<repo>`, lower-cased, and the pull request's number.
+      A missing PR stays null while blocked or retrying its resolution. */
   repository: string;
-  prNumber: number;
+  prNumber: number | null;
   /** The setting's `changedAt` the lane was queued under. */
   policyChangedAt: string;
   /** The head the lane finished on (its `lastPassedCommit`). */

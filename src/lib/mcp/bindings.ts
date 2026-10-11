@@ -5161,7 +5161,7 @@ function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; bridgeR
 /** #2187 §4.1: whether the lane's project merges when the review passes, and
     where the lane's own merge stands when the runner took it. #2146: whether
     the project's bridge reports are on. */
-function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number } } {
+function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number | null } } {
   const merge = pipeline.merge;
   return {
     mergeOnReview: mergeOnReviewEnabled(pipeline.project),

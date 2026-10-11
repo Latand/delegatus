@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, listClaudeAccounts, listClaudeProviderModels, readClaudeProviderRuntime, removeManagedClaudeAccount, updateProviderClaudeAccount, validateClaudeProviderHeaders, validateClaudeProviderModelRoute, validateProviderConfig, type ClaudeProviderConfig } from "@/lib/accounts/claude";
+import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, hideLegacyClaudeAccount, listClaudeAccounts, listClaudeProviderModels, readClaudeProviderRuntime, removeManagedClaudeAccount, restoreLegacyClaudeAccount, updateProviderClaudeAccount, validateClaudeProviderHeaders, validateClaudeProviderModelRoute, validateProviderConfig, type ClaudeProviderConfig } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
-import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, removalErrno, removalResponse } from "@/lib/accounts/removal";
+import { forgetAccountProjectBindings } from "@/lib/accounts/projectBindings";
+import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, accountRemovalLiveWork, legacyRemovalResponse, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -93,6 +94,21 @@ export async function POST(req: NextRequest) {
       return failure(400, "invalid_provider", "Provider configuration or model list is unavailable");
     }
   }
+  /* Main comes back after its removal (it was only hidden; its home was
+     never touched). */
+  if (body.action === "restore") {
+    if (body.id !== "default") return failure(400, "invalid_request", "Only Main can be restored");
+    try {
+      await withAccountMutationLockAsync(() => restoreLegacyClaudeAccount(), { caller: "Claude Main restore", holder: "Claude catalog restore" });
+      requestAccountMigrationTick();
+      return NextResponse.json({ restored: { id: "default" } });
+    } catch (error) {
+      if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
+      if (error instanceof UnknownClaudeAccountError) return failure(404, "unknown_account", "Main is already listed");
+      if (error instanceof CorruptClaudeAccountsError) return failure(409, "accounts_locked", "Claude accounts require registry repair");
+      return failure(500, "restore_failed", "Main could not be restored");
+    }
+  }
   try {
     return await withAccountMutationLockAsync(async () => {
       if (body.action === "retry") {
@@ -144,6 +160,17 @@ export async function POST(req: NextRequest) {
   }
 }
 
+/** A removed account leaves every project's pool; the removal stands even
+    when the binding record cannot be rewritten, since nothing selects it. */
+function forgetBindings(accountId: string): { bindingsCleared?: number } {
+  try {
+    const cleared = forgetAccountProjectBindings("claude", accountId);
+    return cleared > 0 ? { bindingsCleared: cleared } : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function DELETE(req: NextRequest) {
   const rejected = rejectCrossOrigin(req); if (rejected) return rejected;
   let body: { id?: unknown; force?: unknown; cleanupOrphans?: unknown };
@@ -165,23 +192,31 @@ export async function DELETE(req: NextRequest) {
     return await withAccountMutationLockAsync(async () => {
       if (claudeAccountsMutationLocked()) return failure(409, "accounts_locked", "Claude accounts require registry repair");
       const account = listClaudeAccounts().find((candidate) => candidate.id === body.id);
-      if (!account || account.kind !== "managed") return failure(404, "unknown_account", "Claude account is unavailable");
+      if (!account) return failure(404, "unknown_account", "Claude account is unavailable");
       const login = claudeLoginSupervisor.forAccount(account.id);
       const blockers = [
         ...accountRemovalBlockers("claude", account.id),
         ...(login && LIVE_CLAUDE_LOGIN_PHASES.has(login.phase) ? ["login_pending"] : []),
       ];
       if (blockers.length > 0) {
-        return NextResponse.json({ error: "Claude account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers }, { status: 409 });
+        return NextResponse.json({ error: "Claude account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers, ...accountRemovalLiveWork("claude", account.id) }, { status: 409 });
       }
       try {
+        /* Main is only forgotten: its home is the operator's own and stays untouched. */
+        if (account.kind === "legacy") {
+          const retirement = hideLegacyClaudeAccount();
+          const bindingsCleared = forgetBindings(account.id);
+          requestAccountMigrationTick();
+          return NextResponse.json({ ...legacyRemovalResponse(account.id, account.home, retirement), ...bindingsCleared });
+        }
         if (login && LIVE_CLAUDE_LOGIN_PHASES.has(login.phase)) await claudeLoginSupervisor.cancel(login.operationId);
         const removal = removeManagedClaudeAccount(account.id);
+        const bindingsCleared = forgetBindings(account.id);
         requestAccountMigrationTick();
-        return NextResponse.json(removalResponse(account.id, removal));
+        return NextResponse.json({ ...removalResponse(account.id, removal), ...bindingsCleared });
       } catch (error) {
         if (error instanceof AccountRemovalBlockedError) {
-          return NextResponse.json({ error: "Claude account has active sessions or conversations", code: "account_removal_blocked", blockers: error.blockers }, { status: 409 });
+          return NextResponse.json({ error: "Claude account has active sessions or conversations", code: "account_removal_blocked", blockers: error.blockers, ...accountRemovalLiveWork("claude", account.id) }, { status: 409 });
         }
         if (error instanceof AccountArchiveUnavailableError) {
           return NextResponse.json({ error: error.message, code: "archive_unavailable", archive: error.archive }, { status: 409 });

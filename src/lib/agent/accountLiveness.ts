@@ -247,7 +247,7 @@ function liveEntryPaths(file: RegistryFile, engine: AgentEngine, probe: Liveness
     will start on it; null when nothing does. */
 export function accountLiveSessionKind(
   file: RegistryFile,
-  engine: ManagedAccountEngine,
+  engine: AgentEngine,
   accountId: string,
   options: AccountLivenessOptions = {},
 ): "live_sessions" | "queued_pin" | null {
@@ -281,7 +281,7 @@ export function accountLiveSessionKind(
 /** True when a live session (entry or open launch receipt) owns the account. */
 export function accountHasLiveSessions(
   file: RegistryFile,
-  engine: ManagedAccountEngine,
+  engine: AgentEngine,
   accountId: string,
   options: AccountLivenessOptions = {},
 ): boolean {
@@ -328,7 +328,7 @@ export function staleUndeliverableHeldDeliveryIds(
     host can take are settled by the removal, never a reason to refuse it. */
 export function liveAccountConversationIds(
   file: RegistryFile,
-  engine: ManagedAccountEngine,
+  engine: AgentEngine,
   accountId: string,
   options: AccountLivenessOptions = {},
 ): ViewerConversationId[] {
@@ -340,4 +340,48 @@ export function liveAccountConversationIds(
     if (conversationIsLive(file, conversation, paths, probe, "removal")) live.push(conversation.id);
   }
   return live;
+}
+
+/** One piece of live work the removal refusal names, with the conversation
+    to open: its own controls stop the agent or move it to another account. */
+export interface AccountLiveWorkItem {
+  conversationId: ViewerConversationId | null;
+  path: string | null;
+  title: string | null;
+}
+
+/**
+ * What `live_sessions` and `current_conversations` found on the account, one
+ * item per conversation. A launch that has not resolved its account yet blocks
+ * every account of the engine, so it is named on every one of them too.
+ */
+export function accountLiveWork(
+  file: RegistryFile,
+  engine: AgentEngine,
+  accountId: string,
+  options: AccountLivenessOptions = {},
+): AccountLiveWorkItem[] {
+  const probe = livenessProbe(options);
+  const owned = (candidate: string | null) => candidate === accountId || candidate === null;
+  const items = new Map<string, AccountLiveWorkItem>();
+  const ownerOf = (artifactPath: string): RegistryConversation | null =>
+    Object.values(file.conversations).find((conversation) => conversation.engine === engine && conversationOwnsPath(conversation, artifactPath)) ?? null;
+  const add = (conversation: RegistryConversation | null, conversationId: ViewerConversationId | null, artifactPath: string | null): void => {
+    const id = conversation?.id ?? conversationId;
+    const key = id ?? artifactPath;
+    if (!key || items.has(key)) return;
+    const generation = conversation?.generations.at(-1);
+    items.set(key, { conversationId: id, path: generation?.path ?? artifactPath, title: generation?.launchProfile.title?.trim() || null });
+  };
+  for (const entry of Object.values(file.entries)) {
+    if (entry.key.engine !== engine || !owned(entry.accountId) || !entryIsLive(entry, probe)) continue;
+    add(ownerOf(entry.artifactPath), null, entry.artifactPath);
+  }
+  for (const receipt of Object.values(file.receipts)) {
+    if (receipt.engine !== engine || !owned(receipt.accountId) || !receiptIsLive(file, receipt, probe)) continue;
+    const id = canonicalId(file, receipt.conversationId);
+    add(file.conversations[id] ?? null, id, receipt.artifactPath);
+  }
+  for (const id of liveAccountConversationIds(file, engine, accountId, options)) add(file.conversations[id] ?? null, id, null);
+  return [...items.values()];
 }
