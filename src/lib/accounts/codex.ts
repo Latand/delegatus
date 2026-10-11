@@ -9,8 +9,8 @@ import { stateDir, statePath } from "@/lib/configDir";
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
 import { accountProbeIdentity, withAccountMutationLockAsync, withAccountMutationLock } from "./accountMutation";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
-import type { AccountPathRewrite } from "@/lib/agent/registry";
+import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DEFAULT_ID = "default";
@@ -66,6 +66,9 @@ interface Registry {
   retired: RetiredAccount[];
   /** Account removals in flight (issue #1857). */
   removals: AccountRemovalJournalEntry[];
+  /** The operator removed Main: it is neither listed nor picked, and its
+      home stays untouched on disk. */
+  legacyHidden?: true;
 }
 
 interface LoadedRegistry {
@@ -233,7 +236,7 @@ function normalizeRegistry(value: unknown, sourceKey: string): LoadedRegistry {
     reportStoreErrorOnce(`${sourceKey}:invalid-removals`, "registry has an unreadable removal journal; serving the default account");
     return { registry: defaultRegistry(), corrupt: true };
   }
-  return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired, removals }, corrupt: rejected };
+  return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired, removals, ...(raw.legacyHidden === true ? { legacyHidden: true as const } : {}) }, corrupt: rejected };
 }
 
 /* The registry is the `accounts` collection of state.sqlite (#1870, slice 7).
@@ -389,7 +392,27 @@ export function codexAccountsForPrivacy(): readonly { id: string; label: string 
 export function listCodexAccounts(): CodexAccount[] {
   recoverRemovalsAtStartup();
   const loaded = readRegistry();
-  return [defaultAccount(), ...loaded.registry.accounts.map(asAccount)];
+  return [...(loaded.registry.legacyHidden ? [] : [defaultAccount()]), ...loaded.registry.accounts.map(asAccount)];
+}
+
+/** True once the operator removed Main from Delegatus. */
+export function codexLegacyAccountHidden(): boolean {
+  return readRegistry().registry.legacyHidden === true;
+}
+
+/** Whether `id` is one of the listed accounts, from persisted membership only. */
+export function codexAccountListed(id: string): boolean {
+  const { accounts, removals, legacyHidden } = readRegistry().registry;
+  if (id === DEFAULT_ID) return !legacyHidden;
+  return accounts.some((account) => account.id === id) && !removals.some((item) => item.id === id);
+}
+
+/** The account routing falls back to when `leaving` is no longer usable:
+    Main while it is listed, else the first other managed account. */
+function fallbackAccountId(registry: Registry, leaving: string): string | null {
+  if (!registry.legacyHidden && leaving !== DEFAULT_ID) return DEFAULT_ID;
+  const usable = registry.accounts.filter((account) => account.id !== leaving && !registry.removals.some((item) => item.id === account.id));
+  return usable.find((account) => account.id === registry.active)?.id ?? usable[0]?.id ?? null;
 }
 
 export class CodexLoginBusyError extends Error {
@@ -463,8 +486,13 @@ export async function withManagedCodexLogin<T>(account: CodexAccount, operation:
 }
 
 export function activeCodexAccountId(): string {
-  const { active, accounts, removals } = readRegistry().registry;
-  return !removals.some((item) => item.id === active) && accounts.some((account) => account.id === active) ? active : DEFAULT_ID;
+  const registry = readRegistry().registry;
+  const { active, accounts, removals } = registry;
+  if (!removals.some((item) => item.id === active) && accounts.some((account) => account.id === active)) return active;
+  if (!registry.legacyHidden) return DEFAULT_ID;
+  /* With Main removed, the first managed account stands in; with none left
+     the id resolves to no account and a launch says so. */
+  return fallbackAccountId(registry, DEFAULT_ID) ?? DEFAULT_ID;
 }
 
 export function accountForSpawn(requested?: string | null): Pick<CodexAccount, "id" | "kind" | "home" | "sessionsDir"> {
@@ -481,7 +509,7 @@ export function isManagedCodexHome(home: string): boolean {
 export function setActiveCodexAccount(id: string): void {
   withAccountMutationLock(() => {
     const registry = mutableRegistry();
-    if (id !== DEFAULT_ID && !registry.accounts.some((account) => account.id === id)) throw new UnknownAccountError(id);
+    if (id === DEFAULT_ID ? registry.legacyHidden : !registry.accounts.some((account) => account.id === id)) throw new UnknownAccountError(id);
     if (registry.removals.some((item) => item.id === id) || accountRemovalInFlight("codex", id)) throw new UnknownAccountError(id);
     writeRegistry({ ...registry, active: id });
   });
@@ -491,7 +519,11 @@ export function setActiveCodexAccount(id: string): void {
     or the home itself for accounts retired in place before it (issue #643).
     Both the scanner and `/api/log` admission read these roots. */
 export function retiredCodexSessionRoots(): string[] {
-  return readRegistry().registry.retired.map((account) => path.join(account.archived ? retiredAccountArchive("codex", account.id) : managedHome(account.id), "sessions"));
+  const registry = readRegistry().registry;
+  return [
+    ...(registry.legacyHidden ? [path.join(legacyHome(), "sessions")] : []),
+    ...registry.retired.map((account) => path.join(account.archived ? retiredAccountArchive("codex", account.id) : managedHome(account.id), "sessions")),
+  ];
 }
 
 /** Every Codex session root the scanner reads: live accounts first, then retained archives. */
@@ -570,7 +602,7 @@ function withAccountRetired(registry: Registry, id: string): Registry {
   const label = registry.accounts.find((account) => account.id === id)?.label ?? previous?.label ?? id;
   return {
     ...registry,
-    active: registry.active === id ? DEFAULT_ID : registry.active,
+    active: registry.active === id ? fallbackAccountId(registry, id) ?? DEFAULT_ID : registry.active,
     accounts: registry.accounts.filter((account) => account.id !== id),
     retired: [...registry.retired.filter((account) => account.id !== id), { id, label, retiredAt: previous?.retiredAt ?? Date.now(), archived: true }],
     removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
@@ -592,6 +624,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         entry,
         listed: registry.accounts.some((account) => account.id === entry.id),
         retiredInPlace: registry.retired.some((account) => account.id === entry.id && !account.archived),
+        fallbackAccountId: fallbackAccountId(registry, entry.id),
         commitRetired: () => {
           writeRegistry(withAccountRetired(mutableRegistry(), entry.id));
         },
@@ -654,6 +687,7 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
     return removeManagedAccountIntoArchive({
       engine: "codex",
       accountId: id,
+      fallbackAccountId: fallbackAccountId(registry, id),
       home: managedHome(id),
       homeIsSafe: () => managedHomeIsSafe(id, true),
       unsafeHome: () => new UnsafeCodexHomeError(),
@@ -664,6 +698,35 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
         restore: () => writeRegistry(before),
       },
     });
+  });
+}
+
+/**
+ * Removes Main from Delegatus. Nothing under its home is touched: the
+ * registry records it as hidden, so it leaves every list and is never picked
+ * again, and its sessions stay readable as retained history. Routing, pins,
+ * owed deliveries and migrations aimed at it settle as for a managed removal.
+ */
+export function hideLegacyCodexAccount(): AccountRetirementReport {
+  return withRegistryLock(() => {
+    const registry = mutableRegistry();
+    if (registry.legacyHidden) throw new UnknownAccountError(DEFAULT_ID);
+    const fallback = fallbackAccountId(registry, DEFAULT_ID);
+    return retireAccountInPlace({
+      engine: "codex",
+      accountId: DEFAULT_ID,
+      fallbackAccountId: fallback,
+      commit: () => writeRegistry({ ...mutableRegistry(), legacyHidden: true, ...(registry.active === DEFAULT_ID && fallback ? { active: fallback } : {}) }),
+    });
+  });
+}
+
+/** Lists Main again after {@link hideLegacyCodexAccount}; its home was never touched. */
+export function restoreLegacyCodexAccount(): void {
+  withRegistryLock(() => {
+    const { legacyHidden, ...registry } = mutableRegistry();
+    if (!legacyHidden) throw new UnknownAccountError(DEFAULT_ID);
+    writeRegistry(registry);
   });
 }
 

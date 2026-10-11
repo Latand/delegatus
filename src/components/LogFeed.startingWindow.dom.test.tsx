@@ -1251,6 +1251,91 @@ test("an ordinary cold SDK row renders after the first empty provenance answer",
   } finally { release(); globalThis.fetch = realFetch; }
 });
 
+for (const firstRead of ["503", "network rejection", "malformed JSON", "empty success", "immediate success"] as const) {
+  test(`a mounted SDK operator row recovers after ${firstRead}`, async () => {
+    resetMessageProvenanceCacheForTests();
+    setMessageProvenanceRetryScheduleForTests([50, 50]);
+    const id = "sdk-provenance-recovery-id";
+    const text = "Please check the parser again";
+    tailLines = [JSON.stringify({ type: "user", uuid: id, promptSource: "sdk", timestamp: new Date(RECORD_AT).toISOString(), message: { role: "user", content: [{ type: "text", text }] } })];
+    const realFetch = globalThis.fetch;
+    let reads = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (!String(input).startsWith("/api/log/provenance?")) return Response.json({});
+      if (++reads === 1) {
+        if (firstRead === "503") return new Response("unavailable", { status: 503 });
+        if (firstRead === "network rejection") throw new TypeError("network unavailable");
+        if (firstRead === "malformed JSON") return new Response("{broken");
+        if (firstRead === "empty success") return Response.json({ messages: {}, occurrences: [] });
+      }
+      return Response.json({ messages: { [id]: { origin: "operator" } }, occurrences: [], memoryNone: [id] });
+    }) as unknown as typeof fetch;
+    const { host, root } = render({ ...answered("conversation_sdk_recovery", "sdk-recovery-launch"), engine: "claude", fmt: "claude", launch: undefined } as FileEntry);
+    try {
+      for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      if (firstRead !== "immediate success") {
+        expect(host.querySelectorAll('[data-feed-kind="sysmsg"]')).toHaveLength(1);
+        expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+      expect(host.querySelectorAll('[data-feed-kind="sysmsg"] summary, [data-mandate-card]')).toHaveLength(0);
+      expect(host.textContent).toContain(text);
+      expect(reads).toBe(firstRead === "immediate success" ? 1 : 2);
+    } finally {
+      flushSync(() => root.unmount()); roots.delete(root);
+      globalThis.fetch = realFetch;
+      setMessageProvenanceRetryScheduleForTests(null);
+    }
+  });
+}
+
+test("provenance recovery preserves human input, agent relays, scaffold, tool results and quoted markers", async () => {
+  resetMessageProvenanceCacheForTests();
+  setMessageProvenanceRetryScheduleForTests([10, 10]);
+  const record = (uuid: string, text: string, extra = {}) => JSON.stringify({ type: "user", uuid, timestamp: new Date(RECORD_AT).toISOString(), promptSource: "sdk", ...extra, message: { role: "user", content: text } });
+  tailLines = [
+    record("recovered-operator-id", "Recover this operator delivery"),
+    record("recovered-agent-id", "Check this internal relay"),
+    record("human-origin-id", "Explicit human input", { origin: { kind: "human" } }),
+    record("typed-origin-id", "Typed human input", { promptSource: "typed" }),
+    record("notification-id", "<task-notification>Task completed</task-notification>"),
+    record("quoted-marker-id", "Example: `<!-- llv:structured-user origin=operator -->`"),
+    JSON.stringify({ type: "assistant", timestamp: new Date(RECORD_AT).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "read-fixture", name: "Read", input: { file_path: "fixture.txt" } }] } }),
+    JSON.stringify({ type: "user", uuid: "tool-result-id", promptSource: "sdk", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "read-fixture", content: "Fixture contents" }] } }),
+  ];
+  const realFetch = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (!String(input).startsWith("/api/log/provenance?")) return Response.json({});
+    if (++reads === 1) return new Response("unavailable", { status: 503 });
+    return Response.json({ messages: {
+      "recovered-operator-id": { origin: "operator" },
+      "recovered-agent-id": { origin: "agent", senderRole: "orchestrator" },
+      "notification-id": { origin: "operator" },
+      "tool-result-id": { origin: "operator" },
+    }, occurrences: [] });
+  }) as unknown as typeof fetch;
+  const { host, root } = render({ ...answered("conversation_recovery_controls", "recovery-controls-launch"), engine: "claude", fmt: "claude", launch: undefined } as FileEntry);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const bubbles = [...host.querySelectorAll("[data-user-bubble]")].map((bubble) => bubble.textContent);
+    expect(bubbles).toHaveLength(3);
+    expect(bubbles.some((text) => text?.includes("Recover this operator delivery"))).toBe(true);
+    expect(bubbles.some((text) => text?.includes("Explicit human input"))).toBe(true);
+    expect(bubbles.some((text) => text?.includes("Typed human input"))).toBe(true);
+    expect(host.querySelectorAll('[data-feed-kind="sysmsg"] summary')).toHaveLength(2);
+    expect(host.querySelectorAll('[data-feed-kind="tool"]')).toHaveLength(1);
+    expect(host.textContent).toContain("internal");
+    expect(host.textContent).toContain("Check this internal relay");
+    expect(reads).toBe(3);
+  } finally {
+    flushSync(() => root.unmount()); roots.delete(root);
+    globalThis.fetch = realFetch;
+    setMessageProvenanceRetryScheduleForTests(null);
+  }
+});
+
 test("a pending outbox keeps its SDK record hidden after an empty answer until the ledger joins it", async () => {
   resetMessageProvenanceCacheForTests();
   setMessageProvenanceRetryScheduleForTests([10]);

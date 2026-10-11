@@ -17,7 +17,8 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
-import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 
 import {
   claudeCliAuthStatus,
@@ -31,6 +32,7 @@ import {
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
+import { projectEngineHostEvent } from "./engineHostEvents";
 import { normalizeQueueEntry, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
 import { structuredContent, type StructuredImageRef } from "./structuredContent";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES } from "./runtimeImageStore";
@@ -46,6 +48,28 @@ import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
    configuration pinned for it because it no longer inherits XDG_CONFIG_HOME.
    Built from the same inputs the boundary uses, never from its code. */
+test("fresh and resumed Claude carry learned rules once in the append channel", async () => {
+  clearTelegramConnection();
+  for (const resume of [false, true]) for (const cleanMemory of [false, true]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-rule-channel-"));
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const options = {
+      cwd: directory, appendSystemPrompt: "Synthetic rules kept in the engine instruction channel.",
+      cleanMemory, mcpServers: ["viewer", "telegram"], eventStore: new MemoryEventStore(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+    };
+    const host = resume ? await ClaudeStreamBrokerHost.adopt(crypto.randomUUID(), options) : await ClaudeStreamBrokerHost.start(options);
+    try {
+      expect(captured.args!.filter(arg => arg === "--append-system-prompt")).toHaveLength(1);
+      expect(captured.args![captured.args!.indexOf("--append-system-prompt") + 1]).toBe(
+        cleanMemory ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : `${options.appendSystemPrompt}\n\n${TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE}`,
+      );
+      expect(captured.args).not.toContain("--system-prompt");
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
 function agentSandboxEnv(home?: string): Record<string, string> {
   const key = home ? path.basename(home) : "default";
   const config = path.join(os.tmpdir(), "llv-spawn-sandbox", key, "config");
@@ -1198,285 +1222,189 @@ describe("ClaudeStreamBrokerHost", () => {
   });
 
   test.each([
-    { policy: "queue", status: "active" },
-    { policy: "steer-or-queue", status: "active" },
-    { policy: "queue", status: "attention" },
-    { policy: "steer-or-queue", status: "attention" },
-  ] as const)("durable $policy delivery enters Claude's native queue during $status exactly once", async ({ policy, status }) => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-queued-delivery-"));
+    { policy: "queue", pathway: "completed", predecessorOrigin: "agent" },
+    { policy: "steer-or-queue", pathway: "completed", predecessorOrigin: "agent" },
+    { policy: "queue", pathway: "permission-answered", predecessorOrigin: "agent" },
+    { policy: "steer-or-queue", pathway: "permission-expired", predecessorOrigin: "agent" },
+    ...(["agent", "operator", "absent"] as const).flatMap(predecessorOrigin =>
+      (["queue", "steer-or-queue"] as const).flatMap(policy =>
+        (["interrupted", "interrupt-permission"] as const).map(pathway => ({ policy, pathway, predecessorOrigin })))),
+  ] as const)("review: an operator replacement reaches past deferred follow-ups: $policy / $pathway / $predecessorOrigin", async ({ policy, pathway, predecessorOrigin }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-contained-"));
     const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-    const ledger = new RecordingDeliveryLedger();
-    const child = new FakeClaude(ledger);
+    const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    const conversationId = "conversation-contained";
+    const events = new MemoryEventStore();
+    const imageBytes = Buffer.from("fixture image");
+    const image = { sha256: crypto.createHash("sha256").update(imageBytes).digest("hex"), mime: "image/png" as const, bytes: imageBytes.length };
     const host = await ClaudeStreamBrokerHost.start({
-      cwd: directory,
-      eventStore: new MemoryEventStore(),
-      deliveryLedger: ledger,
+      cwd: directory, deliveryLedger: ledger, readTranscript: () => [], readImage: () => imageBytes,
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
-      readTranscript: () => [],
       spawnProcess: fakeSpawn(child, {}),
+      eventStore: {
+        load: id => events.load(id),
+        append: (id, event) => {
+          events.append(id, event);
+          const projected = projectEngineHostEvent(conversationId, `claude:${id}`, event);
+          if (projected) journal.append(projected);
+        },
+      },
     });
-    const echo = (text: string, uuid: string) => child.emitJson({
-      type: "user", isReplay: true, session_id: host.identity.sessionId, uuid,
-      message: { role: "user", content: [{ type: "text", text }] },
-    });
-    const command = {
-      kind: "send" as const, operationId: "queued-follow-up", idempotencyKey: "queued-follow-up",
-      conversationId: "conversation-queued", text: "follow-up", policy,
-    };
-    const queue = new StructuredDeliveryQueue({
-      effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
-      status: async id => journal.operationResult(id)?.receipt ?? null,
-      hostClaim: async () => "fixture-owner",
-      transition: async (id, status, details, guard) => { journal.transitionOperation(id, status, details, guard); },
-    }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
-    try {
-      const running = host.send({ id: "running-turn", text: "work" });
-      echo("work", "user-running");
-      await running;
-      if (status === "attention") {
-        child.emitJson({ type: "control_request", request_id: "permission-running", request: {
-          subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" },
-        } });
-        await Bun.sleep(0);
-      }
-      journal.append({ scope: `session:${command.conversationId}`, kind: "session-status", payload: {
-        conversationId: command.conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId },
-        hostKind: "claude-broker", host: "hosted", turn: "running", activeTurnId: "running-turn",
-        capabilities: { steer: false, structuredAttention: true },
-      } });
-      journal.executeOperation(command);
-      await queue.drain();
-      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
-      expect(journal.operationResult(command.operationId)?.receipt.status).toBe("delivering");
-      expect(await host.health()).toMatchObject({
-        status, activeTurnRef: "running-turn", pendingAttention: status === "attention" ? ["permission-running"] : [],
-      });
-      expect(child.inputs.filter(input => input.type !== "user")).toEqual([]);
-
-      // A repeated pass and request still own the original input awaiting its echo.
-      expect(journal.executeOperation(command).replayed).toBe(true);
-      await queue.drain();
-      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
-      echo("follow-up", "user-follow-up");
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (journal.operationResult(command.operationId)?.receipt.status === "delivered") break;
-        await Bun.sleep(5);
-      }
-      expect(journal.operationResult(command.operationId)?.receipt).toMatchObject({
-        status: "delivered", turnId: command.operationId,
-      });
-      expect(ledger.load(host.identity.sessionId).at(-1)).toMatchObject({
-        disposition: "queued-next-turn", delivered: true,
-      });
-      expect((await host.health()).activeTurnRef).toBe("running-turn");
-      child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
-      expect((await host.health()).activeTurnRef).toBe(command.operationId);
-      await queue.drain();
-      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
-    } finally {
-      await host.release();
-      journal.close();
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  test.each([
-    { race: "turn-ends", fenced: false },
-    { race: "turn-ends", fenced: true },
-    { race: "turn-starts", fenced: false },
-    { race: "turn-starts", fenced: true },
-  ] as const)("durable queued send survives $race with caller fence=$fenced", async ({ race, fenced }) => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-queued-race-"));
-    const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-    const ledger = new RecordingDeliveryLedger();
-    const child = new FakeClaude(ledger);
-    const host = await ClaudeStreamBrokerHost.start({
-      cwd: directory,
-      eventStore: new MemoryEventStore(),
-      deliveryLedger: ledger,
-      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
-      readTranscript: () => [],
-      spawnProcess: fakeSpawn(child, {}),
-    });
-    const echo = (text: string, uuid: string) => child.emitJson({
-      type: "user", isReplay: true, session_id: host.identity.sessionId, uuid,
-      message: { role: "user", content: [{ type: "text", text }] },
-    });
-    const startTurn = async () => {
-      const running = host.send({ id: "running-turn", text: "work" });
-      echo("work", "user-running");
-      await running;
-    };
-    const callerFence = race === "turn-ends" ? "running-turn" : null;
-    const command = {
-      kind: "send" as const, operationId: "queued-race", idempotencyKey: "queued-race",
-      conversationId: "conversation-queued-race", text: "follow-up", policy: "queue" as const,
-      ...(fenced ? { turnId: callerFence } : {}),
-    };
-    let raced = false;
     const queuePort = {
-      effects: async (kinds?: readonly string[], afterEventSeq?: number) => journal.effectBatch(100, kinds, afterEventSeq),
+      effects: async (kinds?: readonly string[], after?: number) => journal.effectBatch(100, kinds, after),
       status: async (id: string) => journal.operationResult(id)?.receipt ?? null,
       hostClaim: async () => "fixture-owner",
-      transition: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => {
-        journal.transitionOperation(...args);
-        if (args[1] === "delivering" && !raced) {
-          raced = true;
-          // Change the host after the health snapshot and journal claim, before send.
-          if (race === "turn-ends") {
-            child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
-          } else await startTurn();
-        }
-      },
+      transition: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => { journal.transitionOperation(...args); },
     };
     const newQueue = () => new StructuredDeliveryQueue(queuePort, () => host,
       undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
-    try {
-      if (race === "turn-ends") await startTurn();
-      journal.append({ scope: `session:${command.conversationId}`, kind: "session-status", payload: {
-        conversationId: command.conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId },
-        hostKind: "claude-broker", host: "hosted",
-        turn: race === "turn-ends" ? "running" : "idle", activeTurnId: callerFence,
-        capabilities: { steer: false, structuredAttention: true },
-      } });
-      journal.executeOperation(command);
-      await newQueue().drain();
-      expect(raced).toBe(true);
-      expect(journal.operationResult(command.operationId)?.receipt).toMatchObject({ status: "queued", reason: "stale-turn" });
-      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(1);
-
-      // A successor executor and request replay retain the original operation.
-      expect(journal.executeOperation(command).replayed).toBe(true);
-      const successor = newQueue();
-      await successor.drain();
-      if (!fenced) {
-        expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
-        expect(journal.effectBatch(100, ["runtime.send"])[0]?.payload.turnId).toBeUndefined();
-        await successor.drain();
-        echo("follow-up", "user-follow-up");
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          if (journal.operationResult(command.operationId)?.receipt.status === "delivered") break;
-          await Bun.sleep(5);
-        }
-        expect(journal.operationResult(command.operationId)?.receipt).toMatchObject({
-          status: "delivered", turnId: command.operationId,
-        });
-        expect(ledger.load(host.identity.sessionId).filter(state => state.entry.id === command.operationId))
-          .toEqual([expect.objectContaining({ delivered: true })]);
-        expect(journal.executeOperation(command).replayed).toBe(true);
-      }
-      await successor.drain();
-      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(fenced ? 1 : 2);
-      if (fenced) {
-        expect(journal.operationResult(command.operationId)?.receipt.status).toBe("queued");
-        expect(journal.effectBatch(100, ["runtime.send"])[0]?.payload.turnId).toBe(callerFence);
-      }
-    } finally {
-      await host.release();
-      journal.close();
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  test.each([
-    { policy: "queue", status: "active" },
-    { policy: "steer-or-queue", status: "active" },
-    { policy: "queue", status: "attention" },
-    { policy: "steer-or-queue", status: "attention" },
-  ] as const)("durable $policy delivery during $status is confirmed by Claude's dequeue echo after its turn starts", async ({ policy, status }) => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-dequeue-echo-"));
-    const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-    const ledger = new RecordingDeliveryLedger();
-    const child = new FakeClaude(ledger);
-    const host = await ClaudeStreamBrokerHost.start({
-      cwd: directory,
-      eventStore: new MemoryEventStore(),
-      deliveryLedger: ledger,
-      requestTimeoutMs: 40,
-      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
-      readTranscript: () => [],
-      spawnProcess: fakeSpawn(child, {}),
-    });
-    const echo = (text: string, uuid: string) => child.emitJson({
-      type: "user", isReplay: true, session_id: host.identity.sessionId, uuid,
-      message: { role: "user", content: [{ type: "text", text }] },
-    });
-    const userFrames = () => child.inputs.filter(input => input.type === "user");
-    const waitFor = async (done: () => boolean) => {
-      for (let attempt = 0; attempt < 200 && !done(); attempt += 1) await Bun.sleep(5);
+    let queue = newQueue();
+    const wait = async (done: () => boolean) => {
+      for (let attempt = 0; attempt < 200 && !done(); attempt++) await Bun.sleep(5);
       expect(done()).toBe(true);
     };
-    const command = {
-      kind: "send" as const, operationId: "dequeued-follow-up", idempotencyKey: "dequeued-follow-up",
-      conversationId: "conversation-dequeue", text: "follow-up", policy,
+    const commands: Array<{ kind: "send"; operationId: string; idempotencyKey: string; conversationId: string;
+      text: string; images: StructuredImageRef[]; policy: "queue" | "steer-or-queue" | "interrupt-active";
+      origin?: { kind: "operator" | "agent"; role?: string } }> = [];
+    const admit = (id: string, sendPolicy: typeof policy | "interrupt-active" = policy,
+      origin: { kind: "operator" | "agent"; role?: string } | undefined = { kind: "operator" }) => {
+      const command = { kind: "send" as const, operationId: id, idempotencyKey: id, conversationId,
+        text: `input ${id}`, images: id.endsWith("image") ? [image] : [], policy: sendPolicy,
+        ...(origin ? { origin } : {}) };
+      commands.push(command); journal.executeOperation(command); return command;
     };
-    const queue = new StructuredDeliveryQueue({
-      effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
-      status: async id => journal.operationResult(id)?.receipt ?? null,
-      hostClaim: async () => "fixture-owner",
-      transition: async (id, nextStatus, details, guard) => { journal.transitionOperation(id, nextStatus, details, guard); },
-    }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+    const echo = (command: (typeof commands)[number]) => child.emitJson({ type: "user", isReplay: true,
+      session_id: host.identity.sessionId, uuid: `echo-${command.operationId}`, message: { role: "user", content: [
+        ...command.images.map(ref => ({ type: "image", source: { type: "base64", media_type: ref.mime, data: imageBytes.toString("base64") } })),
+        { type: "text", text: command.text },
+      ] } });
+    const result = () => child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
+    const users = () => child.inputs.filter(frame => frame.type === "user");
+    const deliver = async (command: (typeof commands)[number]) => {
+      await queue.drain();
+      await wait(() => users().some(frame => JSON.stringify(frame.message).includes(command.text)));
+      echo(command);
+      await wait(() => journal.operationResult(command.operationId)?.receipt.status === "delivered");
+      expect(journal.operationResult(command.operationId)?.receipt.turnId).toBe(command.operationId);
+    };
+    const idle = async () => {
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null, pendingAttention: [] });
+      expect(journal.snapshot().sessions.find(session => session.conversationId === conversationId))
+        .toMatchObject({ turn: "idle", activeTurnId: null, attentionIds: [] });
+    };
     try {
-      const running = host.send({ id: "running-turn", text: "work" });
-      echo("work", "user-running");
-      await running;
-      if (status === "attention") {
-        child.emitJson({ type: "control_request", request_id: "permission-running", request: {
-          subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" },
-        } });
-        await Bun.sleep(0);
-      }
-      journal.append({ scope: `session:${command.conversationId}`, kind: "session-status", payload: {
-        conversationId: command.conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId },
-        hostKind: "claude-broker", host: "hosted", turn: "running", activeTurnId: "running-turn",
-        capabilities: { steer: false, structuredAttention: true },
+      expect(host.supportsQueuedSend).toBe(false);
+      journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: {
+        conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId }, hostKind: "claude-broker",
+        host: "hosted", turn: "idle", activeTurnId: null, capabilities: { steer: false, structuredAttention: true },
       } });
-      journal.executeOperation(command);
-      await queue.drain();
-      expect(userFrames()).toHaveLength(2);
-
-      if (status === "attention") {
-        // The queued input must not hold the answer its predecessor waits on.
-        journal.append({ scope: `session:${command.conversationId}`, kind: "attention", payload: {
-          id: "permission-running", conversationId: command.conversationId, kind: "permission", state: "open",
-          unowned: false, createdAt: new Date().toISOString(), request: { subtype: "can_use_tool" }, turnId: "running-turn",
-        } });
-        journal.executeOperation({
-          kind: "answer", operationId: "answer-running", idempotencyKey: "answer-running",
-          conversationId: command.conversationId, attentionId: "permission-running", resolution: { behavior: "allow" },
-        });
-        await queue.drain();
-        await waitFor(() => child.inputs.some(input => input.type === "control_response"));
-        child.emitJson({ type: "control_response", response: { subtype: "success", request_id: "permission-running" } });
-        await waitFor(() => journal.operationResult("answer-running")?.receipt.status === "answered");
+      for (let batch = 0; batch < 2; batch++) {
+        const incumbent = admit(`incumbent-${batch}`);
+        await deliver(incumbent);
+        const ids = [`batch-${batch}-a`, `batch-${batch}-b-image`, `batch-${batch}-c`];
+        const queued = ids.map(id => admit(id));
+        const written = users().length;
+        if (pathway.startsWith("permission")) child.emitJson({ type: "control_request", request_id: `permission-${batch}`,
+          request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" } } });
+        await queue.drain(); await queue.drain();
+        // No native queue writes means early/coalesced echoes cannot be created.
+        expect(users()).toHaveLength(written);
+        expect(ids.map(id => journal.operationResult(id)?.receipt.status)).toEqual(["queued", "queued", "queued"]);
+        expect(ledger.load(host.identity.sessionId).filter(row => ids.includes(row.entry.id))).toEqual([]);
+        expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(0);
+        for (const command of queued) expect(journal.executeOperation(command).replayed).toBe(true);
+        // A replacement executor still keeps the same durable operations waiting.
+        queue = newQueue(); await queue.drain(); expect(users()).toHaveLength(written);
+        if (pathway === "permission-answered") {
+          const attentionId = `permission-${batch}`;
+          journal.executeOperation({ kind: "answer", operationId: `answer-${batch}`, idempotencyKey: `answer-${batch}`,
+            conversationId, attentionId, resolution: { behavior: "allow" } });
+          await queue.drain();
+          await wait(() => child.inputs.some(frame => frame.type === "control_response"
+            && (frame.response as { request_id?: string })?.request_id === attentionId));
+          child.emitJson({ type: "control_response", response: { subtype: "success", request_id: attentionId } });
+          await wait(() => journal.operationResult(`answer-${batch}`)?.receipt.status === "answered");
+        }
+        result(); await idle();
+        for (const command of queued) {
+          await deliver(command);
+          const count = users().length;
+          await queue.drain(); expect(users()).toHaveLength(count);
+          result(); await idle();
+        }
       }
-
-      // The predecessor outlives the confirmation budget counted from the write.
-      await Bun.sleep(120);
-      expect(journal.executeOperation(command).replayed).toBe(true);
-      await queue.drain();
-      expect(journal.operationResult(command.operationId)?.receipt.status).toBe("delivering");
-      expect(userFrames()).toHaveLength(2);
-
-      // Claude echoes the queued input when its own turn takes it.
-      child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
-      expect((await host.health()).activeTurnRef).toBe(command.operationId);
-      echo("follow-up", "user-follow-up");
-      await waitFor(() => journal.operationResult(command.operationId)?.receipt.status === "delivered");
-      expect(journal.operationResult(command.operationId)?.receipt).toMatchObject({
-        status: "delivered", turnId: command.operationId,
-      });
-      expect(ledger.load(host.identity.sessionId).filter(state => state.entry.id === command.operationId))
-        .toEqual([expect.objectContaining({ disposition: "queued-next-turn", delivered: true })]);
-      await queue.drain();
-      expect(journal.executeOperation(command).replayed).toBe(true);
-      await queue.drain();
-      expect(userFrames()).toHaveLength(2);
-    } finally {
-      await host.release();
-      journal.close();
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
+      // An explicit interrupt still owns the active turn, and waits for its result.
+      if (pathway.startsWith("interrupt")) {
+        const incumbent = admit("interrupt-incumbent"); await deliver(incumbent);
+        const deferredOrigin = predecessorOrigin === "agent" ? { kind: "agent" as const, role: "reviewer" }
+          : predecessorOrigin === "operator" ? { kind: "operator" as const } : undefined;
+        const deferred = ["interrupt-deferred-text", "interrupt-deferred-image"]
+          .map(id => admit(id, policy, deferredOrigin));
+        const count = users().length;
+        await queue.drain(); await queue.drain();
+        expect(users()).toHaveLength(count);
+        const deferredReceipts = deferred.map(command => journal.operationResult(command.operationId)?.receipt);
+        expect(deferredReceipts.map(receipt => receipt?.status)).toEqual(["queued", "queued"]);
+        const originalDeferredReceipts = structuredClone(deferredReceipts);
+        if (pathway === "interrupt-permission") {
+          child.emitJson({ type: "control_request", request_id: "interrupt-permission",
+            request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" } } });
+          await Bun.sleep(0);
+          expect((await host.health()).pendingAttention).toContain("interrupt-permission");
+        }
+        const replacement = admit("interrupt-replacement-image", "interrupt-active");
+        const written = users().length;
+        queue = newQueue();
+        await queue.drain(); await queue.drain();
+        await wait(() => child.inputs.some(frame => frame.type === "control_request"));
+        const control = child.inputs.find(frame => frame.type === "control_request" && frame.request_id !== "interrupt-permission")!;
+        expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(1);
+        expect(users()).toHaveLength(written);
+        for (const [index, command] of deferred.entries()) {
+          expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
+        }
+        child.emitJson({ type: "control_response", response: { subtype: "success", request_id: control.request_id } });
+        await Bun.sleep(0); await queue.drain();
+        expect(users()).toHaveLength(written);
+        const interruptRequests = child.inputs.filter(frame => frame.type === "control_request"
+          && (frame.request as { subtype?: string })?.subtype === "interrupt");
+        expect(interruptRequests).toHaveLength(1);
+        queue = newQueue();
+        result(); await idle(); await queue.drain();
+        await wait(() => users().length > written);
+        expect(JSON.stringify(users()[written]?.message)).toContain(replacement.text);
+        echo(replacement); await wait(() => journal.operationResult(replacement.operationId)?.receipt.status === "delivered");
+        for (const [index, command] of deferred.entries()) {
+          expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
+          expect(journal.effectBatch(100).find(effect => effect.payload.operationId === command.operationId)?.payload.images ?? [])
+            .toEqual(command.images);
+          expect(journal.executeOperation(command).replayed).toBe(true);
+        }
+        result(); await idle();
+        expect(users().filter(frame => JSON.stringify(frame.message).includes(replacement.text))).toHaveLength(1);
+        for (const command of deferred) {
+          await deliver(command); result(); await idle();
+          expect(users().filter(frame => JSON.stringify(frame.message).includes(command.text))).toHaveLength(1);
+        }
+        expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended"
+          && event.turnId === incumbent.operationId)).toEqual([expect.objectContaining({ status: "interrupted" })]);
+        expect(child.inputs.filter(frame => frame.type === "control_request").filter(frame => frame.request_id !== "interrupt-permission")).toHaveLength(1);
+      }
+      const controls = child.inputs.filter(frame => frame.type === "control_request").length;
+      const subsequent = admit("subsequent-image", "interrupt-active"); await deliver(subsequent); result(); await idle();
+      expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(controls);
+      const receipts = commands.map(command => structuredClone(journal.operationResult(command.operationId)?.receipt));
+      for (const command of commands) expect(journal.executeOperation(command).replayed).toBe(true);
+      await queue.drain(); expect(users()).toHaveLength(commands.length);
+      expect(commands.map(command => journal.operationResult(command.operationId)?.receipt)).toEqual(receipts);
+      const reopened = new FileClaudeDeliveryLedger(path.join(directory, "deliveries")).load(host.identity.sessionId);
+      for (const command of commands) {
+        const row = reopened.find(candidate => candidate.entry.id === command.operationId);
+        expect(row).toMatchObject({ engineMessageId: `echo-${command.operationId}`, delivered: true });
+        expect(row?.entry.content).toEqual(expect.objectContaining({ text: command.text, images: command.images }));
+      }
+    } finally { await host.release(); journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
 
   test("a queued input's confirmation budget starts with its own turn", async () => {

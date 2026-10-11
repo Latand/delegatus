@@ -486,7 +486,11 @@ export type PipelineStageAttempt = {
       activation may run. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
-  controllerWait?: PipelineBoundedWait;
+  controllerWait?: PipelineBoundedWait & {
+    /** Cut whose chain owns an incomplete-history confirmation wait, before
+        providerWait can open. The reader must prove closure before clearing it. */
+    providerCutAt?: number;
+  };
   outOfMemory?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit">;
   memoryWait?: PipelineBoundedWait;
   /** Bounded wait for the remote pipeline branch after an approved review
@@ -1110,9 +1114,10 @@ export type PipelineMerge = {
   state: PipelineMergeState;
   /** Who merged it: the runner, or anyone else (the PR was seen merged). */
   by: "auto-merge" | "outside" | null;
-  /** `<owner>/<repo>`, lower-cased, and the pull request's number. */
+  /** `<owner>/<repo>`, lower-cased, and the pull request's number.
+      A missing PR stays null while blocked or retrying its resolution. */
   repository: string;
-  prNumber: number;
+  prNumber: number | null;
   /** The setting's `changedAt` the lane was queued under. */
   policyChangedAt: string;
   /** The head the lane finished on (its `lastPassedCommit`). */

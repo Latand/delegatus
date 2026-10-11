@@ -15,11 +15,14 @@ import type { NativeQueueCommand } from "./nativeQueueContracts";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { parseRuntimeCommand } from "./commands";
+import { driveRuntimeSwitch, switchOperationKey } from "@/lib/pipelines/runtimeSwitch";
+import type { PipelinePorts } from "@/lib/pipelines/engine";
+import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 
 const binary = process.env.NATIVE_CODEX_QUEUE_TEST_BINARY;
 
-for (const scenario of ["small", "large", "two-image-turns"]) test.skipIf(!binary)(`native runtime: queue edits, canonical dispatch, lost reply and cold recovery (${scenario})`, async () => {
-  const largeImages = scenario !== "small";
+for (const scenario of ["small", "large", "two-image-turns", "runtime-switch", "runtime-switch-running"]) test.skipIf(!binary)(`native runtime: queue edits, canonical dispatch, lost reply and cold recovery (${scenario})`, async () => {
+  const largeImages = scenario === "large" || scenario === "two-image-turns";
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "nh-"));
   const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
@@ -119,7 +122,7 @@ plugins = false
         return;
       }
       if (method === "account/read") message.result = { account: { type: "chatgpt", planType: "fixture" }, requiresOpenaiAuth: false };
-      if (method === "model/list") message.result = { data: [{ id: "fixture-model", model: "fixture-model", isDefault: true, inputModalities: ["text", "image"], supportedReasoningEfforts: [{ reasoningEffort: "high" }] }] };
+      if (method === "model/list") message.result = { data: [{ id: "fixture-model", model: "fixture-model", isDefault: true, inputModalities: ["text", "image"], serviceTiers: [{ id: "priority" }], supportedReasoningEfforts: [{ reasoningEffort: "high" }] }] };
       if (method === "thread/queue/add" && dropAdd) return;
       if (method === "thread/items/list" && hideCanonicalClient && Array.isArray(message.result?.data)) {
         message.result.data = message.result.data.filter((entry: { item?: { clientId?: string } }) => entry.item?.clientId !== hideCanonicalClient);
@@ -170,6 +173,7 @@ plugins = false
      rather than satisfied, and the mode named here is the one the Viewer's own
      spawn path already asks for in production. */
   const options = { cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model", sandbox: "danger-full-access",
+    ...(scenario.startsWith("runtime-switch") ? { serviceTier: "priority" } : {}),
     /* The background-history case uses the production timeout. The other two
        inject a lost acknowledgement, and the host's request budget is what
        ends that one deliberately unanswered request — it is spent exactly
@@ -250,6 +254,83 @@ plugins = false
       expect(journal.executeOperation(command).receipt.status).toBe("queued");
       await executor.execute(command); return journal.nativeQueueRead(conversationId).find(e => e.entryId === (extra.entryId ?? id))!;
     };
+    if (scenario.startsWith("runtime-switch")) {
+      const runningAtAdmission = scenario === "runtime-switch-running";
+      await admit("before-switch", {});
+      await until(() => responses.length === 1);
+      const other = structuredClone(await admit("other-queued-entry", {}));
+      const now = () => new Date().toISOString();
+      const seat = { engine: "codex" as const, model: "fixture-model", effort: "high", accountId: binding.accountId, serviceTier: "priority" };
+      const record = { id: "idle-switch", seq: 1, mode: "fork" as const, phase: "requested" as const, requestedAt: now(),
+        from: { ...seat, serviceTier: "standard", conversationId, sessionId: threadId, launchId: "fixture-launch", agentPath: host.identity.path! },
+        to: { ...seat, accountPinned: false } };
+      const attempt = { n: 1, state: "running", startedAt: now(), conversationId, agentPath: host.identity.path!,
+        effectiveRole: { ...seat, serviceTier: "standard" }, runtimeSwitches: [record] } as unknown as PipelineStageAttempt;
+      const pipeline = { state: "running", project: "fixture-project", worktreeDir: cwd } as Pipeline;
+      const delivery = new StructuredDeliveryQueue({
+        effects: async () => journal.effectBatch(100, ["runtime.send"]),
+        status: async id => journal.operationResult(id)?.receipt ?? null,
+        hostClaim: async () => "fixture-owner:1",
+        transition: async (id, status, details) => { journal.transitionOperation(id, status, details); },
+      }, () => host!);
+      const ports: Partial<PipelinePorts> = { now,
+        runtimeSwitchControl: async (_id, _path, action) => {
+          if (action === "reconfigure") {
+            if (runningAtAdmission) {
+              await host!.send({ id: "pre-continuation-turn", text: "Already running work", expectedTurnId: null });
+              await until(() => responses.length === 2);
+            }
+            return "already-current";
+          }
+          await host!.interrupt((await host!.health()).activeTurnRef!);
+          await until(async () => (await host!.health()).activeTurnRef === null);
+        },
+        resumeSeveredTurn: async input => {
+          await publish();
+          journal.executeOperation(parseRuntimeCommand("send", { conversationId, operationId: input.clientMessageId,
+            idempotencyKey: input.clientMessageId, policy: input.policy, turnId: input.turnId, text: input.text }));
+          return true;
+        },
+        runtimeSwitchDelivery: async (_id, key) => {
+          const receipt = journal.operationResult(key)?.receipt;
+          return { state: receipt?.status === "delivered" ? "delivered" : receipt?.status === "failed" ? "failed" : "pending", at: receipt?.admittedAt };
+        },
+        conversationGeneration: () => ({ ...seat, sessionId: threadId, agentPath: host!.identity.path! }),
+        durableTurnEvidence: async () => ({ turn: "busy", message: null, turnStartedAt: Date.now() }),
+      };
+      const drive = () => driveRuntimeSwitch(pipeline, {} as PipelineStage, attempt, ports as PipelinePorts, () => {}, async () => { throw new Error("no handoff expected"); });
+      await drive();
+      const key = switchOperationKey(record, "continue");
+      if (runningAtAdmission) {
+        await delivery.drain(); await delivery.drain(); await drive();
+        expect(requests.filter(r => r.method === "turn/steer" && r.params.clientUserMessageId === key)).toHaveLength(0);
+        expect(requests.filter(r => r.method === "turn/start" && r.params.clientUserMessageId === key)).toHaveLength(0);
+        expect(journal.operationResult(key)?.receipt.status).toBe("queued");
+        expect(attempt.runtimeSwitches![0]!.phase).toBe("continuing");
+        expect(journal.nativeQueueRead(conversationId).find(entry => entry.entryId === other.entryId)).toEqual(other);
+        await host.interrupt((await host.health()).activeTurnRef!);
+        await until(async () => (await host!.health()).activeTurnRef === null);
+      }
+      await until(async () => {
+        for (const effect of journal.effectBatch(100, ["runtime.native-queue"])) {
+          await executor.execute(effect.payload as unknown as NativeQueueCommand & { operationId: string });
+        }
+        await executor.reconcile(conversationId);
+        await delivery.drain();
+        return journal.operationResult(key)?.receipt.status === "delivered";
+      });
+      await drive(); await drive(); await delivery.drain();
+      expect(attempt.runtimeSwitches![0]!.phase).toBe("committed");
+      expect(attempt).toMatchObject({ n: 1, conversationId, effectiveRole: { serviceTier: "priority" } });
+      expect(requests.filter(r => r.method === "turn/start" && r.params.clientUserMessageId === key)).toHaveLength(1);
+      expect(requests.find(r => r.method === "thread/start")?.params.serviceTier).toBe("priority");
+      expect(requests.filter(r => r.method === "thread/queue/add" && r.params.clientUserMessageId === key)).toHaveLength(0);
+      expect(journal.nativeQueueRead(conversationId).find(entry => entry.entryId === other.entryId)).toEqual(other);
+      expect((await host.nativeQueue!.queue.refresh()).items?.map(item => item.id)).toEqual([other.nativeSubmissionId!]);
+      await until(() => responses.length === (runningAtAdmission ? 3 : 2));
+      expect(responses).toHaveLength(runningAtAdmission ? 3 : 2);
+      return;
+    }
     if (scenario === "two-image-turns") {
       for (const [index, id] of ["image-one", "image-two"].entries()) {
         await admit(id, {images: imageRefs});

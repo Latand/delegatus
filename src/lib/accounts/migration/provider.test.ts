@@ -800,6 +800,11 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
   const source = accountRoot(engine, base, "source");
   const target = accountRoot(engine, base, "target");
   const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  const { recordLessonRequest, leaveLessons } = await import("@/lib/memory/roleStore");
+  const lessonSource = { project: `successor-rules-${engine}`, pipelineId: `successor-rules-${engine}`, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_successor_rules" };
+  const rule = "Check the current owner before replaying a persisted acknowledgement.";
+  recordLessonRequest({ ...lessonSource, at: "2026-10-11T00:00:00.000Z" });
+  leaveLessons({ request: lessonSource, source: lessonSource, lessons: [{ scope: "role", rule, why: "An acknowledgement was replayed with a different owner." }], none: null });
   const fakeHost = {
     setWriterFence() {},
     health: async () => ({ status: "idle", sessionKey: "successor", endpoint: "stdio:successor", pid: process.pid, processStartIdentity: null,
@@ -808,8 +813,9 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
     release: async () => {},
   };
   const cells: Array<AgentMemoryCell | null> = [];
-  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null }) => {
+  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null; developerInstructions?: string; appendSystemPrompt?: string }) => {
     cells.push(options.memoryCell ?? null);
+    expect(engine === "codex" ? options.developerInstructions : options.appendSystemPrompt).toContain(rule);
     return { ...fakeHost, identity: engine === "codex" ? { threadId: sessionId } : { sessionId } };
   };
   const adopt = engine === "codex"
@@ -840,7 +846,7 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
       host: engine === "codex"
         ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" }
         : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" } } as ProviderReceipt;
-    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base }) });
+    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base, learnedRules: { project: lessonSource.project, roleId: lessonSource.roleId } }) });
   };
   const saved = { structured: process.env.LLV_STRUCTURED_HOSTS, cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
   Object.assign(process.env, { LLV_STRUCTURED_HOSTS: "1", LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off" });

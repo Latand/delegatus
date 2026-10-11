@@ -20,6 +20,7 @@ process.env.LLV_STATE_DIR = stateDir;
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { loadTasks, saveTasks, TASKS_FILE } = await import("@/lib/tasks/store");
 const { terminalizeStaleStructuredSpawns } = await import("@/lib/runtime/structuredSpawn");
+const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -37,6 +38,30 @@ function registryAt(name: string) {
 }
 const holders = (conversationId: string) => loadTasks().filter((candidate) => candidate.assignments.some((assignment) => assignment.conversationId === conversationId)).map((candidate) => candidate.id);
 
+test("a read-only launch has a named, described task before its first turn, including failure and replay", () => {
+  saveTasks([]);
+  const registry = registryAt("named-read-only");
+  const request = {
+    engine: "codex" as const, cwd: stateDir, explicitProject: project, transport: "structured" as const,
+    clientAttemptId: "named_read_only", origin: { kind: "operator" as const }, role: "verifier",
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Verify export retries" }),
+    launchDisplay: { prompt: "Check that failed exports retry safely.\nReturn the verification evidence.", images: 0, echo: "Private role scaffold" },
+  };
+  const reserved = registry.beginSpawnRequest(request);
+  if (reserved.kind !== "created") throw new Error("expected reservation");
+  expect(loadTasks()).toHaveLength(1);
+  const [named] = loadTasks();
+  expect(named!.text).toBe("Verify export retries\nCheck that failed exports retry safely.");
+  expect(named!.origin).toEqual({ kind: "launch", key: request.clientAttemptId, refinement: "titled" });
+  expect(named!.assignments.map(row => [row.conversationId, row.launchId])).toEqual([[reserved.receipt.conversationId, reserved.receipt.launchId]]);
+  registry.failStructuredSpawn(reserved.receipt.launchId, "host unavailable before first turn");
+  expect(registry.beginSpawnRequest(request).kind).toBe("replay");
+  expect(loadTasks()).toHaveLength(1);
+  expect(loadTasks()[0]!.text).toBe(named!.text);
+  expect(loadTasks()[0]!.origin?.refinement).toBe("titled");
+  expect(loadTasks()[0]!.assignments).toHaveLength(1);
+});
+
 test("a task-less pipeline reviewer joins its source's work at reservation", () => {
   saveTasks([task("reviewed-work", "Keep this task title")]);
   const registry = registryAt("pipeline-inheritance");
@@ -49,6 +74,77 @@ test("a task-less pipeline reviewer joins its source's work at reservation", () 
   expect(holders(reviewer.receipt.conversationId)).toEqual(["reviewed-work"]);
   expect(loadTasks()).toHaveLength(1);
   expect(loadTasks()[0]!.text).toBe("Keep this task title");
+});
+
+test("a task-less pipeline is described from its spec before a read-only launch fails, and retries reuse its card", () => {
+  saveTasks([]);
+  savePipelines([buildPipeline({ id: "described-lane", task: "Restore export retries", taskIds: [],
+    spec: "---\nRestore retries after transient export failures.\nKeep completed exports unchanged.",
+    project, repoDir: stateDir, stages: [{ id: "verify", kind: "run", prompt: "Verify export retries", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now })]);
+  try {
+    const registry = registryAt("pipeline-description");
+    const request = { engine: "codex" as const, cwd: stateDir, explicitProject: project, transport: "structured" as const,
+      clientAttemptId: "described_pipeline_verify", role: "verifier",
+      origin: { kind: "container" as const, container: "pipeline" as const, containerId: "described-lane", creatorConversationId: null },
+      launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Restore export retries · verify", readOnly: true }) };
+    const first = registry.beginSpawnRequest(request);
+    if (first.kind !== "created") throw new Error("expected reservation");
+    const [card] = loadTasks();
+    expect(card!.text).toBe("Restore export retries · verify\nRestore retries after transient export failures.");
+    expect(card!.origin?.refinement).toBe("titled");
+    expect(card!.assignments).toHaveLength(1);
+    registry.failStructuredSpawn(first.receipt.launchId, "host unavailable before first turn");
+    expect(registry.beginSpawnRequest(request)).toMatchObject({ kind: "replay", receipt: { launchId: first.receipt.launchId } });
+    const retry = registry.beginSpawnRequest({ ...request, clientAttemptId: "described_pipeline_verify_retry" });
+    expect(retry.kind).toBe("created");
+    expect(loadTasks()).toHaveLength(1);
+    expect(loadTasks()[0]!.id).toBe(card!.id);
+    expect(loadTasks()[0]!.text).toBe(card!.text);
+    expect(loadTasks()[0]!.assignments).toHaveLength(2);
+  } finally {
+    savePipelines([]);
+  }
+});
+
+test("replay without a title retains the operator's title, receipt, task and assignment while an explicit change conflicts", () => {
+  saveTasks([]);
+  const registry = registryAt("operator-title-replay");
+  const request = { engine: "codex" as const, cwd: stateDir, explicitProject: project, transport: "structured" as const,
+    clientAttemptId: "operator_title_replay", origin: { kind: "operator" as const },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Operator-chosen export audit" }),
+    launchDisplay: { prompt: "Inspect export retry ownership.", images: 0, echo: "Role scaffold" } };
+  const first = registry.beginSpawnRequest(request);
+  expect(first.kind).toBe("created");
+  const cards = loadTasks();
+  const restarted = registryAt("operator-title-replay");
+  const replay = restarted.beginSpawnRequest({ ...request, launchProfile: undefined });
+  expect(replay).toEqual({ kind: "replay", receipt: first.receipt });
+  expect(loadTasks()).toEqual(cards);
+  expect(restarted.beginSpawnRequest({ ...request, launchProfile: { title: "Another export audit" } }).kind).toBe("conflict");
+  expect(loadTasks()).toEqual(cards);
+});
+
+test("a prompt-only reservation derives its title and description before recovery can execute it", async () => {
+  saveTasks([]);
+  const registry = registryAt("prompt-only");
+  const request = {
+    engine: "claude" as const, cwd: stateDir, explicitProject: project, transport: "structured" as const,
+    clientAttemptId: "prompt_only", origin: { kind: "operator" as const }, role: "architect",
+    launchDisplay: { prompt: "---\nInspect export retry ownership.\nReport the unsafe transitions.", images: 0, echo: "Role scaffold" },
+  };
+  const reserved = registry.beginSpawnRequest(request);
+  if (reserved.kind !== "created") throw new Error("expected reservation");
+  expect(loadTasks()[0]!.text).toBe("Inspect export retry ownership.\nInspect export retry ownership.");
+  expect(loadTasks()[0]!.origin?.refinement).toBe("titled");
+  expect(reserved.receipt.launchProfile.title).toBe("Inspect export retry ownership.");
+  const { admitRecoveredLaunch } = await import("./launchMembership");
+  const recovered = admitRecoveredLaunch(reserved.receipt);
+  expect(recovered.ok && recovered.created).toEqual([]);
+  expect(registry.beginSpawnRequest(request).kind).toBe("replay");
+  expect(loadTasks()).toHaveLength(1);
+  expect(loadTasks()[0]!.assignments).toHaveLength(1);
 });
 
 test("reviewers, fixers, merge helpers and maintenance join existing work; an unowned launch gets one placeholder", () => {
@@ -76,7 +172,7 @@ test("reviewers, fixers, merge helpers and maintenance join existing work; an un
   expect(registry.beginSpawnRequest(request).kind).toBe("replay");
   expect(loadTasks()).toHaveLength(2);
   expect(holders(unowned.receipt.conversationId)).toHaveLength(1);
-  expect(loadTasks().find(t => t.id !== "served-work")!.origin?.refinement).toBe("pending");
+  expect(loadTasks().find(t => t.id !== "served-work")!.origin?.refinement).toBe("titled");
 });
 
 test("a dedicated task launch joins exactly its task at the reservation; the replay and the resume successor stay there", () => {
@@ -165,7 +261,7 @@ test("a queued pinned launch recovered for its first execution keeps the members
   expect(loadTasks().length).toBe(2);
   expect(holders(kept.conversationId)).toEqual(["queued-target"]);
   const replacement = loadTasks().find((candidate) => candidate.id !== "queued-target")!;
-  expect(replacement.origin).toEqual({ kind: "launch", key: "queued_orphaned_attempt", refinement: "pending" });
+  expect(replacement.origin).toEqual({ kind: "launch", key: "queued_orphaned_attempt", refinement: "titled" });
   expect(holders(orphaned.conversationId)).toEqual([replacement.id]);
 });
 
