@@ -16,7 +16,7 @@ import type { RuntimeHostClient } from "./runtime/client";
 import { heldDeliveryOccurrences } from "./runtime/deliveredMessageOccurrences";
 import { messageTextDigest } from "./runtime/messageTextDigest";
 import { resolveSendReceipt, sendReceiptFor } from "./runtime/sendSettlement";
-import { recoverDeadStructuredConversation } from "./runtime/structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./runtime/structuredRecovery";
 import type { FileEntry } from "./types";
 import { TmuxDeliveryUncertainError } from "./tmux";
 import { resumeSpecForSession, type ResumeSpecOptions } from "./agent/cli";
@@ -77,6 +77,23 @@ test("migration delivery keeps an internally held result recoverable", () => {
   expect(migrationDeliveryOutcome({ ok: true, target: "pane" })).toBe("delivered");
   expect(migrationDeliveryOutcome(failure)).toBe("failed");
   expect(migrationDeliveryOutcome({ ...failure, actuation: "started" as const })).toBe("delivery-uncertain");
+});
+
+test("a definitively unpublished resume returns a typed unsent failure to seat recovery", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "unpublished-resume-registry.json"));
+  setAgentRegistryForTests(registry);
+  const conversation = registry.ensureConversation("codex", "", "default");
+  let recoveryOrigin: unknown;
+  const outcome = await deliverConversationMessage({ pid: null, path: "", conversationId: conversation.id,
+    clientMessageId: "owed-seat-wake", text: "wake", images: [], origin: { kind: "agent", role: "seat-tick" },
+  }, { recover: async request => {
+    recoveryOrigin = request.origin;
+    throw new StructuredResumeUnpublishedError("replacement host did not publish");
+  } });
+  expect(outcome).toEqual({ ok: false, outcome: "failed", status: 503,
+    code: "structured_revival_impossible", error: "replacement host did not publish" });
+  expect(recoveryOrigin).toEqual({ kind: "agent", role: "seat-tick" });
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
 });
 
 test("structured resume recovery returns a pane-less target and skips legacy host delivery", async () => {
