@@ -14,7 +14,11 @@ const { CompanionStorage } = await import("./storage");
 const { CompanionAdmission } = await import("./admission");
 const { CompanionLiveSessions } = await import("./liveSession");
 const { SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD, BACKEND_RESPONSE_RESERVE_USD } = await import("./usage");
-afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+const { shutdownTranscriptSearchWorker } = await import("@/lib/search/transcriptSearchWorker");
+afterAll(async () => {
+  await shutdownTranscriptSearchWorker();
+  fs.rmSync(root, { recursive: true, force: true });
+});
 beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: true }));
 
 const noReads = () => fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
