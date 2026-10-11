@@ -29,6 +29,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 const TERM_MS = 1_500;
 const KILL_MS = 1_000;
@@ -86,6 +87,7 @@ const childDone = new Promise((resolve) => {
   child.once("exit", (code, signal) => { childExit = { code, signal }; resolve(); });
   child.once("error", () => { childExit ??= { code: 127, signal: null }; resolve(); });
 });
+let windowsIdentity = process.platform === "win32" && group ? windowsStartIdentity(group) : null;
 
 const recordFile = stateDirectory ? join(stateDirectory, "helpers", `${process.pid}.json`) : "";
 function removeRecord() {
@@ -130,15 +132,69 @@ function signalGroup(signal) {
   try { process.kill(-group, signal); } catch { /* already gone */ }
 }
 
+/* Windows has no negative-pid process groups. Keep the guardian alive while
+   a fresh tree snapshot is ended descendants first, using retained process
+   handles so a recycled PID cannot redirect a kill. This runs off the Viewer
+   thread; the helper's own exit and inherited output still fence replacement. */
+async function endWindowsTree() {
+  if (childExit) return true;
+  windowsIdentity ??= windowsStartIdentity(group);
+  if (childExit) return true;
+  if (!windowsIdentity) return false;
+  const script = `
+    $ErrorActionPreference='Stop'; $handles=New-Object 'System.Collections.Generic.List[System.Diagnostics.Process]';
+    try {
+      $root=[System.Diagnostics.Process]::GetProcessById(${group}); $null=$root.Handle; $handles.Add($root);
+      if ($root.HasExited) { exit 0 }
+      if (('${group}:' + $root.StartTime.ToFileTimeUtc()) -ne '${windowsIdentity}') { exit 1 }
+      $rows=@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate);
+      if (-not ($rows | Where-Object { $_.ProcessId -eq ${group} -and $_.ParentProcessId -eq ${process.pid} })) { exit 1 }
+      function Collect($parent) {
+        foreach ($row in $rows) {
+          if ($row.ParentProcessId -ne $parent.Id -or $row.ProcessId -eq $parent.Id) { continue }
+          $member=$null;
+          try {
+            $member=[System.Diagnostics.Process]::GetProcessById($row.ProcessId); $null=$member.Handle;
+            if ($member.HasExited -or $parent.HasExited -or $member.StartTime -lt $parent.StartTime -or
+                $member.StartTime.ToUniversalTime().ToString('yyyyMMddHHmmssfff') -ne $row.CreationDate.ToUniversalTime().ToString('yyyyMMddHHmmssfff')) {
+              $member.Dispose(); continue
+            }
+          } catch { if ($member) { $member.Dispose() }; continue }
+          Collect $member; $handles.Add($member)
+        }
+      }
+      Collect $root
+      foreach ($member in @($handles | Select-Object -Skip 1) + @($root)) {
+        if (-not $member.HasExited) { $member.Kill() }
+        if (-not $member.WaitForExit(1000)) { exit 1 }
+      }
+      exit 0
+    } catch { exit 1 } finally { foreach ($member in $handles) { $member.Dispose() } }
+  `;
+  return new Promise((resolve) => {
+    const reaper = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { stdio: "ignore", windowsHide: true, timeout: 4_000 });
+    reaper.once("error", () => resolve(false));
+    reaper.once("close", (code) => resolve(code === 0));
+  });
+}
+
 let ending = false;
 async function end() {
   if (ending) return;
   ending = true;
   if (group) {
-    signalGroup("SIGTERM");
-    if (!await groupGone(TERM_MS)) {
-      signalGroup("SIGKILL");
-      await groupGone(KILL_MS);
+    if (process.platform === "win32") {
+      // Failed ownership/exit proof keeps the lease resident; never announce
+      // closure and let a successor overlap a helper we could not end.
+      while (!await endWindowsTree()) await wait(POLL_MS);
+      await childDone;
+    } else {
+      signalGroup("SIGTERM");
+      if (!await groupGone(TERM_MS)) {
+        signalGroup("SIGKILL");
+        await groupGone(KILL_MS);
+      }
     }
   }
   removeRecord();

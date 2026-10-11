@@ -209,3 +209,19 @@ jobs:
           bin/launcher-relaunch.test.ts
           bin/launcher-credentials.test.ts
           src/lib/selfUpdate/pid.test.ts
+
+      # The real launch also executes src/lib/transcriptSearchQuery.worker.ts;
+      # keep that spawned entry visible to ci-platform-scope's dependency walk.
+      - name: Transcript query worker lifecycle on the native kernel
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/llv-home
+          USERPROFILE: ${{ runner.temp }}\llv-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/llv-config
+          LLV_STATE_DIR: ${{ runner.temp }}/llv-state
+          TMPDIR: ${{ runner.temp }}/llv-tmp
+          TMP: ${{ runner.temp }}\llv-tmp
+          TEMP: ${{ runner.temp }}\llv-tmp
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+          LLV_HELPER_LEASE_ENTRY: bin/helper-lease.mjs
+        run: bash scripts/gate-slot.sh bun test src/lib/search/transcriptSearchWorker.test.ts

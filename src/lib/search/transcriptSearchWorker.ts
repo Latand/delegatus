@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { stateDir } from "@/lib/configDir";
-import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper, unrefLeasedHelper } from "@/lib/helperLease";
+import { leasedHelperInput, spawnLeasedHelper, unrefLeasedHelper } from "@/lib/helperLease";
 import {
   InvalidTranscriptSearchCursorError, TranscriptSearchPageTooLargeError,
   type TranscriptSearchOptions, type TranscriptSearchResult,
@@ -88,7 +88,7 @@ export class TranscriptSearchWorker {
       this.tail = this.tail.then(async () => {
         if (job.settled) return;
         try {
-          await this.closing;
+          await this.waitForRetirement();
           if (job.settled) return;
           this.active = job;
           const worker = this.worker ?? this.start();
@@ -96,7 +96,7 @@ export class TranscriptSearchWorker {
           const { redactText, ...query } = options;
           this.write(worker, { type: "search", id: job.id, options: query, redact: Boolean(redactText) });
           await completed;
-          await this.closing;
+          await this.waitForRetirement();
           if (this.worker === worker) {
             worker.idle = setTimeout(() => this.retire(worker), this.runtime.idleMs ?? IDLE_MS);
             worker.idle.unref();
@@ -173,18 +173,25 @@ export class TranscriptSearchWorker {
     clearTimeout(worker.idle);
     if (this.worker !== worker) return;
     this.worker = null;
-    endLeasedHelper(worker.child);
-    this.closing = new Promise<void>((resolve, reject) => {
+    // Closing the lease runs guardian cleanup on Windows too, where sending
+    // SIGTERM would terminate the guardian before it could reap its helper.
+    worker.child.stdin?.end();
+    this.closing = worker.closed;
+  }
+
+  private waitForRetirement(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Transcript search worker did not stop")), 5_000);
-      void worker.closed.then(() => { clearTimeout(timer); resolve(); });
+      // A deadline bounds this caller's wait. The exit barrier itself remains
+      // pending until confirmed closure, so a late exit admits a later request.
+      void this.closing.then(() => { clearTimeout(timer); resolve(); });
     });
-    void this.closing.catch(() => {});
   }
 
   async shutdown(): Promise<void> {
     for (const job of this.jobs) job.finish(new Error("Transcript search worker stopped"));
     if (this.worker) this.retire(this.worker);
-    await this.closing;
+    await this.waitForRetirement();
     await this.tail;
   }
 }

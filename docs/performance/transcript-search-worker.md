@@ -14,6 +14,20 @@ query starts. Worker exits, protocol failures and queue exhaustion produce the
 route's existing bounded 503 response. The next request can start a replacement.
 The worker retires after 60 seconds idle or a reply reporting RSS above 512 MiB.
 
+Retirement closes the guardian's lease pipe. Windows terminates a process on
+`SIGTERM` without running its JavaScript cleanup, so signaling the guardian
+could leave a busy query holding stdout open. Windows cleanup now runs inside
+the guardian, takes a fresh descendant snapshot and retains process handles
+while ending descendants before the owned helper. Replacement still waits for
+confirmed closure. A caller's five-second retirement deadline leaves the shared
+exit barrier pending, allowing a later confirmed exit to unblock the lane.
+
+The worker lifecycle tests cover busy-query cancellation, timeout and shutdown
+with an inherited-stream descendant, successful replacement, empty lease records,
+and recovery after a late confirmed exit. The busy tests emulate unhandled
+Windows termination on Unix, and the same file runs on the native Windows CI
+runner under Bun 1.4.0 through the owned gate runner.
+
 A trusted redactor receives the complete highlighted source through the worker
 protocol before excerpting or byte limits. Its closure remains with the caller.
 This preserves the voice companion's masking contract without transferring a

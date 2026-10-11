@@ -2,8 +2,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { spawn, type ChildProcess } from "node:child_process";
+import { stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { procBackend } from "@/lib/proc";
 import { indexTranscriptSources, searchTranscripts, type TranscriptSearchOptions } from "./transcriptSearch";
 import { TranscriptSearchWorker, searchTranscriptsInWorker, shutdownTranscriptSearchWorker, type TranscriptSearchWorkerRuntime } from "./transcriptSearchWorker";
 import { InvalidTranscriptSearchCursorError, TranscriptSearchPageTooLargeError } from "./transcriptSearch";
@@ -84,7 +86,7 @@ test("worker preserves every page, order, scope, copies and redaction before exc
 
 function stub(body: string): { executable: string; workerPath: string } {
   const workerPath = path.join(root, "stub.mjs");
-  fs.writeFileSync(workerPath, `import fs from "node:fs"; import { createInterface } from "node:readline";
+  fs.writeFileSync(workerPath, `import fs from "node:fs"; import { createInterface } from "node:readline"; import { spawn } from "node:child_process";
     createInterface({ input: process.stdin }).on("line", line => { const frame = JSON.parse(line); ${body} });`);
   return { executable: process.execPath, workerPath };
 }
@@ -96,6 +98,65 @@ async function ready(): Promise<void> {
     await Bun.sleep(5);
   }
 }
+
+for (const reason of ["cancellation", "timeout", "shutdown"] as const) {
+  test(`lease retirement after ${reason} reaps a busy query and descendant before replacement`, async () => {
+    const launch = stub(`
+      const descendant = spawn(process.execPath, ["-e", 'process.stdout.write(String(process.pid)); setInterval(() => {}, 1000);'], { stdio: ["ignore", "pipe", "inherit"] });
+      descendant.stdout.once("data", () => {
+        fs.writeFileSync(${JSON.stringify(path.join(root, "ready"))}, JSON.stringify([process.pid, descendant.pid]));
+        while (true) {}
+      });`);
+    const lane = worker({ launch, timeoutMs: reason === "timeout" ? 2000 : 15_000 });
+    const controller = new AbortController();
+    const pending = lane.search({ query: "busy" }, controller.signal).catch(error => error);
+    await ready();
+    const identities = (JSON.parse(fs.readFileSync(path.join(root, "ready"), "utf8")) as number[]).map(pid => captureProcessIdentity(pid));
+    const resident = (lane as unknown as { worker: { child: ChildProcess } }).worker;
+    // Windows terminates the guardian without executing JS signal handlers.
+    // Apply that same behaviour on Unix so this regression also runs locally.
+    const kill = resident.child.kill.bind(resident.child);
+    resident.child.kill = () => kill("SIGKILL");
+    try {
+      stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
+      if (reason === "cancellation") controller.abort();
+      if (reason === "shutdown") await lane.shutdown();
+      const error = await pending;
+      expect(reason === "cancellation" ? error.name : error.message).toBe(reason === "cancellation" ? "AbortError"
+        : reason === "timeout" ? "Transcript search timed out" : "Transcript search worker stopped");
+      expect((await lane.search({ query: "replacement" })).total).toBe(0);
+      for (const identity of identities) {
+        expect(processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)).toBe(true);
+      }
+      await lane.shutdown();
+      const records = path.join(process.env.LLV_STATE_DIR!, "helpers");
+      expect(fs.existsSync(records) ? fs.readdirSync(records).filter(file => file.endsWith(".json")) : []).toEqual([]);
+    } finally {
+      for (const identity of identities.reverse()) await stopFixtureIdentity(identity);
+      await lane.shutdown().catch(() => {});
+      workers = workers.filter(candidate => candidate !== lane);
+    }
+  }, 20_000);
+}
+
+test("a confirmed exit after the retirement deadline unblocks the lane", async () => {
+  await seed();
+  const lane = worker();
+  await lane.search({ query: "cobalt" });
+  const resident = (lane as unknown as { worker: { closed: Promise<void> } }).worker;
+  const actualClose = resident.closed;
+  let confirm!: () => void;
+  resident.closed = actualClose.then(() => new Promise<void>(resolve => { confirm = resolve; }));
+  try {
+    await expect(lane.shutdown()).rejects.toThrow("Transcript search worker did not stop");
+    confirm();
+    expect((await lane.search({ query: "cobalt" })).total).toBeGreaterThan(0);
+  } finally {
+    confirm?.();
+    await lane.shutdown().catch(() => {});
+    workers = workers.filter(candidate => candidate !== lane);
+  }
+}, 15_000);
 
 test("cancelled queued jobs never run; cancelling a busy query ends its worker and allows repair", async () => {
   const marker = JSON.stringify(path.join(root, "ready"));
