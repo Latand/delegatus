@@ -10,6 +10,14 @@ test("spawn titles derive from the role and a sixty-character first prompt line"
   );
 });
 
+test("spawn titles skip leading empty and formatting-only prompt lines", () => {
+  for (const prefix of ["---\n", "\n***\r\n>\r\n", "###\n```markdown\n"]) {
+    expect(derivedSpawnTitle("architect", `${prefix}Inspect export retry ownership.\nReport the unsafe transitions.`))
+      .toBe("architect · Inspect export retry ownership.");
+  }
+  expect(derivedSpawnTitle("architect", "---\n***\n")).toBe("architect · New task");
+});
+
 test("legacy engine placeholders have no semantic title value", () => {
   for (const placeholder of [
     "Codex session",

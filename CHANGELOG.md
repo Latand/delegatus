@@ -2510,7 +2510,7 @@ They are summaries; the comparison links retain each release's complete history.
   clean slate across tracked agent panes.
 
 ### Changed
-- Automatic task inbox capture is opt-in through `LLV_ENABLE_AUTO_TASK_INBOX=1`.
+- Automatic task inbox capture required an explicit opt-in.
 
 ### Fixed
 - Finished Codex worktree sessions under `~/.codex/worktrees/<id>/<repo>` keep

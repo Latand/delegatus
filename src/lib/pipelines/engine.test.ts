@@ -25102,3 +25102,163 @@ test.each([false, true])("pre-publication replacement persists one new activatio
   expect(persistedActivations).toBe(1);
   expect(box.order).toEqual(publication);
 });
+
+test.each(["completed", "open"] as const)("a held restart proposal waits for ledger repair (%s turn)", async (ending) => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { statePath } = await import("@/lib/configDir");
+  const { adoptStructuredHostsAtStartup, structuredStartupDeferral } = await import("@/lib/runtime/startup");
+  const { restartCutEvidenceHolds, setRestartCutHeldRows } = await import("@/lib/runtime/restartCutHold");
+  const h = harness();
+  h.advanceWallClock(Date.now());
+  await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
+  const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "held-stage-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = crypto.randomUUID();
+  const transcriptPath = path.join(directory, `${sessionId}.jsonl`);
+  const workAt = new Date().toISOString();
+  fs.writeFileSync(transcriptPath, JSON.stringify({
+    type: "event_msg", timestamp: workAt, payload: { type: "task_started", turn_id: "T1" },
+  }) + "\n");
+  const launchProfile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex", path: transcriptPath, accountId: null, launchProfile,
+    turn: { state: "busy", source: "lifecycle", terminalAt: null }, observedAt: workAt,
+  }]);
+  const conversationId = registry.conversationForPath(transcriptPath)!.id;
+  const hostKey = `codex:${sessionId}`;
+  registry.upsert({
+    key: { engine: "codex", sessionId }, artifactPath: transcriptPath, cwd: directory,
+    accountId: null, launchProfile, status: "live", host: null,
+    structuredHost: {
+      kind: "codex-app-server", endpoint: "stdio:predecessor",
+      process: { pid: 2_000_007_001, startIdentity: "gone-engine" }, eventCursor: 1,
+      protocolVersion: "test", writerClaimEpoch: 1, activeTurnRef: "T1", pendingAttention: [], activeFlags: [],
+    },
+    claimEpoch: 1, claimOwner: null, pendingAction: null,
+  });
+  const lane = loadPipelines()[0]!;
+  Object.assign(lane.runs[0]!.attempts[0]!, {
+    conversationId, agentPath: transcriptPath, startedAt: new Date(Date.now() - 60_000).toISOString(),
+  });
+  savePipelines([lane]);
+  registry.rememberMembership(conversationId, {
+    kind: "pipeline", containerId: lane.id, role: "builder", slot: "build:1", stageId: "build",
+    stageOrder: 0, round: 1, parentConversationId: null,
+  });
+  const ledgerFile = path.join(statePath("structured-host-events"), `${sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
+  const started = JSON.stringify({ kind: "turn-started", turnId: "T1", seq: 1 }) + "\n";
+  const completed = JSON.stringify({ kind: "turn-ended", turnId: "T1", status: "completed", seq: 2 }) + "\n";
+  fs.writeFileSync(ledgerFile, started);
+  const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
+  const startup = (next: InstanceType<typeof AgentRegistry>) => adoptStructuredHostsAtStartup({
+    registry: next, client: null, orchestratorSeats: () => [],
+    schedule: (callback, delayMs) => { scheduled.push({ callback, delayMs }); return { unref() {} }; },
+    adopt: async () => [], adoptClaude: async () => [],
+  });
+  const reachReprobeCap = async () => {
+    /* Drive the current boot's real callbacks through the cap pass, waiting
+       for each asynchronous probe to schedule its successor. */
+    for (let probe = 0; probe < 10; probe += 1) {
+      const timer = scheduled.shift()!;
+      expect(timer).toBeDefined();
+      timer.callback();
+      for (let wait = 0; wait < 400 && scheduled.length === 0; wait += 1) await Bun.sleep(5);
+      expect(scheduled).toHaveLength(1);
+      if (timer.delayMs === 30_000) return;
+    }
+    throw new Error("restart evidence re-probe never reached its cap");
+  };
+  try {
+    await startup(registry).catch(() => {});
+    const store = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+    expect(store.list()).toMatchObject([{ state: "discharged", turnRef: "T1" }]);
+    fs.appendFileSync(ledgerFile, (ending === "completed" ? completed : "") + '{"kind":"delta",BROKEN}\n');
+    const next = new AgentRegistry(registry.filename);
+    setAgentRegistryForTests(next);
+    await startup(next).catch(() => {});
+    expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
+    expect(restartCutEvidenceHolds(hostKey)).toBe(true);
+    await reachReprobeCap();
+    expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
+    expect(restartCutEvidenceHolds(hostKey)).toBe(false);
+    h.advanceWallClock(6 * 60_000);
+    await withRuntimeSnapshot({ runtime: { hostEpoch: 7 }, sessions: [{ conversationId, host: "dead", turn: "idle", attentionIds: [] }] }, async () => {
+      const production = defaultPipelinePorts();
+      let stops = 0;
+      const ports: PipelinePorts = {
+        ...h.ports, sourcePathAllowed: () => true, pathForConversation: () => transcriptPath,
+        durableTurnEvidence: (engine, file, reportAt, startedAt) => durableStageTurnEvidence(engine, file, reportAt, startedAt),
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        conversationAgentActive: production.conversationAgentActive,
+        conversationInterruption: production.conversationInterruption,
+        conversationRestartCut: production.conversationRestartCut,
+        conversationRestartCutHeld: production.conversationRestartCutHeld,
+        stopInterruptedStageAgent: async (...args) => { stops += 1; return production.stopInterruptedStageAgent!(...args); },
+        conversationHostUnavailableSince: async () => new Date(Date.now() - 5 * 60_000).toISOString(),
+      };
+      for (let tick = 0; tick < 3; tick += 1) await tickPipelines([entry(transcriptPath)], ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(h.spawnInputs).toHaveLength(1);
+      expect(stops).toBe(0);
+      /* Reopening startup on the same unreadable evidence grants no retry. */
+      scheduled.length = 0;
+      await startup(new AgentRegistry(registry.filename)).catch(() => {});
+      await reachReprobeCap();
+      for (let tick = 0; tick < 3; tick += 1) await tickPipelines([entry(transcriptPath)], defaultPorts());
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(stops).toBe(0);
+
+      fs.writeFileSync(ledgerFile, started + (ending === "completed" ? completed : ""));
+      await startup(new AgentRegistry(registry.filename)).catch(() => {});
+      expect(restartCutEvidenceHolds(hostKey)).toBe(false);
+      for (let tick = 0; tick < 3; tick += 1) await tickPipelines([entry(transcriptPath)], defaultPorts());
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(ending === "completed" ? 1 : 2);
+      expect(h.spawnInputs).toHaveLength(ending === "completed" ? 1 : 2);
+      expect(stops).toBe(ending === "completed" ? 0 : 1);
+      if (ending === "completed") {
+        expect(store.list()).toEqual([]);
+        expect(defaultPipelinePorts().conversationRestartCut!(conversationId)).toBeNull();
+        /* The host's completion is authoritative before its rollout echo. */
+        fs.appendFileSync(transcriptPath, JSON.stringify({
+          type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "T1" },
+        }) + "\n");
+        for (let tick = 0; tick < 3; tick += 1) await tickPipelines([entry(transcriptPath)], defaultPorts());
+        expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+        expect(h.spawnInputs).toHaveLength(1);
+      }
+      function defaultPorts(): PipelinePorts {
+        /* Refresh the production readers after each boot; each pass owns
+           its snapshot, while the hold remains a fresh process-wide read. */
+        const refreshed = defaultPipelinePorts();
+        return { ...ports,
+          conversationInterruption: refreshed.conversationInterruption,
+          conversationRestartCut: refreshed.conversationRestartCut,
+          conversationRestartCutHeld: refreshed.conversationRestartCutHeld,
+        };
+      }
+    });
+  } finally {
+    setAgentRegistryForTests(null);
+    setRestartCutHeldRows([]);
+  }
+});
+
+test("a restart evidence hold arriving during termination prevents replacement reservation", async () => {
+  const h = harness();
+  const attempt = await restartCutStage(h);
+  cutByRestart(h, h.ports, attempt, h.ports.now(), "Finished the committed changes; waiting for a tool.");
+  let held = false;
+  let stops = 0;
+  h.ports.conversationRestartCutHeld = () => held;
+  h.ports.stopInterruptedStageAgent = async () => { held = true; stops += 1; return { outcome: "not-running" }; };
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(stops).toBe(1);
+  held = false;
+  h.ports.stopInterruptedStageAgent = async () => ({ outcome: "not-running" });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+});

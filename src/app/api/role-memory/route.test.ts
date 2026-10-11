@@ -40,3 +40,20 @@ test("a rule the store drew is removed and put back through the route", async ()
   expect((await post({ project: PROJECT, ruleId: "r_00000000", action: "delete" })).status).toBe(409);
   for (const ruleId of ["r_xyz", `${left!.id}0`, "rule"]) expect((await post({ project: PROJECT, ruleId, action: "delete" })).status).toBe(400);
 });
+
+test("the operator reverts a version through the existing route and versions stay out of Left", async () => {
+  const source = { project: "route-versions", pipelineId: "route-versions", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_route_versions" };
+  const why = "An earlier write used a receipt belonging to another owner.";
+  const original = "Check every stored receipt against its owner before replaying its acknowledgement.";
+  recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
+  const first = leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: original, why }] }).left[0]!;
+  const next = { ...source, attempt: 2 };
+  recordLessonRequest({ ...next, at: "2026-10-11T00:01:00.000Z" });
+  const revised = leaveLessons({ request: next, source: next, lessons: [], none: null, rewrite: { id: first.id, rule: "Check stored receipts against both their owner and operation before replaying acknowledgements.", why } }).left[0]!;
+  const response = await post({ project: source.project, ruleId: revised.version, action: "revert" });
+  expect(response.status).toBe(200);
+  const scope = projectView(source.project).scopes.find(scope => scope.scope === first.scope)!;
+  expect(scope.active[0]!.rule).toBe(original);
+  expect(scope.active[0]!.versions).toHaveLength(2);
+  expect(scope.left).toEqual([]);
+});

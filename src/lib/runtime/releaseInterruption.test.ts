@@ -2997,3 +2997,110 @@ test.each(["agent", "stage"] as const)("%s: a proposal the pending journal holds
     expect(continuationsIn(ledger)).toEqual([]);
   });
 });
+
+test.each((["claude", "codex"] as const).flatMap((engine) =>
+  (["active", "attention"] as const).flatMap((status) =>
+    (["health", "seat"] as const).map((window) => ({ engine, status, window })))),
+)("$engine $status release completion during the awaited $window read records nothing", async ({ engine: engineKind, status, window }) => {
+  await withJournal(async (journal) => {
+    const engine = deadEngine(2_000_001_299);
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const open = engineKind === "claude" ? openClaudeTurn() : {
+      records: [{ type: "event_msg", timestamp: at, payload: { type: "task_started", turn_id: "T1" } }],
+      ledger: [turnStarted("T1")],
+      ending: [{ type: "event_msg", timestamp: at, payload: { type: "task_complete", turn_id: "T1" } }],
+    };
+    const cut = incumbentConversation(engineKind, cutSessionId(299), engine, open.records);
+    appendHostLedger(cut, open.ledger);
+    markHosted(cut, "live", "T1");
+    const registry = new AgentRegistry(cut.registryFile);
+    const key = { engine: cut.engine, sessionId: cut.sessionId };
+    const host = hostFor(createFakeDeliveryLedger(), {
+      status, pid: engine.pid, processStartIdentity: engine.startIdentity, activeTurnRef: "T1",
+    });
+    const base = await host.health();
+    await bindStructuredDeliveryQueue([{ key, host }] as never, { registry, client: journalClient(journal) });
+    let finished = false;
+    const complete = () => {
+      if (finished) return;
+      finished = true;
+      appendTranscript(cut, open.ending);
+      appendHostLedger(cut, [...open.ending.map((record) => frameOf(record, "T1")), turnEnded("T1")]);
+      markHosted(cut, "idle");
+    };
+    let healthReads = 0;
+    host.health = async () => {
+      const observed = finished ? { ...base, status: "idle" as const, activeTurnRef: null } : base;
+      if (window === "health" && ++healthReads === 1) complete();
+      return observed;
+    };
+    await releaseStructuredDeliveryHostsForDemotion({
+      boundary: "viewer-release:completion-race",
+      seats: () => { if (window === "seat") complete(); return []; },
+    });
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    expect(finished).toBe(true);
+    const successorLedger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, successorLedger)).error).toBeNull();
+    await settle(() => successorLedger.writes.length > 0, 150);
+    expect(continuationsIn(successorLedger)).toEqual([]);
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
+  });
+});
+
+test.each(["agent", "stage"] as const)("a live pending import cannot hide a completed %s proposal from the next boot", async (member) => {
+  await withJournal(async journal => {
+    const open = openClaudeTurn();
+    const cut = incumbentConversation("claude", cutSessionId(298), deadEngine(2_000_001_298), open.records);
+    if (member === "stage") asPipelineStage(cut);
+    appendHostLedger(cut, open.ledger);
+    markHosted(cut, "live", "T1");
+    const obligations = interruptionObligationDirectory(cut.registryFile);
+    fs.mkdirSync(obligations, { recursive: true });
+    fs.chmodSync(obligations, 0o500);
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger, { adoptionFails: true })).error).not.toBeNull();
+    expect(restartCuts(cut.registryFile)).toMatchObject([{ state: member === "agent" ? "owed" : "discharged", turnRef: "T1" }]);
+    appendTranscript(cut, open.ending);
+    appendHostLedger(cut, [...open.ending.map(record => frameOf(record, "T1")), turnEnded("T1")]);
+    fs.chmodSync(obligations, 0o700);
+    const ready = path.join(directory, "import-ready");
+    const release = path.join(directory, "import-release");
+    const childScript = `
+      const fs = await import("node:fs");
+      const { captureProcessIdentity, processIdentityStatus } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../processIdentity.ts"))});
+      const parent = captureProcessIdentity(process.ppid);
+      const { interruptionObligationStore } = await import(${JSON.stringify(path.join(import.meta.dir, "interruptionObligations.ts"))});
+      interruptionObligationStore(${JSON.stringify(obligations)}, { afterPendingRead() {
+        fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+        const limit = Date.now() + 10000;
+        while (!fs.existsSync(${JSON.stringify(release)}) && Date.now() < limit) {
+          if (processIdentityStatus(parent) === "dead") process.exit(1);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+      }}).list();
+    `;
+    const importer = Bun.spawn({ cmd: [process.execPath, "-e", childScript], env: { ...process.env }, stdout: "ignore", stderr: "pipe" });
+    try {
+      await settle(() => fs.existsSync(ready), 1500);
+      expect(fs.existsSync(ready)).toBe(true);
+      const boot = await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(298) });
+      expect(boot.error).toBeNull();
+      fs.writeFileSync(release, "go");
+      expect(await importer.exited).toBe(0);
+      expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(299) })).error).toBeNull();
+      await settle(() => ledger.writes.length > 0);
+      expect(continuationsIn(ledger)).toEqual([]);
+      expect(obligationsFor(cut.registryFile)).toEqual([]);
+      setAgentRegistryForTests(new AgentRegistry(cut.registryFile));
+      try {
+        expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toBeNull();
+      } finally {
+        setAgentRegistryForTests(null);
+      }
+    } finally {
+      fs.writeFileSync(release, "go");
+      await importer.exited;
+    }
+  });
+});
