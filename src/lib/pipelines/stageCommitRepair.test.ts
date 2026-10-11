@@ -202,6 +202,8 @@ test("a real lint refusal of another file whose name ends like the staged one is
 
 function harness(options: { access?: "read-only" | "read-write" } = {}) {
   const access = options.access ?? "read-write";
+  const index = path.join(fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "index-fixture-")), "index");
+  fs.writeFileSync(index, "fixture index\n");
   const requests: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string; cohortAt?: string }> = [];
   let wall = Date.parse("2026-10-07T09:00:00.000Z");
   let turn: StageTurnEvidence = { turn: "busy", message: null, lastRecordAt: wall };
@@ -225,7 +227,9 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
       if (args[0] === "merge-base" && args[1] === "--is-ancestor") return ancestry;
-      if (args[0] === "symbolic-ref" && branchRef) return branchRef;
+      if (args[0] === "symbolic-ref") return head === STAGE_HEAD && branchRef
+        ? branchRef : { code: 0, stdout: `refs/heads/${loadPipelines()[0]?.branch ?? "main"}\n`, stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--git-path") && args.at(-1) === "index") return { code: 0, stdout: `${index}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--verify") return { code: 0, stdout: `${BASE_SHA}\n`, stderr: "" };
@@ -242,12 +246,13 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
         return { code: 0, stdout: changed.join("\0"), stderr: "" };
       }
       if (args[0] === "write-tree") return { code: 0, stdout: `${TREE_SHA}\n`, stderr: "" };
-      if (args[0] === "commit") {
-        if (hook.code === 0) {
-          head = STAGE_HEAD; dirty = [];
-          committedBody = args.filter((_, index) => args[index - 1] === "-m").join("\n\n");
-        }
-        return hook;
+      if (args[0] === "hook" && args.at(-1) === "pre-commit") return hook;
+      if (args[0] === "commit-tree") {
+        committedBody = fs.readFileSync(args[args.indexOf("-F") + 1]!, "utf8");
+        return { code: 0, stdout: `${STAGE_HEAD}\n`, stderr: "" };
+      }
+      if (args[0] === "update-ref" && args.includes(STAGE_HEAD)) {
+        head = STAGE_HEAD; dirty = [];
       }
       /* The ownership proof a read-only stage's commit is checked against. */
       if (args[0] === "show") return { code: 0, stdout: `${BASE_SHA}\0${TREE_SHA}\0${committedBody}\n`, stderr: "" };
@@ -401,7 +406,7 @@ test.each(["blocked", "deadline"] as const)("a rejected %s repair replays as par
   expect(parked.stateDetail).toContain(WHITESPACE_REFUSAL);
   expect(parked.stateDetail).toContain(kind === "blocked" ? BLOCKED_REASON : "did not finish that turn in time");
   expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
-  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(1);
   expect(h.requests).toHaveLength(1);
 });
 
@@ -423,7 +428,7 @@ test.each([
   await tickPipelines([], h.ports);
   const current = loadPipelines()[0]!;
   expect(current.state).toBe(state);
-  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(commits);
+  expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(commits);
   expect(h.requests).toHaveLength(1);
   if (state === "needs_decision") {
     expect(current.stateDetail).toContain(WHITESPACE_REFUSAL);
@@ -461,7 +466,7 @@ test.each(["read-only", "read-write"] as const)("a passed %s stage whose output 
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(h.requests).toHaveLength(1);
-  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(1);
   expect(loadPipelines()[0]!.state).toBe("running");
 
   /* The stage fixed its file and ended its turn; the same hook now accepts it. */
@@ -544,7 +549,7 @@ test.each([
   expect(parked.stateDetail).toContain(BLOCKED_REASON);
   expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
   /* Not committed again, and not asked again. */
-  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(1);
   expect(h.requests).toHaveLength(1);
 });
 
@@ -582,7 +587,7 @@ test("a read-only repair that leaves an undeclared path changed parks on the fen
   expect(parked.stateDetail).toStartWith("read-only stage study modified undeclared worktree paths");
   expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
   expect(study().error).toBe(parked.stateDetail);
-  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(1);
 });
 
 test("the refusal and its deadline are in the store before the request leaves", async () => {
@@ -628,7 +633,7 @@ test("a delivery that throws spends the one repair budget: the commit is not tri
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
-  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(1);
   expect(h.requests.length).toBe(2);
 });
 
@@ -651,7 +656,7 @@ test("a repair the stage never finishes, or the delivery surface never accepts, 
     const parked = loadPipelines()[0]!;
     expect(parked.state).toBe("needs_decision");
     expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
-    expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+    expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(1);
   }
 });
 
@@ -689,7 +694,7 @@ test("a request a crash interrupted after the stage accepted it is replayed unde
   expect(advanced.state).toBe("running");
   expect(advanced.cursor?.stageId).toBe("verify");
   expect(advanced.lastPassedCommit).toBe(STAGE_HEAD);
-  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(2);
+  expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(2);
 });
 
 test.each([
@@ -751,7 +756,7 @@ test("a request the surface admitted but could not acknowledge keeps its moment,
   expect(advanced.state).toBe("running");
   expect(advanced.cursor?.stageId).toBe("verify");
   expect(advanced.lastPassedCommit).toBe(STAGE_HEAD);
-  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(2);
+  expect(h.calls.filter((call) => call.startsWith("git hook run --ignore-missing pre-commit"))).toHaveLength(2);
   /* The stage ran no other turn: its one launch, and the next stage's. */
   expect(study().launchId).toBe("launch-1");
 });
