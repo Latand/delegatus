@@ -1961,6 +1961,10 @@ export class StructuredDeliveryQueue {
           : effect.turnId !== undefined
             ? effect.turnId
             : health.activeTurnRef;
+      // Native queued sends can follow the next turn after a pre-write refusal.
+      // Keep an observed fence on this attempt; only caller fences are durable.
+      const attemptTurnFenceOnly = host.supportsQueuedSend === true && effect.kind === "send"
+        && effect.policy === "queue" && effect.turnId === undefined;
       const entry: QueueEntry = {
         id: effect.operationId,
         content: effect.content,
@@ -2006,7 +2010,7 @@ export class StructuredDeliveryQueue {
         effect.operationId,
         "delivering",
         {
-          turnId: deliveryFence,
+          ...(attemptTurnFenceOnly ? {} : { turnId: deliveryFence }),
           reason: deliveringOwnershipReason(this.executorId, claim),
           ...(routedTurnId ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: routedTurnId } : {}),
         },

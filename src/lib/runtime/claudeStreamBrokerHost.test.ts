@@ -1280,6 +1280,104 @@ describe("ClaudeStreamBrokerHost", () => {
     }
   });
 
+  test.each([
+    { race: "turn-ends", fenced: false },
+    { race: "turn-ends", fenced: true },
+    { race: "turn-starts", fenced: false },
+    { race: "turn-starts", fenced: true },
+  ] as const)("durable queued send survives $race with caller fence=$fenced", async ({ race, fenced }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-queued-race-"));
+    const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: directory,
+      eventStore: new MemoryEventStore(),
+      deliveryLedger: ledger,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    const echo = (text: string, uuid: string) => child.emitJson({
+      type: "user", isReplay: true, session_id: host.identity.sessionId, uuid,
+      message: { role: "user", content: [{ type: "text", text }] },
+    });
+    const startTurn = async () => {
+      const running = host.send({ id: "running-turn", text: "work" });
+      echo("work", "user-running");
+      await running;
+    };
+    const callerFence = race === "turn-ends" ? "running-turn" : null;
+    const command = {
+      kind: "send" as const, operationId: "queued-race", idempotencyKey: "queued-race",
+      conversationId: "conversation-queued-race", text: "follow-up", policy: "queue" as const,
+      ...(fenced ? { turnId: callerFence } : {}),
+    };
+    let raced = false;
+    const queuePort = {
+      effects: async (kinds?: readonly string[], afterEventSeq?: number) => journal.effectBatch(100, kinds, afterEventSeq),
+      status: async (id: string) => journal.operationResult(id)?.receipt ?? null,
+      hostClaim: async () => "fixture-owner",
+      transition: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => {
+        journal.transitionOperation(...args);
+        if (args[1] === "delivering" && !raced) {
+          raced = true;
+          // Change the host after the health snapshot and journal claim, before send.
+          if (race === "turn-ends") {
+            child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
+          } else await startTurn();
+        }
+      },
+    };
+    const newQueue = () => new StructuredDeliveryQueue(queuePort, () => host,
+      undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+    try {
+      if (race === "turn-ends") await startTurn();
+      journal.append({ scope: `session:${command.conversationId}`, kind: "session-status", payload: {
+        conversationId: command.conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId },
+        hostKind: "claude-broker", host: "hosted",
+        turn: race === "turn-ends" ? "running" : "idle", activeTurnId: callerFence,
+        capabilities: { steer: false, structuredAttention: true },
+      } });
+      journal.executeOperation(command);
+      await newQueue().drain();
+      expect(raced).toBe(true);
+      expect(journal.operationResult(command.operationId)?.receipt).toMatchObject({ status: "queued", reason: "stale-turn" });
+      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(1);
+
+      // A successor executor and request replay retain the original operation.
+      expect(journal.executeOperation(command).replayed).toBe(true);
+      const successor = newQueue();
+      await successor.drain();
+      if (!fenced) {
+        expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
+        expect(journal.effectBatch(100, ["runtime.send"])[0]?.payload.turnId).toBeUndefined();
+        await successor.drain();
+        echo("follow-up", "user-follow-up");
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if (journal.operationResult(command.operationId)?.receipt.status === "delivered") break;
+          await Bun.sleep(5);
+        }
+        expect(journal.operationResult(command.operationId)?.receipt).toMatchObject({
+          status: "delivered", turnId: command.operationId,
+        });
+        expect(ledger.load(host.identity.sessionId).filter(state => state.entry.id === command.operationId))
+          .toEqual([expect.objectContaining({ delivered: true })]);
+        expect(journal.executeOperation(command).replayed).toBe(true);
+      }
+      await successor.drain();
+      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(fenced ? 1 : 2);
+      if (fenced) {
+        expect(journal.operationResult(command.operationId)?.receipt.status).toBe("queued");
+        expect(journal.effectBatch(100, ["runtime.send"])[0]?.payload.turnId).toBe(callerFence);
+      }
+    } finally {
+      await host.release();
+      journal.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("queues ordinary active-turn sends and resumes the same durable session", async () => {
     const ledger = new RecordingDeliveryLedger();
     const eventStore = new MemoryEventStore();
