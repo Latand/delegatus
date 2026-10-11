@@ -6785,7 +6785,17 @@ export class AgentRegistry {
           };
           const paths = [receipt.artifactPath, ...(conversation?.generations.map(generation => generation.path) ?? [])];
           if (!paths.every(absent)) return false;
-          const keys = new Set(conversation?.generations.map(generation => sessionKeyId({ engine: conversation.engine, sessionId: generation.id })) ?? []);
+          // A generation id can come from an older transcript filename while
+          // the receipt holds the native key. Include every owner of its paths
+          // instead of treating the filename-derived id as its only writer.
+          const keys = new Set(Object.entries(file.entries)
+            .filter(([, entry]) => paths.includes(entry.artifactPath))
+            .map(([key]) => key));
+          for (const generation of conversation?.generations ?? []) {
+            const key = sessionKeyId({ engine: conversation!.engine, sessionId: generation.id });
+            if (file.entries[key]) keys.add(key);
+            else if (![...keys].some(key => file.entries[key]!.artifactPath === generation.path)) return false;
+          }
           if (receipt.key) keys.add(sessionKeyId(receipt.key));
           for (const key of keys) {
             const entry = file.entries[key];

@@ -283,7 +283,7 @@ test("retry-stage replaces an exhausted reservation with no transcript, host or 
   try {
     f.park();
     expect(f.original.key).toBeNull();
-    expect(f.registry.readOnlySnapshot().conversations[f.original.conversationId]?.generations).toHaveLength(0);
+    expect(f.registry.readOnlySnapshot().conversations[f.original.conversationId]?.generations ?? []).toHaveLength(0);
     const result = await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage", stageId: "build", launchId: f.original.launchId }, f.ports);
     expect(result.error).toBeUndefined();
     await tickPipelines([], f.ports);
@@ -309,7 +309,7 @@ test("recovery exhaustion with no agent settles the receipt and retry-stage laun
   } finally { setAgentRegistryForTests(null); }
 });
 
-test.each(["uncertain", "delivered", "transcript", "unverified", "survivor", "replacement"] as const)("retry preserves %s evidence that an agent might exist", async evidence => {
+test.each(["uncertain", "delivered", "transcript", "unverified", "survivor", "replacement", "same-path"] as const)("retry preserves %s evidence that an agent might exist", async evidence => {
   const f = await fixture();
   try {
     f.loseHost(); f.park();
@@ -320,7 +320,9 @@ test.each(["uncertain", "delivered", "transcript", "unverified", "survivor", "re
       fs.writeFileSync(f.original.artifactPath!, "{}\n");
     } else {
       const entry = f.registry.readOnlySnapshot().entries[`codex:${f.original.key!.sessionId}`]!;
-      f.registry.upsert({ ...entry, ...(evidence === "unverified"
+      f.registry.upsert({ ...entry, ...(evidence === "same-path"
+        ? { key: { engine: "codex", sessionId: randomUUID() }, status: "idle", structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } }
+        : evidence === "unverified"
         ? { structuredHost: { ...entry.structuredHost!, process: { pid: process.pid, startIdentity: null } } }
         : evidence === "replacement" ? { structuredHostOperationId: "other" }
         : { structuredTerminationSurvivors: [captureProcessIdentity(process.pid)] }) });
