@@ -63,6 +63,7 @@ export const MCP_TOOL_NAMES = [
   "pipeline_action",
   "stage_report",
   "leave_lesson",
+  "curate_rules",
   "link_task_to_pipeline",
   "list_conversations",
   "search_transcripts",
@@ -132,6 +133,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      clientRequestId must answer with the rules the first call left rather than
      leave them a second time. */
   "leave_lesson",
+  "curate_rules",
   "link_task_to_pipeline",
   "deploy_exact_sha",
   "flow_action",
@@ -3325,6 +3327,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
     "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
   ].join(" "),
+  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes; scope reads page its active rules, versions, budget archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. Writes stay in local memory. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
     "Answer the lesson request after stage_report exactly once with none (the default), rewrite {id, rule, why}, or lesson {scope, role?, rule, why}.",
     "A new lesson must change what this role does on a different task and use the narrowest true level: own-role work here; every role in this project; or every role in every project on this machine. The curator alone widens role rules across projects.",
@@ -3881,6 +3884,18 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     stageId: z.string().min(1).optional()
       .describe("Only when this conversation holds more than one live stage; the refusal lists them."),
   }).passthrough(),
+  curate_rules: z.object({
+    clientRequestId: clientRequestIdSchema,
+    action: z.enum(["read", "apply"]),
+    scope: z.string().min(1).max(512).optional(), cursor: z.string().max(2048).optional(),
+    scopes: z.array(z.object({ scope: z.string().min(1).max(512), revision: z.number().int().nonnegative(), order: z.array(z.string().min(1).max(128)).max(512) }).strict()).min(1).max(64).optional(),
+    rewrite: z.array(z.object({ id: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    merge: z.array(z.object({ into: z.string(), from: z.array(z.string()).min(1).max(512), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    move: z.array(z.object({ id: z.string(), to: z.string(), note: z.string().trim().min(1).max(1000).optional() }).strict()).max(512).optional(),
+    split: z.array(z.object({ id: z.string(), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional() }).strict()).min(2).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    restore: z.array(z.string()).max(512).optional(),
+  }).strict().refine(args => args.action === "read" ? ![args.scopes, args.rewrite, args.merge, args.move, args.split, args.archive, args.restore].some(value => value !== undefined) : !!args.scopes && args.scope === undefined && args.cursor === undefined, "read takes scope/cursor; apply takes scopes and editorial operations"),
   leave_lesson: z.object({
     clientRequestId: clientRequestIdSchema,
     lesson: z.object({

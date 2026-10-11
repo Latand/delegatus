@@ -305,6 +305,15 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     capabilities: ["read-only"],
   },
   {
+    id: "curator", name: "Curator",
+    description: "Generalizes and consolidates learned rules at their true level on the seat tick.",
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    parameters: [],
+    promptScaffold: `You are a Curator. Read the repository and its instructions, judge the currency and readers of each rule, and change role memory only through curate_rules. Follow the pass brief and checklist. Never quote rule text outside the local tool calls. End with counts and rule ids. Never start a child agent or pipeline. ${SHARED_RULES}`,
+    safetyFences: ["Files stay untouched: no edits, staging, commits or pushes; git and gh are for reading.", "Change role memory only through curate_rules."],
+    capabilities: ["read-only"],
+  },
+  {
     id: "issue-reporter", name: "Issue-reporter",
     description: "Reviews a Delegatus bug report and returns its preview; never publishes.",
     config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },

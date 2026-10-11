@@ -10,8 +10,11 @@ import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, reti
 import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMaintenance/store";
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
+import { curatorCallerOf } from "@/lib/memory/curation/guard";
+import { applyCuration, type CurationApply } from "@/lib/memory/curation/apply";
+import { readCuration } from "@/lib/memory/curation/read";
 import { isMutatingMcpTool } from "./server";
-import { permitIssueReporterTool, permitMaintainerTool } from "./toolAllowlist";
+import { permitIssueReporterTool, permitMaintainerTool, permitCuratorTool } from "./toolAllowlist";
 import { boardSelection } from "./boardSelection";
 import { budgetPage } from "./budgetPage";
 import crypto from "node:crypto";
@@ -6863,6 +6866,10 @@ export function viewerMcpToolPolicy(
       // An admitted agent's read surface is independent of role/seat identity.
       // Resolve authority only where the policy uses it. Bindings still verify
       // their own operation authority and recoverable receipts before dispatch.
+      if (!hostHealthProbe && isMutatingMcpTool(tool) && pipelineCallerRoles(domainDependencies, args.src).includes("curator")) {
+        const verdict = permitCuratorTool(tool, args);
+        if (!verdict.allowed) return verdict;
+      }
       if (!hostHealthProbe && isMutatingMcpTool(tool) && pipelineCallerRoles(domainDependencies, args.src).includes("issue-reporter")) {
         const verdict = permitIssueReporterTool(tool, args);
         if (!verdict.allowed) return verdict;
@@ -7378,6 +7385,18 @@ export function viewerMcpBindings(
     ),
     stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
+    curate_rules: Object.assign(async (args: McpToolArgs) => {
+      try {
+        const pass = curatorCallerOf(attributionOf(domainDependencies).conversationId, domainDependencies.registrySnapshot());
+        return args.action === "read" ? readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined) : applyCuration(pass, args as unknown as CurationApply);
+      } catch (error) {
+        if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
+        throw error;
+      }
+    }, { authorizeReceipt: () => {
+      try { curatorCallerOf(attributionOf(domainDependencies).conversationId, domainDependencies.registrySnapshot()); }
+      catch (error) { if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 }); throw error; }
+    } }),
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: reads.search_transcripts,
