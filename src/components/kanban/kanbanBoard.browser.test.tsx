@@ -98,7 +98,15 @@ describe("memory profile", () => {
           for (const mode of ["cold", "cached"] as const) {
             const started = performance.now();
             await page.locator("[data-profile-summarize]").click();
-            await page.locator("[data-profile-ready]").first().waitFor();
+            await page.waitForFunction(() => {
+              const scroller = document.querySelector<HTMLElement>("[data-memory-profile]");
+              if (!scroller) return false;
+              const band = scroller.getBoundingClientRect();
+              return [...scroller.querySelectorAll<HTMLElement>("[data-profile-ready] h3, [data-profile-ready] h4")].some(title => {
+                const rect = title.getBoundingClientRect();
+                return rect.bottom > Math.max(0, band.top) && rect.top < Math.min(innerHeight, band.bottom) && rect.right > band.left && rect.left < band.right;
+              });
+            });
             const firstMs = Math.round(performance.now() - started);
             await page.locator('[data-memory-profile][aria-busy="false"]').waitFor();
             const totalMs = Math.round(performance.now() - started);

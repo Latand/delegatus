@@ -1,0 +1,490 @@
+[
+  {
+    "width": 1440,
+    "scheme": "light",
+    "lang": "uk",
+    "geometry": {
+      "overflow": 0,
+      "left": 160,
+      "right": 1280,
+      "truncatedPills": 4,
+      "pills": [
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        }
+      ]
+    }
+  },
+  {
+    "width": 390,
+    "scheme": "light",
+    "lang": "uk",
+    "geometry": {
+      "overflow": 0,
+      "left": 0,
+      "right": 390,
+      "truncatedPills": 4,
+      "pills": [
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        }
+      ]
+    }
+  },
+  {
+    "width": 1440,
+    "scheme": "dark",
+    "lang": "uk",
+    "geometry": {
+      "overflow": 0,
+      "left": 160,
+      "right": 1280,
+      "truncatedPills": 4,
+      "pills": [
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        }
+      ]
+    }
+  },
+  {
+    "width": 390,
+    "scheme": "dark",
+    "lang": "uk",
+    "geometry": {
+      "overflow": 0,
+      "left": 0,
+      "right": 390,
+      "truncatedPills": 4,
+      "pills": [
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 117.375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 145.28125,
+          "maxWidth": "min(100%, 240px)"
+        }
+      ]
+    }
+  },
+  {
+    "width": 1440,
+    "scheme": "light",
+    "lang": "en",
+    "geometry": {
+      "overflow": 0,
+      "left": 160,
+      "right": 1280,
+      "truncatedPills": 4,
+      "pills": [
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        }
+      ]
+    }
+  },
+  {
+    "width": 390,
+    "scheme": "light",
+    "lang": "en",
+    "geometry": {
+      "overflow": 0,
+      "left": 0,
+      "right": 390,
+      "truncatedPills": 4,
+      "pills": [
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        }
+      ]
+    }
+  },
+  {
+    "width": 1440,
+    "scheme": "dark",
+    "lang": "en",
+    "geometry": {
+      "overflow": 0,
+      "left": 160,
+      "right": 1280,
+      "truncatedPills": 4,
+      "pills": [
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        }
+      ]
+    }
+  },
+  {
+    "width": 390,
+    "scheme": "dark",
+    "lang": "en",
+    "geometry": {
+      "overflow": 0,
+      "left": 0,
+      "right": 390,
+      "truncatedPills": 4,
+      "pills": [
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 240,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 108.203125,
+          "maxWidth": "min(100%, 240px)"
+        },
+        {
+          "width": 91.09375,
+          "maxWidth": "min(100%, 240px)"
+        }
+      ]
+    }
+  }
+]

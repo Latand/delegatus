@@ -268,7 +268,7 @@ export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, r
   );
 }
 
-/** The rules window: the role, project and machine rules a new agent of the chosen role starts with, side by side on the desktop and stacked on the phone. */
+/** Project memory profile and the source rules its agents start with. */
 export function RulesWindow({ project, focusRule, onClose }: { project: string; focusRule?: string; onClose: () => void }) {
   const { t, locale } = useLocale();
   const { view, failed, act } = useProjectRules(project);

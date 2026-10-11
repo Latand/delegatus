@@ -6322,7 +6322,7 @@ export const en = {
   "memoryProfile.retry": "Try again",
   "memoryProfile.summarizing": "Summarizing…",
   "memoryProfile.loading": "Summaries appear as they finish. You can close this window.",
-  "memoryProfile.errorAccount": "No Claude account of this project has free capacity. Try again later.",
+  "memoryProfile.errorAccount": "No Claude account is available for this project. Check Accounts and try again.",
   "memoryProfile.errorSize": "Memory exceeds the summary size limit. You can still read the rules.",
   "memoryProfile.error": "Could not summarize. Try again.",
   "memoryProfile.stale": "Summary is stale: +{added} rules, {rewritten} rewritten, {removed} removed.",

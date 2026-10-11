@@ -1,0 +1,34 @@
+[
+  {
+    "lang": "uk",
+    "mode": "cold",
+    "model": "haiku",
+    "ruleCount": 106,
+    "firstMs": 2602,
+    "totalMs": 6918
+  },
+  {
+    "lang": "uk",
+    "mode": "cached",
+    "model": "haiku",
+    "ruleCount": 106,
+    "firstMs": 43,
+    "totalMs": 53
+  },
+  {
+    "lang": "en",
+    "mode": "cold",
+    "model": "haiku",
+    "ruleCount": 106,
+    "firstMs": 2347,
+    "totalMs": 5151
+  },
+  {
+    "lang": "en",
+    "mode": "cached",
+    "model": "haiku",
+    "ruleCount": 106,
+    "firstMs": 19,
+    "totalMs": 44
+  }
+]

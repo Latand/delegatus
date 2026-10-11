@@ -39,8 +39,9 @@ One model constant selects the catalogue’s Claude Haiku 5.5 entry when present
 until then it selects `haiku`. The Messages API requires a concrete model id,
 so that alias maps to the verified Haiku 4.5 API target. A project Claude account
 is selected through the existing account admission policy. Its current OAuth
-credential stays inside the direct caller. Provider accounts, unavailable
-capacity or expired credentials produce the account error. No API-key fallback.
+credential stays inside the direct caller. Provider accounts and expired
+credentials are excluded. Unavailable capacity or no eligible credential
+produces the account error. No API-key fallback.
 Each call has a 30-second deadline and a small maximum output token budget.
 
 ## Input, answer and validation
@@ -99,6 +100,40 @@ other installations, GitHub, Telegram or MCP. The prompt forbids identities,
 paths and secrets in the answer, which the UI renders as plain text. Public
 fixtures and evidence contain invented examples only.
 
+## Verification record
+
+The shared browser case in `kanbanBoard.browser.test.tsx` renders the real
+window at 1440 and 390 pixels, in light/dark and Ukrainian/English. It also
+checks the empty, summarizing, error, stale and no-rules states. All eight
+layout combinations have zero horizontal overflow, stay inside the viewport,
+and truncate long pills at 240 pixels. See `evidence/memory-profile/geometry.json`.
+Screenshots use synthetic rules and were visually inspected; every browser
+and fixture server was closed by its owner.
+
+The opt-in timing case uses a private, read-only snapshot of 106 active rules
+across six slices, the direct model caller, the profile service, NDJSON and the
+real client window. It measures from the button click to a generated headline
+intersecting the scroller's visible area, then to the terminal profile state.
+Only timing metadata is retained in `evidence/memory-profile/timings.json`.
+
+| Locale | Application cache | First visible | Complete |
+| --- | --- | ---: | ---: |
+| Ukrainian | Cold | 2.602 s | 6.918 s |
+| English | Cold | 2.347 s | 5.151 s |
+| Ukrainian | Cached | 0.043 s | 0.053 s |
+| English | Cached | 0.019 s | 0.044 s |
+
+The measured model is the `haiku` fallback, mapped to Haiku 4.5. Cold means an
+empty application profile cache; the provider's schema cache may already be
+warm. The harness supplies a current credential directly and uses an in-memory
+storage port; production account admission and SQLite persistence are covered
+separately by focused tests. These are observations from this machine, with
+seven independent summary jobs per cold locale, rather than latency guarantees.
+
+Focused tests cover scope slicing, number binding, locale retry, cache/stale
+behavior, persistence isolation, structured requests, route authority and stream
+decoding. They run by explicit path through the owned gate with isolated state.
+
 ## 7. Export: the shape for later
 
 The operator: these are abstract rules that could help other people, so the
@@ -134,8 +169,8 @@ and what never leaves, so nothing built now has to change for it.
 
 ### 7.2 What goes in by default
 
-Machine and roles on every project are checked: they are about tools and
-kinds of work, not this repository. Roles on this project are unchecked
+Machine and roles on every project are checked: they cover general tools and
+kinds of work. Roles on this project are unchecked
 and can be ticked. The project level is unchecked and says why: it is about
 this repository.
 

@@ -5,7 +5,7 @@ import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAutho
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 afterEach(() => setCallerConversationResolverForTests(null));
-const post = (body: unknown, headers: Record<string, string> = {}) => POST(new NextRequest("http://localhost/api/role-memory/profile", { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) }));
+const post = (body: unknown, headers: Record<string, string> = {}) => POST(new NextRequest("http://localhost/api/role-memory/profile", { method: "POST", headers: { Host: "localhost", Origin: "http://localhost", "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) }));
 
 test("reads do not create a profile and reject missing or unsupported locales", async () => {
   expect((await GET(new NextRequest("http://localhost/api/role-memory/profile?project=sample-route"))).status).toBe(400);

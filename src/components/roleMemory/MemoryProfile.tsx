@@ -50,7 +50,7 @@ export function MemoryProfile({ rules, renderRules }: { rules: RoleMemoryProject
   const code = count ? error ?? view?.run?.errors[0]?.code : null;
   const overall = count ? view?.overall : null;
   return <div data-memory-profile="" className="min-h-0 flex-1 overflow-y-auto p-3" aria-busy={running}>
-    <section className="rounded-xl border border-border bg-card p-4">
+    <section data-profile-ready={overall ? "" : undefined} className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <h3 className="m-0 text-[16px] font-semibold">{overall?.answer.headline ?? t(count ? "memoryProfile.noneTitle" : "memoryProfile.emptyTitle")}</h3>
@@ -64,7 +64,7 @@ export function MemoryProfile({ rules, renderRules }: { rules: RoleMemoryProject
       {code ? <p role="alert" className="mb-0 mt-3 text-[12px] text-danger">{t(code === "account" ? "memoryProfile.errorAccount" : code === "size" ? "memoryProfile.errorSize" : "memoryProfile.error")}</p> : null}
       {count > 0 && view?.stale ? <p data-profile-stale="" className="mb-0 mt-3 rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning">{t("memoryProfile.stale", view.changes)}</p> : null}
       {overall && view ? <>
-        <p className="mb-0 mt-3 text-[11px] text-muted">{modelDisplayName("claude", view.model)} · {new Date(overall.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")} · {t(locale === "uk" ? "memoryProfile.uk" : "memoryProfile.en")}{view.run?.durationMs !== undefined ? ` · ${(view.run.durationMs / 1000).toFixed(1)} s` : ""}</p>
+        <p className="mb-0 mt-3 text-[11px] text-muted">{modelDisplayName("claude", overall.model)} · {new Date(overall.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")} · {t(locale === "uk" ? "memoryProfile.uk" : "memoryProfile.en")} · {(overall.durationMs / 1000).toFixed(1)} s</p>
         {topics(overall, true)}
       </> : null}
     </section>
