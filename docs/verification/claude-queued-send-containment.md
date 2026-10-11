@@ -32,6 +32,11 @@ credentials, transcript excerpts or agent controls were used.
   cases failed because a second input reached stdin during the incumbent
   turn. With containment, all five passed through the real broker,
   `StructuredDeliveryQueue`, `RuntimeJournal` and engine-event projection.
+- Separately, the operator-predecessor interruption finding was base-green and
+  head-red: both reported cases passed at historical base
+  `efd43fc7ccb47b40b0ced4d17393c1ffd7fbcafb` and failed at reviewed pre-fix
+  head `9d133060fb66968fa8f8ffb9f1fd5fd8337936f1`. The integrated repair's
+  16-case regression passes at `9607fef77d31d76e80af5c4a57865b54e8b5bd9a`.
 - The final cases cover two batches, three pending follow-ups per batch,
   queued images, a replacement executor, idempotent operation replay,
   permission answer and expiration, explicit interruption, and a subsequent
