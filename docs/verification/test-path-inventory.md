@@ -2224,3 +2224,17 @@ The refreshed historical confirmations also pass by isolated path:
 
 The refreshed `bunx tsc --noEmit` through `scripts/gate-slot.sh` passes with
 the gate's default heap, and `git diff --check` passes.
+
+### Forced probe termination
+
+A real Node child that ignores SIGTERM exposed the remaining cleanup gap:
+the timed-out probe returned after **4.55 seconds** with that child still
+running. Sending SIGKILL had completed the shared cleanup promise before the
+child's close event arrived.
+
+Cleanup now awaits that event after escalation, with a **two-second** bound
+that rejects rather than reports successful cleanup if termination is not
+observed. The existing probe test file records the owned child and checks it
+is absent both when each shared close completes and when the probe returns.
+The regression passes in **4.53 seconds**, and the full file passes **13/0**
+under isolated state through the owned gate.

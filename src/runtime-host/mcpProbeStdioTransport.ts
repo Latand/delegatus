@@ -122,12 +122,20 @@ export class McpProbeStdioTransport implements Transport {
       const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
       try { child.stdin?.end(); } catch { /* already closed */ }
       await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref())]);
-      if (child.exitCode === null) {
+      if (child.exitCode === null && child.signalCode === null) {
         try { child.kill("SIGTERM"); } catch { /* already exited */ }
         await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref())]);
       }
-      if (child.exitCode === null) {
+      if (child.exitCode === null && child.signalCode === null) {
         try { child.kill("SIGKILL"); } catch { /* already exited */ }
+        // Sending a signal does not mean the child has exited. Keep concurrent
+        // callers on the cleanup promise until termination is observed.
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(
+            new Error("MCP probe child did not exit after SIGKILL"),
+          ), 2_000).unref();
+          void closed.then(() => { clearTimeout(timer); resolve(); });
+        });
       }
     }
     this.closeHealthAdmission?.();
