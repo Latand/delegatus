@@ -816,16 +816,51 @@ test("the executor's own status read, after the queue's answered, shows that ste
   f.journal.close();
 });
 
-function handOffFixture(name: string) {
+function handOffFixture(name: string, sqlite = false) {
   const f = fixture();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-handoff-${name}-`));
-  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
+    sqlite ? { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") } : {});
   return { f, root, registry, cleanup: () => { f.journal.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 function handOff(key: string, text = "queued for Codex") {
   return new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
     body: JSON.stringify({ kind: "native-queue", conversationId, idempotencyKey: key, action: "add", text, binding }) });
 }
+
+test("fresh and replayed hand-off writer waits name the returned original operation and perform one native add", async () => {
+  const { registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const { f, registry, root, cleanup } = handOffFixture("correlation", true);
+  const holder = registryLockHolder(path.join(root, "registry.sqlite"));
+  const progress = new DeliveryProgressStore(null);
+  const dependencies = { client: () => f.client, enabled: () => true, kick: () => {},
+    admitImages: () => ({ images: [], error: null }), storeImages: () => [], registry: () => registry, progress };
+  try {
+    let operationId: string | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      resetBlockingWaitsForTests(() => {});
+      await holder.hold(600);
+      const { value: response, gapMs } = await longestLoopGap(() => handleNativeQueue(handOff("correlated-original-key"), dependencies as never));
+      expect(response.status).toBe(202);
+      const body = await response.json();
+      operationId ??= body.operationId;
+      expect(body.operationId).toBe(operationId);
+      expect(gapMs).toBeLessThan(50);
+      expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "delivery.direct-admission")?.operationId).toBe(operationId);
+    }
+    const command = { ...JSON.parse(await handOff("correlated-original-key").text()), operationId };
+    await f.executor.execute(command);
+    await f.executor.execute(command);
+    expect(f.calls.filter(call => call.endsWith("/add"))).toHaveLength(1);
+  } finally {
+    await holder.close();
+    progress.close();
+    registry.close();
+    cleanup();
+  }
+});
 
 test("a Queue-for-Codex hand-off whose reply is lost is owned and recorded from before its command, a replay answers the same operation, and Codex's queue receives one add", async () => {
   const { f, registry, cleanup } = handOffFixture("lost-reply");
