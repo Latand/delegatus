@@ -9,6 +9,7 @@ import { fixtureBoardReads } from "./boardReads.fixture";
 import { CompanionStorage } from "./storage";
 import { CompanionAdmission } from "./admission";
 import { CompanionLiveSessions } from "./liveSession";
+import type { LiveProvider } from "./provider";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 const roots: string[] = [];
@@ -28,6 +29,77 @@ function fixture(mode = "sdp") {
     environment: { ...process.env, LLV_CODEX_BINARY: binary, VOICE_STUB_ROOT: root, VOICE_STUB_MODE: mode, OPENAI_API_KEY: "synthetic", OTHER_API_KEY: "synthetic" } });
   return { root, binary, provider };
 }
+function sessions(root: string, provider: CodexLiveProvider, apiProvider?: Pick<LiveProvider, "hangup">) {
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true, monthlyCapUsd: 0 });
+  storage.providerKey = () => { throw new Error("API key read on subscription path"); };
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("slice 1 is read-only"); }, reports: () => [] });
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  return { storage, admission, service: new CompanionLiveSessions(storage, admission, reads, provider, { timers: false, closeTimeoutMs: 50, apiProvider }) };
+}
+
+test("a Codex-backed service recovers an old API call through its API provider", async () => {
+  const f = fixture();
+  const hangups: string[] = [];
+  const { storage, admission, service } = sessions(f.root, f.provider, { hangup: async (id, key) => {
+    expect(key).toBe("synthetic-credential"); hangups.push(id);
+    if (hangups.length === 1) throw new Error("PROVIDER_ERROR");
+  } });
+  storage.providerKey = () => "synthetic-credential";
+  const old = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
+  storage.change(document => { Object.assign(document.sessions[old.id], { providerId: "old_api_call", remoteOpen: true }); });
+  await service.recover();
+  expect(storage.read().sessions[old.id]).toMatchObject({ closed: true, remoteOpen: true });
+  await service.recover();
+  expect(hangups).toEqual(["old_api_call", "old_api_call"]);
+  expect(storage.read().sessions[old.id].remoteOpen).toBe(false);
+  await service.recover();
+  expect(hangups).toHaveLength(2);
+});
+
+test("a start answering after the operator close timeout reaps its minted call", async () => {
+  const f = fixture();
+  const { storage, service } = sessions(f.root, f.provider);
+  const pending = service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "close-during-start" });
+  void pending.catch(() => {});
+  try {
+    await until(() => fs.existsSync(path.join(f.root, "ack")));
+    const pid = Number(fs.readFileSync(path.join(f.root, "pid"), "utf8"));
+    await service.closeRequest("close-during-start");
+    expect(Object.values(storage.read().sessions)[0].closed).toBe(true);
+    expect(gone(pid)).toBe(false);
+    fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+    await expect(pending).rejects.toThrow("PROVIDER_ERROR");
+    expect(gone(pid)).toBe(true);
+    await expect(f.provider.attach("voice_thread", "", () => {}, () => {})).rejects.toThrow("PROVIDER_ERROR");
+    expect(Object.values(storage.read().sessions)[0]).toMatchObject({ closed: true, remoteOpen: false, backend: "codex" });
+    await service.recover();
+    expect(gone(pid)).toBe(true);
+  } finally { fs.writeFileSync(path.join(f.root, "sdp"), "ready"); await pending.catch(() => {}); await f.provider.hangup("voice_thread", ""); }
+}, 15000);
+
+test("recovery reaps a Codex call retained by this provider before clearing remoteOpen", async () => {
+  const f = fixture(); fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  const first = sessions(f.root, f.provider);
+  const session = await first.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  const pid = Number(fs.readFileSync(path.join(f.root, "pid"), "utf8"));
+  const recovered = sessions(f.root, f.provider);
+  const hangup = f.provider.hangup.bind(f.provider);
+  let attempts = 0;
+  f.provider.hangup = async (...args) => { if (++attempts === 1) throw new Error("PROVIDER_ERROR"); await hangup(...args); };
+  try {
+    await recovered.service.recover();
+    expect(recovered.storage.read().sessions[session.sessionId].remoteOpen).toBe(true);
+    expect(gone(pid)).toBe(false);
+    await Promise.all([recovered.service.recover(), recovered.service.recover()]);
+    expect(gone(pid)).toBe(true);
+    expect(attempts).toBe(2);
+    expect(recovered.storage.read().sessions[session.sessionId]).toMatchObject({ closed: true, remoteOpen: false });
+    await expect(f.provider.attach(session.providerId, "", () => {}, () => {})).rejects.toThrow("PROVIDER_ERROR");
+    await recovered.service.recover();
+    expect(attempts).toBe(2);
+  } finally { f.provider.hangup = hangup; await first.service.close(session.sessionId); await hangup(session.providerId, ""); }
+}, 15000);
 
 test("start waits for the SDP notification after the RPC acknowledgement", async () => {
   const f = fixture(); let settled = false;
@@ -48,6 +120,14 @@ test("an error before SDP and non-subscription auth refuse and reap the process"
     expect(gone(pid)).toBe(true);
     expect(JSON.parse(fs.readFileSync(path.join(f.root, "env"), "utf8")).filter((key: string) => /_API_KEY$/i.test(key))).toEqual([]);
   }
+});
+
+test("a realtime error in the SDP stdout chunk refuses and reaps the call", async () => {
+  const f = fixture("sdp-error"); fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  try {
+    await expect(f.provider.create("", "en", "v=0", "Fixture", "fixture")).rejects.toThrow("PROVIDER_ERROR");
+    expect(gone(Number(fs.readFileSync(path.join(f.root, "pid"), "utf8")))).toBe(true);
+  } finally { await f.provider.hangup("voice_thread", ""); }
 });
 
 test("capacity honours project bindings and never falls back to the legacy home", () => {

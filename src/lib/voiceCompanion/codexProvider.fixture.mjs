@@ -26,7 +26,9 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
         if (!fs.existsSync(`${root}/sdp`)) return;
         clearInterval(timer);
         note("thread/realtime/started", { threadId });
-        note("thread/realtime/sdp", { threadId, sdp: "v=0\r\nanswer\r\n" });
+        const answer = { method: "thread/realtime/sdp", params: { threadId, sdp: "v=0\r\nanswer\r\n" } };
+        if (mode === "sdp-error") process.stdout.write(`${JSON.stringify(answer)}\n${JSON.stringify({ method: "thread/realtime/error", params: { threadId, message: "connection failed" } })}\n`);
+        else send(answer);
         if (mode === "tools") {
           for (let index = 0; index < 2; index++) setTimeout(() => {
             note("thread/realtime/itemAdded", { threadId, item: { type: "handoff_request", handoff_id: `handoff_${index}`, input_transcript: "Read the open tasks on the board" } });

@@ -11,6 +11,11 @@ selected only by `LLV_VOICE_BACKEND=codex`; there is no new UI control.
    until `thread/realtime/sdp`. A pre-SDP error rejects start and the recorded
    stub PID has exited. The limit variant reads the same client's account
    window, records the observation and returns its reset time.
+   A close timeout before SDP followed by a late answer also rejects start,
+   reaps the stub and clears its stored open flag. Recovery stops a call still
+   held by the same provider; a refused hangup keeps the open flag until a
+   later recovery confirms cleanup. An error immediately after SDP in the
+   same stdout chunk rejects start and reaps the stub too.
 2. **Registry and read ledger.** Two `item/tool/call` requests for `list_tasks`
    in separate backing turns produce one store read. The second result has
    `repeated: true` and `readSecondsAgo: 0`, through the existing 120-second
@@ -33,6 +38,8 @@ selected only by `LLV_VOICE_BACKEND=codex`; there is no new UI control.
    realtime start/stop/appendSpeech and dynamic-tool responses, rejecting a
    deliberately unsupported field in every case. The installed canary version
    was `codex-cli 0.162.1`; the test runtime was Bun `1.4.0`.
+   On machines without Codex the installed-schema test skips; the acceptance
+   check requires an installed executable and passes against it here.
 6. **Live board answer.** The canary uses a copied managed sign-in in isolated
    homes, the production task/pipeline stores and
    `createCompanionBoardReadPaths` through `CompanionLiveSessions`. The spoken
@@ -45,6 +52,10 @@ the absent Codex provider, the USD-cap refusal on a subscription session and
 the HTTP refusal codes being collapsed to `COMPANION_UNAVAILABLE`. A separate
 transport regression test first reproduced a tool response written after
 stdin closed; the client now fences that write.
+Review regressions first reproduced the late-start process leak, premature
+recovery closure, the dropped error following SDP, and recovery of an old API
+call through a Codex no-op. Old API calls now use the API provider for recovery
+even when new calls use Codex, and remain open until hangup is confirmed.
 
 ## Live measurements
 
@@ -85,7 +96,7 @@ Tests run by explicit file path through `scripts/gate-slot.sh`, with `HOME`,
 XDG configuration, `TMPDIR` and `LLV_STATE_DIR` under one private temporary
 root, and `LLV_VIEWER_CONTROL_URL` set to a closed loopback port. TypeScript,
 changed-file ESLint and the local publication privacy gate use the project's
-gates. The seven explicit test files cover 111 tests; the final pre-push gate
+gates. The ten explicit test files cover 363 tests; the final pre-push gate
 also compares touched files against the merge base. No runtime-host source
 changes are part of this slice.
 

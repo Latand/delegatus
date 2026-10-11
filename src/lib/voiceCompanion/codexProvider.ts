@@ -60,7 +60,7 @@ export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, p
 interface Call {
   client: CodexAppServerClient; account: VoiceAccount; cwd: string; id: string; createdAt: number;
   events: unknown[]; event?(value: unknown): void; lost?(): void; tool?: LiveToolHandler;
-  stopping?: Promise<void>; reaped: Promise<void>; ready?: boolean; failed?: boolean;
+  stopping?: Promise<void>; reaped: Promise<void>; sdpReceived?: boolean; failed?: boolean;
 }
 
 /** Companion-owned stdio protocol. No conversation host, writer or composer
@@ -121,8 +121,10 @@ export class CodexLiveProvider implements LiveProvider {
         const params = jsonObject(notification.params);
         if (notification.method === "account/rateLimits/updated") { this.limits(active, params?.rateLimits); return; }
         if (params?.threadId !== id) return;
-        if (notification.method === "thread/realtime/sdp" && typeof params.sdp === "string" && params.sdp.length > 0 && params.sdp.length <= 96_000) resolveSdp(params.sdp);
-        else if (notification.method === "thread/realtime/error" && !active.ready) rejectSdp(new CodexVoiceError("PROVIDER_ERROR"));
+        if (notification.method === "thread/realtime/sdp" && typeof params.sdp === "string" && params.sdp.length > 0 && params.sdp.length <= 96_000) {
+          active.sdpReceived = true;
+          resolveSdp(params.sdp);
+        } else if (notification.method === "thread/realtime/error" && !active.sdpReceived) rejectSdp(new CodexVoiceError("PROVIDER_ERROR"));
         else this.notification(active, notification);
       });
       client.onLifecycle(event => {
@@ -135,8 +137,7 @@ export class CodexLiveProvider implements LiveProvider {
       try {
         await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName));
         const answerSdp = await answer;
-        if (active.failed) throw new CodexVoiceError("PROVIDER_ERROR");
-        active.ready = true;
+        if (active.failed || active.stopping) throw new CodexVoiceError("PROVIDER_ERROR");
         return { id, sdp: answerSdp };
       } catch (error) {
         if (error instanceof CodexVoiceError && error.message === "PROVIDER_ERROR") {

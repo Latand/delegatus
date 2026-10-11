@@ -37,7 +37,11 @@ interface ActiveSession {
   hangingUp?: Promise<void>;
   codexTurn?: { project: string | null; sourceTurn?: number; confirmationProposalId: string | null };
 }
-interface Options { key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean }
+interface Options {
+  key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean;
+  /** Old API calls keep their original hangup path while Codex is selected. */
+  apiProvider?: Pick<LiveProvider, "hangup">;
+}
 export interface MintedCompanionSession { sessionId: string; providerId: string; sdp: string }
 /** `session.commentary.append` takes at most 500 tokens. A token holds at
  * least one byte, so text of at most 500 UTF-8 bytes always fits, whatever
@@ -186,8 +190,12 @@ export class CompanionLiveSessions {
       }
       return { sessionId: id, providerId: minted.id, sdp: minted.sdp };
     } catch (error) {
-      if (active.providerId && !active.ended) {
-        try { await this.provider.hangup(active.providerId, key); active.hungUp = true; }
+      if (active.providerId && (codex || !active.ended)) {
+        try {
+          await this.provider.hangup(active.providerId, key); active.hungUp = true;
+          // The close timeout may already have finished the local session.
+          if (codex) this.storage.change(document => { document.sessions[id].remoteOpen = false; });
+        }
         catch { /* remoteOpen stays set: recovery retries the hangup. */ }
       }
       const uncertain = !active.providerId && !refused && !hungUpUnnamed;
@@ -198,6 +206,7 @@ export class CompanionLiveSessions {
         if (refused) this.storage.settle(id, 0);
       }
       this.finish(active, false);
+      if (codex && active.providerId && !active.hungUp) this.retryHangup(id);
       if (codex) throw error;
       throw new Error(uncertain ? "MINT_UNCERTAIN" : "PROVIDER_ERROR");
     }
@@ -528,9 +537,19 @@ export class CompanionLiveSessions {
       const session = this.admission.session(id);
       if (this.active.has(id)) return;
       if (session.backend === "codex") {
-        // Its Viewer-owned lease is gone. No remote hangup or API-key lookup
-        // can recover an ephemeral call from the previous Viewer.
-        this.storage.change(document => { document.sessions[id].remoteOpen = false; delete document.sessions[id].mintUncertain; });
+        // Recovery also runs in the same Viewer after a failed start. Stop
+        // any call this provider still owns; a previous Viewer's lease ended
+        // its call, so the provider's idempotent hangup has nothing to do.
+        let confirmed = true;
+        if (session.providerId && this.provider.backend === "codex") {
+          try { await this.provider.hangup(session.providerId, ""); }
+          catch { confirmed = false; }
+        }
+        this.storage.change(document => {
+          document.sessions[id].remoteOpen = !confirmed;
+          if (confirmed) delete document.sessions[id].mintUncertain;
+        });
+        if (confirmed) this.retrying.delete(id); else this.retryHangup(id);
         if (!session.closed) { this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true }); this.admission.retire(id); }
         return;
       }
@@ -542,7 +561,11 @@ export class CompanionLiveSessions {
       const uncertain = !session.providerId && !!session.mintUncertain && session.remoteOpen !== false;
       if (remote) {
         let confirmed = false;
-        try { await this.provider.hangup(session.providerId!, this.options.key?.() ?? this.storage.providerKey()); confirmed = true; }
+        try {
+          const provider = this.provider.backend === "codex" ? this.options.apiProvider : this.provider;
+          if (!provider) throw new Error("PROVIDER_ERROR");
+          await provider.hangup(session.providerId!, this.options.key?.() ?? this.storage.providerKey()); confirmed = true;
+        }
         catch { /* Asked again below and at the next recovery. */ }
         this.storage.change(document => { document.sessions[id].remoteOpen = !confirmed; });
         if (confirmed) this.retrying.delete(id); else this.retryHangup(id);

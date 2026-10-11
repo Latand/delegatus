@@ -31,10 +31,11 @@ function check(value: unknown, schema: Schema, root: Schema, at = "params"): voi
     }
   }
 }
-test("the installed Codex experimental schema contains every field the voice sends", () => {
+const codexBinary = codexAccountBinary();
+test.if(Bun.which(codexBinary) !== null)("the installed Codex experimental schema contains every field the voice sends", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "voice-schema-"));
   try {
-    const generated = Bun.spawnSync([codexAccountBinary(), "app-server", "generate-json-schema", "--experimental", "--out", directory], { stdout: "ignore", stderr: "pipe", env: { ...process.env, CODEX_HOME: directory } });
+    const generated = Bun.spawnSync([codexBinary, "app-server", "generate-json-schema", "--experimental", "--out", directory], { stdout: "ignore", stderr: "pipe", env: { ...process.env, CODEX_HOME: directory } });
     expect(generated.exitCode).toBe(0);
     const cases = [
       ["v1/InitializeParams", { clientInfo: { name: "agent-log-viewer", version: "0.11.7" }, capabilities: { experimentalApi: true } }],
