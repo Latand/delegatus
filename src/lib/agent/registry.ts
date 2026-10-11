@@ -17,7 +17,7 @@ import {
   sameRecordedProcessIdentity,
   type ProcessIdentity,
 } from "@/lib/processIdentity";
-import { durableSemanticTitle, firstPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
+import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -5665,10 +5665,17 @@ export class AgentRegistry {
         }
       }
       const requestedTitle = input.launchProfile?.title;
+      const existingAttempt = input.clientAttemptId
+        ? Object.values(file.receipts).find((receipt) => receipt.clientAttemptId === input.clientAttemptId)
+        : null;
       const requestedProfile = emptyLaunchProfile({
         cwd: input.cwd,
         ...(input.launchProfile ?? {}),
-        title: durableSemanticTitle(requestedTitle) ?? (requestedTitle == null ? firstPromptLine(input.launchDisplay?.prompt?.trim(), 80) : null),
+        /* A replay that omits title keeps the admitted name before deriving a
+           fresh one; an explicit title still participates in compatibility. */
+        title: durableSemanticTitle(requestedTitle) ?? (requestedTitle == null
+          ? durableSemanticTitle(existingAttempt?.launchProfile.title) ?? firstMeaningfulPromptLine(input.launchDisplay?.prompt, 80)
+          : null),
         ...(explicitProject ? { project: explicitProject } : {}),
         parentConversationId,
       });
@@ -5694,7 +5701,7 @@ export class AgentRegistry {
         throw new Error("conversation migration prevents resume succession");
       }
       if (input.clientAttemptId) {
-        const existing = Object.values(file.receipts).find((receipt) => receipt.clientAttemptId === input.clientAttemptId);
+        const existing = existingAttempt;
         if (existing) {
           const existingTitle = durableSemanticTitle(existing.launchProfile.title);
           const requestedTitle = durableSemanticTitle(profile.title);

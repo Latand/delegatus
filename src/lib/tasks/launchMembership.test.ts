@@ -24,11 +24,25 @@ test("an operator or agent launch is keyed by its attempt (or launch id) and tit
   expect(keyless.identity.clientAttemptId).toBeNull();
 });
 
+test("a replay's recorded title names a replacement task when its request omits the title", () => {
+  const titledReceipt = { ...receipt, launchProfile: { title: "Operator-chosen export audit" },
+    launchDisplay: { prompt: "Inspect export retry ownership." } };
+  const input = launchMembershipInput({ engine: "codex", cwd: "/repo", clientAttemptId: "attempt-1",
+    launchDisplay: { prompt: "Inspect export retry ownership." } }, titledReceipt, noPipelines, projectFor);
+  const replacement = ensureTaskMembership([], input, { id: () => "replacement" });
+  expect(replacement.ok).toBe(true);
+  if (!replacement.ok) throw new Error(replacement.error);
+  expect(replacement.tasks[0]!.text).toBe("Operator-chosen export audit\nInspect export retry ownership.");
+  expect(replacement.tasks[0]!.assignments).toHaveLength(1);
+  expect(launchMembershipInput({ engine: "codex", cwd: "/repo", clientAttemptId: "attempt-1" }, titledReceipt, noPipelines, projectFor))
+    .toMatchObject({ title: "Operator-chosen export audit", description: "Inspect export retry ownership." });
+});
+
 test("a pipeline stage joins the pipeline's recorded tasks; a task-less pipeline or flow gets one fallback task per container", () => {
-  const bound = launchMembershipInput({ engine: "codex", cwd: "/repo", origin: { kind: "container", container: "pipeline", containerId: "p1" } }, receipt, (id) => (id === "p1" ? ["task-a", "task-b"] : null), projectFor);
+  const bound = launchMembershipInput({ engine: "codex", cwd: "/repo", origin: { kind: "container", container: "pipeline", containerId: "p1" } }, receipt, (id) => (id === "p1" ? { taskIds: ["task-a", "task-b"] } : null), projectFor);
   expect(bound.explicitTaskIds).toEqual(["task-a", "task-b"]);
   expect(bound.origin).toEqual({ kind: "launch", key: "launch-1" });
-  const fallback = launchMembershipInput({ engine: "codex", cwd: "/repo", origin: { kind: "container", container: "pipeline", containerId: "p2" } }, receipt, () => [], projectFor);
+  const fallback = launchMembershipInput({ engine: "codex", cwd: "/repo", origin: { kind: "container", container: "pipeline", containerId: "p2" } }, receipt, () => ({ taskIds: [] }), projectFor);
   expect(fallback.origin).toEqual({ kind: "pipeline", key: "p2" });
   expect(fallback.explicitTaskIds).toBeUndefined();
   const flow = launchMembershipInput({ engine: "claude", cwd: "/repo", origin: { kind: "container", container: "flow", containerId: "f1" } }, receipt, noPipelines, projectFor);
@@ -36,7 +50,7 @@ test("a pipeline stage joins the pipeline's recorded tasks; a task-less pipeline
 });
 
 function ports(commit: (input: MembershipInput) => MembershipResult): LaunchMembershipPorts {
-  return { commit, pipelineTaskIds: () => ["gone-task"], projectForCwd: projectFor };
+  return { commit, pipelineContext: () => ({ taskIds: ["gone-task"] }), projectForCwd: projectFor };
 }
 
 test("unreadable seat ownership refuses a rotation before it can create a placeholder", () => {
@@ -183,7 +197,7 @@ test("a launch that names no directory still admits, and the project derivation 
   expect(adopted.project).toBe("other");
   const recovered = admitRecoveredLaunch(
     { launchId: "launch-r", conversationId: "conversation_r", engine: "claude", cwd: undefined, clientAttemptId: null, explicitProject: null, launchProfile: {}, launchDisplay: null },
-    { commit: (input) => ({ ok: true, tasks: [], taskIds: [input.project], created: [], changed: false }), pipelineTaskIds: noPipelines, projectForCwd: derive },
+    { commit: (input) => ({ ok: true, tasks: [], taskIds: [input.project], created: [], changed: false }), pipelineContext: noPipelines, projectForCwd: derive },
   );
   expect(recovered.ok && recovered.taskIds).toEqual(["other"]);
 });
@@ -233,7 +247,7 @@ test("a launch that resolves to a task another linked machine runs is refused wi
     const task = { id: "task-on-peer", project: "derived:/repo", status: "assigned" as const, text: "Runs on the peer", placement: "unplaced" as const,
       assignments: [held], machine: peer, createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z" };
     const commits = ports((input) => ensureTaskMembership([task], input));
-    const withPipeline = { ...commits, pipelineTaskIds: (id: string) => (id === "lane" ? [task.id] : null) };
+    const withPipeline = { ...commits, pipelineContext: (id: string) => (id === "lane" ? { taskIds: [task.id] } : null) };
     const launches = [
       { name: "explicit targets", launch: { engine: "codex", cwd: "/repo", clientAttemptId: "explicit-1", taskIds: [task.id] }, conversationId: "conversation_new" },
       { name: "pipeline stage", launch: { engine: "codex", cwd: "/repo", origin: { kind: "container", container: "pipeline", containerId: "lane" } }, conversationId: "conversation_stage" },
