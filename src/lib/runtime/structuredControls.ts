@@ -398,7 +398,12 @@ export async function dispatchStructuredControl(
           try { await (dependencies.kick ?? kickStructuredDeliveryQueue)(); } catch { /* committed hold stands */ }
         }
         if (waiting) {
-          const withdrawal = registry.withdrawConversationReconfigure(conversation.id, waiting.operationId);
+          const written = await registry.deliveryWrite({ label: "migration.withdraw-pick", operationId: waiting.operationId },
+            () => registry.withdrawConversationReconfigure(conversation.id, waiting.operationId));
+          if (!written.acquired) return { status: 503, body: {
+            error: "the delivery record's write lock is busy; the waiting pick and its messages remain held", retryable: true,
+          } };
+          const withdrawal = written.value;
           /* The claim won the race with this withdrawal: the move is under way, and a profile-only reconfigure
              in its place would supersede it while answering success. */
           if (withdrawal.kind === "claimed") return switchApplying(waiting);

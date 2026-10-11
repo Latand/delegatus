@@ -587,6 +587,9 @@ export type PipelineStageAttempt = {
     /** Missing on older settled repairs, which already permitted a commit. */
     outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
     settledAt?: string;
+    /** Consumes the one recommit before Git runs. Recovery must advance from
+        this head; a refused recommit checkpoints a rejected outcome. */
+    recommit?: { at: string; head: string };
   };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
