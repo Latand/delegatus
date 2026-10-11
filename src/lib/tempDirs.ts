@@ -30,6 +30,15 @@ export const OWNED_TEMP_PREFIX = "llv-";
 /** The per-process root a test run claims in `test-preload.ts`. */
 export const TEST_RUN_TEMP_PREFIX = `${OWNED_TEMP_PREFIX}test-run-`;
 
+/** procfs exposes starting environment only. An open directory keeps a root
+ * visible to the sweeper even after TMPDIR changes at runtime. The kernel
+ * releases the hold on every process exit, including a hard kill. */
+function holdTempDirectory(directory: string): number | null {
+  return process.platform === "win32" ? null : fs.openSync(directory, fs.constants.O_RDONLY);
+}
+
+const nestedHolds = new Map<string, number | null>();
+
 export type ProcessTempRoot = {
   root: string;
   /** Removes the root and everything in it, and puts `TMPDIR` back. Idempotent. */
@@ -48,6 +57,7 @@ export function claimProcessTempRoot(prefix: string, env: NodeJS.ProcessEnv = pr
   const parent = os.tmpdir();
   fs.mkdirSync(parent, { recursive: true });
   const root = fs.mkdtempSync(path.join(parent, prefix));
+  const hold = holdTempDirectory(root);
   const previous = Object.prototype.hasOwnProperty.call(env, "TMPDIR") ? env.TMPDIR : undefined;
   env.TMPDIR = root;
   let released = false;
@@ -60,6 +70,7 @@ export function claimProcessTempRoot(prefix: string, env: NodeJS.ProcessEnv = pr
         if (previous === undefined) delete env.TMPDIR;
         else env.TMPDIR = previous;
       }
+      if (hold !== null) fs.closeSync(hold);
       try {
         /* This path came from mkdtemp in this process; never the temp root. */
         fs.rmSync(root, { recursive: true, force: true });
@@ -80,6 +91,10 @@ export function claimProcessTempRoot(prefix: string, env: NodeJS.ProcessEnv = pr
 export function nestProcessTempUnder(directory: string, env: NodeJS.ProcessEnv = process.env): string {
   const nested = path.join(directory, "tmp");
   fs.mkdirSync(nested, { recursive: true, mode: 0o700 });
+  const physical = fs.realpathSync(directory);
+  const stat = fs.statSync(physical);
+  const identity = `${stat.dev}:${stat.ino}`;
+  if (!nestedHolds.has(identity)) nestedHolds.set(identity, holdTempDirectory(physical));
   env.TMPDIR = nested;
   return nested;
 }
