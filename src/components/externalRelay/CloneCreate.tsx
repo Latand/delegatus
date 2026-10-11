@@ -477,10 +477,11 @@ export function CloneStatus({ clone, setup, owner, here, name, errorText }: {
     );
   }
   if (phase.kind === "ended") {
+    const endedReason = phase.reason === "bot_username_taken" ? t("externalRelay.clone.reason.bot_username_taken") : null;
     return (
       <div data-clone-ended={phase.status} className="flex min-w-0 flex-col gap-1.5">
         <p role="status" className="flex items-start gap-1.5 text-ui text-primary"><Dot tone={phase.status === "failed" ? "danger" : "muted"} className="mt-[5px]" />{t(phase.status === "failed" ? "externalRelay.clone.failed" : "externalRelay.clone.expired")}</p>
-        {phase.reason ? <p className="pl-3 text-caption leading-4 text-muted">{phase.reason}</p> : null}
+        {endedReason ? <p data-clone-ended-reason="" className="pl-3 text-caption leading-4 text-muted">{endedReason}</p> : null}
         <button type="button" data-clone-again="" onClick={clone.again} className={`${QUIET} self-start`}><RotateCcw className="h-3.5 w-3.5" aria-hidden />{t("externalRelay.clone.again")}</button>
       </div>
     );

@@ -226,11 +226,14 @@ test("created with photo_failed keeps the clone and says the photo was not set",
 test("expired and failed end the wait plainly with Try again", async () => {
   for (const [status, text] of [["expired", "The time to create it in Telegram ran out; no clone was created."], ["failed", "The service could not create the clone."]] as const) {
     state = { relays: [relay({ cloneRequest: request() })], pending: [], status: [] };
-    route((url) => url === `${BASE}/clone-requests/req-1` ? jsonResponse({ request: { status, ...(status === "failed" ? { reason: "bot limit reached" } : {}) } }) : undefined);
+    route((url) => url === `${BASE}/clone-requests/req-1` ? jsonResponse({ request: { status, ...(status === "failed" ? { reason: "bot_username_taken" } : {}) } }) : undefined);
     const host = await mount(<ExternalRelaySection />);
     const ended = host.querySelector(`[data-clone-ended='${status}']`)!;
     expect(ended.textContent).toContain(text);
-    if (status === "failed") expect(ended.textContent).toContain("bot limit reached");
+    if (status === "failed") {
+      expect(ended.textContent).toContain("That Telegram address is already taken. Pick another one.");
+      expect(ended.textContent).not.toContain("bot_username_taken");
+    }
     await click(ended.querySelector("[data-clone-again]"));
     expect(host.querySelector("[data-clone-form]")).toBeTruthy();
     const { root } = mounted!;
@@ -238,6 +241,16 @@ test("expired and failed end the wait plainly with Try again", async () => {
     mounted!.host.remove();
     mounted = null;
   }
+});
+
+test("a failed request with a reason this install does not know shows no identifier", async () => {
+  state = { relays: [relay({ cloneRequest: request() })], pending: [], status: [] };
+  route((url) => url === `${BASE}/clone-requests/req-1` ? jsonResponse({ request: { status: "failed", reason: "some_unknown_code" } }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  const ended = host.querySelector("[data-clone-ended='failed']")!;
+  expect(ended.textContent).toContain("The service could not create the clone.");
+  expect(ended.textContent).not.toContain("some_unknown_code");
+  expect(ended.querySelector("[data-clone-ended-reason]")).toBeNull();
 });
 
 test("the daily limit, for photos and for the request, is said plainly and closes the window it opened", async () => {
@@ -398,7 +411,7 @@ test("a setup write that fails once is retried by itself; one that keeps failing
   await act(async () => settle(30));
   expect(writes()).toEqual([ENGINE_PATCH, ROUTE_PATCH, ROUTE_PATCH]);
   const failed = card.querySelector("[data-clone-setup-failed]")!;
-  expect(failed.querySelector("[role=alert]")?.textContent).toBe("The clone was created, but setting it up to be answered by this install failed. The relay service could not be reached.");
+  expect(failed.querySelector("[role=alert]")?.textContent).toBe("Setting it up to be answered by this install failed. The relay service could not be reached.");
   expect(stuck.fake.record).not.toBeNull();
   routeFailing = false;
   await click(failed.querySelector("[data-clone-setup-retry]"));
