@@ -7,7 +7,7 @@ import {
   VERDICT_LINE_RE,
   type ReviewCardItem,
 } from "@/lib/review";
-import { isClaudeProtocolUser, isClaudeSdkDeliveredUser } from "@/lib/claudeProtocolUser";
+import { claudeQueuedPromptUser, isClaudeProtocolUser, isClaudeSdkDeliveredUser } from "@/lib/claudeProtocolUser";
 import { getLocale, translate } from "@/lib/i18n";
 import { inboxImageExt, MAX_INBOX_IMAGE_BYTES, rasterImagePath } from "@/lib/imagePolicy";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
@@ -3215,13 +3215,18 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   /* The call whose picture result the last record carried: Claude Code writes
      the picture's dimension note as an isMeta user record right after it. */
   let imageResultId: string | null = null;
-  const renderClaude = (obj: Record<string, unknown>) => {
-    const ts = obj.timestamp;
+  const renderClaude = (record: Record<string, unknown>) => {
+    const ts = record.timestamp;
     const followsImage = imageResultId;
     imageResultId = null;
     /* A subagent's own records belong to a different conversation's context. */
-    const sidechain = obj.isSidechain === true;
-    if (obj.type === "attachment" && !sidechain && CONTEXT_ATTACHMENT_TYPES.has(textPart(rec(obj.attachment).type))) ledger.contaminate();
+    const sidechain = record.isSidechain === true;
+    if (record.type === "attachment" && !sidechain && CONTEXT_ATTACHMENT_TYPES.has(textPart(rec(record.attachment).type))) ledger.contaminate();
+    /* A message delivered while a turn runs is journaled as a `queued_command`
+       attachment rather than a user record. Its context cost stays the
+       attachment's (above); its row is the user record it stands for, with
+       the same provenance and ledger join an idle delivery gets. */
+    const obj = claudeQueuedPromptUser(record) ?? record;
     if (obj.type === "user" && obj.message) {
       const content = rec(obj.message).content;
       const fileWrap = rec(rec(obj.toolUseResult).file);
@@ -3915,7 +3920,22 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
      events are all identity-equal to the previous snapshot's — and whose active
      lifecycle matches — is reused as-is, keeping its card memoized. */
   const buildSnapshot = (isLive: boolean): FeedSnapshot => {
-    const visibleEntries = entries.filter(entry => !(entry.item.kind === "tool" && representedExecs.has(entry.item.id)));
+    /* One delivery, one row: an input Claude journaled both as a mid-turn
+       `queued_command` attachment and as a user record names the same engine
+       id on each, so only the first record in the window that names it keeps
+       its rows. Every row of one record shares that id, so it is compared per
+       source line. */
+    const deliveredBy = new Map<string, number>();
+    const repeatedDeliveries = new Set<number>();
+    for (const entry of entries) {
+      const id = entry.item.kind === "sysmsg" ? entry.item.deliveredMessage?.engineMessageId : null;
+      if (!id) continue;
+      const first = deliveredBy.get(id);
+      if (first === undefined) deliveredBy.set(id, entry.bornSrc);
+      else if (first !== entry.bornSrc) repeatedDeliveries.add(entry.bornSrc);
+    }
+    const visibleEntries = entries.filter(entry => !(entry.item.kind === "tool" && representedExecs.has(entry.item.id))
+      && !repeatedDeliveries.has(entry.bornSrc));
     const out: FeedEntry[] = [];
     const nextGroups = new Map<number, CmdGroupItem>();
     const anchorOrdinals = new Map<string, number>();

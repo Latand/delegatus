@@ -94,6 +94,11 @@ describe("Claude", () => {
 
   const between: [string, string][] = [
     ["a queued_command attachment", JSON.stringify({ type: "attachment", timestamp: at(0), attachment: { type: "queued_command", prompt: "hello" } })],
+    /* The mid-turn delivery that also renders as a message row. */
+    ["a message delivered mid-turn", JSON.stringify({ type: "attachment", timestamp: at(0), entrypoint: "sdk-cli",
+      attachment: { type: "queued_command", commandMode: "prompt", source_uuid: "queued-one", prompt: [{ type: "text", text: "hello" }] } })],
+    ["a background-task notice queued mid-turn", JSON.stringify({ type: "attachment", timestamp: at(0), entrypoint: "sdk-cli",
+      attachment: { type: "queued_command", commandMode: "task-notification", origin: { kind: "task-notification" }, prompt: "<task-notification>done</task-notification>" } })],
     ["an edited_text_file attachment", JSON.stringify({ type: "attachment", timestamp: at(0), attachment: { type: "edited_text_file", filename: "a.ts" } })],
     ["typed user text", JSON.stringify({ type: "user", timestamp: at(0), message: { role: "user", content: "also do this" } })],
     ["a user record with a text part", JSON.stringify({ type: "user", timestamp: at(0), message: { role: "user", content: [{ type: "text", text: "interrupted" }] } })],
