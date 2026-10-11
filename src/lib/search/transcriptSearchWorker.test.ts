@@ -124,10 +124,11 @@ for (const reason of ["cancellation", "timeout", "shutdown"] as const) {
       const error = await pending;
       expect(reason === "cancellation" ? error.name : error.message).toBe(reason === "cancellation" ? "AbortError"
         : reason === "timeout" ? "Transcript search timed out" : "Transcript search worker stopped");
-      expect((await lane.search({ query: "replacement" })).total).toBe(0);
+      await lane.shutdown();
       for (const identity of identities) {
         expect(processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)).toBe(true);
       }
+      expect((await lane.search({ query: "replacement" })).total).toBe(0);
       await lane.shutdown();
       const records = path.join(process.env.LLV_STATE_DIR!, "helpers");
       expect(fs.existsSync(records) ? fs.readdirSync(records).filter(file => file.endsWith(".json")) : []).toEqual([]);
