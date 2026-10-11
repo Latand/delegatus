@@ -6,7 +6,7 @@ import type { LimitSample } from "@/lib/types";
 
 import { doneCandidates, type DoneCandidate, type DoneDeployment } from "./candidates";
 import { lookupDoneFrame, type DoneFramePorts } from "./frames";
-import { doneActivation, doneDatabase, doneFloor, readDoneRows, writeDoneProjection } from "./store";
+import { doneActivation, doneDatabase, doneFloor, readDoneMemory, readDoneRows, writeDoneProjection } from "./store";
 import type { DoneItemV1 } from "./types";
 
 /*
@@ -61,9 +61,10 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
   stamps[database] = now;
   const activation = Date.parse(doneActivation(now));
   /* Rows the store holds keep refreshing whatever their age; a key it does
-     not hold is inserted only past the settled floor (§3). */
+     not hold is inserted unless retention settled it (§3). */
   const floor = doneFloor(now);
-  const candidates = doneCandidates({
+  const memory = readDoneMemory();
+  const { candidates, limitEpisodes } = doneCandidates({
     now,
     floor: activation,
     forge: world.forge(),
@@ -72,6 +73,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     deployments: world.deployments(),
     reports: world.reports(),
     limits: world.limits(),
+    limitEpisodes: memory.limitEpisodes,
     pipelineRepository: (pipeline) => world.pipelineRepository(pipeline),
     repositoryProject: (repository) => world.repositoryProject(repository),
     accountLabel: (engine, accountId) => world.accountLabel(engine, accountId),
@@ -83,7 +85,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
   for (const candidate of candidates) {
     const row = held.get(candidate.key);
     if (row?.acknowledgedAt) continue;
-    if (!row && !(Date.parse(candidate.at) >= floor)) continue;
+    if (!row && (memory.settled.has(candidate.key) || !(Date.parse(candidate.at) >= floor))) continue;
     let frame = row?.frame ?? null;
     let frameCheckedAt = row?.frameCheckedAt ?? null;
     if (candidate.subject && !frameCheckedAt) {
@@ -101,7 +103,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     }
     upserts.push(itemOf(candidate, row, frame, frameCheckedAt, at));
   }
-  return { projected: true, ...writeDoneProjection({ upserts }, now) };
+  return { projected: true, ...writeDoneProjection({ upserts, limitEpisodes }, now) };
 }
 
 function itemOf(candidate: DoneCandidate, row: DoneItemV1 | undefined, frame: DoneItemV1["frame"], frameCheckedAt: string | null, at: string): DoneItemV1 {

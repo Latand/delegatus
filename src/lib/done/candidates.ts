@@ -5,7 +5,7 @@ import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { LimitSample } from "@/lib/types";
 
-import type { DoneItemKind, DoneItemLook, DoneItemRefs } from "./types";
+import type { DoneItemKind, DoneItemLook, DoneItemRefs, DoneLimitEpisode, DoneLimitEpisodes } from "./types";
 
 /*
  * The «Готово» candidates (docs/design/done-section.md §2): one per finished
@@ -36,6 +36,8 @@ export interface DoneSources {
   reports: readonly BridgeReportV1[];
   /** The limits history's series, `<engine>|<accountId>|<window>` → samples. */
   limits: Readonly<Record<string, readonly LimitSample[]>>;
+  /** The limit episodes the store remembers from earlier projections. */
+  limitEpisodes?: Readonly<DoneLimitEpisodes>;
   /** `<owner>/<repo>` a lane delivers to. */
   pipelineRepository(pipeline: Pipeline): string | null;
   /** The project whose records live in a repository no lane of the PR names. */
@@ -120,7 +122,13 @@ export function pipelineFinished(pipeline: Pipeline): boolean {
   return last.state === "passed";
 }
 
-export function doneCandidates(sources: DoneSources): DoneCandidate[] {
+export interface DoneCandidates {
+  candidates: DoneCandidate[];
+  /** The remembered limit episodes with this projection's samples folded in. */
+  limitEpisodes: DoneLimitEpisodes;
+}
+
+export function doneCandidates(sources: DoneSources): DoneCandidates {
   const tasks = new Map(sources.tasks.map((task) => [task.id, task] as const));
   const repositoryOf = new Map<string, string | null>();
   const repoOf = (pipeline: Pipeline) => {
@@ -265,25 +273,69 @@ export function doneCandidates(sources: DoneSources): DoneCandidate[] {
     });
   }
 
-  out.push(...limitCandidates(sources));
-  return out;
+  const limits = limitCandidates(sources);
+  out.push(...limits.candidates);
+  return { candidates: out, limitEpisodes: limits.episodes };
+}
+
+interface LimitRun {
+  start: number;
+  lastZero: number;
+  close: number | null;
+  /** No sample before it shows room: the history may have trimmed its start. */
+  first: boolean;
+}
+
+/** The remembered episode a run continues: one whose samples overlap it, or,
+    for a run whose start the history may have trimmed, the latest episode
+    still open, last seen before the samples now begin. */
+function episodeOf(run: LimitRun, episodes: readonly DoneLimitEpisode[]): DoneLimitEpisode | null {
+  const overlapping = episodes.filter((episode) => episode.start <= run.lastZero && episode.lastZero >= run.start);
+  if (overlapping.length) return overlapping.reduce((earliest, episode) => (episode.start < earliest.start ? episode : earliest));
+  if (!run.first) return null;
+  const latest = episodes.reduce<DoneLimitEpisode | null>((newest, episode) => (!newest || episode.start > newest.start ? episode : newest), null);
+  return latest && latest.close === null && latest.lastZero < run.start ? latest : null;
 }
 
 /** One item per exhausted usage window (§2.4): a run of samples at no room
-    left is one episode, keyed by its first sample, which an append-only
-    history never moves. */
-function limitCandidates(sources: DoneSources): DoneCandidate[] {
+    left is one episode, keyed by its first sample. The history drops samples
+    older than 8 days, so the store remembers each episode and a run that
+    continues one keeps its key; a run after an observed reset is a new one. */
+function limitCandidates(sources: DoneSources): { candidates: DoneCandidate[]; episodes: DoneLimitEpisodes } {
   const out: DoneCandidate[] = [];
+  const episodes: DoneLimitEpisodes = Object.fromEntries(Object.entries(sources.limitEpisodes ?? {})
+    .map(([series, held]) => [series, held.map((episode) => ({ ...episode }))]));
   for (const [series, raw] of Object.entries(sources.limits)) {
     const [engine, accountId, window, extra] = series.split("|");
     if (!engine || !accountId || !window || extra !== undefined) continue;
     const samples = [...raw].filter((sample) => Number.isFinite(sample.t) && Number.isFinite(sample.remaining)).sort((left, right) => left.t - right.t);
-    let from: number | null = null;
-    const close = (to: number | null) => {
-      if (from === null) return;
-      const start = from;
-      from = null;
-      if (start * 1_000 < sources.floor) return;
+    const runs: LimitRun[] = [];
+    let open: LimitRun | null = null;
+    samples.forEach((sample, index) => {
+      if (sample.remaining <= 0) {
+        if (open) open.lastZero = sample.t;
+        else runs.push(open = { start: sample.t, lastZero: sample.t, close: null, first: index === 0 });
+      } else if (open) {
+        open.close = sample.t;
+        open = null;
+      }
+    });
+    if (!runs.length) continue;
+    const remembered = (episodes[series] ??= []);
+    for (const run of runs) {
+      let episode = episodeOf(run, remembered);
+      if (episode) {
+        episode.lastZero = Math.max(episode.lastZero, run.lastZero);
+        episode.close = run.close ?? episode.close;
+      } else {
+        episode = { start: run.start, lastZero: run.lastZero, close: run.close };
+        remembered.push(episode);
+      }
+      /* Remembered whether or not it makes an item, so an episode older than
+         the store keeps its old start as its first samples trim away. */
+      const start = episode.start;
+      const to = episode.close;
+      if (start * 1_000 < sources.floor) continue;
       const label = sources.accountLabel?.(engine, accountId) ?? null;
       out.push({
         key: `limit:${engine}:${accountId}:${window}:${start}`,
@@ -299,14 +351,9 @@ function limitCandidates(sources: DoneSources): DoneCandidate[] {
         },
         subject: null,
       });
-    };
-    for (const sample of samples) {
-      if (sample.remaining <= 0) from ??= sample.t;
-      else close(sample.t);
     }
-    close(null);
   }
-  return out;
+  return { candidates: out, episodes };
 }
 
 /** Lanes whose attempts recorded this account as limited inside the episode. */

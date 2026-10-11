@@ -73,7 +73,7 @@ work gives exactly one item, so each unit belongs to exactly one source:
 | A task closed with no pipeline | `tasks` (`status: "done"`, `doneAt`) | `task:<id>` | `doneAt` is set and no pipeline is bound to the task |
 | A deploy of Delegatus | `ledgerDeployments(20)` (`src/lib/runtime/deploymentLedger.ts`; runtime host and self-update checkout alike) | `deploy:<deploymentId>` | phase `succeeded`, `failed` or `rolled-back` |
 | An incident or a publication | the bridge report log, manager rows marked `outcome` (§2.3) | `report:<report id>` | the report is appended |
-| An account limit | account usage observations (`limits-history.json` samples, the store `account_limits` reads) | `limit:<engine>:<accountId>:<window>:<first exhausted sample t>` | a window is first observed exhausted |
+| An account limit | account usage observations (`limits-history.json` samples, the store `account_limits` reads) | `limit:<engine>:<accountId>:<window>:<episode start t>` (§2.4) | a window is first observed exhausted |
 
 A task bound to a pipeline is represented by that pipeline's item (the PR item
 or the pipeline item names it in `refs.taskIds`), so a lane that merges and
@@ -154,12 +154,19 @@ marker.
 
 An exhausted usage window is the limits line. The projector reads the limits
 history: a run of samples with `remaining ≤ 0` for one engine, account and
-window is one episode, keyed by its first sample's `t`, which an append-only
-history keeps stable. The row says which account and window ran out, when, and,
+window is one episode, keyed by its first sample's `t`. The history drops
+samples older than 8 days, so an episode that lasts across that edge would
+show a later first sample; the store therefore remembers each episode it saw
+(its start, its latest sample at no room left and the sample that showed it
+back, in the `limit-episodes` row) and a run that overlaps a remembered
+episode, or that begins the visible history while the latest remembered one
+is still open, keeps that episode's key. A run after an observed reset is a
+new episode. An episode is forgotten 30 days after its last exhausted sample.
+The row says which account and window ran out, when, and,
 once a later sample shows it reset, when it came back; when pipeline attempts
 recorded that account in `usageLimitedAccounts` during the episode, it adds how
-many lanes waited. Its key never changes as the text fills in, so acknowledging
-it early holds.
+many lanes waited. Its key never changes as the text fills in or the history
+trims, so acknowledging it early holds.
 
 ## 3. The acknowledgement store
 
@@ -199,14 +206,15 @@ interface DoneItemV1 {
   both. Operator only, through the Viewer's own route: no MCP tool takes it, so
   no agent can acknowledge what the operator has not seen.
 - **Retention.** An acknowledged row is kept 30 days after its acknowledgement.
-  Past 2 000 rows the acknowledged rows with the oldest events go first, but
-  only those whose event is at least a day old, since a source can still report
-  a younger one late (the forge sweep sees a merge an hour on). Unacknowledged
-  rows stay until acknowledged. Removing a row moves the meta row's
-  `settledThrough` up to that row's event time in the same transaction, and the
-  store never inserts a key whose event is at or before it, so neither a
-  repeated source nor a fresh reader after a restart can re-create a pruned
-  acknowledgement.
+  Past 2 000 rows the acknowledged rows with the oldest events go first.
+  Unacknowledged rows stay until acknowledged. Removing a row leaves a settled
+  row (`settled:<key>` with the event time) in the same transaction, and the
+  store never inserts a settled key, so neither a repeated source nor a fresh
+  reader after a restart can re-create a pruned acknowledgement, while every
+  other key, however old its event, stays eligible. A settled row retires once
+  its event is 400 days old and moves the meta row's `retiredThrough` up to
+  that event, so only an outcome older than that which no projection saw in
+  all that time is no longer inserted.
 - **Routes.** `GET /api/attention/done` answers `{ items, revision }`, the
   unacknowledged rows, newest event first, after projecting.
   `POST /api/attention/done` takes `{ keys, undo?, surface }` (at most 200
@@ -347,8 +355,9 @@ By path, under isolated state (one `mktemp -d` root holding HOME,
   idempotent second run; an acknowledged key stays acknowledged while its source
   repeats; nothing before `activation`; an unread outcome arriving days later;
   the sweep keeping items past their source's rollover; manager-only `outcome`;
-  a limit episode keeps its key as its reset arrives; retention and the row cap
-  never re-creating an acknowledged key; a builder-only lane's evidence frame;
+  a limit episode keeps its key as its reset arrives and as the history trims
+  its first samples; retention and the row cap never re-creating an
+  acknowledged key and never hiding an older key first seen afterwards; a builder-only lane's evidence frame;
 - forge sweep: `title`/`mergedAt` parsed on both field sets; the batch-title
   parser;
 - the route: GET projects and answers unacknowledged rows; POST acknowledges,

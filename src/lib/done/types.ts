@@ -72,3 +72,17 @@ export interface DoneAcknowledgeAnswer {
 
 /** The most keys one acknowledgement may name. */
 export const DONE_ACK_MAX_KEYS = 200;
+
+/** What the store remembers of one limit episode (§2.4), in sample seconds:
+    the first sample at no room left that the projector saw, the latest one,
+    and the sample that showed the window back. The history trims its oldest
+    samples, so an episode is recognised by these and keeps the key its start
+    gave it. */
+export interface DoneLimitEpisode {
+  start: number;
+  lastZero: number;
+  close: number | null;
+}
+
+/** `<engine>|<accountId>|<window>` → the episodes remembered for it. */
+export type DoneLimitEpisodes = Record<string, DoneLimitEpisode[]>;

@@ -13,7 +13,7 @@ import type { LimitSample } from "@/lib/types";
 import type { DoneDeployment } from "./candidates";
 import { lookupDoneFrame } from "./frames";
 import { DONE_PROJECTION_THROTTLE_MS, projectDoneItems, resetDoneProjectionThrottleForTests, type DoneWorld } from "./project";
-import { acknowledgeDoneItems, DONE_ACKNOWLEDGED_RETENTION_MS, DONE_MAX_ROWS, doneRevision, readDoneRows, resetDoneCollectionsForTests, unacknowledgedDoneItems, writeDoneProjection } from "./store";
+import { acknowledgeDoneItems, DONE_ACKNOWLEDGED_RETENTION_MS, DONE_MAX_ROWS, DONE_SETTLED_RETENTION_MS, doneRevision, readDoneMemory, readDoneRows, resetDoneCollectionsForTests, unacknowledgedDoneItems, writeDoneProjection } from "./store";
 import { DONE_SWEEP_INTERVAL_MS, runDoneSweepOnce, startDoneSweep, stopDoneSweep } from "./sweep";
 import type { DoneFrame } from "./types";
 
@@ -420,4 +420,127 @@ test("crossing the row cap never brings an accepted item back, and every unaccep
   const waiting = unacknowledgedDoneItems();
   expect(waiting.some((item) => item.key === "task:t0")).toBe(false);
   expect(waiting.length).toBe(DONE_MAX_ROWS);
+});
+
+test("an outcome first seen after age retention removed a newer accepted one still arrives, and the accepted one stays away", async () => {
+  await activate();
+  const DAY = 24 * HOUR;
+  const newer = task("t-newer", "Новіша", { status: "done", doneAt: iso(T0 + 2 * DAY) });
+  const state = world({ now: T0 + 2 * DAY, tasks: [newer] });
+  await projectDoneItems(ports(state), { force: true });
+  acknowledgeDoneItems(["task:t-newer"], { undo: false, surface: "desktop", now: T0 + 2 * DAY });
+  const later = T0 + 2 * DAY + DONE_ACKNOWLEDGED_RETENTION_MS + HOUR;
+  await projectDoneItems(ports({ ...state, now: later }), { force: true });
+  expect(readDoneRows().some((row) => row.key === "task:t-newer")).toBe(false);
+  /* A source that was out until now reports an older outcome for the first time. */
+  state.tasks = [newer, task("t-first", "Вперше побачена", { status: "done", doneAt: iso(T0 + DAY) })];
+  await projectDoneItems(ports({ ...state, now: later + HOUR }), { force: true });
+  expect(keys()).toEqual(["task:t-first"]);
+  resetDoneCollectionsForTests();
+  await projectDoneItems(ports({ ...state, now: later + 2 * HOUR }), { force: true });
+  expect(keys()).toEqual(["task:t-first"]);
+});
+
+test("an outcome first seen after the row cap removed an accepted one still arrives, through a fresh reader too", async () => {
+  await activate();
+  const DAY = 24 * HOUR;
+  const done = (index: number) => task(`t${index}`, `Задача ${index}`, { status: "done", doneAt: iso(T0 + 2 * DAY + index * 1_000) });
+  const tasks = Array.from({ length: DONE_MAX_ROWS }, (_, index) => done(index));
+  const state = world({ now: T0 + 2 * DAY + HOUR, tasks });
+  await projectDoneItems(ports(state), { force: true });
+  acknowledgeDoneItems(["task:t0"], { undo: false, surface: "desktop", now: T0 + 2 * DAY + HOUR });
+  state.tasks = [...tasks, done(DONE_MAX_ROWS)];
+  await projectDoneItems(ports({ ...state, now: T0 + 4 * DAY }), { force: true });
+  expect(readDoneRows().some((row) => row.key === "task:t0")).toBe(false);
+  state.tasks = [...state.tasks, task("t-early", "Подія першої доби", { status: "done", doneAt: iso(T0 + DAY) })];
+  await projectDoneItems(ports({ ...state, now: T0 + 4 * DAY + HOUR }), { force: true });
+  expect(unacknowledgedDoneItems().some((item) => item.key === "task:t-early")).toBe(true);
+  resetDoneCollectionsForTests();
+  await projectDoneItems(ports({ ...state, now: T0 + 4 * DAY + 2 * HOUR }), { force: true });
+  const waiting = unacknowledgedDoneItems();
+  expect(waiting.some((item) => item.key === "task:t-early")).toBe(true);
+  expect(waiting.some((item) => item.key === "task:t0")).toBe(false);
+});
+
+test("a limit episode keeps its key while the history trims its first samples, and the next one after a reset is one new item", async () => {
+  await activate();
+  const DAY = 24 * HOUR;
+  const t = (days: number) => Math.round((T0 + days * DAY) / 1000);
+  const series = "claude|acct-b|weekly";
+  const zeros = (from: number, through: number) => Array.from({ length: through - from + 1 }, (_, index) => ({ t: t(from + index), remaining: 0 }));
+  const state = world({ now: T0 + 2 * DAY + HOUR, limits: { [series]: zeros(1, 2) } });
+  await projectDoneItems(ports(state), { force: true });
+  const key = `limit:claude:acct-b:weekly:${t(1)}`;
+  expect(keys()).toEqual([key]);
+  acknowledgeDoneItems([key], { undo: false, surface: "desktop", now: T0 + 2 * DAY + HOUR });
+  /* Eight days on the history no longer holds the first sample. */
+  state.limits = { [series]: zeros(2, 10) };
+  await projectDoneItems(ports({ ...state, now: T0 + 10 * DAY + HOUR }), { force: true });
+  expect(keys()).toEqual([]);
+  resetDoneCollectionsForTests();
+  state.limits = { [series]: zeros(3, 11) };
+  await projectDoneItems(ports({ ...state, now: T0 + 11 * DAY + HOUR }), { force: true });
+  expect(keys()).toEqual([]);
+  /* A reset, then the window runs out again: exactly one new item, which
+     keeps its own key as the history trims it in turn. */
+  state.limits = { [series]: [...zeros(4, 11), { t: t(12), remaining: 60 }, ...zeros(13, 14)] };
+  await projectDoneItems(ports({ ...state, now: T0 + 14 * DAY + HOUR }), { force: true });
+  const next = `limit:claude:acct-b:weekly:${t(13)}`;
+  expect(keys()).toEqual([next]);
+  state.limits = { [series]: zeros(14, 22) };
+  await projectDoneItems(ports({ ...state, now: T0 + 22 * DAY + HOUR }), { force: true });
+  expect(keys()).toEqual([next]);
+  expect(unacknowledgedDoneItems()[0]!.refs.limit!.from).toBe(iso(t(13) * 1000));
+});
+
+test("an unaccepted limit episode stays one item while its first samples trim away", async () => {
+  await activate();
+  const DAY = 24 * HOUR;
+  const t = (days: number) => Math.round((T0 + days * DAY) / 1000);
+  const series = "codex|acct-b|weekly";
+  const state = world({ now: T0 + 2 * DAY, limits: { [series]: [{ t: t(1), remaining: 0 }, { t: t(2), remaining: 0 }] } });
+  await projectDoneItems(ports(state), { force: true });
+  state.limits = { [series]: [{ t: t(2), remaining: 0 }, { t: t(9), remaining: 0 }, { t: t(10), remaining: 30 }] };
+  await projectDoneItems(ports({ ...state, now: T0 + 10 * DAY }), { force: true });
+  expect(keys()).toEqual([`limit:codex:acct-b:weekly:${t(1)}`]);
+  expect(unacknowledgedDoneItems()[0]!.refs.limit).toMatchObject({ from: iso(t(1) * 1000), to: iso(t(10) * 1000) });
+  /* Its closing reset trims away as well: still the same single item. */
+  state.limits = { [series]: [{ t: t(9), remaining: 0 }, { t: t(10), remaining: 30 }] };
+  resetDoneCollectionsForTests();
+  await projectDoneItems(ports({ ...state, now: T0 + 16 * DAY }), { force: true });
+  expect(keys()).toEqual([`limit:codex:acct-b:weekly:${t(1)}`]);
+});
+
+test("a settled key retires only after 400 days and still cannot come back", async () => {
+  await activate();
+  const accepted = task("t-a", "Прийнята", { status: "done", doneAt: iso(T0 + HOUR) });
+  const state = world({ now: T0 + HOUR, tasks: [accepted] });
+  await projectDoneItems(ports(state), { force: true });
+  acknowledgeDoneItems(["task:t-a"], { undo: false, surface: "desktop", now: T0 + HOUR });
+  await projectDoneItems(ports({ ...state, now: T0 + HOUR + DONE_ACKNOWLEDGED_RETENTION_MS + HOUR }), { force: true });
+  expect(readDoneMemory().settled.has("task:t-a")).toBe(true);
+  const retire = T0 + HOUR + DONE_SETTLED_RETENTION_MS + HOUR;
+  await projectDoneItems(ports({ ...state, now: retire }), { force: true });
+  expect(readDoneMemory().settled.has("task:t-a")).toBe(false);
+  resetDoneCollectionsForTests();
+  await projectDoneItems(ports({ ...state, now: retire + HOUR }), { force: true });
+  expect(keys()).toEqual([]);
+  /* A later outcome is still a new item. */
+  state.tasks = [accepted, task("t-b", "Пізніша", { status: "done", doneAt: iso(T0 + 2 * HOUR) })];
+  await projectDoneItems(ports({ ...state, now: retire + 2 * HOUR }), { force: true });
+  expect(keys()).toEqual(["task:t-b"]);
+});
+
+test("an accepted limit episode still open stays accepted when the Viewer was away longer than the history keeps", async () => {
+  await activate();
+  const DAY = 24 * HOUR;
+  const t = (days: number) => Math.round((T0 + days * DAY) / 1000);
+  const series = "claude|acct-b|weekly";
+  const state = world({ now: T0 + DAY + HOUR, limits: { [series]: [{ t: t(0.5), remaining: 20 }, { t: t(1), remaining: 0 }] } });
+  await projectDoneItems(ports(state), { force: true });
+  acknowledgeDoneItems([`limit:claude:acct-b:weekly:${t(1)}`], { undo: false, surface: "desktop", now: T0 + DAY + HOUR });
+  /* Back after twelve days: every sample left is newer than the last one seen, none shows room. */
+  state.limits = { [series]: [{ t: t(5), remaining: 0 }, { t: t(12), remaining: 0 }] };
+  await projectDoneItems(ports({ ...state, now: T0 + 12 * DAY }), { force: true });
+  expect(keys()).toEqual([]);
 });
