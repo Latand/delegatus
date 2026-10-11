@@ -1097,6 +1097,31 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual(result["verdict"], "pass")
         self.assertEqual(result["relocation"]["placement"], "placed")
 
+    def test_active_unit_with_pending_stop_still_owes_a_start(self):
+        self.relocating()
+        self.start_refusals = deploy.START_ATTEMPTS
+        execute = self.adapter.command
+        pending = False
+        def queued(args, cwd=None):
+            nonlocal pending
+            if args[:4] == ["systemctl", "--user", "--no-block", "stop"]:
+                self.commands.append(args)
+                pending = True
+                return ""
+            if "list-jobs" in args and pending:
+                return "1 synthetic-viewer.service stop running"
+            if args[:4] == ["systemctl", "--user", "--no-block", "start"] and not self.start_refusals:
+                pending = False
+            return execute(args, cwd)
+        self.adapter.command = queued
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=2, timeout=0)
+        self.assertTrue(self.active)
+        self.assertFalse(pending)
+        self.assertEqual(self.service_commands(), ["stop"] + ["start"] * (deploy.START_ATTEMPTS + 1))
+        # Cancelling a queued stop kept the old release alive; it is still
+        # available, but cannot pass the replacement's health checks.
+        self.assertEqual(result["verdict"], "fail")
+
     def test_a_start_that_keeps_failing_retries_during_health_and_on_exit(self):
         self.relocating()
         self.start_refusals = 1000

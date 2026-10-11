@@ -1124,7 +1124,7 @@ class Checkout:
     def recover_start(self, attempts=1):
         relocation = self.relocation
         try:
-            if self.active_state() in ["active", "activating", "reloading"]:
+            if not self.jobs() and self.active_state() in ["active", "activating", "reloading"]:
                 relocation["started"] = True
                 relocation["outcome"] = relocation["stopOutcome"]
                 return

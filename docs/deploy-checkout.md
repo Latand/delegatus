@@ -213,9 +213,9 @@ and `CPUWeight=1000` and still ran in `app.slice/delegatus.service`, with no
    submitted, whatever steps 2 to 4 found. A refused or failed start is retried
    up to three times initially. If those attempts fail, each bounded health
    retry checks the unit and resubmits start while it remains inactive or
-   failed. Exit cleanup checks again and makes up to three final attempts,
-   even when observation raises. A persistent refusal is reported as
-   `start-failed`. The verdict records the final cleanup's attempts; a start
+   failed, or still has a pending job. Exit cleanup checks again and makes up
+   to three final attempts, even when observation raises. A persistent refusal
+   is reported as `start-failed`. The verdict records the final cleanup's attempts; a start
    after the last health sample cannot establish a healthy switch by itself.
    SIGTERM, SIGHUP and SIGINT to the worker are held through recovery and exit
    cleanup, and are delivered afterwards.
