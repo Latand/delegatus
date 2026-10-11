@@ -98,7 +98,8 @@ The rules already reach the same provider in agent prompts. The profile stays
 in local storage and the window. It is not injected into agents or relayed to
 other installations, GitHub, Telegram or MCP. The prompt forbids identities,
 paths and secrets in the answer, which the UI renders as plain text. Public
-fixtures and evidence contain invented examples only.
+UI fixtures and screenshots contain invented examples. Timing evidence contains
+measurement metadata.
 
 ## Verification record
 
@@ -127,8 +128,8 @@ The measured model is the `haiku` fallback, mapped to Haiku 4.5. Cold means an
 empty application profile cache; the provider's schema cache may already be
 warm. The harness supplies a current credential directly and uses an in-memory
 storage port; production account admission and SQLite persistence are covered
-separately by focused tests. These are observations from this machine, with
-seven independent summary jobs per cold locale, rather than latency guarantees.
+separately by focused tests. The measurements are observations from this
+machine, with seven independent summary jobs per cold locale.
 
 Focused tests cover scope slicing, number binding, locale retry, cache/stale
 behavior, persistence isolation, structured requests, route authority and stream
