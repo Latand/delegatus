@@ -478,6 +478,22 @@ export class TelegramReportRunner {
         this.settle(runId, "failed", "connector_unavailable", false, { requeue: readiness.reason === "unavailable" });
         return;
       }
+      /* Readiness can start the feed after beginRun's provisional end. Finalize
+         a fresh window now, before reads can fail and freeze its bounds. Owed
+         windows and already-planned deferred admissions keep both bounds. */
+      if (!file.cursor.unreportedUntilAt && !active.admissionDeferred) {
+        const readyWindow = reportWindowFor(this.ports.now(), file.cursor);
+        let current = false;
+        updateTelegramReports((state) => {
+          if (state.active?.runId !== runId) return;
+          state.active.windowStart = readyWindow.startAt;
+          state.active.windowEnd = readyWindow.endAt;
+          current = true;
+        });
+        if (!current) return;
+        window.startAt = readyWindow.startAt;
+        window.endAt = readyWindow.endAt;
+      }
       /* A mismatch is the issue's `account-mismatch` outcome: no report, no
          window advance, and — because this runs before the source pass — no
          read of the wrong account's dialogs either. */

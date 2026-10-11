@@ -1080,6 +1080,7 @@ test("a run that starts while the connector is coming up waits for it and report
      there and terminalize `sources_failed` within seconds. */
   const ports = new FakePorts();
   enableReports();
+  updateTelegramReports((state) => { state.settings.time = "23:59"; });
   let connectorCameUp!: () => void;
   ports.connectorReadinessGate = new Promise<void>((resolve) => { connectorCameUp = resolve; });
   const runner = new TelegramReportRunner(ports);
@@ -1091,6 +1092,15 @@ test("a run that starts while the connector is coming up waits for it and report
   expect(ports.reads).toEqual([]);
   expect(readTelegramReports().active?.runId).toBe(launched.ok ? launched.runId : "");
 
+  /* The connector starts its feed during readiness, after the provisional
+     window opened. The finalized window must reach that new coverage. */
+  ports.feedCoveredSinceMs = NOW + 1000;
+  ports.clock = NOW + 5000;
+  ports.afterRead = (name) => {
+    if (name === "getMe") {
+      expect(readTelegramReports().active?.windowEnd).toBe(new Date(NOW + 5000).toISOString());
+    }
+  };
   connectorCameUp();
   await runner.settled();
 
@@ -1102,6 +1112,38 @@ test("a run that starts while the connector is coming up waits for it and report
   const file = readTelegramReports();
   expect(file.active?.conversationId).toBe("conversation_report");
   expect(file.history.some((row) => row.errorCode === "sources_failed")).toBe(false);
+  const window = {
+    windowStart: new Date(ports.feedCoveredSinceMs).toISOString(),
+    windowEnd: new Date(ports.clock).toISOString(),
+  };
+  expect(file.active).toMatchObject(window);
+  const plan = JSON.parse(fs.readFileSync(reportSourcesPath(activeRunId()), "utf8"));
+  expect(plan).toMatchObject(window);
+  for (const bound of Object.values(window)) expect(JSON.stringify(ports.spawns[0])).toContain(bound);
+
+  /* Once this launched run fails, restarts and later readiness waits retain
+     the finalized bounds, even a week later. */
+  ports.live = false;
+  await runner.tick();
+  expect(readTelegramReports().history[0]).toMatchObject({ status: "failed", ...window });
+  for (const days of [1, 7]) {
+    ports.clock = NOW + days * 24 * 3_600_000;
+    ports.live = true;
+    const restarted = new TelegramReportRunner(ports);
+    await restarted.runNow();
+    await restarted.settled();
+    expect(readTelegramReports().active).toMatchObject(window);
+    const retryPlan = JSON.parse(fs.readFileSync(reportSourcesPath(activeRunId()), "utf8"));
+    expect(retryPlan).toMatchObject(window);
+    for (const bound of Object.values(window)) expect(JSON.stringify(ports.spawns.at(-1))).toContain(bound);
+    ports.live = false;
+    await restarted.tick();
+    expect(readTelegramReports().cursor).toMatchObject({
+      unreportedSinceAt: window.windowStart,
+      unreportedUntilAt: window.windowEnd,
+    });
+  }
+  expect(ports.spawns).toHaveLength(3);
 });
 
 test("a connector that never comes up fails the run and arms one re-queue", async () => {
@@ -1272,6 +1314,8 @@ test.each(["evidence", "account"] as const)("scheduled report defers after %s wa
     await runner.tick();
     expect(ports.spawns).toHaveLength(0);
     expect(readTelegramReports().active).toMatchObject({ runId: heldRun, admissionDeferred: true, conversationId: null });
+    const held = readTelegramReports().active!;
+    const window = { windowStart: held.windowStart, windowEnd: held.windowEnd };
     ports.afterRead = null;
     const restarted = new TelegramReportRunner(ports);
     ports.clock += RUN_TIMEOUT_MS * 2;
@@ -1283,6 +1327,10 @@ test.each(["evidence", "account"] as const)("scheduled report defers after %s wa
     expect(ports.spawns).toHaveLength(1);
     expect(ports.spawns[0].clientAttemptId).toBe(`telegram-report-${heldRun}`);
     expect(activeRunId()).toBe(heldRun!);
+    expect(readTelegramReports().active).toMatchObject(window);
+    const plan = JSON.parse(fs.readFileSync(reportSourcesPath(activeRunId()), "utf8"));
+    expect(plan).toMatchObject(window);
+    for (const bound of Object.values(window)) expect(JSON.stringify(ports.spawns[0])).toContain(bound);
     await restarted.tick(); expect(ports.spawns).toHaveLength(1);
   } finally { releaseDrain(drainFile(), "report-wait"); }
 });
