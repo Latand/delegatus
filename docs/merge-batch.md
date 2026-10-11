@@ -47,6 +47,23 @@ contains those native candidate files plus their versions at the reviewed head
 of each PR in the candidate; unrelated repository tests are outside this gate.
 Identical file versions are sampled once within that validation. Different
 versions run separately; removing a PR cannot hide a restored native assertion.
+An unchanged copy of a member's review base is superseded when another member
+explicitly changed that same base version of the file at its reviewed head.
+The receipt and report list the skipped copy and the exact replacement source.
+A changed detector keeps its own assertions; a deferred, moved or withheld PR
+supplies no replacement authority. Native candidate files still run, so a
+behaviour regression without a reviewed test replacement retains its detector.
+
+When main changed a file that a PR also changed independently, the script
+three-way merges main's contract update into that reviewed detector. It accepts
+only a clean merge whose zero-context stable patch-id, relative to main, is
+identical to the PR's original test patch. The PR's added or changed assertions
+remain in every confirmation and removal probe. A conflict, deletion or changed
+patch retains the original detector and its refusal rules. Adapted detectors
+are listed separately in the exact tuple's receipt and report, and are rebuilt
+from immutable Git objects on every validation. An unreviewed change to the
+built tree still refuses the gate and publication.
+
 A reviewed detector of a PR outside the candidate (deferred, moved, culprit) is
 skipped and listed under "Skipped test files": it can import code the candidate
 does not carry, and its native files still run. Full browser campaigns
@@ -82,7 +99,8 @@ omission clears it, combined removals find a minimal clearing set. If all
 implementation removals leave a failure, attribution cannot be proven: the gate
 names the failing tests, retains their detectors and refuses publication, and
 its message names that rule. Test authorship and literal assertion syntax supply
-no attribution or exemption.
+no attribution or exemption; replacement and adaptation require the immutable
+reviewed patch evidence described above.
 
 A PR's reviewed tree supplies every selected test file, including files its
 patch never touched; such a copy is the version at the PR's review base. When
@@ -93,7 +111,8 @@ defers only that PR, with `stale reviewed detector: branch predates <main
 commit> that changed <file>; merge main into the branch`, and the rest of the
 batch is validated again; `resolve N` merges main into it after landing. The
 report lists these under "Stale reviewed detectors". A file the PR itself
-changed keeps the rules above, and a failure that is neither narrowed nor stale
+changed keeps its reviewed patch through any clean main-contract adaptation,
+and a failure that is neither narrowed nor stale
 still stops the batch.
 A case that passes on main and breaks on the candidate, a new file fault
 included, drops only the PR whose removal clears it; the batch is rebuilt and

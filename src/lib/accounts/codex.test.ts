@@ -508,3 +508,80 @@ test("removal recovery that meets a held registry lock answers busy and finishes
     await holder.close();
   }
 });
+
+/* Task d7759de2: Main is removed through the same control as every other
+   account. It is only forgotten: ~/.codex is the operator's own and stays untouched. */
+test("removing Main hides it from every list and pick, keeps its home and sessions, and restores", async () => {
+  const { hideLegacyCodexAccount, restoreLegacyCodexAccount, accountForSpawn, codexAccountListed } = await import("./codex");
+  const legacy = path.join(SANDBOX, "legacy-codex");
+  const session = path.join(legacy, "sessions", "2026", "10", "01", "rollout-2026-10-01T00-00-00-11111111-2222-3333-4444-555555555555.jsonl");
+  fs.mkdirSync(path.dirname(session), { recursive: true });
+  fs.writeFileSync(session, "{}\n");
+  fs.writeFileSync(path.join(legacy, "auth.json"), "{}");
+  const work = createManagedCodexAccount("Work");
+  const registry = agentRegistry();
+  registry.setEngineRouting("codex", "default");
+
+  hideLegacyCodexAccount();
+
+  expect(listCodexAccounts().map((account) => account.id)).toEqual([work.id]);
+  expect(activeCodexAccountId()).toBe(work.id);
+  expect(accountForSpawn().id).toBe(work.id);
+  expect(() => accountForSpawn("default")).toThrow();
+  expect(() => setActiveCodexAccount("default")).toThrow();
+  expect(codexAccountListed("default")).toBe(false);
+  expect(registry.engineRouting("codex").activeAccountId).toBe(work.id);
+  /* Nothing under the home moved or went. */
+  expect(fs.readFileSync(path.join(legacy, "auth.json"), "utf8")).toBe("{}");
+  expect(fs.readFileSync(session, "utf8")).toBe("{}\n");
+  /* Its history stays readable. */
+  expect(codexSessionRoots()).toContain(path.join(legacy, "sessions"));
+  expect(pathAllowed(session)).toBe(true);
+  expect(persistedAccountRegistry("codex")).toMatchObject({ legacyHidden: true });
+
+  restoreLegacyCodexAccount();
+  expect(listCodexAccounts().map((account) => account.id)).toEqual(["default", work.id]);
+  expect(codexAccountListed("default")).toBe(true);
+});
+
+test("removing Main with no other account leaves no account to pick, never Main", async () => {
+  const { hideLegacyCodexAccount, accountForSpawn } = await import("./codex");
+  hideLegacyCodexAccount();
+  expect(listCodexAccounts()).toEqual([]);
+  expect(() => accountForSpawn()).toThrow();
+  expect(agentRegistry().engineRouting("codex").activeAccountId).toBeNull();
+});
+
+test("removing a managed account while Main is hidden routes to another visible account", async () => {
+  const { hideLegacyCodexAccount } = await import("./codex");
+  const first = createManagedCodexAccount("First");
+  const second = createManagedCodexAccount("Second");
+  hideLegacyCodexAccount();
+  agentRegistry().setEngineRouting("codex", first.id);
+
+  removeManagedCodexAccount(first.id);
+
+  expect(agentRegistry().engineRouting("codex").activeAccountId).toBe(second.id);
+  expect(activeCodexAccountId()).toBe(second.id);
+});
+
+/* A removal a crash left at `retiring` (home already in the archive, agent
+   registry not yet retired) is finished by recovery. With Main hidden, that
+   retirement must route to a listed account, never back onto Main. */
+test("recovery of a removal interrupted while retiring never routes onto a hidden Main", async () => {
+  const { hideLegacyCodexAccount } = await import("./codex");
+  const fixture = usedCodexHome("Invented Recovery");
+  const other = createManagedCodexAccount("Invented Other");
+  hideLegacyCodexAccount();
+  agentRegistry().setEngineRouting("codex", fixture.account.id);
+  fs.mkdirSync(path.dirname(fixture.archive), { recursive: true, mode: 0o700 });
+  fs.renameSync(fixture.account.home, fixture.archive);
+  seedAccountRegistry("codex", { ...persistedAccountRegistry("codex"), removals: [{ id: fixture.account.id, phase: "retiring", startedAt: Date.now() }] });
+
+  expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  expect(agentRegistry().engineRouting("codex").activeAccountId).toBe(other.id);
+  expect(activeCodexAccountId()).toBe(other.id);
+  expect(listCodexAccounts().map((account) => account.id)).toEqual([other.id]);
+  expect(persistedAccountRegistry("codex").active).not.toBe("default");
+});

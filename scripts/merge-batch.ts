@@ -166,7 +166,7 @@ const sameCandidate = (a: Candidate, b: Candidate) => JSON.stringify(a) === JSON
 type Detector = { source: string; pr?: number; corpus: Record<string, string>; stale?: Record<string, string> };
 type NotApplicable = { source: string; file: string; reason: string };
 type AttributionRecord = TestAttribution & { candidate: Candidate; source: string; stale?: true };
-type Validation = { candidate: Candidate; tip: string; decisions: BatchTestDecision[]; notApplicable: NotApplicable[] };
+type Validation = { candidate: Candidate; tip: string; decisions: BatchTestDecision[]; notApplicable: NotApplicable[]; adapted?: NotApplicable[] };
 
 export function parseReviewedPrs(input: string): ReviewedPr[] {
   const seen = new Set<number>();
@@ -800,7 +800,36 @@ export class MergeBatch {
     const prs = validation.candidate.prs.map(pr => pr.number);
     const all: Detector[] = [{ source: "native candidate", corpus: this.treeTests(state, state.tip, paths) },
       ...state.rows.map(row => ({ source: `#${row.number}@${row.head}`, pr: row.number, corpus: this.treeTests(state, row.head, paths) }))];
-    // Contents come only from immutable Git objects. Deduplication is local to
+    const bases = new Map(state.rows.map(row => [row.number, this.treeTests(state, row.reviewBase, paths)]));
+    const main = this.treeTests(state, state.base, paths);
+    const member = (detector: Detector) => detector.pr === undefined || prs.includes(detector.pr);
+    // Only a member's explicitly reviewed replacement can supersede an
+    // unchanged copy of that same review base. A changed detector keeps its
+    // own assertions, even when another member edited the same file.
+    const applicable = all.filter(member).map(detector => {
+      const row = state.rows.find(entry => entry.number === detector.pr);
+      if (!row) return detector;
+      const corpus = { ...detector.corpus };
+      for (const [file, contents] of Object.entries(corpus)) {
+        const base = bases.get(row.number)![file];
+        const replacement = contents === base && all.find(other => other.pr !== undefined && other.pr !== row.number
+          && member(other) && bases.get(other.pr)![file] === contents && other.corpus[file] !== undefined && other.corpus[file] !== contents);
+        if (replacement) {
+          delete corpus[file];
+          validation.notApplicable.push({ source: detector.source, file,
+            reason: `unchanged review-base copy superseded by ${replacement.source}` });
+        } else if (base !== undefined && contents !== base) {
+          const adapted = this.mainContractDetector(state, base, contents, main[file]);
+          if (adapted !== undefined) {
+            corpus[file] = adapted;
+            (validation.adapted ??= []).push({ source: detector.source, file,
+              reason: "main contract update merged with the unchanged reviewed test patch" });
+          }
+        }
+      }
+      return { ...detector, corpus };
+    });
+    // Contents derive only from immutable Git objects. Deduplication is local to
     // this validation; a rebuilt candidate starts with an empty set again.
     const seen = new Set<string>();
     const unseen = (detector: Detector) => Object.fromEntries(Object.entries(detector.corpus).filter(([file, contents]) => {
@@ -808,8 +837,7 @@ export class MergeBatch {
       if (seen.has(key)) return false;
       seen.add(key); return true;
     }));
-    const member = (detector: Detector) => detector.pr === undefined || prs.includes(detector.pr);
-    const active = all.filter(member).map(detector => ({ ...detector, corpus: unseen(detector) }));
+    const active = applicable.map(detector => ({ ...detector, corpus: unseen(detector) }));
     // A PR outside this candidate judges nothing in it: its test can import
     // code the candidate does not carry. Its native files still run above.
     for (const detector of all.filter(detector => !member(detector))) {
@@ -830,6 +858,37 @@ export class MergeBatch {
       }
     }
     return active.filter(detector => Object.keys(detector.corpus).length);
+  }
+
+  /** Carry main's newer contract into an independently changed test without
+   * changing the PR's reviewed patch. Conflicts, deletions and overlapping
+   * patch changes retain the original detector and its existing stop rules. */
+  private mainContractDetector(state: RunState, base: string, reviewed: string, main: string | undefined): string | undefined {
+    if (main === undefined || main === base) return undefined;
+    const root = mkdtempSync(join(dirname(this.stateFile), "contract-detector-"));
+    const current = join(root, "current"), next = join(root, "next"), ancestor = join(root, "base");
+    const patch = (before: string, after: string) => {
+      writeFileSync(current, Buffer.from(before, "base64"));
+      writeFileSync(next, Buffer.from(after, "base64"));
+      let diff: string;
+      try { diff = git(state.work, ["diff", "--no-index", "--binary", "-U0", "--", current, next]); }
+      catch (error) {
+        const failure = error as { status?: number; stdout?: Buffer };
+        if (failure.status !== 1 || !failure.stdout) throw error;
+        diff = failure.stdout.toString();
+      }
+      return git(state.work, ["patch-id", "--stable"], diff + "\n").split(" ")[0];
+    };
+    try {
+      writeFileSync(current, Buffer.from(main, "base64"));
+      writeFileSync(ancestor, Buffer.from(base, "base64"));
+      writeFileSync(next, Buffer.from(reviewed, "base64"));
+      let merged: string;
+      try { merged = execFileSync("git", ["merge-file", "-p", current, ancestor, next],
+        { cwd: state.work, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 }).toString("base64"); }
+      catch { return undefined; }
+      return patch(base, reviewed) === patch(main, merged) ? merged : undefined;
+    } finally { rmSync(root, { recursive: true, force: true }); }
   }
 
   /** A PR's reviewed tree carries every selected test file, including ones its
@@ -1242,6 +1301,7 @@ export function report(state: RunState): string {
         ...row.resolutionTests.decision.uncompared.map(site =>
           `- ${site.file} > ${site.suite} > ${site.name}; native main did not establish a result or absence`.replace(/[\r\n]/g, " "))] : []),
     ] : []),
+    "", "Adapted reviewed detectors:", ...(state.gated?.adapted ?? []).map(entry => `- ${entry.source}: ${entry.file}: ${entry.reason}`),
     "", "Skipped test files:", ...(state.gated?.notApplicable ?? []).map(entry => `- ${entry.source}: ${entry.file}: ${entry.reason}`), ...(state.batch ? ["", state.batch.url] : [])].join("\n");
 }
 

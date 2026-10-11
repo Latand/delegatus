@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts } from "@/lib/accounts/codex";
-import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts, readClaudeProviderRuntime } from "@/lib/accounts/claude";
+import { activeCodexAccountId, codexAccountsMutationLocked, codexLegacyAccountHidden, listCodexAccounts } from "@/lib/accounts/codex";
+import { activeClaudeAccountId, claudeAccountsMutationLocked, claudeLegacyAccountHidden, listClaudeAccounts, readClaudeProviderRuntime } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { providerCredentialChangedAt, readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 import { engineCliPresence } from "@/lib/accounts/engineConnection";
@@ -81,6 +81,15 @@ function autoBalanceProjection(engine: MigrationEngine, snapshot: ReturnType<Ret
     state: !policy.enabled ? "disabled" : draining ? "draining" : cooling ? "cooldown" : fresh ? "idle" : "waiting-fresh",
   };
 }
+
+/** Routing that still names a listed account; one left on a removed account
+    names nothing, so the panel and the launch draft never show it active. */
+function listedOr(accounts: readonly { id: string }[], id: string | null): string | null {
+  return id && accounts.some((account) => account.id === id) ? id : null;
+}
+
+/** Main the operator removed: no longer listed, offered back in account setup. */
+const HIDDEN_MAIN = { id: "default", label: "Main" } as const;
 
 /** Pure durable projection. Live auth/quota/login reconciliation runs in the controller. */
 export async function GET() {
@@ -177,16 +186,18 @@ export async function GET() {
   const [claudeCli, codexCli] = await cliProbe;
   return NextResponse.json({
     codex: {
-      active: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
+      active: listedOr(codexAccountList, snapshot.engineRouting.codex.activeAccountId) ?? listedOr(codexAccountList, activeCodexAccountId()) ?? "",
       cli: codexCli,
       accounts: codexAccounts,
+      hidden: codexLegacyAccountHidden() ? [HIDDEN_MAIN] : [],
       migration: codexMigration,
       autoBalance: codexAuto,
     },
     claude: {
-      active: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
+      active: listedOr(claudeAccountList, snapshot.engineRouting.claude.activeAccountId) ?? listedOr(claudeAccountList, activeClaudeAccountId()) ?? "",
       cli: claudeCli,
       accounts: claudeAccounts,
+      hidden: claudeLegacyAccountHidden() ? [HIDDEN_MAIN] : [],
       mutationLocked: claudeAccountsMutationLocked(),
       migration: claudeMigration,
       autoBalance: claudeAuto,

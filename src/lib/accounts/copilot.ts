@@ -5,8 +5,11 @@ import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
 
+import type { AccountRetirementReport } from "@/lib/agent/registry";
+
 import { withAccountMutationLock } from "./accountMutation";
 import type { AccountContext } from "./contracts";
+import { retireAccountInPlace } from "./removal";
 
 /**
  * GitHub Copilot accounts (docs/design/copilot-engine.md 3.9).
@@ -61,7 +64,12 @@ export function copilotSignedInUser(home: string): string | null {
 }
 
 interface StoredAccount { id: string; label: string; createdAt: number }
-interface Registry { version: 1; active: string | null; accounts: StoredAccount[] }
+/** A removed managed account. Its home stays where it was, so its
+    `session-state/` transcripts stay readable. */
+interface RetiredAccount { id: string; label: string; retiredAt: number }
+/** `legacyHidden`: the operator removed the default home from Delegatus; it is
+    neither listed nor picked, and nothing in it is touched. */
+interface Registry { version: 1; active: string | null; accounts: StoredAccount[]; retired?: RetiredAccount[]; legacyHidden?: true }
 
 export class UnknownCopilotAccountError extends Error {
   constructor(id: string) {
@@ -119,7 +127,18 @@ function readRegistry(requireComplete = false): Registry {
         && typeof item.label === "string" && typeof item.createdAt === "number")
       : [];
     if (requireComplete && (!Array.isArray(parsed.accounts) || accounts.length !== parsed.accounts.length)) throw new Error("Copilot account names are unreadable");
-    return { version: 1, active: typeof parsed.active === "string" ? parsed.active : null, accounts };
+    const retired = Array.isArray(parsed.retired)
+      ? parsed.retired.filter((item): item is RetiredAccount => !!item
+        && typeof item.id === "string" && ACCOUNT_ID.test(item.id) && item.id !== COPILOT_LEGACY_ACCOUNT_ID
+        && typeof item.label === "string" && typeof item.retiredAt === "number")
+      : [];
+    return {
+      version: 1,
+      active: typeof parsed.active === "string" ? parsed.active : null,
+      accounts,
+      ...(retired.length ? { retired } : {}),
+      ...(parsed.legacyHidden === true ? { legacyHidden: true as const } : {}),
+    };
   } catch (error) {
     if (requireComplete && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return { version: 1, active: null, accounts: [] };
@@ -136,7 +155,7 @@ function writeRegistry(registry: Registry): void {
 
 function legacyAccount(): CopilotAccount | null {
   const home = legacyCopilotHome();
-  if (!fs.existsSync(home)) return null;
+  if (!fs.existsSync(home) || readRegistry().legacyHidden) return null;
   return {
     id: COPILOT_LEGACY_ACCOUNT_ID,
     label: "Default",
@@ -150,7 +169,8 @@ function legacyAccount(): CopilotAccount | null {
 
 /** Stored names for publication checks without opening account credentials. */
 export function copilotAccountsForPrivacy(): readonly { id: string; label: string }[] {
-  return [{ id: COPILOT_LEGACY_ACCOUNT_ID, label: "Default" }, ...readRegistry(true).accounts];
+  const registry = readRegistry(true);
+  return [{ id: COPILOT_LEGACY_ACCOUNT_ID, label: "Default" }, ...registry.accounts, ...registry.retired ?? []];
 }
 
 export function listCopilotAccounts(): CopilotAccount[] {
@@ -190,7 +210,7 @@ export function createManagedCopilotAccount(label: string): CopilotAccount {
   }
   return withAccountMutationLock(() => {
     const registry = readRegistry();
-    const taken = new Set([COPILOT_LEGACY_ACCOUNT_ID, ...registry.accounts.map((account) => account.id)]);
+    const taken = new Set([COPILOT_LEGACY_ACCOUNT_ID, ...registry.accounts.map((account) => account.id), ...(registry.retired ?? []).map((account) => account.id)]);
     const base = clean.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "account";
     let id = base;
     for (let suffix = 1; taken.has(id) || !ACCOUNT_ID.test(id) || fs.existsSync(managedHome(id)); suffix += 1) {
@@ -206,9 +226,85 @@ export function createManagedCopilotAccount(label: string): CopilotAccount {
   });
 }
 
-/** Every Copilot transcript root the scanner reads, resolved per call. */
+/** Transcript roots of removed accounts: each retired home in place, and the
+    default home once it is hidden. */
+export function retiredCopilotSessionRoots(): string[] {
+  const registry = readRegistry();
+  return [
+    ...(registry.legacyHidden ? [path.join(legacyCopilotHome(), "session-state")] : []),
+    ...(registry.retired ?? []).map((account) => path.join(managedHome(account.id), "session-state")),
+  ];
+}
+
+/** Every Copilot transcript root the scanner reads, resolved per call:
+    live accounts first, then retained history. */
 export function copilotSessionRoots(): string[] {
-  return [...new Set(listCopilotAccounts().map((account) => account.sessionStateDir))];
+  return [...new Set([...listCopilotAccounts().map((account) => account.sessionStateDir), ...retiredCopilotSessionRoots()])];
+}
+
+/** What a Copilot removal did, for the DELETE answer. */
+export type CopilotAccountRemoval = AccountRetirementReport & {
+  /** The home whose transcripts stay readable where they are. */
+  home: string;
+  /** True for the default home, which Delegatus only stopped listing. */
+  hidden: boolean;
+  /** The sign-in file of a managed home could not be deleted. */
+  cleanupPending: boolean;
+};
+
+/**
+ * Removes a Copilot account from Delegatus. A managed account leaves the
+ * list with a retired record; its home stays in place so `session-state/`
+ * remains readable, and only its sign-in file (`config.json`, which holds the
+ * token when the operator chose plaintext storage) is deleted. The default
+ * home is only hidden: nothing in it is touched. Pins, owed deliveries and
+ * routing aimed at the account settle as for every other engine.
+ */
+export function removeCopilotAccount(id: string): CopilotAccountRemoval {
+  return withAccountMutationLock(() => {
+    const account = listCopilotAccounts().find((candidate) => candidate.id === id);
+    if (!account) throw new UnknownCopilotAccountError(id);
+    const registry = readRegistry(true);
+    const remaining = registry.accounts.filter((item) => item.id !== id);
+    const retirement = retireAccountInPlace({
+      engine: "copilot",
+      accountId: id,
+      fallbackAccountId: null,
+      commit: () => writeRegistry(account.kind === "legacy"
+        ? { ...registry, active: registry.active === id ? null : registry.active, legacyHidden: true }
+        : {
+          ...registry,
+          active: registry.active === id ? null : registry.active,
+          accounts: remaining,
+          retired: [...(registry.retired ?? []).filter((item) => item.id !== id), { id, label: account.label, retiredAt: Date.now() }],
+        }),
+    });
+    let cleanupPending = false;
+    if (account.kind === "managed") {
+      const credential = path.join(account.home, "config.json");
+      try {
+        const stat = fs.lstatSync(credential);
+        if (stat.isFile() || stat.isSymbolicLink()) fs.unlinkSync(credential);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") cleanupPending = true;
+      }
+    }
+    return { ...retirement, home: account.home, hidden: account.kind === "legacy", cleanupPending };
+  });
+}
+
+/** True once the operator removed the default home from Delegatus. */
+export function copilotLegacyAccountHidden(): boolean {
+  return readRegistry().legacyHidden === true;
+}
+
+/** Lists the default home again after its removal; nothing in it was touched. */
+export function restoreLegacyCopilotAccount(): void {
+  withAccountMutationLock(() => {
+    const { legacyHidden, ...registry } = readRegistry(true);
+    if (!legacyHidden) throw new UnknownCopilotAccountError(COPILOT_LEGACY_ACCOUNT_ID);
+    writeRegistry(registry);
+  });
 }
 
 export function copilotHomeOwningSessionPath(pathname: string): string | null {

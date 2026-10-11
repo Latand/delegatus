@@ -1,7 +1,7 @@
 import { codexModelServiceTiers, tierOffers, CodexServiceTierUnavailableError } from "./codexServiceTiers";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
-import { accountForSpawn, activeCodexAccountId, codexAccountsMutationLocked, codexHomeOwningSessionPath, CorruptCodexAccountsError, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount, UnknownAccountError, type CodexAccount } from "./codex";
-import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeAccountEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderRuntime, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
+import { accountForSpawn, activeCodexAccountId, codexAccountListed, codexAccountsMutationLocked, codexHomeOwningSessionPath, CorruptCodexAccountsError, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount, UnknownAccountError, type CodexAccount } from "./codex";
+import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountListed, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeAccountEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderRuntime, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "./claudeLogin";
 import { managedCodexRuntime } from "./codexRuntime";
 import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotConfigCheckedAt, copilotHomeOwningSessionPath, copilotLoginCommand, copilotSignedInUser, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
@@ -16,6 +16,19 @@ import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
 import { selectHealthyClaudeAccount } from "./spawnHealth";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readProviderMessageHealth } from "./claudeProviderHealth";
+
+/** The engine's routed account while it is still listed. Routing left on an
+    account the operator removed names nothing, so every launch, resume and
+    automatic pick falls back to an account that exists. */
+export function routedAccountId(engine: "claude" | "codex"): string | null {
+  return listedAccountId(engine, agentRegistry().engineRouting(engine).activeAccountId);
+}
+
+/** A preferred account id while it is still listed, else null. */
+function listedAccountId(engine: "claude" | "codex", id: string | null | undefined): string | null {
+  if (!id) return null;
+  return (engine === "claude" ? claudeAccountListed(id) : codexAccountListed(id)) ? id : null;
+}
 
 function contextForSpawn(engine: "claude" | "codex", requested?: string | null) {
   if (engine === "claude") { const item = claudeAccountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.projectsDir, env: item.kind === "managed" ? claudeAccountEnvironment(item) : withoutUnsupportedApiCredentials(process.env), ...(item.provider ? { claudeProvider: item.provider } : {}) }; }
@@ -111,7 +124,7 @@ export async function resolveHealthySpawnAccount(
   const allowedAccountIds = allowedAccountIdsForProject(project, engine, bindings);
   const allowed = allowedAccountIds === null ? null : new Set(allowedAccountIds);
   const registry = agentRegistry();
-  const routing = registry.engineRouting(engine).activeAccountId ?? undefined;
+  const routing = routedAccountId(engine) ?? undefined;
   const selectionInput = {
     project,
     engine,
@@ -429,7 +442,7 @@ export function resolveResumeAccountId(
        none, and handing its routing account back here would replace the spec
        builder's fallback with a different one on projects that opted into
        nothing. */
-    preferredId: allowed === null ? null : registry.engineRouting(engine).activeAccountId,
+    preferredId: allowed === null ? null : routedAccountId(engine),
     unbound: "engine-default",
   });
   if (selection.kind !== "available") throw new ProjectAccountRefusedError(selection, engine, project);
@@ -581,7 +594,7 @@ export const accountManager: AccountManager = {
   },
   resolveSpawn(engine, requested) {
     if (engine === "copilot") return copilotAccountForSpawn(requested ?? null);
-    return contextForSpawn(engine, requested ?? agentRegistry().engineRouting(engine).activeAccountId ?? undefined);
+    return contextForSpawn(engine, requested ?? routedAccountId(engine) ?? undefined);
   },
   resolveHeadlessSpawn(engine, requested, excludedIds, project, model, unavailableIds) {
     if (engine === "copilot") {
@@ -608,7 +621,7 @@ export const accountManager: AccountManager = {
       bindings: accountProjectBindings(),
       /* Headless selection has no pin: `requested` has always been a
          preference here, and it stays one — the fence is the candidate set. */
-      preferredId: requested ?? agentRegistry().engineRouting(engine).activeAccountId,
+      preferredId: listedAccountId(engine, requested) ?? routedAccountId(engine),
       excludedIds,
       unavailableIds,
       /* This path has always been the rate-limit-aware one, bound project or
@@ -658,7 +671,7 @@ export const accountManager: AccountManager = {
       model: request.model,
       /* The caller's continuity hint outranks the engine's routing as an
          ORDERING, and neither one widens the candidate set. */
-      preferredId: request.preferredId ?? agentRegistry().engineRouting(engine).activeAccountId,
+      preferredId: listedAccountId(engine, request.preferredId) ?? routedAccountId(engine),
       excludedIds: request.excludedIds ?? [],
       unavailableIds: request.unavailableIds ?? [],
     });

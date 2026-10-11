@@ -33,3 +33,9 @@ test("missing/empty path falls back to the default account", () => {
 test("a foreign engine folder under accounts is not matched", () => {
   expect(accountIdFromPath("/x/accounts/gemini/acct/projects/s.jsonl")).toBe(DEFAULT_ACCOUNT_ID);
 });
+
+test("a removed account's archived history stays attributed to it", () => {
+  expect(accountIdFromPath("/fixture/config/agent-log-viewer/shared/codex/retired/codex-fixture/sessions/2026/07/x.jsonl")).toBe("codex-fixture");
+  expect(accountIdFromPath("/fixture/config/agent-log-viewer/shared/claude/retired/claude-fixture/projects/-x/s.jsonl")).toBe("claude-fixture");
+  expect(accountIdFromPath("/fixture/config/agent-log-viewer/shared/claude/projects/-x/s.jsonl")).toBe(DEFAULT_ACCOUNT_ID);
+});
