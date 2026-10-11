@@ -266,7 +266,7 @@ for (const approval of [false, true])
     try {
       const result = await runClaimedRequest(paired, wire, undefined, { timeoutMs: 10000, ownerPorts: {
         launch: async input => {
-          launchPrompt = input.prompt;
+          launchPrompt = String(input.prompt);
           return { status: 202, body: { conversationId: sender.id } };
         },
         observe: async () => {
