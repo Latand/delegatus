@@ -7545,6 +7545,9 @@ async function registryHistoryMain(): Promise<void> {
   try {
     server = startServer(port);
     await waitForServer(baseUrl, server);
+    /* The views open on a server that has started and scanned once, as an
+       operator's do; the gate itself bounds the cold first projection. */
+    await waitForBoard(baseUrl, false);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
     const views = await Promise.all(Array.from({ length: REGISTRY_HISTORY_VIEWS }, async (_, index) => {
@@ -7577,8 +7580,8 @@ async function registryHistoryMain(): Promise<void> {
       const pinned = dataset.conversationPaths[(index * 7) % dataset.conversationPaths.length]!;
       const started = performance.now();
       await page.goto(`${baseUrl}/#f=${encodeURIComponent(pinned)}`, { waitUntil: "domcontentloaded" });
-      await page.waitForSelector("[data-kanban-board]", { timeout: REGISTRY_HISTORY_BOUNDS.readyMs });
-      const readyMs = Math.round(performance.now() - started);
+      const drawn = await page.waitForSelector("[data-kanban-board]", { timeout: REGISTRY_HISTORY_BOUNDS.readyMs }).then(() => true, () => false);
+      const readyMs = drawn ? Math.round(performance.now() - started) : Number.POSITIVE_INFINITY;
       measuring = true;
       await page.evaluate(() => { (window as unknown as { __historyProbe: { lags: number[] } }).__historyProbe.lags.length = 0; });
       return { index, context, page, files, failed, readyMs };
@@ -7629,7 +7632,7 @@ async function registryHistoryMain(): Promise<void> {
       if (reading.files.maxMs > REGISTRY_HISTORY_BOUNDS.filesMaxMs) report.failures.push(`${name} /api/files max ${reading.files.maxMs}ms`);
       if (reading.lag.p95Ms > REGISTRY_HISTORY_BOUNDS.lagP95Ms) report.failures.push(`${name} main-thread lag p95 ${reading.lag.p95Ms}ms`);
       if (reading.lag.maxMs > REGISTRY_HISTORY_BOUNDS.lagMaxMs) report.failures.push(`${name} main-thread lag max ${reading.lag.maxMs}ms`);
-      if (reading.readyMs > REGISTRY_HISTORY_BOUNDS.readyMs) report.failures.push(`${name} drew its board after ${reading.readyMs}ms`);
+      if (!Number.isFinite(reading.readyMs)) report.failures.push(`${name} drew no board within ${REGISTRY_HISTORY_BOUNDS.readyMs}ms`);
       if (inputMs > REGISTRY_HISTORY_BOUNDS.inputMs) report.failures.push(`${name} answered a wheel in ${inputMs}ms`);
       await view.page.screenshot({ path: path.join(OUT_DIR, `registry-history-view-${view.index}.png`) });
       await view.context.close();
