@@ -160,7 +160,9 @@ committed, so a younger check cannot overtake one waiting for a slot. Waiting
 uses no heavy slot. The owned runner's execution deadline starts after admission.
 Nested waits report heartbeat intervals to private ledgers owned by bounded
 callers; concurrent intervals count once. The Git executor, hook plan and owned
-runner exclude those intervals from their finite execution budgets. Cancellation
+runner exclude those intervals from their finite execution budgets. Per-file
+test comparisons keep an independent execution guard with the existing cleanup
+allowance, and exclude waits from batch and flaky-retry clocks. Cancellation
 still stops waiting immediately. The Linux service uses a kernel watchdog to
 bound an unresponsive supervisor while its execution timer excludes queue time.
 The stage-output commit retry policy belongs to the separate settlement change.

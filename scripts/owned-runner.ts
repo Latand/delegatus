@@ -15,7 +15,27 @@ const args = process.argv.slice(2);
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
 
-if (args[0] === "--portable") {
+if (args[0] === "--budget") {
+  const allowance = Number(args[1]), command = args.slice(2);
+  if (!Number.isFinite(allowance) || allowance <= 0 || !command.length) throw new Error("owned runner budget needs a finite allowance and a command");
+  const budget = cpuWaitBudget(process.env);
+  const child = spawn(command[0]!, command.slice(1), { stdio: "inherit", env: { ...budget.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) } });
+  const close = new Promise<number>(resolve => {
+    child.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
+    child.once("error", error => { console.error(`owned runner: budget launch failed: ${error.message}`); resolve(1); });
+  });
+  let stopped = 0, cleanup: Promise<void> | undefined;
+  const stop = (code: number) => {
+    stopped ||= code;
+    cleanup ??= stopFixtureProcess(child).catch(error => { console.error(`owned runner: budget cleanup failed: ${error.message}`); budget.close(); process.exit(1); });
+  };
+  process.on("SIGTERM", () => stop(143)); process.on("SIGINT", () => stop(130));
+  const stopTimer = cpuBudgetTimer(allowance, budget.elapsed, () => { console.error("owned runner: execution guard expired"); stop(124); });
+  const code = await close;
+  await cleanup;
+  stopTimer(); budget.close();
+  process.exit(stopped || code);
+} else if (args[0] === "--portable") {
   // The fallback uses the same spawn ledger and independent guardian as direct
   // test runs. On Linux the gate refuses to lose kernel cgroup containment.
   admitPortableTestRunner();
