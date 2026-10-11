@@ -12,6 +12,142 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const noTimer = (() => 0 as unknown as ReturnType<typeof setTimeout>);
 
+/* A busy week's retained completions, newer than the records under test. */
+function addRecentCompletions(filename: string, now: number): void {
+  const seed = new DeliveryProgressStore(null, () => now, noTimer);
+  seed.note("completion-seed", "busy-conversation", { waitReason: "dispatching" });
+  seed.settle("completion-seed", "delivered", null);
+  const record = seed.get("completion-seed")!;
+  const db = new Database(filename);
+  try {
+    const insert = db.query("INSERT INTO delivery_progress VALUES (?, ?, ?, ?, ?, ?)");
+    db.transaction(() => {
+      for (let i = 0; i < 10_001; i++) {
+        const operationId = `recent-completion-${i}`;
+        insert.run(operationId, record.conversationId, null, 1, now,
+          JSON.stringify({ ...record, operationId }));
+      }
+    })();
+  } finally {
+    db.close();
+    seed.close();
+  }
+}
+
+test("recent completions cannot hide an open send after prune and restart or replace its history", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "busy-restart.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("open-send", "conversation", {
+    waitReason: "queued", originalKey: "open-key", kind: "steer", admittedAt: new Date(now).toISOString(),
+    executorId: "original-executor", nextWakeMs: 5_000,
+  });
+  store.timing("open-send", { ingressAt: new Date(now - 100).toISOString() });
+  now += 100;
+  store.note("open-send", "conversation", { waitReason: "checking", detail: "reading journal", attempted: true });
+  store.deadline("open-send", new Date(now + 60_000).toISOString(), "settlement-window");
+  store.stalled("open-send");
+  const before = structuredClone(store.get("open-send"))!;
+  expect(store.flush()).toBe(true);
+  now += 1_000;
+  addRecentCompletions(filename, now);
+  now += 10 * 60_000;
+  store.checkpoint(now);
+  expect(store.flush()).toBe(true);
+  store.close();
+
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  try {
+    expect(reopened.open().map((record) => record.operationId)).toContain("open-send");
+    expect(reopened.get("open-send")).toEqual(before);
+    const at = new Date(now).toISOString();
+    reopened.note("open-send", "conversation", { waitReason: "dispatching", attempted: true });
+    const expected = { ...before, waitReason: "dispatching", detail: null, attempt: before.attempt + 1,
+      phaseSince: at, lastProgressAt: at, stalledSince: null, updatedAt: at,
+      phaseHistory: [...before.phaseHistory!, { phase: "dispatching", reason: null, at }] };
+    expect(reopened.get("open-send")).toEqual(expected);
+    expect(reopened.get("open-send")!.phaseHistory!.length).toBeLessThanOrEqual(DELIVERY_PHASE_HISTORY_LIMIT);
+    expect(reopened.flush()).toBe(true);
+    expect(readDeliveryProgress(["open-send"], filename).get("open-send")).toEqual(expected);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("updates hydrate retained sends outside the startup cache and preserve their fields and phases", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "cold-history.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  const operations = ["note", "rearm", "settle", "timing", "get"] as const;
+  for (const operation of operations) {
+    store.note(operation, "conversation", { waitReason: "queued", originalKey: `${operation}-key`,
+      admittedAt: new Date(now).toISOString(), executorId: "original-executor" });
+    store.note(operation, "conversation", { waitReason: "dispatching", attempted: true });
+    store.settle(operation, "uncertain", "lost acknowledgement");
+  }
+  const before = new Map(operations.map((operation) => [operation, structuredClone(store.get(operation))!]));
+  store.close();
+  now += 1_000;
+  addRecentCompletions(filename, now);
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  try {
+    expect(reopened.open()).toEqual([]); // Load the startup cache before each cold access.
+    reopened.note("note", "conversation", { waitReason: "checking" });
+    reopened.rearm("rearm", "conversation", { waitReason: "checking" });
+    reopened.settle("settle", "delivered", null);
+    reopened.timing("timing", { engineEchoAt: new Date(now).toISOString() });
+    expect(reopened.get("get")).toEqual(before.get("get")!);
+    expect(reopened.flush()).toBe(true);
+    const records = readDeliveryProgress(operations, filename);
+    expect(records.get("note")).toEqual(before.get("note")!);
+    for (const operation of ["rearm", "settle", "timing"] as const) {
+      const record = records.get(operation)!;
+      expect(record).toMatchObject({ originalKey: `${operation}-key`, admittedAt: before.get(operation)!.admittedAt });
+      expect(record.phaseHistory?.slice(0, 3)).toEqual(before.get(operation)!.phaseHistory!);
+      expect(record.phaseHistory).toHaveLength(4);
+    }
+    expect(records.get("rearm")).toMatchObject({ terminal: null, attempt: 2, executorId: null });
+    expect(records.get("settle")).toMatchObject({ terminal: { state: "delivered" }, attempt: 1 });
+    expect(records.get("timing")).toMatchObject({ terminal: before.get("timing")!.terminal, attempt: 1,
+      engineEchoAt: new Date(now).toISOString() });
+  } finally {
+    reopened.close();
+  }
+});
+
+test("an unreadable cold row is left intact until an update can hydrate it", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "unreadable-cold-history.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("cold-send", "conversation", { waitReason: "queued", originalKey: "cold-key" });
+  store.settle("cold-send", "uncertain", "lost acknowledgement");
+  const before = structuredClone(store.get("cold-send"))!;
+  store.close();
+  now += 1_000;
+  addRecentCompletions(filename, now);
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  const internals = reopened as unknown as { connection: () => unknown };
+  const connection = internals.connection;
+  try {
+    expect(reopened.open()).toEqual([]);
+    internals.connection = () => { throw new Error("unable to open database file"); };
+    reopened.note("cold-send", "conversation", { waitReason: "checking" });
+    reopened.rearm("cold-send", "conversation", { waitReason: "checking" });
+    expect(reopened.flush()).toBe(true); // Neither update queued a replacement row.
+    internals.connection = connection;
+    expect(reopened.get("cold-send")).toEqual(before);
+    reopened.rearm("cold-send", "conversation", { waitReason: "checking" });
+    expect(reopened.flush()).toBe(true);
+    const record = readDeliveryProgress(["cold-send"], filename).get("cold-send")!;
+    expect(record).toMatchObject({ terminal: null, originalKey: "cold-key", attempt: 1 });
+    expect(record.phaseHistory?.slice(0, 2)).toEqual(before.phaseHistory!);
+    expect(record.phaseHistory).toHaveLength(3);
+  } finally {
+    internals.connection = connection;
+    reopened.close();
+  }
+});
+
 test("phase history survives a restart, including changes within checking and the ending", () => {
   let now = Date.parse("2026-10-11T00:00:00.000Z");
   const filename = path.join(root, "phase-history.sqlite");
