@@ -7,7 +7,7 @@ import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/s
 import { canonicalProject } from "@/lib/projects/aliases";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 
-import { appendRule, leavingOrder, lessonPattern, retainRules, sameRule, scopeChars } from "./roleConsolidate";
+import { appendRule, lessonPattern, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import { renderLearnedRules } from "./roleRender";
@@ -176,7 +176,9 @@ export function learnedRulesBlock(project: string, roleId: string | null, maxByt
   return renderLearnedRules(readableScopes(project, roleId).map(scope => {
     const active = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope ? row.active : [])
       .flatMap(id => { const found = byId.get(id); return found?.state === "active" && !found.versionOf ? [found] : []; });
-    return { scope, rules: leavingOrder(active).reverse() };
+    // Two aliased rows can exceed one scope's bound before an owner joins them.
+    // Apply the same retention decision to this snapshot without writing it.
+    return { scope, rules: retainRules(active, new Date().toISOString()).active.reverse() };
   }), maxBytes);
 }
 

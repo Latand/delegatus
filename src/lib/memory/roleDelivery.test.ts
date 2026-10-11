@@ -2,6 +2,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import ts from "typescript";
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-delivery-"));
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
@@ -48,8 +49,8 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the 
     const seen: unknown[] = [];
     const capture = async (options: unknown) => { seen.push(options); throw new Error("captured delivery options"); };
     const start = spyOn(Host, "start").mockImplementation(capture);
-    const adopt = spyOn(Host, "adopt").mockImplementation(async (_id, options) => capture(options));
-    const input = { engine, registry, receipt: begun.receipt, spec: { command: engine, engine, cwd, windowName: "delivery", transcript: transcript ?? undefined, launchProfile }, account: { engine, accountId: "account-a", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }, prompt: "Stage prompt only", client: {} as import("@/lib/runtime/client").RuntimeHostClient };
+    const adopt = spyOn(Host, "adopt").mockImplementation(async (_id: string, options: unknown) => capture(options));
+    const input = { engine, registry, receipt: begun.receipt, spec: { command: engine, engine, cwd, windowName: "delivery", transcript: transcript ?? undefined, launchProfile }, account: { engine, accountId: "account-a", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } }, prompt: "Stage prompt only", client: {} as import("@/lib/runtime/client").RuntimeHostClient };
     try {
       await expect(defaultStartHost(input, "fixture-capability")).rejects.toThrow("captured delivery options");
       const rewritten = "Check the current owner of durable acknowledgements before replaying any persisted receipt.";
@@ -102,6 +103,20 @@ test("the byte ceiling omits whole lowest-ranked lines and creates no files", ()
   } finally { warn.mockRestore(); }
 });
 
+test("the renderer shared with browser fixtures works without the Node Buffer global", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "Buffer")!;
+  let block: string | undefined;
+  let error: unknown;
+  try {
+    Reflect.deleteProperty(globalThis, "Buffer");
+    block = renderLearnedRules([]);
+    renderLearnedRules([], 2_000);
+  } catch (cause) { error = cause; }
+  finally { Object.defineProperty(globalThis, "Buffer", descriptor); }
+  expect(error).toBeUndefined();
+  expect(block).toContain("Learned rules (Delegatus role memory)");
+});
+
 test("old pointer files age out at activation while newer and unrelated files stay", () => {
   const directory = path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch");
   fs.mkdirSync(directory, { recursive: true });
@@ -137,12 +152,29 @@ test("all production host start sites go through the declared option builders", 
   ]);
   for (const [file, count] of declared) expect((fs.readFileSync(path.join(runtime, file), "utf8").match(/(?:appendSystemPrompt|developerInstructions): learnedRulesForLaunchProfile\(/g) ?? []).length).toBe(count);
   const callers: { file: string; count: number }[] = [];
+  const hostNames = new Set(["ClaudeStreamBrokerHost", "CodexAppServerHost"]);
+  const wrapperNames = new Set(["startCodexStructuredHost", "startClaudeStructuredHost"]);
+  const countStarts = (file: string): number => {
+    const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+    let count = 0;
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node)) {
+        const called = node.expression;
+        if (ts.isPropertyAccessExpression(called) && ts.isIdentifier(called.expression)
+          && hostNames.has(called.expression.text) && ["start", "adopt"].includes(called.name.text)
+          || ts.isIdentifier(called) && wrapperNames.has(called.text)) count += 1;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return count;
+  };
   const scan = (directory: string) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory() && entry.name !== "fixtures") scan(file);
       else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-        const count = (fs.readFileSync(file, "utf8").match(/(?:ClaudeStreamBrokerHost|CodexAppServerHost)\.(?:start|adopt)\(/g) ?? []).length;
+        const count = countStarts(file);
         if (count) callers.push({ file: path.relative(path.resolve(runtime, ".."), file), count });
       }
     }
@@ -150,7 +182,7 @@ test("all production host start sites go through the declared option builders", 
   scan(path.resolve(runtime, ".."));
   expect(callers.sort((a, b) => a.file.localeCompare(b.file))).toEqual([
     { file: "accounts/migration/provider.ts", count: 2 },
-    { file: "runtime/registry.ts", count: 2 },
+    { file: "runtime/registry.ts", count: 4 },
     { file: "runtime/structuredSpawn.ts", count: 4 },
   ]);
 });

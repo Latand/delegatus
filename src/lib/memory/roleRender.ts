@@ -7,6 +7,7 @@ import { RULE_MAX_CHARS, WHY_MAX_CHARS, type RoleMemoryRule } from "./roleTypes"
    purpose (operator, 2026-10-07: «Треба, щоб не було дуже багато тексту»). */
 
 export const LEARNED_RULES_HEADING = "Learned rules (Delegatus role memory)";
+const utf8 = new TextEncoder();
 
 const LESSON_POINTER = "When you report with stage_report, its answer asks whether this stage taught anything; most stages answer none. A rule above that proved wrong or too narrow can be rewritten then, by its id.";
 
@@ -27,9 +28,9 @@ export function renderLearnedRules(scopes: readonly { scope: string; rules: read
   const selected = scopes.map(entry => ({ scope: entry.scope, rules: [...entry.rules] }));
   let block = renderBlock(selected);
   let omitted = 0;
-  while (Buffer.byteLength(block, "utf8") > maxBytes) {
+  while (utf8.encode(block).byteLength > maxBytes) {
     const largest = selected.filter(entry => entry.rules.length).sort((a, b) =>
-      Buffer.byteLength(b.rules.map(ruleLine).join("\n")) - Buffer.byteLength(a.rules.map(ruleLine).join("\n")))[0];
+      utf8.encode(b.rules.map(ruleLine).join("\n")).byteLength - utf8.encode(a.rules.map(ruleLine).join("\n")).byteLength)[0];
     if (!largest) throw new Error("learned-rule headings exceed the engine instruction limit");
     largest.rules.pop();
     omitted += 1;

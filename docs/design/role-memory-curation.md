@@ -510,8 +510,9 @@ SQLite at every engine start.**
    A test drives each of the six with a marked profile, and a source check
    lists every `start` and `adopt` call of the two host classes, so a new
    start path fails the test until it carries the rules. The function reads
-   only: moved project keys resolve on read, as
-   the window's view does, and the succession join stays with the writers.
+   only: moved project keys resolve on read, and the combined snapshot
+   follows the scope's curation order and character bound. The succession
+   join stays with the writers.
    The collection's snapshot is cached by revision, so a start costs at most
    one SQLite read.
 4. **The channels**, checked against the engines installed on this machine:
@@ -881,7 +882,8 @@ Failing-first tests, run by path under isolated state:
   refuses Return and rewrite; a repeat moves an uncurated target to the end
   of its segment; a tail append written in the old shape is placed
   correctly on the next write; the succession join and Return follow the
-  same order; a store written by slice A decodes under a decoder that
+  same order; an engine start bounds aliased scopes without changing the
+  store; a store written by slice A decodes under a decoder that
   accepts only the three row kinds. The test at `:60` (oldest archived over
   the bound) changes to the new order.
 - `src/lib/memory/roleEgress.test.ts`: the earlier text of a rewritten rule
@@ -945,7 +947,9 @@ Delivery tests in slice A (3.5):
   call of `ClaudeStreamBrokerHost` or `CodexAppServerHost` outside them.
 - **Failures**: an unreadable store starts the host without the block and
   logs it; a block past 120 000 bytes leaves out the lowest-ranked rules of
-  its largest scope, keeps them active, and logs the count.
+  its largest scope, keeps them active, and logs the count. The shared
+  renderer uses `TextEncoder` and runs without Node's `Buffer` global in
+  browser fixtures.
 - **Old files**: the sweep removes a launch file older than a day, keeps a
   newer one, and refuses outside the release fence.
 

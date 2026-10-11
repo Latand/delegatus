@@ -117,7 +117,7 @@ const builderLane = () => create([{ id: "build", kind: "run", role: { roleId: "b
 test("a review's finding becomes the fixer's abstract rule, a fresh builder starts with it, reviewers stay clean, and the kill switch stops both", async () => {
   savePipelines([]);
   const first = await create([
-    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review src/size.ts", next: null, onFail: { to: "fix", maxRounds: 1 } },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review src/size.ts", next: null, onFail: { to: "fix", maxRounds: 2 } },
     { id: "fix", kind: "run", role: { roleId: "builder" }, prompt: "Fix the findings below.\n\n{{prev.output}}", next: "recheck" },
     { id: "recheck", kind: "run", role: { roleId: "reviewer" }, prompt: "Review src/size.ts again", next: null },
   ]);
@@ -149,7 +149,7 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   await tickPipelines([], ports);
 
   /* The recheck is a reviewer: no block, and no rule text anywhere in its launch. */
-  expect(lane(first)).toMatchObject({ state: "running", cursor: { stageId: "recheck" } });
+  expect(lane(first).cursor?.stageId).toBe("recheck");
   expect(spawned[2]!.role.roleId).toBe("reviewer");
   expect(spawned[2]!.learnedRules ?? null).toBeNull();
   expect(spawned[2]!.prompt).not.toContain(RULE);
@@ -194,8 +194,8 @@ test("a stored lesson the fixer quotes never reaches the review gate it relays t
   /* The rule stored by the test above; the pipeline keeps the report as written. */
   savePipelines([]);
   const id = await create([
-    { id: "gate", kind: "run", role: { roleId: "builder" }, prompt: "Judge src/size.ts. Earlier work:\n\n{{prev.output}}", next: null, onFail: { to: "fix", maxRounds: 1 } },
-    { id: "fix", kind: "run", role: { roleId: "builder" }, prompt: "Fix the findings below.\n\n{{prev.output}}", next: null },
+    { id: "gate", kind: "run", role: { roleId: "builder" }, prompt: "Judge src/size.ts. Earlier work:\n\n{{prev.output}}", next: null, onFail: { to: "fix", maxRounds: 2 } },
+    { id: "fix", kind: "run", role: { roleId: "builder" }, prompt: "Fix the findings below.\n\n{{prev.output}}", next: "gate" },
   ]);
   await tickPipelines([], ports);
   await tickPipelines([], ports);

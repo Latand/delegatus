@@ -155,3 +155,27 @@ test("a project succession preserves the curation and operator priority of a dup
   expect(kept.keptByOperatorAt).toBeTruthy();
   expect(kept.curatedAt).toBeTruthy();
 });
+
+test("an engine start bounds aliased scopes by curation order without changing the store", async () => {
+  const template = fixtureRows().snapshot().find((row): row is Rule => row.kind === "rule" && row.state === "active" && !row.versionOf)!;
+  const currentScope = "role:alias-budget-current:builder";
+  const oldScope = "role:alias-budget-old:builder";
+  const rules = [currentScope, oldScope].flatMap((scope, group) => Array.from({ length: 8 }, (_, n): Rule => ({
+    ...template, id: `r_alias_budget_${group}_${n}`, scope,
+    rule: `Check durable ownership category ${group} variation ${n} before every replay. ${"Check each receipt. ".repeat(34)}`,
+    versions: [], revisedBy: undefined, curatedAt: group ? "2026-10-11T00:00:00.000Z" : undefined,
+    keptByOperatorAt: undefined, state: "active",
+  })));
+  fixtureRows().boundedPatch(40, tx => {
+    for (const row of rules) tx.put(row);
+    for (const scope of [currentScope, oldScope]) tx.put({ kind: "scope", scope, revision: 1, history: [], active: rules.filter(row => row.scope === scope).map(row => row.id) });
+  });
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  expect(persistProjectAliases([{ source: "alias-budget-old", target: "alias-budget-current", displayName: "Alias bound fixture" }])).toBe(true);
+  const before = fixtureRows().snapshot();
+  const block = store.learnedRulesBlock("alias-budget-current", "builder");
+  const selected = rules.filter(row => block.includes(`[${row.id}]`));
+  expect(scopeChars(selected)).toBeLessThanOrEqual(10_000);
+  for (const row of rules.filter(row => row.curatedAt)) expect(block).toContain(row.rule);
+  expect(fixtureRows().snapshot()).toEqual(before);
+});
