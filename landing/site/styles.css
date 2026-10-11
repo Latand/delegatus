@@ -301,6 +301,7 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
   padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--raised);
   box-shadow: 0 10px 20px -14px rgb(0 0 0 / 0.7);
+  transform-origin: top;
 }
 .d-ct { display: flex; align-items: flex-start; gap: 8px; font-weight: 600; }
 .d-ct .ic { margin-top: 2.5px; color: var(--product-muted); }
