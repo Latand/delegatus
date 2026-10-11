@@ -1,4 +1,4 @@
-import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor, type AgentEngine } from "@/lib/agent/cli";
@@ -21,7 +21,7 @@ import { listFiles } from "@/lib/scanner";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { transcriptLiveOwnership, type TranscriptLiveOwnership } from "@/lib/scanner/transcripts";
 import { procBackend } from "@/lib/proc";
-import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "@/lib/runtime/structuredRecovery";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { ownedDeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
@@ -169,21 +169,17 @@ export async function reconfigureConversation(
          project for this transcript is what the board already groups it under. */
       project: entry.project,
     });
-    const previousProfile = generation.launchProfile;
-    let profileUpdated = false;
     try {
       await (overrides.validateAccount ?? validateAccountAuthentication)(entry.engine, config.accountId);
       (overrides.resolveAccount ?? accountManager.resolveSpawn)(entry.engine, config.accountId);
-      registry.updateConversationLaunchProfile(conversation.id, {
-        model: config.model,
-        effort: config.effort,
-        fast: config.fast,
-      });
-      profileUpdated = true;
-      const queued = registry.requestConversationReseat(conversation.id, config.accountId);
-      if (!queued.migration) throw new Error("account switch could not be queued");
+      const targetId = config.accountId;
+      const written = await registry.deliveryWrite({ label: "migration.reseat-request" },
+        () => registry.requestConversationReseat(conversation.id, targetId, undefined, {
+          model: config.model, effort: config.effort, fast: config.fast,
+        }), requested => ({ label: "migration.reseat-request", operationId: requested.migration?.operationId }));
+      if (!written.acquired) return { ...failure(REGISTRY_WRITER_BUSY, 503), code: "REGISTRY_WRITER_BUSY" };
+      if (!written.value.migration) throw new Error("account switch could not be queued");
     } catch (error) {
-      if (profileUpdated) registry.updateConversationLaunchProfile(conversation.id, previousProfile);
       return failure(error, 409);
     }
     /* Accepted: the reseat is durably queued, so the record describes a switch
@@ -272,6 +268,7 @@ export function migrationDeliveryOutcome(outcome: DeliveryOutcome): "delivered" 
 
 function failure(error: unknown, status = 500, actuation?: "started"): DeliveryFailure {
   if (error instanceof DeliveryAdmissionRefusedError) return { ok: false, outcome: "failed", error: error.message, code: error.code, status: 409, admission: "refused" };
+  if (error instanceof StructuredResumeUnpublishedError) return { ok: false, outcome: "failed", error: error.message, code: "structured_revival_impossible", status: 503 };
   return {
     ok: false,
     outcome: "failed",
@@ -690,7 +687,9 @@ export interface ConversationMessage {
   clientMessageId?: string | null;
   reservedDeliveryId?: string | null;
   /** In-process fence checked after waits before a fresh local reservation. */
-  admissionGuard?: () => void;
+  admissionGuard?: DeliveryAdmissionGuard;
+  /** Recheck autonomous seat authority while its replacement host is publishing. */
+  recoveryAuthorityGuard?: () => void;
   text: string;
   images: InboxImagePayload[];
   /** The "on resume" profile chosen in the control strip (issue #241 §4): when a
@@ -809,7 +808,8 @@ export async function deliverConversationMessage(message: ConversationMessage, o
     try {
       message.admissionGuard?.();
       const recovered = await (overrides.recover ?? recoverDeadStructuredConversation)(
-        { path: message.path, conversationId: conversation.id },
+        { path: message.path, conversationId: conversation.id, admissionGuard: message.admissionGuard,
+          authorityGuard: message.recoveryAuthorityGuard, origin: message.origin },
         { registry },
       );
       if (recovered) {
@@ -819,7 +819,10 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           path: recovered.path,
           conversationId: recovered.conversationId,
           clientMessageId: message.clientMessageId,
-          admissionGuard: message.admissionGuard,
+          // Our admitted successor changes the receipt and host identity. Seat
+          // authority still applies when reserving its original-key message.
+          admissionGuard: recovered.spawned ? message.recoveryAuthorityGuard ?? message.admissionGuard : message.admissionGuard,
+          recoveryAuthorityGuard: message.recoveryAuthorityGuard,
           text,
           hasImages: images.length > 0,
           ...(message.origin ? { origin: message.origin } : {}),
