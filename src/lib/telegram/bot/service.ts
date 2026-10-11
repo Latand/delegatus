@@ -1182,7 +1182,7 @@ export class TelegramBotService {
       throw new TelegramBotError("send_uncertain", "Telegram returned an incomplete document receipt, so the send may already be posted");
     }
     const sent = [{ messageId: message.message_id, date: message.date, text: document.caption, replyToMessageId: replyTo, topicId, kind: "document" as const, filename: document.filename }];
-    this.publishConfirmed(botId, message, chatId, topicId, message.caption ?? document.caption);
+    this.publishConfirmed(botId, message, chatId, topicId, message.caption ?? document.caption ?? "");
     const now = this.deps.now();
     store.completeSend({ callerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now });
     const current = store.chat(chatId);
