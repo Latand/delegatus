@@ -4531,7 +4531,13 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
               "tool_failed", error instanceof Error ? error.message : "Viewer MCP read failed", true);
           }
         }
-        local ??= createProductionViewerMcpService(hostHealthProbe);
+        if (!local) {
+          const created = createProductionViewerMcpService(hostHealthProbe);
+          local = created;
+          created.catch(() => {
+            if (local === created) local = null;
+          });
+        }
         return (await local).callTool(toolName, args, context);
       },
     };

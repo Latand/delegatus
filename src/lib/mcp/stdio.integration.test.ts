@@ -157,6 +157,35 @@ test("the real stdio server releases retained handles when its client disappears
   expect(exited).toBe(0);
 }, 15_000);
 
+test("a launched stdio server retries local initialization after a receipt database lock clears", async () => {
+  const sandbox = sandboxDir("llv-mcp-local-retry-");
+  const environment = identifiedEnvironment(sandbox, { LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" });
+  const filename = path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite");
+  const { SqliteMcpReceiptStore } = await import("./server");
+  new SqliteMcpReceiptStore(filename).close();
+  const holder = new Database(filename, { strict: true });
+  holder.exec("BEGIN IMMEDIATE");
+  let session: McpSession | undefined;
+  try {
+    session = await startMcp(environment, "local-initialization-retry");
+    const read = () => session!.client.callTool({ name: "list_tasks", arguments: { ids: ["absent"] } });
+    const failures = await Promise.all([read(), read()]);
+    for (const failure of failures) {
+      expect(failure.isError).toBe(true);
+      expect(JSON.stringify(failure.content)).toContain("database is locked");
+    }
+    holder.exec("ROLLBACK");
+    // The same stdio session must recover without reconnecting or restarting.
+    for (const result of await Promise.all([read(), read()])) {
+      expect(result.structuredContent).toMatchObject({ ok: true, tasks: [] });
+    }
+    expect((await read()).structuredContent).toMatchObject({ ok: true, tasks: [] });
+  } finally {
+    holder.close();
+    await session?.close();
+  }
+}, 30_000);
+
 test("a launched stdio server releases repeated large read answers without loading its domain stores", async () => {
   const sandbox = sandboxDir("llv-mcp-large-reads-");
   let calls = 0;
