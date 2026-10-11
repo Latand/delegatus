@@ -53,17 +53,22 @@ patch(path.join(feed, "FeedItem.tsx"), [
   [`  const { t } = useLocale();\n  const isMobile = useIsMobile();`,
     `  const { t } = useLocale();\n  const proto = useRoleAvatarScope();\n  const protoRole = proto?.role ?? null;\n  const protoName = protoRole ? (protoRole === "neutral" ? t("roleFrame.neutral") : roleNameById(t, protoRole)) : null;\n  const isMobile = useIsMobile();`],
   [`{deputyInk ? <DeputyMark engine={item.engine} /> : avatarIcon("h-4 w-4 shrink-0 text-secondary")}`,
-    `{proto && protoRole ? <RoleAvatar variant={proto.variant} role={protoRole} size={20} /> : deputyInk ? <DeputyMark engine={item.engine} /> : avatarIcon("h-4 w-4 shrink-0 text-secondary")}`],
-  [`{deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>`,
-    `{protoName ? protoName : deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>{protoName ? <span className="shrink-0">· {ENGINE_LABEL[item.engine]}</span> : null}`],
+    `{proto && protoRole ? <RoleAvatar role={protoRole} size={20} /> : deputyInk ? <DeputyMark engine={item.engine} /> : avatarIcon("h-4 w-4 shrink-0 text-secondary")}`],
+  /* In an agent's own feed the window header already names the role and the
+     engine, so an answer row carries the avatar and the time only. */
+  [`<span data-mobile-message-speaker className="shrink-0 font-semibold text-secondary">{deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>
+            {time ? <span className="shrink-0 tabular-nums">· {time}</span> : null}`,
+    `{protoName ? null : <span data-mobile-message-speaker className="shrink-0 font-semibold text-secondary">{deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>}
+            {time ? <span className="shrink-0 tabular-nums">{protoName ? time : \`· \${time}\`}</span> : null}`],
   [`        {deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : (`,
-    `        {proto && protoRole ? <RoleAvatar variant={proto.variant} role={protoRole} size={26} className="mt-1" /> : deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : (`],
-  [`            {hhmm(item.ts) ? <span className="text-label tabular-nums text-muted">{hhmm(item.ts)}</span> : null}\n            <span className="ml-auto`,
-    `            {protoName ? <><span data-rax-speaker className="text-label font-semibold text-secondary">{protoName}</span><span className="text-label text-muted">· {ENGINE_LABEL[item.engine]} ·</span></> : null}\n            {hhmm(item.ts) ? <span className="text-label tabular-nums text-muted">{hhmm(item.ts)}</span> : null}\n            <span className="ml-auto`],
+    `        {proto && protoRole ? <RoleAvatar role={protoRole} size={26} className="mt-1" /> : deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : (`],
   [`<span className={\`flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg \${item.voiceRelay ? "bg-info-soft text-info" : "bg-accent-soft text-accent"}\`}>`,
     `<span className={\`flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg \${item.voiceRelay ? "bg-info-soft text-info" : "bg-accent-soft text-accent"}\`} style={proto && item.internal && isAvatarRole(item.peer) ? { background: "transparent", ["--avatar-ring" as string]: "var(--color-accent-soft)" } : undefined}>`],
   [`{item.internal ? <DelegatusMark size={20} /> : <Mail className="h-3.5 w-3.5" aria-hidden />}`,
-    `{item.internal ? (proto && isAvatarRole(item.peer) ? <RoleAvatar variant={proto.variant} role={item.peer} size={26} /> : <DelegatusMark size={20} />) : <Mail className="h-3.5 w-3.5" aria-hidden />}`],
+    `{item.internal ? (proto && isAvatarRole(item.peer) ? <RoleAvatar role={item.peer} size={26} /> : <DelegatusMark size={20} />) : <Mail className="h-3.5 w-3.5" aria-hidden />}`],
+  /* The sender's label stays on one line, so every internal card header has one height. */
+  [`<span className="min-w-0 text-[11px] font-semibold text-accent" data-agent-author`,
+    `<span className={\`min-w-0 \${proto ? "truncate " : ""}text-[11px] font-semibold text-accent\`} data-agent-author`],
   [` · \${agentRoleLabel(item.peer, t)}\``,
     ` · \${proto && isAvatarRole(item.peer) ? roleNameById(t, item.peer) : agentRoleLabel(item.peer, t)}\``],
 ]);
@@ -71,13 +76,14 @@ patch(path.join(feed, "FeedItem.tsx"), [
 /* 4. The fixture's dispatcher mounts the new case. */
 patch(path.join(exportDir, "src/components/conversation/conversationWindowEvidence.fixture.tsx"), [
   [`if (root && requested === "lifecycle") mountLifecycle(root);`,
-    `if (root && (requested as string) === "role-avatars") createRoot(root).render(<RoleAvatarsEvidence variant={Number(params.get("avatar") ?? 1) as 1 | 2 | 3} />);\nelse if (root && requested === "lifecycle") mountLifecycle(root);`],
+    `if (root && (requested as string) === "role-avatars") createRoot(root).render(<RoleAvatarsEvidence drawings={params.get("drawings") === "1"} />);\nelse if (root && requested === "lifecycle") mountLifecycle(root);`],
   [`import { LogFeed } from "@/components/LogFeed";`,
     `import { LogFeed } from "@/components/LogFeed";\nimport { RoleAvatarsEvidence } from "@/components/feed/roleAvatarsEvidence";`],
 ]);
 
-/* 5. Render: three variants × desktop and phone × light and dark, Ukrainian,
-   plus a 2× close-up of each variant's size sheet. */
+/* 5. Render variant 1, the operator's choice: desktop 1440 and 1000 and phone
+   × light and dark, Ukrainian, plus a 2× close-up of the size sheet and a 2×
+   sheet of the drawings at 96 and 48 px for critique of the art itself. */
 process.chdir(exportDir);
 const { chromium } = await import(path.join(exportDir, "node_modules/playwright-core/index.mjs"));
 const { openFixture, serveEvidenceFixture } = await import(path.join(exportDir, "src/components/kanban/issue1695BrowserHarness.ts"));
@@ -86,13 +92,15 @@ const server = await serveEvidenceFixture(scratch, "src/components/conversation/
 const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 const geometry: Record<string, unknown> = {};
 try {
-  for (const variant of [1, 2, 3] as const) {
+  {
+    const variant = 1;
     for (const scheme of ["light", "dark"] as const) {
       for (const shape of [
-        { name: "desktop-1280", viewport: { width: 1280, height: 900 }, touch: false, scale: 1 },
+        { name: "desktop-1440", viewport: { width: 1440, height: 900 }, touch: false, scale: 1 },
+        { name: "desktop-1000", viewport: { width: 1000, height: 700 }, touch: false, scale: 1 },
         { name: "phone-390", viewport: { width: 390, height: 844 }, touch: true, scale: 2 },
       ]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?case=role-avatars&avatar=${variant}&lang=uk`, shape.viewport, scheme, "uk", "reduce", shape.touch, shape.scale);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?case=role-avatars&lang=uk`, shape.viewport, scheme, "uk", "reduce", shape.touch, shape.scale);
         await page.waitForSelector("[data-evidence-case='role-avatars'] [data-rax-pane='builder'] [data-role-avatar]");
         await page.evaluate(() => document.fonts.ready);
         await page.waitForFunction(() => [...document.images].every((image) => image.complete && image.naturalWidth > 0));
@@ -105,6 +113,18 @@ try {
             sheetAvatars: [...document.querySelectorAll(".rax-sheet [data-role-avatar]")].length,
             feedAvatars: Object.fromEntries(panes.map((pane) => [pane.getAttribute("data-rax-pane"),
               [...pane.querySelectorAll("[data-role-avatar]")].map((element) => `${element.getAttribute("data-role-avatar")}:${rect(element).join("x")}`)])),
+            /* An answer's avatar is a square box whose top sits level with its
+               header row (offset = avatar top − header row top, px). */
+            answerAvatars: [...document.querySelectorAll("[data-rax-pane] [data-tts-message]")].flatMap((body) => {
+              const row = body.closest(".group\\/msg");
+              const avatar = row?.querySelector("[data-role-avatar]");
+              const header = body.firstElementChild;
+              if (!avatar || !header) return [];
+              const a = avatar.getBoundingClientRect(); const h = header.getBoundingClientRect();
+              return [`${rect(avatar).join("x")}@${Math.round(a.top - h.top)}`];
+            }),
+            /* Every internal card header has one height. */
+            internalHeaders: [...new Set([...document.querySelectorAll("[data-agent-author]")].map((label) => Math.round(label.parentElement!.getBoundingClientRect().height)))],
             /* A header row's avatar must sit inside the row: overflow in px. */
             headerOverflow: Math.max(0, ...[...document.querySelectorAll("[data-mobile-message-header]")].map((row) => {
               const box = row.getBoundingClientRect();
@@ -119,11 +139,17 @@ try {
         await page.screenshot({ path: path.join(outDir, `variant-${variant}-${shape.name}-${scheme}-uk.png`), fullPage: true, scale: "device" });
         await context.close();
       }
-      const { context, page } = await openFixture(browser, `${server.base}?case=role-avatars&avatar=${variant}&lang=uk`, { width: 1280, height: 900 }, scheme, "uk", "reduce", false, 2);
+      const { context, page } = await openFixture(browser, `${server.base}?case=role-avatars&lang=uk`, { width: 1440, height: 900 }, scheme, "uk", "reduce", false, 2);
       await page.waitForSelector(".rax-sheet [data-role-avatar]");
       await page.waitForFunction(() => [...document.images].every((image) => image.complete && image.naturalWidth > 0));
       await page.locator(".rax-sheet").screenshot({ path: path.join(outDir, `variant-${variant}-sheet-2x-${scheme}-uk.png`) });
       await context.close();
+      const drawings = await openFixture(browser, `${server.base}?case=role-avatars&drawings=1&lang=uk`, { width: 1440, height: 900 }, scheme, "uk", "reduce", false, 2);
+      await drawings.page.waitForSelector(".rax-drawings [data-role-avatar]");
+      await drawings.page.waitForFunction(() => [...document.images].every((image) => image.complete && image.naturalWidth > 0));
+      if (drawings.pageErrors.length) throw new Error(`drawings-${scheme}: ${drawings.pageErrors.join("; ")}`);
+      await drawings.page.locator("[data-evidence-case='role-avatars']").screenshot({ path: path.join(outDir, `variant-${variant}-drawings-2x-${scheme}-uk.png`) });
+      await drawings.context.close();
     }
   }
 } finally {
