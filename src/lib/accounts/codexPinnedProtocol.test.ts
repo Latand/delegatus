@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { CodexPinnedProtocol } from "./codexPinnedProtocol";
 import { CodexAppServerClient } from "./codexAppServer";
 import { NativeCodexQueue, type NativeQueueInput } from "../runtime/nativeCodexQueue";
+import { CodexAppServerHost } from "../runtime/codexAppServerHost";
 import { codexServerRequestKinds, encodeCodexServerResponse, routeCodexServerRequest } from "../runtime/codexServerRequests";
 
 const adapterFiles = ["../runtime/codexAppServerHost.ts", "../runtime/nativeCodexQueue.ts", "../runtime/codexHistoryReader.ts", "codexAppServer.ts"];
@@ -98,12 +99,49 @@ describe.each(["0.154.0", "0.159.0", "0.162.1"])("pinned Codex %s", version => {
       ]);
     } finally { queue.dispose(); }
   });
+  test("real host resume payloads, including forwarded fields and the spread fallback, fit the pin", async () => {
+    // Exercise the private helper on its real prototype without starting a
+    // host or process. Its caller's inferred fields are checked below; here
+    // the transport checks fields added after the Record type erases them.
+    const host = Object.create(CodexAppServerHost.prototype) as {
+      resumeThreadTolerantly(params: Record<string, unknown>): Promise<unknown>;
+    };
+    Object.defineProperty(host, "identity", { value: { threadId: "thread", path: null } });
+    for (const access of [
+      { sandbox: "danger-full-access", approvalPolicy: "never" },
+      { sandbox: "workspace-write", approvalPolicy: "on-request" },
+      { sandbox: "read-only", approvalPolicy: "untrusted" },
+      { permissions: "read-only-stage", approvalPolicy: "never" },
+    ]) {
+      for (const paginated of [false, true]) {
+        const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+        Object.defineProperty(host, "rpc", { configurable: true, value: async (method: string, params: Record<string, unknown>) => {
+          protocol.assertRequest(method, params);
+          requests.push({ method, params: structuredClone(params) });
+          if (paginated && !params.excludeTurns) throw new Error("Codex app-server request failed: list_turns is not supported yet");
+          return { thread: { id: "thread", path: null } };
+        } });
+        const params = { threadId: "thread", ...access, approvalsReviewer: "user", serviceTier: "standard",
+          developerInstructions: "Resume instructions", config: { model_reasoning_effort: "high" } };
+        expect(await host.resumeThreadTolerantly(params)).toEqual({
+          thread: { id: "thread", path: null, ...(paginated ? { turns: [] } : {}) },
+        });
+        expect(requests).toEqual([
+          { method: "thread/resume", params },
+          ...(paginated ? [{ method: "thread/resume", params: { ...params, excludeTurns: true } }] : []),
+        ]);
+      }
+    }
+  });
   test("the adapter's outgoing methods and inferred payload fields exist in every supported schema", () => {
     const { program, checker } = adapterSources();
     const fields = (type: ts.Type): string[] => type.isUnion()
       ? type.types.flatMap(fields) : checker.getPropertiesOfType(type).map(property => property.name);
     const methods = (type: ts.Type): string[] => type.isUnion()
       ? type.types.flatMap(methods) : type.isStringLiteral() ? [type.value] : [];
+    const opaque = (type: ts.Type): boolean => type.isUnion()
+      ? type.types.some(opaque) : Boolean(type.getStringIndexType() || type.getNumberIndexType()
+        || (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)));
     for (const relative of adapterFiles) {
       const file = path.join(import.meta.dir, relative);
       const source = program.getSourceFile(file)!;
@@ -133,6 +171,15 @@ describe.each(["0.154.0", "0.159.0", "0.162.1"])("pinned Codex %s", version => {
           for (const method of outgoingMethods) expect(protocol.hasMethod(kind, method), `${relative}: ${method}`).toBe(true);
           const params = node.arguments[name === "resumeThreadTolerantly" ? 0 : 1];
           if (kind === "ClientRequest" && params && outgoingMethods.length) {
+            if (opaque(checker.getTypeAtLocation(params))) {
+              // Only this forwarded payload is covered by the real helper
+              // matrix above. An index signature supplies no field evidence.
+              const checkedHostResume = relative === "../runtime/codexAppServerHost.ts"
+                && checker.getSymbolAtLocation(params)?.declarations?.some(declaration =>
+                  ts.isParameter(declaration) && ts.isMethodDeclaration(declaration.parent)
+                  && declaration.parent.name.getText(source) === "resumeThreadTolerantly");
+              expect(checkedHostResume, `${relative}: unchecked payload ${params.getText(source)}`).toBe(true);
+            }
             for (const field of fields(checker.getTypeAtLocation(params))) {
               // Conditional turn/start vs turn/steer carries expectedTurnId
               // only on the steer branch. Actual wire builders are validated
