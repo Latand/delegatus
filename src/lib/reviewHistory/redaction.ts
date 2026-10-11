@@ -157,9 +157,10 @@ function redactStructuredText(text: string, depth = 0): string {
       // that prose JSON. Credential values were already handled above.
       const ambiguous = separator || containsSensitiveAssignment(token);
       parts.push(redactPlainText(prefix), ambiguous ? '"[redacted]"' : redactPlainText(token));
-      // An undecodable key's value cannot be classified. Drop the same-line
-      // remainder too, rather than export bytes outside the invalid token.
-      if (separator) {
+      // An ambiguous token can end at the opening quote of a credential value,
+      // even without a key separator. Its same-line remainder has no proven
+      // boundary, so discard it along with the invalid token.
+      if (ambiguous) {
         const newline = text.slice(fields.lastIndex).search(/[\r\n]/);
         fields.lastIndex = newline < 0 ? text.length : fields.lastIndex + newline;
       }

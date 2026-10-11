@@ -515,6 +515,27 @@ test.each([...artifactKinds])("HTTP export drops uncertain tails of malformed qu
   }
 });
 
+test.each([...artifactKinds])("HTTP export drops uncertain credential tails across malformed token boundaries in %s", async kind => {
+  const marker = "ordinaryBoundaryProbeMarker";
+  const malformed = `"Use \\q password="${marker}"`;
+  for (const suffix of ["", "\nKEEP_NEXT_LINE", "\r\nKEEP_NEXT_LINE"]) {
+    let serialized = malformed + suffix;
+    for (const levels of [0, 1, 2, 3]) {
+      for (const original of new Set([serialized, encodeMessage(malformed + suffix, levels)])) {
+        const { response, bytes, occurrences } = await exportArtifact(kind, original);
+        expect(response.status).toBe(200);
+        expect(bytes).not.toContain(marker);
+        const body = JSON.parse(bytes);
+        expect(body.redacted).toBe(true);
+        expect(body.row.extension.receiptId).toBe("archive-receipt");
+        expect(body.relayOccurrences).toEqual(occurrences);
+        if (suffix) expect(body.artifacts[0].artifacts[kind].text).toContain("KEEP_NEXT_LINE");
+      }
+      serialized = JSON.stringify(serialized);
+    }
+  }
+});
+
 test.each([
   '{"credentials":{"value":"synthetic ordinary secret"',
   '{"password":["synthetic ordinary secret"}',
