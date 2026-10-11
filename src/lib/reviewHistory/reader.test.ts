@@ -506,7 +506,7 @@ test.each([...artifactKinds])("HTTP export preserves harmless quoted backslashes
 test.each([...artifactKinds])("HTTP export drops uncertain tails of malformed quoted text carrying credential assignments in %s", async kind => {
   const marker = "ordinaryProbeMarker";
   const key = "password";
-  const values = [`"Use \\q ${key}='${marker} tail ${marker}'"`, `"Use \\q {'PRIVATE KEY':'${marker}'}"`];
+  const values = [`"Use \\q ${key}='${marker} tail ${marker}'"`, `"Use \\q {'PRIVATE KEY':'${marker}'}"`, `"Use \\q PRIVATE KEY VALUE='${marker}'"`];
   for (const value of values) for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
     const { response, bytes } = await exportArtifact(kind, format(encodeMessage(value, levels)));
     expect(bytes).not.toContain(marker);

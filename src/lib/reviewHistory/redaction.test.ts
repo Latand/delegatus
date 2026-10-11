@@ -6,7 +6,7 @@ test.each([
   ["apiKey", true], ["APIToken", true], ["DBPassword", true],
   ["HTTPAuthorization", true], ["TLSPrivateKey", true], ["api_key", true],
   ["api-key", true], ["auth.password", true], ["PRIVATE KEY", true],
-  ["DBPasswordHash", true], ["clientSecret", true], ["accessTokenValue", true],
+  ["DBPasswordHash", true], ["clientSecret", true], ["accessTokenValue", true], ["PRIVATE KEY VALUE", true],
   ["pAsSwOrD", true], ["aPiKeY", true],
   ["tokenCount", false], ["APITokenCount", false], ["token_count", false],
   ["token-count", false], ["token.count", false], ["passwordChanged", false],

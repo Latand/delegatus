@@ -38,7 +38,9 @@ function encodeQuoted(text: string, quote: string): string {
  * with the opposite quote style. Never send those through the prose fallback. */
 function containsSensitiveAssignment(text: string): boolean {
   for (let depth = 0; depth <= MAX_ENCODED_DEPTH; depth++) {
-    const keys = /(["'])([^"']+)\1\s*[:=]|([\w.-]+)\s*[:=]/g;
+    // Credential suffixes have at most three words, including value/hash.
+    // Keep raw prefixes bounded and start at an identifier's edge.
+    const keys = /(["'])([^"']+)\1\s*[:=]|(?<![\w.-])([\w.-]+(?:[ \t]+[\w.-]+){0,2})\s*[:=]/g;
     for (let match; (match = keys.exec(text));) {
       if (sensitiveKey(match[2] ?? match[3])) return true;
     }
