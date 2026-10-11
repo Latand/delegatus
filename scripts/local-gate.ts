@@ -202,9 +202,9 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
     "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
   ]) delete env[key];
   for (const key of Object.keys(env)) if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) delete env[key];
-  // Keep slots shared even when TMPDIR below becomes private to the test run:
-  // /var/tmp is the one machine namespace both gate implementations lock in.
-  env.LLV_GATE_LOCK_DIR = inherited.LLV_GATE_LOCK_DIR ?? "/var/tmp";
+  // Preserve explicit slot/queue overrides through isolation. Leave the
+  // default unset: gate-slot keeps its shared /var/tmp locks, while the CPU
+  // queue remains in the same writable machine cache as the Viewer.
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });
@@ -271,13 +271,11 @@ export async function fetchMain(root: string, until: number): Promise<"fetched" 
 
 export interface PushDeadline { at: number; startedAt: number }
 
-/** `LLV_GATE_PUSH_DEADLINE` (Unix ms) is set by a caller that kills the push
-    at a limit of its own, as the controller's publication does. Everything
-    that can wait on the network, on machine admission or on a check then ends
-    by it: the fetch of origin/main, a cold-cache Bun or Codex install, and
-    every step. Nothing starts once it has passed. Only local reads (git's own
-    plumbing, planning) run outside it. Without it nothing is stopped and every
-    step reaches its verdict. */
+/** `LLV_GATE_PUSH_DEADLINE` (Unix ms) is set by a bounded caller such as the
+    publication controller. Fetch, installs and checks use that execution
+    deadline; CPU queue waits extend it. Nothing starts once its execution
+    budget is spent. Local reads (Git plumbing, planning) run outside it.
+    Without it every step reaches its verdict. */
 export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number): PushDeadline | null {
   const raw = env.LLV_GATE_PUSH_DEADLINE;
   if (raw === undefined || raw === "") return null;

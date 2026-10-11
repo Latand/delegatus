@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import type { Database } from "bun:sqlite";
 
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../processIdentity";
@@ -11,11 +11,27 @@ export const CPU_QUEUE_SPACING_MS = 2_000;
 export type CpuQueueWait = { since: number; position: number; remainingMs: number };
 type Ticket = { seq: number; key: string; since: number; owner: string | null };
 
+const homeSymbol = Symbol.for("delegatus.cpuAdmission.home");
+const nativeHome = globalThis as typeof globalThis & { [homeSymbol]?: string };
+function machineHome(): string {
+  if (nativeHome[homeSymbol]) return nativeHome[homeSymbol]!;
+  // Bun's userInfo delegates to homedir, which reads HOME/USERPROFILE first.
+  // A tiny synchronous child uses the native account/profile fallback without
+  // changing the Viewer's environment. NSS remains intact inside the image.
+  const env = { ...process.env };
+  delete env.HOME; delete env.USERPROFILE;
+  const result = spawnSync(process.execPath, ["-e", 'process.stdout.write(require("node:os").userInfo().homedir)'], {
+    env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
+  });
+  if (result.status !== 0 || !path.isAbsolute(result.stdout ?? "")) throw new Error("CPU admission could not resolve the native user home");
+  return nativeHome[homeSymbol] = result.stdout;
+}
+
 /** Shared by the Viewer and gate-slot, including children with sandboxed HOME. */
 export function cpuAdmissionFile(): string {
   // The passwd home is stable when agent/test commands sandbox HOME. It is
   // mounted writable into the Viewer image; /var/tmp there is read-only.
-  return path.join(process.env.LLV_GATE_LOCK_DIR || path.join(os.userInfo().homedir, ".cache", "delegatus-cpu"), "admission.sqlite");
+  return path.join(process.env.LLV_GATE_LOCK_DIR || path.join(machineHome(), ".cache", "delegatus-cpu"), "admission.sqlite");
 }
 
 /** Admission is committed under SQLite's writer lock, before a caller starts.
@@ -51,10 +67,14 @@ export class CpuAdmissionQueue {
       }
       this.db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, now, owner ? JSON.stringify(owner) : null);
       const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
-      const position = this.db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM tickets WHERE seq <= ?").get(ticket.seq)!.n;
+      const ahead = this.db.query<{ n: number; since: number | null }, [number, number]>("SELECT COUNT(*) AS n, MAX(CASE WHEN seq < ? THEN since END) AS since FROM tickets WHERE seq <= ?").get(ticket.seq, ticket.seq)!;
+      const position = ahead.n;
       const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
       const budget = pressureAllows ? 0 : Math.max(0, this.maxWaitMs - (now - ticket.since));
+      // Older callers may retain a hysteresis hold while this fresh sample
+      // permits pressure. Their durable clocks still bound the queue wait.
+      const priorBudget = ahead.since === null ? 0 : Math.max(0, this.maxWaitMs - (now - ahead.since));
       if (position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
         if (consume) {
           this.cancel(key);
@@ -62,7 +82,7 @@ export class CpuAdmissionQueue {
         }
         return null;
       }
-      return { since: ticket.since, position, remainingMs: Math.max(budget, spacing) + (position - 1) * this.spacingMs };
+      return { since: ticket.since, position, remainingMs: Math.max(budget, priorBudget, spacing) + (position - 1) * this.spacingMs };
     }).immediate();
   }
 }

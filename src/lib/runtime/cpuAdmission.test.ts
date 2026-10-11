@@ -59,6 +59,19 @@ test("a stage and a heavy check share FIFO, even when pressure is low or samplin
   expect(q.check("command:two", true)).toBeNull();
 });
 
+test("a fresh pressure sample cannot understate an earlier held ticket's wait", () => {
+  const f = fixture(), q = f.open();
+  q.check("stage:one", false);
+  f.at(300_000);
+  expect(q.check("command:two", true)).toEqual({
+    since: 300_000, position: 2, remainingMs: 300_000 + CPU_QUEUE_SPACING_MS,
+  });
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  expect(q.check("stage:one", false)).toBeNull();
+  f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
+  expect(q.check("command:two", true)).toBeNull();
+});
+
 test("slot readiness leaves the head durable until claim; cancellation frees only its namespace", () => {
   const f = fixture(), q = f.open();
   expect(q.check("stage:one", true, undefined, false)).toBeNull();
