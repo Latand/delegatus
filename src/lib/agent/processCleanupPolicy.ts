@@ -9,27 +9,32 @@ export const PROCESS_CLEANUP_DENY_MESSAGE = "PID-only process cleanup: stop only
 /** Recognizes common process cleanup commands at the hook boundary.
  * Kept self-contained so the installed hook needs no repository or packages. */
 export function forbiddenProcessCleanup(command: string, expansionsOnly = false): boolean {
-  type Word = { value: string; substituted: boolean };
+  type Word = { value: string; substituted: boolean; redirected: boolean };
   const words: Word[] = [];
+  const groupLookups: boolean[] = [];
   const heredocs: { delimiter: string; literal: boolean; stripTabs: boolean; executable: boolean }[] = [];
   const pipelineBodies: string[] = [];
   let pipelineContinuation = false, pipelineHeredocStart = 0;
   let word = "", started = false, substituted = false, quote = "", pipelineLookup = false;
+  let redirected = false, quotedWord = false, inArray = false;
   const basename = (value: string) => value.split("/").pop() ?? value;
   const flush = () => {
-    if (started) words.push({ value: word, substituted });
-    word = ""; started = false; substituted = false;
+    if (started) {
+      if (!inArray) words.push({ value: word, substituted, redirected });
+      redirected = false;
+    }
+    word = ""; started = false; substituted = false; quotedWord = false;
   };
   const inspect = (input: Word[]): boolean => {
     if (expansionsOnly) return false;
-    const args = [...input];
+    const args = input.filter(arg => !arg.redirected);
     while (args.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(args[0].value)
       || ["!", "if", "then", "else", "do"].includes(args[0].value))) args.shift();
     const executable = basename(args.shift()?.value ?? "");
     if (["pkill", "killall"].includes(executable)) return true;
     if (executable === "fuser") return args.some(({ value }) => value === "--kill" || /^-[^-]*k/.test(value));
     if (["lsof", "pgrep"].includes(executable)) pipelineLookup = true;
-    if (executable === "kill") return pipelineLookup || args.some((arg) => arg.substituted);
+    if (executable === "kill") return pipelineLookup || groupLookups.some(Boolean) || args.some((arg) => arg.substituted);
     if (["sh", "bash", "zsh", "dash", "ksh"].includes(executable)) {
       const index = args.findIndex(({ value }) => /^-[^-]*c/.test(value));
       // A shell reading stdin executes even a quoted heredoc, including one
@@ -72,9 +77,26 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
     const char = command[i];
     // Shell line continuations contribute no character or word boundary.
     if (char === "\\" && quote !== "'" && command[i + 1] === "\n") { i++; continue; }
-    if (char === "\\" && quote !== "'") { word += command[++i] ?? ""; started = true; continue; }
+    if (char === "\\" && quote !== "'") { word += command[++i] ?? ""; started = true; quotedWord = true; continue; }
     if (char === quote) { quote = ""; continue; }
-    if (!expansionsOnly && !quote && (char === "'" || char === '"')) { quote = char; started = true; continue; }
+    if (!expansionsOnly && !quote && (char === "'" || char === '"')) { quote = char; started = true; quotedWord = true; continue; }
+    if (!expansionsOnly && !quote && !inArray && char === "{" && !started) {
+      const descriptor = command.slice(i).match(/^\{[A-Za-z_][A-Za-z0-9_]*\}(?=[<>])/);
+      if (descriptor) { i += descriptor[0].length - 1; continue; }
+    }
+    if (!expansionsOnly && !quote && !inArray && (char === "<" || char === ">" || (char === "&" && command[i + 1] === ">"))) {
+      // A contiguous, unquoted descriptor belongs to the redirect, not argv.
+      // Its operand still passes through expansion scanning below.
+      if (started && !quotedWord && /^\d+$/.test(word)) { word = ""; started = false; }
+      flush();
+      if (!(char === "<" && command[i + 1] === "<" && command[i + 2] !== "<" && command[i - 1] !== "<")) {
+        if (char === "&") i++;
+        if (command[i + 1] === command[i]) { i++; if (command[i + 1] === "<") i++; }
+        else if (command[i + 1] === "&" || command[i + 1] === "|" || (char === "<" && command[i + 1] === ">")) i++;
+        redirected = true;
+        continue;
+      }
+    }
     if (!expansionsOnly && !quote && char === "<" && command[i + 1] === "<" && command[i + 2] !== "<" && command[i - 1] !== "<") {
       flush();
       let end = i + 2, delimiter = "", delimiterQuote = "", literal = false;
@@ -116,14 +138,31 @@ export function forbiddenProcessCleanup(command: string, expansionsOnly = false)
       word += command.slice(i, end + 1); started = true; substituted = true; i = end;
       continue;
     }
+    if (!expansionsOnly && !quote && !inArray && char === "(" && started && /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]+\])?\+?=$/.test(word)) {
+      flush(); inArray = true;
+      continue;
+    }
     if (!expansionsOnly && !quote && char === "#" && !started) {
       while (i < command.length && command[i] !== "\n") i++;
+    }
+    if (inArray) {
+      // Array elements are data; substitutions were inspected above.
+      if (!quote && command[i] === ")") { flush(); inArray = false; }
+      else if (!quote && /\s/.test(command[i] ?? "")) flush();
+      else { word += command[i] ?? ""; started = true; }
+      continue;
     }
     if (!quote && /[;|&\n(){}]/.test(command[i] ?? "")) {
       flush();
       const hadWords = words.length > 0;
       if (inspect(words.splice(0))) return true;
-      if (command[i] === "|" && command[i + 1] !== "|" && command[i - 1] !== "|") pipelineContinuation = true;
+      if (command[i] === "(" || command[i] === "{") {
+        groupLookups.push(pipelineLookup || groupLookups.some(Boolean));
+        pipelineContinuation = false;
+      } else if (command[i] === ")" || command[i] === "}") {
+        pipelineLookup = (groupLookups.pop() ?? false) || pipelineLookup;
+        pipelineContinuation = false;
+      } else if (command[i] === "|" && command[i + 1] !== "|" && command[i - 1] !== "|") pipelineContinuation = true;
       else if (!(command[i] === "\n" && !hadWords && pipelineContinuation)) {
         pipelineLookup = false; pipelineContinuation = false; pipelineHeredocStart = heredocs.length;
         pipelineBodies.length = 0;
