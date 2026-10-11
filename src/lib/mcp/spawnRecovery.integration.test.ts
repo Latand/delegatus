@@ -192,6 +192,7 @@ test("a prompt-only MCP launch skips leading Markdown and reserves one named, de
     ["prompt"]: "---\nInspect export retry ownership.\nReport the unsafe transitions." };
   const answer = await live.callTool("spawn_agent", args);
   expect(answer).toMatchObject({ ok: true });
+  if (!answer.ok) throw new Error(answer.error);
   expect(loadTasks()).toHaveLength(1);
   expect(loadTasks()[0]!.text).toBe("codex · Inspect export retry ownership.\nInspect export retry ownership.");
   expect(loadTasks()[0]!.origin?.refinement).toBe("titled");

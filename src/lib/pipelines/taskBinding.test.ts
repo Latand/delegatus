@@ -36,7 +36,7 @@ test("a task-less pipeline keeps its first attempt's inherited task for later se
   expect(JSON.stringify(work)).toBe(before);
   expect(adoptPipelineFallbackTask(pipeline, [work])).toBe(false);
   const later = launchMembershipInput({ engine: "codex", cwd: "/repo", origin: { kind: "container", container: "pipeline", containerId: pipeline.id } },
-    { launchId: "launch-fixer", conversationId: "conversation_fixer" }, () => pipeline.taskIds, () => "viewer");
+    { launchId: "launch-fixer", conversationId: "conversation_fixer" }, () => ({ taskIds: pipeline.taskIds }), () => "viewer");
   expect(later.explicitTaskIds).toEqual([work.id]);
 });
 
@@ -60,7 +60,7 @@ test("inherited pipeline tasks survive project aliases on reservation replay and
     const owner = { conversationId: "conversation_owner", path: null, panePid: null, state: "linked" as const, error: null, at: "now" };
     const boards = [{ ...task(), project: "old-project", assignments: [owner] }, { ...task(), id: "second-task", project, assignments: [owner] }];
     const launch = { engine: "codex", cwd: "/repo", parentConversationId: owner.conversationId, origin: { kind: "container", container: "pipeline", containerId: pipeline.id } };
-    const input = (receipt: typeof spawnIdentity) => launchMembershipInput(launch, receipt, () => pipeline.taskIds, () => project);
+    const input = (receipt: typeof spawnIdentity) => launchMembershipInput(launch, receipt, () => ({ taskIds: pipeline.taskIds }), () => project);
     const first = ensureTaskMembership(boards, input(spawnIdentity));
     if (!first.ok) throw new Error(first.error);
     expect(adoptPipelineFallbackTask(pipeline, first.tasks)).toBe(true);
@@ -221,7 +221,7 @@ test("adopt, link the outcome, unlink the placeholder: no re-adoption, and the n
     now: "now",
   });
   const stageLaunch = { engine: "codex", cwd: "/repo", origin: { kind: "container" as const, container: "pipeline" as const, containerId: pipeline.id } };
-  const nextStage = () => launchMembershipInput(stageLaunch, { launchId: "launch-next", conversationId: "conversation_next" }, () => pipeline.taskIds, () => "viewer");
+  const nextStage = () => launchMembershipInput(stageLaunch, { launchId: "launch-next", conversationId: "conversation_next" }, () => ({ taskIds: pipeline.taskIds }), () => "viewer");
 
   /* First stage reservation: adoption. */
   expect(adoptPipelineFallbackTask(pipeline, [placeholder, outcome])).toBe(true);
