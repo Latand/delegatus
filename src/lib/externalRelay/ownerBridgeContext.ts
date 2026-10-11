@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { readBridgeReportLog } from "@/lib/bridge/store";
@@ -23,7 +22,9 @@ export interface OwnerBridgeContextPorts {
 function recordedChatId(alias: string): string | null {
   const file = statePath("telegram/bot.sqlite");
   if (!fs.existsSync(file)) return null;
-  const db = openCurrentDatabase(file, () => new Database(file, { readonly: true }));
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  if (!sqlite) throw new Error("owner report context requires the Bun runtime");
+  const db = openCurrentDatabase(file, () => new sqlite.Database(file, { readonly: true }));
   try {
     return db.query<{ chat_id: string }, [string, string]>("SELECT chat_id FROM chats WHERE lower(alias) = ? OR chat_id = ?")
       .get(alias.trim().toLowerCase(), alias.trim())?.chat_id ?? null;
