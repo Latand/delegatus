@@ -573,7 +573,15 @@ export function retireAccountInPlace(spec: {
   try {
     spec.commit();
   } catch (error) {
-    registry.restoreSnapshot(retired, before);
+    /* One attempt, never a wait: the caller holds the accounts file lock. */
+    const restored = registry.deliveryWriteNow({ label: "account.retirement-rollback", operationId: `account-removal:${spec.engine}:${spec.accountId}` },
+      () => registry.restoreSnapshot(retired, before));
+    if (!restored.acquired) {
+      /* The account stays listed and launchable; only what the retirement
+         settled (pins, owed deliveries, routing) stays settled. Removing it
+         again finishes the job. */
+      throw new Error("the removal was not recorded and the agent registry is busy; the account is still listed, try the removal again", { cause: error });
+    }
     throw error;
   }
   return retirement;

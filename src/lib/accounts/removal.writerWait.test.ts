@@ -8,7 +8,7 @@ import { longestLoopGap, registryLockHolder, sqliteRegistryFixture } from "@/lib
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 import { drainHeldDeliveries } from "./migration/coordinator";
 import { emptyLaunchProfile } from "./migration/contracts";
-import { recoverManagedAccountRemoval, removeManagedAccountIntoArchive, retiredAccountArchive, type AccountRemovalJournalEntry } from "./removal";
+import { recoverManagedAccountRemoval, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, type AccountRemovalJournalEntry } from "./removal";
 
 for (const busy of [false, true]) test(`failed account commit restores immediately or retains a durable retirement for later recovery (${busy})`, async () => {
   const made = sqliteRegistryFixture("llv-retirement-rollback");
@@ -135,5 +135,67 @@ for (const retiredInPlace of [false, true]) for (const renamed of [false, true])
     registry.close();
     made.cleanup();
     fs.rmSync(archive, { recursive: true, force: true });
+  }
+});
+
+/* Task d7759de2: an in-place retirement (a hidden default home) whose
+   accounts commit fails puts the agent registry back with one attempt, or
+   says the registry was busy without waiting on the loop. */
+for (const busy of [false, true]) test(`failed in-place retirement commit restores or refuses without waiting (${busy})`, async () => {
+  const made = sqliteRegistryFixture("llv-in-place-rollback");
+  const registry = made.registry;
+  setAgentRegistryForTests(registry);
+  const accountId = `in-place-${crypto.randomUUID()}`;
+  registry.setEngineRouting("claude", accountId);
+  const go = path.join(made.root, "go");
+  const ready = path.join(made.root, "ready");
+  const child = busy ? Bun.spawn([process.execPath, "-e", `
+    const { Database } = await import("bun:sqlite");
+    const fs = await import("node:fs");
+    const db = new Database(process.argv[1]);
+    process.stdout.write("started\\n");
+    const timer = setInterval(() => {
+      if (!fs.existsSync(process.argv[2])) return;
+      clearInterval(timer);
+      db.exec("BEGIN IMMEDIATE");
+      fs.writeFileSync(process.argv[3], "ready");
+      setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 600);
+    }, 1);
+  `, made.sqliteFilename, go, ready], { stdout: "pipe", stderr: "inherit" }) : null;
+  try {
+    if (child) expect(new TextDecoder().decode((await child.stdout.getReader().read()).value)).toContain("started");
+    resetBlockingWaitsForTests(() => {});
+    let thrown: unknown = null;
+    const { gapMs } = await longestLoopGap(() => {
+      try {
+        retireAccountInPlace({ engine: "claude", accountId, fallbackAccountId: "kept", commit: () => {
+          if (busy) {
+            fs.writeFileSync(go, "go");
+            const deadline = performance.now() + 2_000;
+            while (!fs.existsSync(ready)) {
+              if (performance.now() > deadline) throw new Error("holder did not start");
+              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+            }
+          }
+          throw new Error("accounts commit denied");
+        } });
+      } catch (error) { thrown = error; }
+    });
+    expect(gapMs).toBeLessThan(50);
+    if (!busy) {
+      expect((thrown as Error).message).toBe("accounts commit denied");
+      expect(registry.engineRouting("claude").activeAccountId).toBe(accountId);
+    } else {
+      expect((thrown as Error).message).toContain("the agent registry is busy");
+      expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "account.retirement-rollback")).toMatchObject({
+        operationId: `account-removal:claude:${accountId}`, synchronous: false, refused: true,
+      });
+      expect(registry.engineRouting("claude").activeAccountId).toBe("kept");
+    }
+  } finally {
+    if (child) { child.kill(); await child.exited; }
+    setAgentRegistryForTests(null);
+    registry.close();
+    made.cleanup();
   }
 });
