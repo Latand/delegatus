@@ -994,6 +994,83 @@ test("pass commits a dirty stage and retry resets plus cleans", async () => {
   expect(calls).toContain("git clean -fd");
 });
 
+test.each([false, true])("controller settlement refuses a stale main snapshot and a later stage can commit fresh work (stage edit: %s)", async (stageEdit) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    await box.run("config", "user.name", "Fixture");
+    await box.run("config", "user.email", ["noreply", "example.invalid"].join("@"));
+    const subject = pipeline();
+    subject.worktreeDir = box.repo; subject.baseBranch = "main";
+    subject.baseRef = await box.run("rev-parse", "HEAD");
+    const snapshot = await box.run("write-tree");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts"); await box.run("commit", "-m", "new main content");
+    const integrated = await box.run("rev-parse", "HEAD");
+    await box.run("update-ref", "refs/remotes/origin/main", integrated);
+    await box.run("checkout", "-b", subject.branch);
+    let accepted = integrated;
+    if (stageEdit) {
+      fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 3;\n");
+      await box.run("add", "source.ts"); await box.run("commit", "-m", "accepted stage edit");
+      accepted = await box.run("rev-parse", "HEAD");
+    }
+    // The later attempt already accepted the newer main integration. Restoring
+    // the saved index/worktree must not make those old versions its output.
+    subject.lastPassedCommit = accepted;
+    await box.run("restore", `--source=${snapshot}`, "--staged", "--worktree", "--", "source.ts");
+    fs.writeFileSync(path.join(box.repo, "report.md"), "later stage work\n");
+
+    const result = await commitPipelineStage(subject, "fix", true, box.exec);
+
+    expect(result).toMatchObject({ ok: false, commitRefusal: { paths: ["source.ts"] } });
+    expect(!result.ok && result.error).toContain("stale");
+    expect(await box.run("rev-parse", "HEAD")).toBe(accepted);
+    expect(fs.readFileSync(path.join(box.repo, "source.ts"), "utf8")).toBe("export const value = 1;\n");
+    expect(fs.readFileSync(path.join(box.repo, "report.md"), "utf8")).toBe("later stage work\n");
+    // Releasing that old snapshot leaves no lasting claim on the next stage.
+    await box.run("restore", "--source=HEAD", "--staged", "--worktree", "--", "source.ts");
+    expect(await commitPipelineStage(subject, "later", true, box.exec)).toMatchObject({ ok: true });
+    expect(await box.run("show", "HEAD:source.ts")).toBe(`export const value = ${stageEdit ? 3 : 2};`);
+    expect(await box.run("show", "--name-only", "--format=", "HEAD")).toBe("report.md");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["index", "head"])("stage index custody defers a concurrent %s change and revalidates on retry", async (change) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.baseBranch = "main";
+    subject.baseRef = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    expect((await box.exec("git", ["commit", "-m", "new main content"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const accepted = await box.run("rev-parse", "HEAD");
+    await box.run("update-ref", "refs/remotes/origin/main", accepted);
+    await box.run("checkout", "-b", subject.branch);
+    subject.lastPassedCommit = accepted;
+    fs.writeFileSync(path.join(box.repo, "report.md"), "initial stage output\n");
+    let moved = accepted;
+    const racingExec: ExecPort = async (command, args, cwd, env) => {
+      const result = await box.exec(command, args, cwd, env);
+      if (args.includes("--diff-merges=first-parent")) {
+        if (change === "head") {
+          expect((await box.exec("git", ["commit", "-m", "concurrent stage output"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+          moved = await box.run("rev-parse", "HEAD");
+        }
+        fs.writeFileSync(path.join(box.repo, "report.md"), "newer stage output\n");
+        await box.run("add", "report.md");
+      }
+      return result;
+    };
+
+    expect(await commitPipelineStage(subject, "fix", true, racingExec)).toMatchObject({ ok: false, deferred: true });
+    expect(await box.run("rev-parse", "HEAD")).toBe(moved);
+    expect(fs.readFileSync(path.join(box.repo, "report.md"), "utf8")).toBe("newer stage output\n");
+    expect(await commitPipelineStage(subject, "later", true, box.exec)).toMatchObject({ ok: true });
+    expect(await box.run("show", "HEAD:report.md")).toBe("newer stage output");
+    expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 2;");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test.each(["missing", "malformed", "nonce", "tree", "newer-changes"] as const)("owned output recovery refuses %s proof and preserves the checkout", async (change) => {
   const box = await isolatedIdentityRepo();
   try {
@@ -1554,8 +1631,9 @@ async function publishSandbox(withOrigin = true): Promise<PublishSandbox> {
   const repo = path.join(root, "repo");
   fs.mkdirSync(repo);
   (await git(repo, "init", "--initial-branch=main"));
-  (await git(repo, "config", "user.email", "pipeline-test@example.com"));
-  (await git(repo, "config", "user.name", "Pipeline Test"));
+  const identity = controllerCommitIdentityEnv();
+  (await git(repo, "config", "user.email", identity.GIT_AUTHOR_EMAIL!));
+  (await git(repo, "config", "user.name", identity.GIT_AUTHOR_NAME!));
   (await git(repo, "config", "commit.gpgSign", "false"));
   fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
   (await git(repo, "add", "base.txt"));
@@ -1946,6 +2024,59 @@ test("stage reconciliation accepts squashed content, preserves the tree, and use
       .toBe(`${identity.GIT_AUTHOR_NAME}|${identity.GIT_AUTHOR_EMAIL}|${identity.GIT_COMMITTER_NAME}|${identity.GIT_COMMITTER_EMAIL}`);
     expect((await git(box.subject.worktreeDir, "status", "--porcelain"))).toBe("");
     expect((await box.originHead())).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each([
+  { field: "GIT_AUTHOR_EMAIL", ancestor: false },
+  { field: "GIT_AUTHOR_NAME", ancestor: false },
+  { field: "GIT_COMMITTER_EMAIL", ancestor: false },
+  { field: "GIT_COMMITTER_NAME", ancestor: false },
+  { field: "GIT_AUTHOR_EMAIL", ancestor: true },
+])("stage reconciliation refuses to restore a rejected $field before a clean recommit (ancestor: $ancestor)", async ({ field, ancestor }) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.worktreeDir = box.repo; subject.branch = "main";
+    const base = await box.run("rev-parse", "HEAD");
+    const email = ["rejected", "example.invalid"].join("@");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    expect((await box.exec("git", ["commit", "-m", "accepted work"], box.repo,
+      { ...controllerCommitIdentityEnv(), [field]: email })).code).toBe(0);
+    const rejectedCommit = await box.run("rev-parse", "HEAD");
+    if (ancestor) expect((await box.exec("git", ["commit", "--allow-empty", "-m", "canonical accepted tip"],
+      box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const publication = () => box.exec(process.execPath, [path.resolve("scripts/privacy-publication-gate.ts"),
+      "--repository", box.repo, "--base", base, "--check-commits", "--require-known-values"], box.repo, {
+      // The gate's generic rules admit example addresses. Protect this synthetic
+      // fixture value explicitly to reproduce a known-identity rejection.
+      LLV_PRIVACY_KNOWN_VALUES: email, LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain",
+      LLV_PRIVACY_KNOWN_VALUES_FILE: undefined, LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: undefined,
+    });
+    const rejected = await publication();
+    expect(rejected.code).toBe(1);
+    expect(rejected.stdout + rejected.stderr).toContain("merge_boundary:");
+    expect(rejected.stdout).toContain("known_value:");
+    if (ancestor) await box.run("reset", "--soft", rejectedCommit);
+    expect((await box.exec("git", ["commit", "--amend", "--reset-author", "--no-edit"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const head = await box.run("rev-parse", "HEAD");
+    const tree = await box.run("rev-parse", "HEAD^{tree}");
+    expect((await publication()).code).toBe(0);
+    // Replacement objects must not hide an unsafe ancestor's literal identity.
+    if (ancestor) await box.run("replace", rejectedCommit, head);
+
+    const result = await reconcilePipelineStageHead(subject, head, box.exec);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("reconciliation restored rejected history");
+    expect(result.error).toContain("identity");
+    expect(result.error).not.toContain(email);
+    expect(await box.run("rev-parse", "HEAD")).toBe(head);
+    expect(await box.run("rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect((await box.exec("git", ["--no-replace-objects", "merge-base", "--is-ancestor", subject.lastPassedCommit, "HEAD"], box.repo)).code).toBe(1);
+    expect((await publication()).code).toBe(0);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 

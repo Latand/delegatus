@@ -24,7 +24,7 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   preservedLocalRef?: PreservedProvisionRef;
   /** The controller must retry this committing attempt after collecting fresh evidence. */
   deferred?: true;
-  /** Set only when `git commit` itself answered no for a passed stage. */
+  /** Set when Git or index validation refuses the proposed stage commit. */
   commitRefusal?: StageCommitRefusal;
 };
 /** A refused stage commit, handed back to the stage that wrote it. The
@@ -564,6 +564,74 @@ async function changedWorktreePaths(
 
 type StageCommitReceipt = { version: 1; id: string; parent: string; tree: string; paths: string[] };
 
+type RawTreeChange = { path: string; before: string; after: string };
+
+function rawTreeChanges(output: string): RawTreeChange[] {
+  const fields = output.split("\0");
+  const changes: RawTreeChange[] = [];
+  for (let index = 0; index < fields.length; index += 2) {
+    const header = fields[index].trim();
+    if (!header && index === fields.length - 1) break;
+    const match = /^:([0-7]{6}) ([0-7]{6}) ([0-9a-f]{40}) ([0-9a-f]{40}) [AMDT]$/.exec(header);
+    const file = fields[index + 1];
+    if (!match || !file || file.includes("\uFFFD")) throw new Error("unverifiable index paths");
+    changes.push({ path: file, before: `${match[1]} ${match[3]}`, after: `${match[2]} ${match[4]}` });
+  }
+  return changes;
+}
+
+/** An old merge snapshot can be restored into both index and worktree after
+    newer main was accepted. Revalidate against main's retired file versions
+    at every settlement, using the lane's fixed base rather than a later pass.
+    Ambiguous reversions stay intact and return to the stage's repair path. */
+async function staleStageIndex(pipeline: Pipeline, head: string, exec: ExecPort): Promise<PipelineGitResult | null> {
+  exec = withLiteralGitObjects(exec);
+  const cwd = pipeline.worktreeDir;
+  const diff = ["--raw", "--no-abbrev", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "-z"];
+  const staged = await exec("git", ["diff", "--cached", ...diff, head, "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd);
+  if (staged.code !== 0) return failure("revalidating stage index custody", staged);
+  try {
+    const changes = rawTreeChanges(staged.stdout);
+    if (!changes.length) return null;
+    const baseBranch = pipeline.baseBranch?.trim() || DEFAULT_PIPELINE_BASE_BRANCH;
+    if (!validBaseBranch(baseBranch)) return { ok: false, error: "stage index custody requires a valid base branch" };
+    const main = await exec("git", ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${baseBranch}^{commit}`], cwd);
+    if (main.code === 1) return null; // No remote main integration to revalidate.
+    if (main.code !== 0) return failure("reading main for stage index custody", main);
+    const integrated = await exec("git", ["merge-base", head, main.stdout.trim()], cwd);
+    if (integrated.code !== 0) return failure("locating integrated main for stage index custody", integrated);
+    const boundary = await exec("git", ["merge-base", pipeline.baseRef, integrated.stdout.trim()], cwd);
+    if (boundary.code !== 0) return failure("locating the stage index custody boundary", boundary);
+    if (boundary.stdout.trim() === integrated.stdout.trim()) return null;
+    const files = changes.map((change) => change.path);
+    const current = await exec("git", ["--literal-pathspecs", "ls-tree", "-r", "-z", integrated.stdout.trim(), "--", ...files], cwd);
+    if (current.code !== 0) return failure("reading integrated main file versions", current);
+    const versions = new Map<string, string>();
+    for (const entry of current.stdout.split("\0").filter(Boolean)) {
+      const separator = entry.indexOf("\t");
+      const match = /^([0-7]{6}) (?:blob|commit) ([0-9a-f]{40})$/.exec(entry.slice(0, separator));
+      if (separator < 0 || !match) throw new Error("unverifiable main tree");
+      versions.set(entry.slice(separator + 1), `${match[1]} ${match[2]}`);
+    }
+    const history = await exec("git", ["--literal-pathspecs", "log", "--format=", "--first-parent", "--diff-merges=first-parent", ...diff,
+      `${boundary.stdout.trim()}..${integrated.stdout.trim()}`, "--", ...files], cwd);
+    if (history.code !== 0) return failure("reading retired main file versions", history);
+    const retired = new Map<string, Set<string>>();
+    for (const change of rawTreeChanges(history.stdout)) {
+      const values = retired.get(change.path) ?? new Set<string>();
+      values.add(change.before); retired.set(change.path, values);
+    }
+    const absent = `000000 ${"0".repeat(40)}`;
+    const stale = changes.filter((change) => change.after !== (versions.get(change.path) ?? absent)
+      && retired.get(change.path)?.has(change.after)).map((change) => change.path);
+    return stale.length ? { ok: false,
+      error: "stale stage index restores earlier integrated main content; preserve the files and replay the intended patch before retrying",
+      commitRefusal: { paths: stale } } : null;
+  } catch {
+    return { ok: false, error: "stage index custody could not be verified; preserve the index and worktree" };
+  }
+}
+
 /** The controller flushes ownership before Git writes. Recovery must prove the
     exact parent, tree, nonce and declared paths; a familiar commit title alone
     never grants a read-only stage permission to have created a commit. */
@@ -670,12 +738,28 @@ export async function commitPipelineStage(
   }
   const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
   if (unstage) return unstage;
+  let custodyTree: string | undefined;
+  if (allowCommit && /^[0-9a-f]{40}$/i.test(pipeline.baseRef)) {
+    const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
+    if (tree.code !== 0 || !/^[0-9a-f]{40}$/i.test(tree.stdout.trim())) return failure("pinning stage index custody", tree);
+    custodyTree = tree.stdout.trim();
+    const stale = await staleStageIndex(pipeline, sha, exec);
+    if (stale) return stale;
+  }
   let receipt: StageCommitReceipt | undefined;
   if (!allowCommit && receiptFile && protectedHead && /^[0-9a-f]{40}$/.test(protectedHead)) {
     const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
     if (tree.code !== 0 || !/^[0-9a-f]{40}$/.test(tree.stdout.trim())) return failure("recording the stage commit tree", tree);
     receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: tree.stdout.trim(), paths: changedOutputPaths };
     writeJsonDurably(receiptFile, receipt);
+  }
+  if (custodyTree) {
+    const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+    const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
+    if (head.code !== 0 || tree.code !== 0) return failure("rechecking stage index custody", head.code !== 0 ? head : tree);
+    if (head.stdout.trim() !== sha || tree.stdout.trim() !== custodyTree) {
+      return { ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" };
+    }
   }
   const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
     ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
@@ -969,16 +1053,34 @@ export async function mapReplayPatchLocation(
 /** Retained patch history admits subsequent builder edits just as ordinary
     ancestry does. Merge commits have no cherry patch-id; unique merge content
     therefore needs the controlled tree proof. Record the builder's unchanged
-    tree with both parents, then CAS the ref. Delivery still owns publication. */
+    tree with both parents only when restored identities are canonical. A clean
+    recommit must never regain a rejected identity through its second parent.
+    Then CAS the ref; delivery still owns publication. */
 export async function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort,
   destination?: { branch: string; head: string; prepared: (sha: string) => void | Promise<void> }): Promise<PipelineGitResult> {
   const accepted = pipeline.lastPassedCommit;
   if (!/^[0-9a-f]{40}$/i.test(head) || !/^[0-9a-f]{40}$/i.test(accepted)) {
     return { ok: false, error: "reconciling stage history requires exact commit SHAs" };
   }
+  exec = withLiteralGitObjects(exec);
   const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
+  // Check every commit this parent would reintroduce, including an unsafe
+  // ancestor behind a canonical accepted tip. Unknown identities are refused
+  // conservatively; values and partial metadata reads never enter the reason.
+  const restored = await exec("git", ["log", "--no-use-mailmap", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce", `${head}..${accepted}`], pipeline.worktreeDir);
+  const unreadableIdentity = { ok: false as const, error: "accepted commit identities could not be verified; history reconciliation refused (values withheld)" };
+  if (restored.code !== 0) return unreadableIdentity;
+  const identity = controllerCommitIdentityEnv();
+  const canonical = [identity.GIT_AUTHOR_NAME, identity.GIT_AUTHOR_EMAIL, identity.GIT_COMMITTER_NAME, identity.GIT_COMMITTER_EMAIL];
+  for (const line of restored.stdout.split("\n").filter(Boolean)) {
+    const [commit, ...fields] = line.split("\0");
+    if (!/^[0-9a-f]{40}$/.test(commit) || fields.length !== canonical.length) return unreadableIdentity;
+    const refused = fields.findIndex((value, index) => value !== canonical[index]);
+    if (refused !== -1) return { ok: false,
+      error: `history reconciliation refused to restore ${commit.slice(0, 12)} ${refused < 2 ? "author" : "committer"} identity; restored commits must use the canonical no-reply machine identity (values withheld)` };
+  }
   const branch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
   if (branch.code !== 0) return failure("pinning the reconciliation branch", branch);
   const ref = branch.stdout.trim();
