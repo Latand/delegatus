@@ -162,6 +162,8 @@ async function mount(element: React.ReactElement) {
 
 const confirmDialog = () => dom.document.querySelector("[data-team-dialog='self-update-confirm']");
 const text = () => confirmDialog()?.textContent ?? "";
+/** A button under `scope`, typed as the DOM's (happy-dom's types are its own). */
+const button = (scope: { querySelector(selector: string): unknown } | null, selector: string) => scope?.querySelector(selector) as HTMLButtonElement;
 
 describe("SelfUpdateConfirm", () => {
   for (const locale of ["en", "uk"] as const) {
@@ -178,7 +180,7 @@ describe("SelfUpdateConfirm", () => {
       expect(text().split(translate(locale, "selfUpdate.confirmApply.resumes")).length).toBe(2);
       expect(text()).toContain(translate(locale, "roleCopy.reviewer.name"));
       expect(text()).not.toMatch(/repo-|dir-|conversation_/);
-      expect((dialog.querySelector("[data-action='confirm-apply']") as HTMLButtonElement).textContent).toBe(translate(locale, "selfUpdate.confirmApply.go"));
+      expect(button(dialog, "[data-action='confirm-apply']").textContent).toBe(translate(locale, "selfUpdate.confirmApply.go"));
     });
   }
 
@@ -194,7 +196,7 @@ describe("SelfUpdateConfirm", () => {
     expect(text()).toContain(translate("en", "selfUpdate.confirmApply.pending"));
     expect(confirmDialog()!.querySelector("[data-confirm-list]")).toBeNull();
     expect(text()).not.toContain(translate("en", "selfUpdate.confirmApply.idle"));
-    expect((confirmDialog()!.querySelector("[data-action='confirm-apply']") as HTMLButtonElement).disabled).toBe(false);
+    expect(button(confirmDialog(), "[data-action='confirm-apply']").disabled).toBe(false);
   });
 
   test("unreadable work is said with its reason and never as no work", async () => {
@@ -229,7 +231,7 @@ describe("the Update dialog asks before it applies", () => {
     let closed = 0;
     await mount(<SelfUpdateDialog onClose={() => { closed += 1; }} />);
     for (let wait = 0; wait < 40 && !dom.document.querySelector("[data-action='update']"); wait++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
-    const update = dom.document.querySelector("[data-action='update']") as HTMLButtonElement;
+    const update = button(dom.document, "[data-action='update']");
     expect(update).not.toBeNull();
     await act(async () => { update.click(); });
     expect(confirmDialog()).not.toBeNull();
@@ -251,11 +253,11 @@ describe("the Update dialog asks before it applies", () => {
 
   test("Cancel applies nothing; «Update now» closes the question and runs the update once", async () => {
     const first = await open("pending");
-    await act(async () => { (confirmDialog()!.querySelector("[data-action='cancel-apply']") as HTMLButtonElement).click(); });
+    await act(async () => { button(confirmDialog(), "[data-action='cancel-apply']").click(); });
     expect(confirmDialog()).toBeNull();
     expect(first.posts).toEqual([]);
-    await act(async () => { (dom.document.querySelector("[data-action='update']") as HTMLButtonElement).click(); });
-    await act(async () => { (confirmDialog()!.querySelector("[data-action='confirm-apply']") as HTMLButtonElement).click(); });
+    await act(async () => { button(dom.document, "[data-action='update']").click(); });
+    await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
     expect(confirmDialog()).toBeNull();
     expect(first.posts.map((post) => post.path)).toEqual(["/api/self-update/update"]);
     expect(Object.keys(first.posts[0]!.body as object)).toEqual(["key"]);
