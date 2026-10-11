@@ -2129,6 +2129,35 @@ function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt
   pipeline.stateDetail = detail;
 }
 
+/** Admission before reservation owns the next cut. Quota refusals keep a
+    usage fence that successful authentication alone cannot clear. */
+function parkProviderTarget(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string,
+  ports: PipelinePorts, refusal?: ProjectAccountRefusedError, reason?: ParkedTaskReason): void {
+  const wait = attempt.providerWait!;
+  const at = ports.now();
+  const engine = attempt.effectiveRole.engine;
+  const exhausted = refusal?.resolution.kind === "exhausted" ? refusal.resolution : null;
+  wait.accountId = wait.switchedAccountId!;
+  delete wait.switchedAccountId;
+  wait.turnTs = unixMs(at);
+  wait.resetsAt = exhausted?.resetsAt ?? null;
+  if (exhausted) {
+    wait.condition = { kind: "usage_limit", scope: "usage", resetLabel: null, label: `${engine} usage limit` };
+    attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []).filter(item =>
+      item.accountId !== wait.accountId || (item.engine ?? engine) !== engine),
+      { engine, accountId: wait.accountId, limitedAt: wait.turnTs, resetsAt: wait.resetsAt, turnId: String(wait.turnTs) }];
+    const budget = attempt.providerRecoveryBudget ??= { tries: wait.tries, startedAt: wait.startedAt, engine };
+    budget.triedAccounts = [...new Set([...(budget.triedAccounts ?? []), wait.accountId])];
+  } else {
+    wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
+    wait.condition = classifyProviderCondition(engine, "unauthorized", "Authentication required");
+  }
+  const detailWithCut = `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`;
+  recordProviderRecovery(attempt, "park", wait.condition, detailWithCut, at);
+  attempt.completedAt = at;
+  park(pipeline, detailWithCut, attempt, reason);
+}
+
 function knownReset(...candidates: Array<number | null | undefined>): number | null {
   const resets = candidates.filter((candidate): candidate is number =>
     typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0);
@@ -5780,16 +5809,10 @@ async function spawnRunStage(
     } else if (wait?.condition.kind === "auth_required" && wait.turnTs === 0 && wait.switchedAccountId
       && !attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
       && (error instanceof ProjectAccountRefusedError || error instanceof AccountAuthenticationRequiredError)) {
-      // A target that signed out before reservation must not strand the cut,
-      // nor may its earlier positive probe immediately retry that same target.
-      wait.accountId = wait.switchedAccountId;
-      wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.switchedAccountId])];
-      delete wait.switchedAccountId;
-      wait.turnTs = unixMs(ports.now());
-      const reason = `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`;
-      recordProviderRecovery(attempt, "park", wait.condition, reason, ports.now());
-      attempt.completedAt = ports.now();
-      park(pipeline, reason, attempt);
+      // A refusal before reservation leaves no host to reconcile. Record the
+      // target's cut so later authentication or quota proof can re-admit it.
+      parkProviderTarget(pipeline, attempt, detail, ports,
+        error instanceof ProjectAccountRefusedError ? error : undefined);
     } else park(pipeline, detail, attempt);
   } finally {
     /* The key only means "this spawn is in flight in this process". */
@@ -6130,12 +6153,12 @@ async function tickRunStage(
     const readiness = ports.engineReadiness?.(engine, pipeline.project) ?? "connected";
     if (readiness !== "connected") {
       const roleId = attempt.definition ? attempt.effectiveRole.roleId : stage.effectiveRole.roleId;
-      park(
-        pipeline,
-        engineNotConnectedMessage({ stageId: stage.id, role: roleId ?? null, engine, reason: readiness }),
-        attempt,
-        readiness === "signed-out" ? { kind: "signed-out", engine } : undefined,
-      );
+      const detail = engineNotConnectedMessage({ stageId: stage.id, role: roleId ?? null, engine, reason: readiness });
+      const wait = attempt.providerWait;
+      if (readiness === "signed-out" && wait?.turnTs === 0 && wait.switchedAccountId
+        && !attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId)
+        parkProviderTarget(pipeline, attempt, detail, ports, undefined, { kind: "signed-out", engine });
+      else park(pipeline, detail, attempt, readiness === "signed-out" ? { kind: "signed-out", engine } : undefined);
       return;
     }
     /* A publication this process is merely between is transient. Waiting for it
