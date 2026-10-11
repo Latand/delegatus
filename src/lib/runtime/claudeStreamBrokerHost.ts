@@ -619,7 +619,10 @@ export function readClaudeTranscriptUsers(filename: string): ClaudeTranscriptUse
 /** One durable writer around a long-lived Claude stream-json process. */
 export class ClaudeStreamBrokerHost implements EngineHost {
   readonly supportsSteer = false;
-  readonly supportsQueuedSend = true;
+  // Keep follow-ups in Delegatus until idle. Claude can consume several inputs
+  // before one result, or combine them into a replay with one canonical UUID;
+  // native batching cannot currently preserve our per-input receipt identity.
+  readonly supportsQueuedSend = false;
   readonly identity: ClaudeSessionIdentity;
 
   private readonly child: ChildProcessWithoutNullStreams;

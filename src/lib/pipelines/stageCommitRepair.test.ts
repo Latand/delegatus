@@ -7,6 +7,17 @@ import path from "node:path";
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
 
+// Fixture executors clear inherited Git configuration too; keep the caller's
+// count consistent with the configuration available to their child processes.
+const inheritedGitConfig: Record<string, string> = {};
+for (const key of Object.keys(process.env)) {
+  if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/.test(key)) {
+    inheritedGitConfig[key] = process.env[key]!;
+    delete process.env[key];
+  }
+}
+afterAll(() => Object.assign(process.env, inheritedGitConfig));
+
 /* Isolated state only: this suite drives the production pipeline controller
    over a store of its own and must never read or write the operator's. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-commit-repair-"));
@@ -202,6 +213,7 @@ test("a real lint refusal of another file whose name ends like the staged one is
 
 function harness(options: { access?: "read-only" | "read-write" } = {}) {
   const access = options.access ?? "read-write";
+  const index = path.join(fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "index-fixture-")), "index");
   const requests: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string; cohortAt?: string }> = [];
   let wall = Date.parse("2026-10-07T09:00:00.000Z");
   let turn: StageTurnEvidence = { turn: "busy", message: null, lastRecordAt: wall };
@@ -219,13 +231,19 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
   let committedBody = "";
   let ancestry: ExecResult = { code: 0, stdout: "", stderr: "" };
   let branchRef: ExecResult | null = null;
+  let reconciliationStarted = false;
   const calls: string[] = [];
   const ports: PipelinePorts = {
     exec: (rawCommand, rawArgs) => {
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
-      if (args[0] === "merge-base" && args[1] === "--is-ancestor") return ancestry;
-      if (args[0] === "symbolic-ref" && branchRef) return branchRef;
+      if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+        if (ancestry.code === 1) reconciliationStarted = true;
+        return ancestry;
+      }
+      if (args[0] === "symbolic-ref") return reconciliationStarted && branchRef
+        ? branchRef : { code: 0, stdout: `refs/heads/${loadPipelines()[0]?.branch ?? "main"}\n`, stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--git-path") && args.at(-1) === "index") return { code: 0, stdout: `${index}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--verify") return { code: 0, stdout: `${BASE_SHA}\n`, stderr: "" };

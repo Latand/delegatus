@@ -1433,7 +1433,7 @@ export function compareDeliveryAdmission(
 /** The next admission sequence of a canonical conversation, inside the reservation's own transaction. */
 function nextAdmissionSeq(file: RegistryFile, canonicalId: ViewerConversationId): number {
   let highest = 0;
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  for (const delivery of conversationRows(file, "heldDeliveries", canonicalId)) {
     if (typeof delivery.admissionSeq !== "number" || delivery.admissionSeq <= highest) continue;
     if (resolveConversationAlias(file, delivery.conversationId) === canonicalId) highest = delivery.admissionSeq;
   }
@@ -9651,7 +9651,7 @@ export class AgentRegistry {
          switch commits cannot overtake what the switch carried. Every actuator claims here, and its claim and
          journal admission run inside `withConversationActuation`, so an earlier claim is admitted first. */
       const canonicalId = resolveConversationAlias(file, delivery.conversationId);
-      if (Object.values(file.heldDeliveries).some((other) => other.id !== delivery.id
+      if (conversationRows(file, "heldDeliveries", canonicalId).some((other) => other.id !== delivery.id
         && other.state === "assigned"
         && other.generationId === generationId
         && resolveConversationAlias(file, other.conversationId) === canonicalId
