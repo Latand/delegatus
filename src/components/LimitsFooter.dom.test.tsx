@@ -215,7 +215,7 @@ test("a genuine 5-hour window keeps the 5h label", async () => {
     staleSince: null,
   };
   const line = meterLine(engineBlock(await render("line"), "codex"));
-  expect(line.value).toBe("left 90%"); // the line names the week, however tight the 5h window is
+  expect(line.value).toBe("week 90%"); // the line names the week, however tight the 5h window is
   expect(line.windows).toBe("5h left 60% · Week left 90%");
   await act(async () => { root?.unmount(); });
   root = null;
@@ -253,7 +253,7 @@ for (const density of DENSITIES) test(`provider exhaustion reconciles the ${dens
   const text = host.textContent ?? "";
   expect(text).not.toContain("79%");
   const line = meterLine(engineBlock(host, "codex"));
-  expect(line.value).toBe("left 0%");
+  expect(line.value).toBe("week 0%");
   expect(line.windows).toBe("Week left 0%");
   // Behind "All windows" the weekly window says the same zero under the line.
   expect(text.match(/0%/g)?.length ?? 0).toBe(density === "detail" ? 2 : 1);
@@ -395,7 +395,7 @@ for (const density of DENSITIES) test(`an account B limits payload cannot overri
   expect(text).toContain("79%");
   expect(text).not.toContain("0%");
   const line = meterLine(engineBlock(host, "codex"));
-  expect(line).toMatchObject({ name: "Account A", value: "left 79%", windows: "Week left 79%" });
+  expect(line).toMatchObject({ name: "Account A", value: "week 79%", windows: "Week left 79%" });
 });
 
 // ── Issues #1358 / #1796 — each metered tier's weekly as its own footer row ──
@@ -428,7 +428,7 @@ test("no tier bucket: the Claude block keeps its two rows and no placeholder", a
   expect(block.textContent).toContain("5h");
   expect(block.textContent).toContain("Week");
   expect(block.textContent).not.toContain("Opus · Week");
-  expect(meterLine(block).value).toBe("left 60%"); // the general week binds the line
+  expect(meterLine(block).value).toBe("week 60%"); // the general week binds the line
   expect(block.querySelectorAll("[data-limits-windows] [data-meter-window]").length).toBe(2);
 });
 
@@ -437,7 +437,7 @@ test("a healthy tier bucket renders as a third row named by the tier, and the ge
   const block = claudeBlock(await render());
   expect(block.textContent).toContain("Opus · Week");
   expect(block.textContent).toContain("90%");
-  expect(meterLine(block).value).toBe("left 60%");
+  expect(meterLine(block).value).toBe("week 60%");
   expect(block.querySelectorAll("[data-limits-windows] [data-meter-window]").length).toBe(3);
   expect(block.textContent?.match(/reset/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
 });
@@ -447,7 +447,7 @@ test("a tier bucket tighter than the general week stays in the tooltip; the gene
   for (const density of DENSITIES) {
     const block = claudeBlock(await render(density));
     const line = meterLine(block);
-    expect(line.value).toBe("left 60%");
+    expect(line.value).toBe("week 60%");
     expect(line.windows).toBe("5h left 88% · Week left 60% · Opus · Week left 20%");
     expect(Boolean(block.querySelector("[data-limits-windows]"))).toBe(density === "detail");
     if (density === "detail") expect(block.querySelector("[data-limits-windows]")?.textContent).toContain("Opus · Week");
@@ -462,7 +462,7 @@ test("every tier the provider meters gets its own footer line, Fable included (#
   const block = claudeBlock(await render());
   expect(block.textContent).toContain("Fable · Week");
   expect(block.textContent).toContain("Opus · Week");
-  expect(meterLine(block).value).toBe("left 60%"); // the general week holds the line; Fable's 12% is its own row
+  expect(meterLine(block).value).toBe("week 60%"); // the general week holds the line; Fable's 12% is its own row
   expect(block.textContent).toContain("37%");
   expect(meterLine(block).windows).toBe("5h left 88% · Week left 60% · Fable · Week left 12% · Opus · Week left 37%");
 });
@@ -518,12 +518,12 @@ test("the compact footer draws one line for every account of each engine, the ac
   const claude = accountRows(engineBlock(host, "claude")).map(rowReading);
   const codex = accountRows(engineBlock(host, "codex")).map(rowReading);
   expect(claude).toEqual([
-    { id: "claude-a", name: "Claude A", value: "left 90%", active: true },
-    { id: "claude-b", name: "Claude B", value: "left 30%", active: false },
+    { id: "claude-a", name: "Claude A", value: "week 90%", active: true },
+    { id: "claude-b", name: "Claude B", value: "week 30%", active: false },
   ]);
   expect(codex).toEqual([
-    { id: "codex-a", name: "Codex A", value: "left 75%", active: true },
-    { id: "codex-b", name: "Codex B", value: "left 60%", active: false },
+    { id: "codex-a", name: "Codex A", value: "week 75%", active: true },
+    { id: "codex-b", name: "Codex B", value: "week 60%", active: false },
     // No reading at all: the existing "no data yet" treatment.
     { id: "codex-c", name: "Codex C", value: "no data yet", active: false },
   ]);
@@ -598,7 +598,7 @@ test("All windows stays one account per engine with every window", async () => {
     expect(block.querySelectorAll("[data-meter-name]").length).toBe(1);
     expect(block.querySelector("[data-limits-windows]")).not.toBeNull();
   }
-  expect(meterLine(engineBlock(host, "codex"))).toMatchObject({ name: "Codex A", value: "left 75%" });
+  expect(meterLine(engineBlock(host, "codex"))).toMatchObject({ name: "Codex A", value: "week 75%" });
   expect(host.textContent).not.toContain("Codex B");
   expect(host.textContent).not.toContain("Claude B");
 });
@@ -630,13 +630,13 @@ for (const density of DENSITIES) test(`a Claude account with both windows names 
   seedClaude({ week: 77, fiveHour: 36 }, { week: 55, fiveHour: 12 });
   const block = engineBlock(await render(density), "claude");
   const rows = accountRows(block);
-  expect(rowReading(rows[0]!)).toMatchObject({ id: "claude-a", value: "left 77%", active: true });
+  expect(rowReading(rows[0]!)).toMatchObject({ id: "claude-a", value: "week 77%", active: true });
   expect(rows[0]!.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar")).toBe("77");
   expect(lineText(rows[0]!)).not.toContain("36%");
   // The 5h figure stays where it is named: the tooltip, and the labelled row behind "All windows".
   expect(meterLine(block).windows).toBe("5h left 36% · Week left 77%");
   if (density === "line") {
-    expect(rowReading(rows[1]!)).toMatchObject({ id: "claude-b", value: "left 55%", active: false });
+    expect(rowReading(rows[1]!)).toMatchObject({ id: "claude-b", value: "week 55%", active: false });
     expect(lineText(rows[1]!)).not.toContain("12%");
   } else {
     expect(block.querySelector("[data-limits-windows]")?.textContent).toContain("5h");
@@ -648,8 +648,8 @@ test("a Claude account with only a weekly reading shows that week", async () => 
   seedClaude({ week: 77, fiveHour: null }, { week: 40, fiveHour: null });
   const rows = accountRows(engineBlock(await render("line"), "claude")).map(rowReading);
   expect(rows).toEqual([
-    { id: "claude-a", name: "Claude A", value: "left 77%", active: true },
-    { id: "claude-b", name: "Claude B", value: "left 40%", active: false },
+    { id: "claude-a", name: "Claude A", value: "week 77%", active: true },
+    { id: "claude-b", name: "Claude B", value: "week 40%", active: false },
   ]);
 });
 
@@ -674,8 +674,8 @@ test("Codex lines are unchanged: each account names its weekly window", async ()
   seedRoster();
   const rows = accountRows(engineBlock(await render("line"), "codex")).map(rowReading);
   expect(rows).toEqual([
-    { id: "codex-a", name: "Codex A", value: "left 75%", active: true },
-    { id: "codex-b", name: "Codex B", value: "left 60%", active: false },
+    { id: "codex-a", name: "Codex A", value: "week 75%", active: true },
+    { id: "codex-b", name: "Codex B", value: "week 60%", active: false },
     { id: "codex-c", name: "Codex C", value: "no data yet", active: false },
   ]);
 });

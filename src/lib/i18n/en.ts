@@ -2911,6 +2911,7 @@ export const en = {
   "limits.stale": "data is stale: {stale}",
   "limits.5h": "5h",
   "limits.week": "Week",
+  "limits.weekValue": "week",
   "limits.month": "Month",
   // Window labels for a horizon the provider declares itself (issue #606).
   "limits.windowMinutes": "{n}m",

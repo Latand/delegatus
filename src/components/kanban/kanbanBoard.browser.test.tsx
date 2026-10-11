@@ -28148,8 +28148,8 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
    * The operator's reading (2026-10-11): a Claude account with 77 % of its week and 36 % of its 5-hour window left
    * read 36 in the sidebar. Over the board fixture with `&accountpicker=1&sidebarweekly=1`: Claude «Main» 77 % week
    * and 36 % 5h, «Work» a week only (41 %), «Night» a 5-hour window only (70 %); Codex 78 % and 23 %, weekly only.
-   * The desktop sidebar footer at 1440, one line per account, then «All windows»; the phone's accounts screen at
-   * 390, where the phone keeps its account lines. en and uk.
+   * The desktop sidebar footer at 1440 and 1000, dark and light, one line per account (each names the week), then
+   * «All windows»; the phone's accounts screen at 390, where the phone keeps its account lines. en and uk.
    *
    *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 SIDEBAR_WEEKLY_OUT=<dir> \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "weekly limit left, Claude as Codex"
@@ -28166,12 +28166,12 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
     try {
       for (const lang of ["en", "uk"] as const) {
         const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
-        const left = (percent: number) => `${tr("limits.left")} ${percent}%`;
+        const left = (percent: number) => `${tr("limits.weekValue")} ${percent}%`;
 
-        /* The desktop sidebar: one line per account, then every window behind «All windows». */
-        {
-          const name = `sidebar-1440-${lang}`;
-          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, VIEWPORT, "dark", lang, "reduce");
+        /* The desktop sidebar at 1440 and 1000, dark and light: one line per account, then every window behind «All windows». */
+        for (const [width, scheme] of [[1440, "dark"], [1440, "light"], [1000, "dark"], [1000, "light"]] as const) {
+          const name = `sidebar-${width}-${scheme}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width, height: VIEWPORT.height }, scheme, lang, "reduce");
           try {
             await page.locator('[data-engine-limits="claude"] [data-footer-account="night"]').waitFor({ timeout: 40_000 });
             await page.locator('[data-engine-limits="codex"] [data-footer-account="review"] [data-meter-value]').waitFor({ timeout: 15_000 });
@@ -28191,6 +28191,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
             expect(compact.filter((row) => row.overflow).map((row) => row.text), `${name} lines hold their contents`).toEqual([]);
             const footerText = await page.locator("[data-rail-footer]").innerText();
             expect(footerText, `${name} no 5-hour figure on a line`).not.toMatch(/\b(36|70)%/);
+            expect(compact.filter((row) => row.value?.endsWith("%") && !row.value.startsWith(tr("limits.weekValue"))).map((row) => row.text), `${name} every percent on a line names the week`).toEqual([]);
             await page.mouse.move(0, 0);
             const footer = (await page.locator("[data-rail-footer]").boundingBox())!;
             await page.screenshot({ path: path.join(out, `${name}-lines.png`), clip: { x: 0, y: Math.max(0, footer.y - 40), width: Math.ceil(footer.x + footer.width), height: Math.min(VIEWPORT.height, footer.y + footer.height + 4) - Math.max(0, footer.y - 40) } });

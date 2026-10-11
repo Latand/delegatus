@@ -179,7 +179,7 @@ function InactiveAccountLine({ account, engine, label, now, onOpen }: {
       </button>
       {weekly ? (
         <span className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1.5 px-1.5">
-          <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
+          <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.weekValue")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
           <ReserveBar percent={weekly.percent} color={color} />
         </span>
       ) : (
@@ -360,7 +360,7 @@ function EngineLimitsBlock({
           <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
             {weekly ? (
               <>
-                <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
+                <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.weekValue")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
                 <ReserveBar percent={weekly.percent} color={color} />
               </>
             ) : (

@@ -1,20 +1,20 @@
 [
   {
-    "shot": "sidebar-1440-en",
+    "shot": "sidebar-1440-dark-en",
     "lines": [
       {
         "engine": "claude",
         "id": "default",
-        "text": "Main left 77%",
-        "value": "left 77%",
+        "text": "Main week 77%",
+        "value": "week 77%",
         "bar": "77",
         "overflow": false
       },
       {
         "engine": "claude",
         "id": "work",
-        "text": "Work left 41%",
-        "value": "left 41%",
+        "text": "Work week 41%",
+        "value": "week 41%",
         "bar": "41",
         "overflow": false
       },
@@ -29,25 +29,181 @@
       {
         "engine": "codex",
         "id": "default",
-        "text": "Personal left 78%",
-        "value": "left 78%",
+        "text": "Personal week 78%",
+        "value": "week 78%",
         "bar": "78",
         "overflow": false
       },
       {
         "engine": "codex",
         "id": "review",
-        "text": "Review left 23%",
-        "value": "left 23%",
+        "text": "Review week 23%",
+        "value": "week 23%",
         "bar": "23",
         "overflow": false
       }
     ],
     "allWindows": {
-      "line": "left 77%",
+      "line": "week 77%",
       "windows": [
-        "5h left 36% reset in 3h · 19:38",
-        "Week left 77% reset in 3d · Oct 14 15:58"
+        "5h left 36% reset in 3h · 00:54",
+        "Week left 77% reset in 3d · Oct 14 21:14"
+      ]
+    }
+  },
+  {
+    "shot": "sidebar-1440-light-en",
+    "lines": [
+      {
+        "engine": "claude",
+        "id": "default",
+        "text": "Main week 77%",
+        "value": "week 77%",
+        "bar": "77",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "work",
+        "text": "Work week 41%",
+        "value": "week 41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "night",
+        "text": "Night no weekly data",
+        "value": "no weekly data",
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "default",
+        "text": "Personal week 78%",
+        "value": "week 78%",
+        "bar": "78",
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "review",
+        "text": "Review week 23%",
+        "value": "week 23%",
+        "bar": "23",
+        "overflow": false
+      }
+    ],
+    "allWindows": {
+      "line": "week 77%",
+      "windows": [
+        "5h left 36% reset in 3h · 00:54",
+        "Week left 77% reset in 3d · Oct 14 21:14"
+      ]
+    }
+  },
+  {
+    "shot": "sidebar-1000-dark-en",
+    "lines": [
+      {
+        "engine": "claude",
+        "id": "default",
+        "text": "Main week 77%",
+        "value": "week 77%",
+        "bar": "77",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "work",
+        "text": "Work week 41%",
+        "value": "week 41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "night",
+        "text": "Night no weekly data",
+        "value": "no weekly data",
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "default",
+        "text": "Personal week 78%",
+        "value": "week 78%",
+        "bar": "78",
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "review",
+        "text": "Review week 23%",
+        "value": "week 23%",
+        "bar": "23",
+        "overflow": false
+      }
+    ],
+    "allWindows": {
+      "line": "week 77%",
+      "windows": [
+        "5h left 36% reset in 3h · 00:54",
+        "Week left 77% reset in 3d · Oct 14 21:14"
+      ]
+    }
+  },
+  {
+    "shot": "sidebar-1000-light-en",
+    "lines": [
+      {
+        "engine": "claude",
+        "id": "default",
+        "text": "Main week 77%",
+        "value": "week 77%",
+        "bar": "77",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "work",
+        "text": "Work week 41%",
+        "value": "week 41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "night",
+        "text": "Night no weekly data",
+        "value": "no weekly data",
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "default",
+        "text": "Personal week 78%",
+        "value": "week 78%",
+        "bar": "78",
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "review",
+        "text": "Review week 23%",
+        "value": "week 23%",
+        "bar": "23",
+        "overflow": false
+      }
+    ],
+    "allWindows": {
+      "line": "week 77%",
+      "windows": [
+        "5h left 36% reset in 3h · 00:54",
+        "Week left 77% reset in 3d · Oct 14 21:14"
       ]
     }
   },
@@ -82,21 +238,21 @@
     ]
   },
   {
-    "shot": "sidebar-1440-uk",
+    "shot": "sidebar-1440-dark-uk",
     "lines": [
       {
         "engine": "claude",
         "id": "default",
-        "text": "Main лишилось 77%",
-        "value": "лишилось 77%",
+        "text": "Main тиждень 77%",
+        "value": "тиждень 77%",
         "bar": "77",
         "overflow": false
       },
       {
         "engine": "claude",
         "id": "work",
-        "text": "Work лишилось 41%",
-        "value": "лишилось 41%",
+        "text": "Work тиждень 41%",
+        "value": "тиждень 41%",
         "bar": "41",
         "overflow": false
       },
@@ -111,25 +267,181 @@
       {
         "engine": "codex",
         "id": "default",
-        "text": "Personal лишилось 78%",
-        "value": "лишилось 78%",
+        "text": "Personal тиждень 78%",
+        "value": "тиждень 78%",
         "bar": "78",
         "overflow": false
       },
       {
         "engine": "codex",
         "id": "review",
-        "text": "Review лишилось 23%",
-        "value": "лишилось 23%",
+        "text": "Review тиждень 23%",
+        "value": "тиждень 23%",
         "bar": "23",
         "overflow": false
       }
     ],
     "allWindows": {
-      "line": "лишилось 77%",
+      "line": "тиждень 77%",
       "windows": [
-        "5 год лишилось 36% скид через 3 год · 19:38",
-        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 15:58"
+        "5 год лишилось 36% скид через 3 год · 00:54",
+        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 21:14"
+      ]
+    }
+  },
+  {
+    "shot": "sidebar-1440-light-uk",
+    "lines": [
+      {
+        "engine": "claude",
+        "id": "default",
+        "text": "Main тиждень 77%",
+        "value": "тиждень 77%",
+        "bar": "77",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "work",
+        "text": "Work тиждень 41%",
+        "value": "тиждень 41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "night",
+        "text": "Night немає тижневих даних",
+        "value": "немає тижневих даних",
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "default",
+        "text": "Personal тиждень 78%",
+        "value": "тиждень 78%",
+        "bar": "78",
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "review",
+        "text": "Review тиждень 23%",
+        "value": "тиждень 23%",
+        "bar": "23",
+        "overflow": false
+      }
+    ],
+    "allWindows": {
+      "line": "тиждень 77%",
+      "windows": [
+        "5 год лишилось 36% скид через 3 год · 00:54",
+        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 21:14"
+      ]
+    }
+  },
+  {
+    "shot": "sidebar-1000-dark-uk",
+    "lines": [
+      {
+        "engine": "claude",
+        "id": "default",
+        "text": "Main тиждень 77%",
+        "value": "тиждень 77%",
+        "bar": "77",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "work",
+        "text": "Work тиждень 41%",
+        "value": "тиждень 41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "night",
+        "text": "Night немає тижневих даних",
+        "value": "немає тижневих даних",
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "default",
+        "text": "Personal тиждень 78%",
+        "value": "тиждень 78%",
+        "bar": "78",
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "review",
+        "text": "Review тиждень 23%",
+        "value": "тиждень 23%",
+        "bar": "23",
+        "overflow": false
+      }
+    ],
+    "allWindows": {
+      "line": "тиждень 77%",
+      "windows": [
+        "5 год лишилось 36% скид через 3 год · 00:54",
+        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 21:14"
+      ]
+    }
+  },
+  {
+    "shot": "sidebar-1000-light-uk",
+    "lines": [
+      {
+        "engine": "claude",
+        "id": "default",
+        "text": "Main тиждень 77%",
+        "value": "тиждень 77%",
+        "bar": "77",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "work",
+        "text": "Work тиждень 41%",
+        "value": "тиждень 41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "night",
+        "text": "Night немає тижневих даних",
+        "value": "немає тижневих даних",
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "default",
+        "text": "Personal тиждень 78%",
+        "value": "тиждень 78%",
+        "bar": "78",
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "review",
+        "text": "Review тиждень 23%",
+        "value": "тиждень 23%",
+        "bar": "23",
+        "overflow": false
+      }
+    ],
+    "allWindows": {
+      "line": "тиждень 77%",
+      "windows": [
+        "5 год лишилось 36% скид через 3 год · 00:54",
+        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 21:14"
       ]
     }
   },
