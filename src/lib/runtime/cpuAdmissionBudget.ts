@@ -14,8 +14,9 @@ export function cpuWaitBudget(env: NodeJS.ProcessEnv) {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const dir = fs.mkdtempSync(path.join(root, "budget-"));
   fs.chmodSync(dir, 0o700);
+  const childEnv: NodeJS.ProcessEnv = { ...env, [ROOTS]: JSON.stringify([...roots(env), dir]) };
   return {
-    env: { ...env, [ROOTS]: JSON.stringify([...roots(env), dir]) },
+    env: childEnv,
     elapsed: () => cpuWaitElapsed(dir),
     close: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
