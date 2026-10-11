@@ -16,6 +16,8 @@ import type { Locale } from "./contract";
 import { jsonObject, type LiveConnection, type LiveProvider, type LiveToolHandler } from "./provider";
 import { BACKEND_INSTRUCTIONS, LIVE_BACKEND_MODEL, liveInstructions } from "./sessionConfig";
 import { COMPANION_TOOL_REGISTRY } from "./tools";
+import { CodexVoiceTranscript } from "./codexTranscript";
+import { VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
 
 type VoiceAccount = { id: string; kind: "managed" | "legacy"; home: string; authPresent: boolean };
 export interface CodexVoiceOptions {
@@ -50,17 +52,27 @@ export function codexVoiceEnvironment(home: string, source: NodeJS.ProcessEnv): 
 export function codexVoiceThread(cwd: string, compactPrompt = true) {
   const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread");
   return { model: LIVE_BACKEND_MODEL, cwd, approvalPolicy: "never", sandbox: "read-only", ephemeral: true,
-    dynamicTools: COMPANION_TOOL_REGISTRY.filter(tool => tool.class !== "delegation").map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })),
+    dynamicTools: COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })),
     developerInstructions: instructions, ...(compactPrompt ? { environments: [], baseInstructions: instructions } : {}) };
 }
 export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string) {
   return { threadId, version: "v3", model: "gpt-live-1-codex", outputModality: "audio", transport: { type: "webrtc", sdp: sdp.replace(/\r?\n/g, "\r\n") },
     clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName) };
 }
+export function codexVoiceContext(threadId: string, text: string) {
+  return { threadId, items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }] };
+}
+export function codexVoiceText(threadId: string, text: string) { return { threadId, role: "developer", text }; }
+export function codexVoiceToolResult(result: unknown) {
+  return { contentItems: [{ type: "inputText", text: JSON.stringify(result) },
+    ...((result as SpeechReadResult | null)?.[VOICE_IMAGES] ?? []).map(image => ({ type: "inputImage", imageUrl: `data:${image.mime};base64,${image.data}` }))], success: true };
+}
 interface Call {
   client: CodexAppServerClient; account: VoiceAccount; cwd: string; id: string; createdAt: number;
   events: unknown[]; event?(value: unknown): void; lost?(): void; tool?: LiveToolHandler;
   stopping?: Promise<void>; reaped: Promise<void>; sdpReceived?: boolean; failed?: boolean;
+  transcriptAdapter: CodexVoiceTranscript;
+  writing: Promise<void>;
 }
 
 /** Companion-owned stdio protocol. No conversation host, writer or composer
@@ -99,17 +111,17 @@ export class CodexLiveProvider implements LiveProvider {
       const started = jsonObject(await client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt)));
       const id = jsonObject(started?.thread)?.id;
       if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new CodexVoiceError("CODEX_UNSUPPORTED");
-      call = { client, account, cwd, id, events: [], createdAt: this.now(), reaped };
+      call = { client, account, cwd, id, events: [], createdAt: this.now(), reaped, transcriptAdapter: new CodexVoiceTranscript(), writing: Promise.resolve() };
       this.calls.set(id, call);
       const active = call;
       client.onRequest(async request => {
         const params = jsonObject(request.params);
         if (request.method !== "item/tool/call" || params?.threadId !== id || typeof params.tool !== "string" || typeof params.callId !== "string" || typeof params.turnId !== "string"
-          || !COMPANION_TOOL_REGISTRY.some(tool => tool.class !== "delegation" && tool.name === params.tool))
-          return { contentItems: [{ type: "inputText", text: "Tool is unavailable in this voice slice." }], success: false };
+          || !COMPANION_TOOL_REGISTRY.some(tool => tool.name === params.tool))
+          return { contentItems: [{ type: "inputText", text: "Tool is unavailable." }], success: false };
         if (!active.tool || active.stopping || active.failed) return { contentItems: [{ type: "inputText", text: "Voice session is unavailable." }], success: false };
         const result = await active.tool(params.tool, params.arguments, params.callId, params.turnId);
-        return { contentItems: [{ type: "inputText", text: JSON.stringify(result) }], success: true };
+        return codexVoiceToolResult(result);
       });
       let resolveSdp!: (sdp: string) => void; let rejectSdp!: (error: Error) => void;
       const answer = new Promise<string>((resolve, reject) => { resolveSdp = resolve; rejectSdp = reject; });
@@ -161,9 +173,14 @@ export class CodexLiveProvider implements LiveProvider {
   }
   private notification(call: Call, notification: AppServerNotification) {
     const params = jsonObject(notification.params)!;
-    if (notification.method === "thread/realtime/itemAdded") {
+    if (notification.method.startsWith("thread/realtime/transcript/")) {
+      for (const event of call.transcriptAdapter.notification(notification.method, params, this.now() - call.createdAt)) this.emit(call, event);
+    } else if (notification.method === "thread/realtime/itemAdded") {
       const item = jsonObject(params.item);
       if (item?.type === "handoff_request" && typeof item.handoff_id === "string") this.emit(call, { type: "session.delegation.created", offset_ms: this.now() - call.createdAt, delegation: { id: item.handoff_id, target: "client" } });
+    } else if (notification.method === "turn/started") {
+      const turn = jsonObject(params.turn);
+      if (typeof turn?.id === "string") this.emit(call, { type: "codex.turn.started", turnId: turn.id });
     } else if (notification.method === "thread/tokenUsage/updated") {
       const usage = jsonObject(params.tokenUsage); const total = jsonObject(usage?.total);
       if (total) this.emit(call, { type: "codex.tokenUsage", tokens: Object.fromEntries(Object.entries(total).filter(([, value]) => Number.isSafeInteger(value) && (value as number) >= 0)) });
@@ -197,7 +214,19 @@ export class CodexLiveProvider implements LiveProvider {
     for (const queued of call.events.splice(0)) event(queued);
     return { send: command => {
       if (command.type === "session.close") void this.hangup(id, "").then(() => event({ type: "session.closed" }), lost);
-      // Reports, context and interruption are added in slice 2.
+      else if (["session.commentary.append", "session.instructions.append"].includes(command.type) && typeof command.content === "string") {
+        const text = command.content;
+        // The same call orders speech and context even when polls overlap.
+        // Failed writes close the call through its lost path.
+        call.writing = call.writing.then(async () => {
+          if (call.stopping || call.failed) return;
+          if (command.type === "session.commentary.append") await call.client.request("thread/realtime/appendSpeech", { threadId: id, text });
+          else {
+            await call.client.request("thread/inject_items", codexVoiceContext(id, text));
+            if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendText", codexVoiceText(id, text));
+          }
+        }).catch(() => { call.failed = true; call.lost?.(); });
+      }
     }, dispose: () => {
       call.event = undefined; call.lost = undefined; call.tool = undefined;
       // Session recovery retains the open flag until hangup confirms reaping.
