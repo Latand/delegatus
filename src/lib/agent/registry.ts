@@ -9063,12 +9063,11 @@ export class AgentRegistry {
       const receipts = Object.values(file.receipts)
         .filter((receipt) => resolveConversationAlias(file, receipt.conversationId) === conversation.id);
       const pending = receipts.find((receipt) => receipt.pendingSpawnCapability?.operationId === expectedOperationId);
-      if (pending?.pendingSpawnCapability) {
-        const digest = pending.pendingSpawnCapability.digest;
-        for (const receipt of receipts) {
-          receipt.spawnCapabilityDigest = receipt === pending ? digest : null;
-          receipt.pendingSpawnCapability = null;
-        }
+      const digest = pending?.pendingSpawnCapability?.digest ?? null;
+      // A rollback successor can publish without HTTP identity; its archived predecessor still loses access at commit.
+      for (const receipt of receipts) {
+        receipt.spawnCapabilityDigest = receipt === pending ? digest : null;
+        receipt.pendingSpawnCapability = null;
       }
       conversation.updatedAt = now();
       settleDeliveriesAtCommit(file, conversation, migration, predecessor, generation, committedAt);
