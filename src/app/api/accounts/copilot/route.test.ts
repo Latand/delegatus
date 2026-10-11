@@ -19,7 +19,7 @@ process.env.COPILOT_HOME = path.join(sandbox, "legacy-absent");
 process.env.LLV_COPILOT_BIN = "/fixture/copilot";
 const { createManagedCopilotAccount } = await import("@/lib/accounts/copilot");
 const { CopilotLoginSupervisor, setCopilotLoginSupervisorForTests } = await import("@/lib/accounts/copilotLogin");
-const { GET, POST } = await import("./route");
+const { DELETE: remove, GET, POST } = await import("./route");
 const { GET: getModels } = await import("./models/route");
 
 class FakeChild extends EventEmitter {
@@ -142,4 +142,86 @@ for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`man
   } else {
     expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
   }
+});
+
+function deleteRequest(body: unknown) {
+  return new NextRequest("http://127.0.0.1/api/accounts/copilot", {
+    method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+}
+
+/* Task d7759de2: Copilot accounts are removed through the same control as
+   Claude and Codex ones; history stays readable where it is. */
+test("a managed Copilot account is removed: it leaves the list, its sign-in file goes, its transcripts stay readable", async () => {
+  const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { copilotSessionRoots, listCopilotAccounts } = await import("@/lib/accounts/copilot");
+  closeAgentRegistryForTests();
+  const account = listCopilotAccounts().find((candidate) => candidate.id === accountId)!;
+  const transcript = path.join(account.sessionStateDir, "session-one", "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "{}\n");
+
+  const response = await remove(deleteRequest({ id: accountId }));
+
+  expect(response.status).toBe(200);
+  const body = await response.json() as { removed: { id: string }; accounts: { id: string }[]; cleanupPending: boolean };
+  expect(body.removed).toEqual({ id: accountId });
+  expect(body.cleanupPending).toBe(false);
+  expect(body.accounts.map((item) => item.id)).not.toContain(accountId);
+  expect(listCopilotAccounts().map((item) => item.id)).not.toContain(accountId);
+  expect(fs.existsSync(path.join(account.home, "config.json"))).toBe(false);
+  expect(fs.readFileSync(transcript, "utf8")).toBe("{}\n");
+  expect(copilotSessionRoots()).toContain(account.sessionStateDir);
+  expect((await remove(deleteRequest({ id: accountId }))).status).toBe(404);
+  closeAgentRegistryForTests();
+});
+
+test("the default Copilot home is only hidden, and a live agent refuses removal by name", async () => {
+  const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { listCopilotAccounts } = await import("@/lib/accounts/copilot");
+  closeAgentRegistryForTests();
+  const legacy = path.join(sandbox, `run-${run}`, "legacy-present");
+  fs.mkdirSync(path.join(legacy, "session-state"), { recursive: true });
+  fs.writeFileSync(path.join(legacy, "config.json"), "{}");
+  process.env.COPILOT_HOME = legacy;
+  const begun = beginLegacySpawnFixture(agentRegistry(), { engine: "copilot", cwd: "/repo", accountId: accountId });
+  if (begun.kind !== "created") throw new Error("expected a launch receipt");
+
+  const refused = await remove(deleteRequest({ id: accountId }));
+  expect(refused.status).toBe(409);
+  await expect(refused.json()).resolves.toMatchObject({ blockers: ["live_sessions"], sessions: [expect.objectContaining({ conversationId: begun.receipt.conversationId })] });
+
+  const hidden = await remove(deleteRequest({ id: "default" }));
+  expect(hidden.status).toBe(200);
+  await expect(hidden.json()).resolves.toMatchObject({ removed: { id: "default" }, hidden: { home: legacy } });
+  expect(listCopilotAccounts().map((item) => item.id)).toEqual([accountId]);
+  expect(fs.readFileSync(path.join(legacy, "config.json"), "utf8")).toBe("{}");
+  closeAgentRegistryForTests();
+});
+
+test("the hidden Copilot Default is offered back and restored, untouched, through the same route", async () => {
+  const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { listCopilotAccounts } = await import("@/lib/accounts/copilot");
+  closeAgentRegistryForTests();
+  const legacy = path.join(sandbox, `run-${run}`, "legacy-present");
+  fs.mkdirSync(path.join(legacy, "session-state"), { recursive: true });
+  fs.writeFileSync(path.join(legacy, "config.json"), "{}");
+  process.env.COPILOT_HOME = legacy;
+  expect((await remove(deleteRequest({ id: "default" }))).status).toBe(200);
+  await expect((await GET()).json()).resolves.toMatchObject({ hidden: [{ id: "default", label: "Default" }] });
+
+  const restored = await POST(post({ action: "restore", id: "default" }));
+
+  expect(restored.status).toBe(200);
+  const body = await restored.json() as { restored: { id: string }; accounts: { id: string }[]; hidden: unknown[] };
+  expect(body.restored).toEqual({ id: "default" });
+  expect(body.accounts.map((item) => item.id)).toEqual(["default", accountId]);
+  expect(body.hidden).toEqual([]);
+  expect(listCopilotAccounts().map((item) => item.id)).toEqual(["default", accountId]);
+  expect(fs.readFileSync(path.join(legacy, "config.json"), "utf8")).toBe("{}");
+  // Only the default home is ever restored; a second restore has nothing to show.
+  expect((await POST(post({ action: "restore", id: accountId }))).status).toBe(400);
+  expect((await POST(post({ action: "restore", id: "default" }))).status).toBe(404);
+  closeAgentRegistryForTests();
 });

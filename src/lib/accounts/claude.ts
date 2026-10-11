@@ -9,8 +9,8 @@ import { CLAUDE_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from ".
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
 import { withAccountMutationLock } from "./accountMutation";
 import { providerSecretsAtHome, retainProviderRedactionSecrets } from "./providerSecretRedaction";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
-import type { AccountPathRewrite } from "@/lib/agent/registry";
+import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DEFAULT_ID = "default";
@@ -41,8 +41,10 @@ type StoredAccount = { id: string; label: string; kind: "managed"; createdAt: nu
 /** A removed account. `archived` leftovers live in the shared archive
     (issue #1857); older records kept their transcript tree in the home (#643). */
 type RetiredAccount = { id: string; label: string; retiredAt: number; archived?: true };
-/** `removals` journals account removals in flight (issue #1857). */
-type Registry = { version: number; active: string; accounts: StoredAccount[]; retired: RetiredAccount[]; removals: AccountRemovalJournalEntry[] };
+/** `removals` journals account removals in flight (issue #1857).
+    `legacyHidden`: the operator removed Main; it is neither listed nor
+    picked, and its home stays untouched on disk. */
+type Registry = { version: number; active: string; accounts: StoredAccount[]; retired: RetiredAccount[]; removals: AccountRemovalJournalEntry[]; legacyHidden?: true };
 type Loaded = { registry: Registry; corrupt: boolean };
 
 export class UnknownClaudeAccountError extends Error { constructor(id: string) { super(`unknown Claude account: ${id}`); this.name = "UnknownClaudeAccountError"; } }
@@ -243,7 +245,7 @@ function normalize(value: unknown): Loaded {
   }
   const removals = normalizeAccountRemovalJournal(raw.removals, (id) => ACCOUNT_ID.test(id) && id !== DEFAULT_ID);
   if (!removals) return { registry: defaults(), corrupt: true };
-  return { registry: { version: VERSION, active: raw.active, accounts, retired, removals }, corrupt };
+  return { registry: { version: VERSION, active: raw.active, accounts, retired, removals, ...(raw.legacyHidden === true ? { legacyHidden: true as const } : {}) }, corrupt };
 }
 
 /* The registry is the `accounts` collection of state.sqlite (#1870, slice 7).
@@ -325,26 +327,52 @@ export function claudeAccountsForPrivacy(): readonly { id: string; label: string
 export function listClaudeAccounts(): ClaudeAccount[] {
   recoverRemovalsAtStartup();
   const loaded = readRegistry();
-  return [main(), ...loaded.registry.accounts.map(account)];
+  return [...(loaded.registry.legacyHidden ? [] : [main()]), ...loaded.registry.accounts.map(account)];
+}
+/** True once the operator removed Main from Delegatus. */
+export function claudeLegacyAccountHidden(): boolean { return readRegistry().registry.legacyHidden === true; }
+/** Whether `id` is one of the listed accounts, from persisted membership only. */
+export function claudeAccountListed(id: string): boolean {
+  const { accounts, removals, legacyHidden } = readRegistry().registry;
+  if (id === DEFAULT_ID) return !legacyHidden;
+  return accounts.some((item) => item.id === id) && !removals.some((item) => item.id === id);
+}
+/** The account routing falls back to when `leaving` is no longer usable:
+    Main while it is listed, else the first other managed account. */
+function fallbackAccountId(registry: Registry, leaving: string): string | null {
+  if (!registry.legacyHidden && leaving !== DEFAULT_ID) return DEFAULT_ID;
+  const usable = registry.accounts.filter((item) => item.id !== leaving && !registry.removals.some((removal) => removal.id === item.id));
+  return usable.find((item) => item.id === registry.active)?.id ?? usable[0]?.id ?? null;
 }
 /** Routing needs persisted membership only; credential discovery may spawn Keychain. */
 export function activeClaudeAccountId(): string {
-  const { active, accounts, removals } = readRegistry().registry;
-  return !removals.some((item) => item.id === active) && accounts.some((item) => item.id === active) ? active : DEFAULT_ID;
+  const registry = readRegistry().registry;
+  const { active, accounts, removals } = registry;
+  if (!removals.some((item) => item.id === active) && accounts.some((item) => item.id === active)) return active;
+  if (!registry.legacyHidden) return DEFAULT_ID;
+  /* With Main removed, the first managed account stands in; with none left
+     the id resolves to no account and a launch says so. */
+  return fallbackAccountId(registry, DEFAULT_ID) ?? DEFAULT_ID;
 }
 export function claudeAccountsMutationLocked(): boolean { return readRegistry().corrupt; }
 export function claudeAccountForSpawn(requested?: string | null): Pick<ClaudeAccount, "id" | "kind" | "home" | "projectsDir" | "provider"> { const found = listClaudeAccounts().find((item) => item.id === (requested ?? activeClaudeAccountId())); if (!found) throw new UnknownClaudeAccountError(requested ?? ""); if (found.kind === "managed" && (!managedClaudeHomeIsSafe(found.id, true) || (found.provider ? !found.authPresent : !managedClaudeCredentialIsSafe(found.home)))) throw new UnsafeClaudeHomeError(); return { id: found.id, kind: found.kind, home: found.home, projectsDir: found.projectsDir, provider: found.provider }; }
 export function setActiveClaudeAccount(id: string): void {
   withAccountMutationLock(() => {
     const registry = mutable();
-    if (id !== DEFAULT_ID && !registry.accounts.some((item) => item.id === id)) throw new UnknownClaudeAccountError(id);
+    if (id === DEFAULT_ID ? registry.legacyHidden : !registry.accounts.some((item) => item.id === id)) throw new UnknownClaudeAccountError(id);
     if (registry.removals.some((item) => item.id === id) || accountRemovalInFlight("claude", id)) throw new UnknownClaudeAccountError(id);
     write({ ...registry, active: id });
   });
 }
 /** Transcript trees kept by removed accounts: the shared archive (issue #1857),
     or the home itself for accounts retired in place before it (issue #643). */
-export function retiredClaudeProjectRoots(): string[] { return readRegistry().registry.retired.map((item) => projectsDirFor(item.archived ? retiredAccountArchive("claude", item.id) : managedHome(item.id))); }
+export function retiredClaudeProjectRoots(): string[] {
+  const registry = readRegistry().registry;
+  return [
+    ...(registry.legacyHidden ? [projectsDirFor(legacyClaudeHome())] : []),
+    ...registry.retired.map((item) => projectsDirFor(item.archived ? retiredAccountArchive("claude", item.id) : managedHome(item.id))),
+  ];
+}
 /** Every Claude transcript root the scanner reads: live accounts first,
  * then the shared store and retained archives. The shared store survives the
  * last account's projects link being removed during archive cleanup. */
@@ -624,7 +652,7 @@ function withAccountRetired(registry: Registry, id: string): Registry {
   const label = registry.accounts.find((item) => item.id === id)?.label ?? previous?.label ?? id;
   return {
     ...registry,
-    active: registry.active === id ? DEFAULT_ID : registry.active,
+    active: registry.active === id ? fallbackAccountId(registry, id) ?? DEFAULT_ID : registry.active,
     accounts: registry.accounts.filter((item) => item.id !== id),
     retired: [...registry.retired.filter((item) => item.id !== id), { id, label, retiredAt: previous?.retiredAt ?? Date.now(), archived: true }],
     removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
@@ -645,6 +673,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         entry,
         listed: registry.accounts.some((item) => item.id === entry.id),
         retiredInPlace: registry.retired.some((item) => item.id === entry.id && !item.archived),
+        fallbackAccountId: fallbackAccountId(registry, entry.id),
         commitRetired: () => { write(withAccountRetired(mutable(), entry.id)); },
         clearJournal: () => writeJournal(entry.id, null),
       });
@@ -690,6 +719,7 @@ export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalRep
     const report = removeManagedAccountIntoArchive({
       engine: "claude",
       accountId: id,
+      fallbackAccountId: fallbackAccountId(registry, id),
       home: managedHome(id),
       homeIsSafe: () => managedClaudeHomeIsSafe(id, true),
       unsafeHome: () => new UnsafeClaudeHomeError(),
@@ -701,6 +731,36 @@ export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalRep
       },
     });
     return { ...report, cleanupPending: cleanupClaudeSidecars(id) || report.cleanupPending };
+  });
+}
+
+/**
+ * Removes Main from Delegatus. Nothing under its home is touched: the
+ * registry records it as hidden, so it leaves every list and is never picked
+ * again, and its transcripts stay readable as retained history. Routing,
+ * pins, owed deliveries and migrations aimed at it settle as for a managed
+ * removal.
+ */
+export function hideLegacyClaudeAccount(): AccountRetirementReport {
+  return withRegistryLock(() => {
+    const registry = mutable();
+    if (registry.legacyHidden) throw new UnknownClaudeAccountError(DEFAULT_ID);
+    const fallback = fallbackAccountId(registry, DEFAULT_ID);
+    return retireAccountInPlace({
+      engine: "claude",
+      accountId: DEFAULT_ID,
+      fallbackAccountId: fallback,
+      commit: () => write({ ...mutable(), legacyHidden: true, ...(registry.active === DEFAULT_ID && fallback ? { active: fallback } : {}) }),
+    });
+  });
+}
+
+/** Lists Main again after {@link hideLegacyClaudeAccount}; its home was never touched. */
+export function restoreLegacyClaudeAccount(): void {
+  withRegistryLock(() => {
+    const { legacyHidden, ...registry } = mutable();
+    if (!legacyHidden) throw new UnknownClaudeAccountError(DEFAULT_ID);
+    write(registry);
   });
 }
 

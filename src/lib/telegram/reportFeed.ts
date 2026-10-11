@@ -65,7 +65,7 @@ type FeedLine = {
  * username to end in `bot` — and a negative id is a group or channel, which
  * this feed is not supposed to contain and which is never a private dialog.
  */
-export function feedDialogsSince(text: string, sinceMs: number): FeedDialog[] {
+export function feedDialogsSince(text: string, sinceMs: number, untilMs = Number.POSITIVE_INFINITY): FeedDialog[] {
   const newest = new Map<string, number>();
   const titles = new Map<string, string>();
   for (const line of text.split("\n")) {
@@ -82,7 +82,7 @@ export function feedDialogsSince(text: string, sinceMs: number): FeedDialog[] {
     if (!id) continue;
     if (typeof parsed.username === "string" && parsed.username.toLowerCase().endsWith("bot")) continue;
     const at = feedInstant(parsed.ts);
-    if (at === null || at < sinceMs) continue;
+    if (at === null || at < sinceMs || at > untilMs) continue;
     const previous = newest.get(id);
     if (previous !== undefined && previous >= at) continue;
     newest.set(id, at);
@@ -121,7 +121,7 @@ function feedInstant(value: unknown): number | null {
  *    OLDEST in the window, and the walk behind it is bounded by a probe budget
  *    over a list ordered by pins, so it cannot be relied on to find them.
  */
-export function readFeedDialogsSince(feedFile: string | null, sinceMs: number): FeedDialog[] {
+export function readFeedDialogsSince(feedFile: string | null, sinceMs: number, untilMs = Number.POSITIVE_INFINITY): FeedDialog[] {
   if (!feedFile) return [];
   const tail = readSafeTailUntil(
     feedFile,
@@ -130,7 +130,7 @@ export function readFeedDialogsSince(feedFile: string | null, sinceMs: number): 
   );
   if (tail === null) return [];
   if (!tail.complete) throw new Error("Telegram incoming feed is larger than one report read");
-  return feedDialogsSince(tail.text, sinceMs);
+  return feedDialogsSince(tail.text, sinceMs, untilMs);
 }
 
 /** Whether a chunk of the feed holds a burst OLDER than the window. The feed

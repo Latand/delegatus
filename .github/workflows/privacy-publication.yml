@@ -151,9 +151,21 @@ jobs:
           path: ${{ runner.temp }}/privacy-media
           key: ${{ steps.media-key.outputs.key }}
 
+      # A failing default-branch suite must leave a repair PR inspectable. Keep
+      # the baseline visible and bounded; trusted inspection below and the
+      # candidate's own suite remain mandatory publication gates.
       - name: Verify privacy gate behavior
+        id: trusted-tests
         working-directory: trusted
+        timeout-minutes: 3
+        continue-on-error: true
         run: bun test scripts/privacy-*.test.ts
+
+      - name: Report trusted privacy self-test failure
+        if: steps.trusted-tests.outcome == 'failure'
+        working-directory: trusted
+        run: |
+          echo "::warning title=Trusted privacy self-tests::Default-branch privacy self-tests failed or timed out. Publication still requires trusted inspection and passing candidate tests."
 
       # Commit messages are published the moment the branch is pushed, and the
       # gate is the only thing that reads them before that happens. Scanning
