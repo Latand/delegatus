@@ -1459,8 +1459,10 @@ browserTest("agent-delivered seat message keeps its author at desktop and phone 
           await page.waitForSelector("[data-agent-author]", { timeout: 15_000 });
           await page.waitForSelector("[data-user-bubble]", { timeout: 15_000 });
           const label = await page.locator("[data-agent-author]").first().innerText();
-          const roleLabel = locale === "uk" ? "Агент · Оркестратор" : "Agent · Orchestrator";
-          if (!label.includes(roleLabel) || !label.includes("wardrobe-agent")) throw new Error(`agent label missing: ${label}`);
+          /* The sender's costume says "an agent"; the label names the role alone (docs/design/role-avatars.md). */
+          const roleLabel = locale === "uk" ? "Оркестратор" : "Orchestrator";
+          if (!label.startsWith(roleLabel) || !label.includes("wardrobe-agent")) throw new Error(`agent label missing: ${label}`);
+          if (!await page.locator('[data-role-avatar="orchestrator"]').first().isVisible()) throw new Error("the sender's costume is missing");
           const projectName = page.locator("[data-agent-project]").first();
           if (await projectName.textContent() !== " · wardrobe-agent") throw new Error("sender project name changed");
           if (await projectName.evaluate((element) => getComputedStyle(element).whiteSpace) !== "nowrap") throw new Error("sender project name can split across lines");

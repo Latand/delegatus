@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
+import { ConversationRoleScope } from "../brand/RoleAvatar";
 import { HintScope } from "../Hint";
 import { ProcessStatusControls } from "../TaskHeader";
 import { AgentControlStrip } from "../AgentControlStrip";
@@ -56,6 +57,8 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
         <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-composer-yields="">
           {transcriptSlot ?? (
             <ToolDisclosurePolicy value="collapsed">
+              {/* The seat's answers wear the orchestrator's headset (docs/design/role-avatars.md). */}
+              <ConversationRoleScope value="orchestrator">
               <LogFeed
                 file={file}
                 showSvc={false}
@@ -67,6 +70,7 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
                 compact
                 stepsMount={stepsMount}
               />
+              </ConversationRoleScope>
             </ToolDisclosurePolicy>
           )}
         </div>

@@ -384,6 +384,10 @@ const LAUNCH_CLS = SCENARIO === "launch-cls";
    that runs on the clock of `launch-cls`, held a little longer before its receipt so the frame between the
    press and the receipt can be read. */
 const NEW_AGENT = SCENARIO === "new-agent";
+/* Role avatars (docs/design/role-avatars.md): the seat's feed holds one internal message from each of the
+   other eleven roles and one from an agent that names no role; the second implement attempt is the builder's
+   conversation, and a conversation started by hand, which no card holds, names no role: the agent in the tuxedo. */
+const ROLE_AVATARS = SCENARIO === "role-avatars";
 /* Five states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
    a tab's drafts, continuing the conversation «Worker waiting for a seat»; the same draft when the source's
    folder is on no record; the engine's active account signed out; a launch the server refuses by name; and
@@ -458,6 +462,7 @@ const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s afte
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
 if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
+const roleAvatarAgent = ROLE_AVATARS ? add(conversation("ra-agent", L("Why the search results went empty", "Чому результати пошуку зникли"), { mtime: now - 20 * MIN })) : null;
 /* `&stage-switch`: the running verify conversation carries its stage membership, as a launched stage does,
    so its runtime pill moves the attempt through the pipeline. */
 if (new URLSearchParams(location.search).has("stage-switch")) {
@@ -2095,12 +2100,57 @@ function roleMemoryStageTranscript(): string {
   ].join("\n")}\n`;
 }
 
+/* Role avatars: what each role reported to the seat, delivered by Delegatus (`promptSource: "sdk"` with an engine
+   uuid the provenance route names the sender of). `null` is an agent that names no role. */
+const ROLE_AVATAR_REPORTS: [string | null, string, string][] = [
+  ["architect", "The design note is ready: costumes from 20 px, smaller places keep the glyph.", "Дизайн-нотатка готова: костюми від 20 px, менші місця лишають гліф."],
+  ["builder", "The role avatar in the feed and the conversation header is built; component tests are green. PR opened.", "Аватар ролі у стрічці й заголовку розмови готовий, тести компонентів зелені. PR відкрито."],
+  ["reviewer", "Round 1: two P2 findings — hat contrast on the dark theme and an empty alt.", "Раунд 1: два зауваження P2 — контраст капелюха на темній темі й порожній alt."],
+  ["visual-critic", "Frames at 390 and 1280 reviewed: nothing is cut, the 20 px avatar reads.", "Кадри 390 і 1280 переглянуто: нічого не обрізано, аватар 20 px читається."],
+  ["verifier", "Checked on the built branch: each of the 12 roles has its avatar, the agent with no role wears the tuxedo.", "Перевірив на зібраній гілці: кожна з 12 ролей має свій аватар, агент без ролі — у смокінгу."],
+  ["cleaner", "Removed the second set of role glyphs from the pipeline graph: one source now.", "Прибрав другий набір гліфів ролей із графа пайплайна: тепер одне джерело."],
+  ["merger", "The PR merged in a batch with two others.", "PR злито пакетом разом із двома іншими."],
+  ["deployer", "Deployed on this machine, the Viewer restarted, the health check answers 200.", "Розгорнуто на цій машині, Viewer перезапущено, перевірка здоров'я відповідає 200."],
+  ["prod-auditor", "Production is clean: no avatar render errors in the log for 30 minutes.", "Прод чистий: помилок рендеру аватарів у журналі за 30 хвилин немає."],
+  ["maintainer", "Board tidied: the card moved to Done, duplicates closed.", "Дошку прибрано: картку перенесено в «Готово», дублікати закрито."],
+  ["issue-reporter", "Filed an issue: on the phone the agent window names the role twice.", "Завів задачу: на телефоні у вікні агента роль названо двічі."],
+  [null, "A helper agent finished the export check: nothing changed.", "Допоміжний агент завершив перевірку експорту: нічого не змінилося."],
+];
+const ROLE_AVATAR_BRIEF = L("Add the role avatars to the message feed as the chosen variant draws them.", "Додай аватари ролей у стрічку повідомлень за обраним варіантом.");
+const roleAvatarUuid = (text: string) => `ra_${messageTextDigest(text).slice(0, 12)}`;
+const roleAvatarRelay = (secondsAgo: number, text: string) => line(secondsAgo, { type: "user", uuid: roleAvatarUuid(text), message: { role: "user", content: text }, promptSource: "sdk" });
+/** Each delivered text and its sender's role, for the provenance route: the reports, and the seat's brief to the builder. */
+function roleAvatarSenders(): { text: string; role: string | null; secondsAgo: number }[] {
+  return [
+    ...ROLE_AVATAR_REPORTS.map(([role, en, uk], index) => ({ text: L(en, uk), role, secondsAgo: (30 - index * 2) * MIN })),
+    { text: ROLE_AVATAR_BRIEF, role: "orchestrator", secondsAgo: 12 * MIN },
+  ];
+}
+function roleAvatarSeat(): string {
+  return `${[
+    asked(34 * MIN, L("Where is the role avatars lane? Briefly, every stage.", "Що з лейном аватарів ролей? Коротко по всіх стадіях.")),
+    said(33 * MIN, L("Collecting the stage reports. Below is what each role reported in the last hour.", "Збираю звіти стадій. Нижче те, що кожна роль повідомила за останню годину.")),
+    ...roleAvatarSenders().filter((sender) => sender.role !== "orchestrator").map((sender) => roleAvatarRelay(sender.secondsAgo, sender.text)),
+    said(4 * MIN, L("Every stage reported. The lane can close once you confirm.", "Усі стадії звітували. Лейн можна закривати після вашого підтвердження.")),
+  ].join("\n")}\n`;
+}
+
 function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
   if (ROLE_MEMORY && (file as { conversationId?: string }).conversationId === "conversation_md-impl") return roleMemoryStageTranscript();
   /* A launch the transcript has not appeared for reads nothing. */
   if ((LAUNCH_CLS || SEAT_CLS || NEW_AGENT) && file.path.startsWith("spawn:")) return "";
+  if (ROLE_AVATARS && file === orchestrator) return roleAvatarSeat();
+  if (ROLE_AVATARS && file === searchImpl2) return `${[
+    roleAvatarRelay(12 * MIN, ROLE_AVATAR_BRIEF),
+    said(11 * MIN, L("Started with FeedItem: the role's avatar takes the answer's avatar column, and the engine keeps its mark and name beside the time.", "Почав з FeedItem: аватар ролі стає в колонку аватара відповіді, а рушій лишає свій знак і назву біля часу.")),
+    said(9 * MIN, L("Done. RoleAvatar draws the role's costume; the component tests are green.", "Готово. RoleAvatar малює костюм ролі; тести компонентів зелені.")),
+  ].join("\n")}\n`;
+  if (ROLE_AVATARS && file === roleAvatarAgent) return `${[
+    asked(95 * MIN, L("Why are the results empty after the swap?", "Чому після заміни результати порожні?")),
+    said(93 * MIN, L("The alias moved before the warm-up query answered; the new index served empty results for 40 s.", "Псевдонім перемкнувся раніше, ніж відповів прогрівальний запит; новий індекс 40 с віддавав порожні результати.")),
+  ].join("\n")}\n`;
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
   if (FEED_RELOAD && file === searchVer2) return `${[
@@ -3723,6 +3773,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
   if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
+  if (url.pathname === "/api/log/provenance" && ROLE_AVATARS) {
+    const senders = roleAvatarSenders().map(({ text, role, secondsAgo }) => ({ text, secondsAgo, origin: { origin: "agent", ...(role ? { senderRole: role } : {}) } }));
+    return json({
+      messages: Object.fromEntries(senders.map((sender) => [roleAvatarUuid(sender.text), sender.origin])),
+      occurrences: senders.map((sender) => ({ ...sender.origin, textDigest: messageTextDigest(sender.text), deliveredAt: iso(sender.secondsAgo) })),
+    });
+  }
   if (url.pathname === "/api/log/provenance" && VOICE) {
     const relay = { origin: "operator", channel: "voice-delegatus", submissionId: DEMO_IDS.clientMessageId };
     const internal = { origin: "agent", senderRole: "reviewer", senderProject: PROJECT };

@@ -51,7 +51,7 @@ import type { SubagentTrayApi } from "@/components/scheme/SubagentTrayView";
 import { WakeupChip, wakeupChipKey } from "@/components/WakeupChip";
 
 import { MobileBarTitle, MobileShell, ReachLine, useMobileShellChrome, type MobileShellHost, type SheetRenderer } from "./MobileShell";
-import { RoleFrameMark } from "../RoleFrameMark";
+import { ConversationRoleScope, RoleAvatar } from "../brand/RoleAvatar";
 import { MobileBackgroundSheet, MobilePinnedSheet } from "./MobileChromeSheets";
 import { MobileConversationMenu } from "./MobileConversationMenu";
 import { MobileOrchestratorSheet } from "./MobileOrchestratorSheet";
@@ -580,7 +580,11 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const frameRole = activeFile
     ? conversationFrameRole({ seat: holdsSeat, stage: stage?.stage ?? null, file: activeFile })
     : activeDeck ? "reviewer" as const : null;
-  const frameMark = frameRole ? <RoleFrameMark role={frameRole} /> : null;
+  /* On the phone the bar's role mark is Delegatus in the role's costume
+     (docs/design/role-avatars.md §10). It stands where the frame's 32 px emblem
+     ribbon stood, so the role is drawn once and the state line under the title
+     keeps the width that shows the model. */
+  const frameMark = frameRole ? <RoleAvatar role={frameRole} size={26} /> : null;
   const title = activeFile ? (
     <>
       {frameMark}
@@ -679,16 +683,18 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     /* One conversation, edge to edge under the bar: no pane header (the bar's
        title cell IS it), no strip, no docked tray — §3.4 spends 0 px here. */
     <div key={activeNode.file.path} data-testid="mobile-focused-pane" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      <BranchPane
-        file={activeNode.file}
-        tasks={activeNode.tasks}
-        isRoot={activeNode.isRoot}
-        showFavorite
-        chromeInMenu
-        onClose={() => onClose(activeNode.file.path)}
-        relatedTasks={relatedTasksByPath.get(activeNode.file.path)}
-        onOpenTask={openPipelineTask}
-      />
+      <ConversationRoleScope value={frameRole}>
+        <BranchPane
+          file={activeNode.file}
+          tasks={activeNode.tasks}
+          isRoot={activeNode.isRoot}
+          showFavorite
+          chromeInMenu
+          onClose={() => onClose(activeNode.file.path)}
+          relatedTasks={relatedTasksByPath.get(activeNode.file.path)}
+          onOpenTask={openPipelineTask}
+        />
+      </ConversationRoleScope>
       {/* No badge rail and no docked tray over the feed (README §3.4, §6):
           the desktop scheme's badges are laid out from a card rect the phone
           does not have, so mounted here they floated down the feed's left edge
