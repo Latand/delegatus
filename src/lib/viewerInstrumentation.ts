@@ -895,6 +895,8 @@ export async function registerViewerRuntime(): Promise<void> {
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
     activatedReleaseRevision = boundary.authority?.releaseRevision ?? null;
     const durability = await checkStateDatabasesBeforeStores(hotStateDirectory);
+    const { sweepOldLearnedRulesFiles } = await import("@/lib/memory/roleLaunch");
+    try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
     const authority = await initializeHotStateStoresAtStartup(boundary);
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();

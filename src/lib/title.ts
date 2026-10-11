@@ -61,8 +61,18 @@ export function firstPromptLine(value: string | null | undefined, maxLength = 60
   return semanticTitle(firstLine, maxLength);
 }
 
+/** Find a usable launch brief after leading whitespace and Markdown formatting. */
+export function firstMeaningfulPromptLine(value: string | null | undefined, maxLength = 60): string | null {
+  for (const line of value?.split(/\r?\n/) ?? []) {
+    if (/^\s*(?:`{3,}|~{3,})/.test(line)) continue;
+    const title = semanticTitle(line, maxLength);
+    if (title) return title;
+  }
+  return null;
+}
+
 export function derivedSpawnTitle(role: string | null | undefined, prompt: string | null | undefined, fallback = "New task"): string {
   const semanticRole = typeof role === "string" ? cleanTitle(role, 40) || "agent" : "agent";
-  const semanticPrompt = firstPromptLine(prompt, 60) ?? semanticTitle(fallback, 60) ?? "New task";
+  const semanticPrompt = firstMeaningfulPromptLine(prompt, 60) ?? semanticTitle(fallback, 60) ?? "New task";
   return cleanTitle(`${semanticRole} · ${semanticPrompt}`, 120);
 }
