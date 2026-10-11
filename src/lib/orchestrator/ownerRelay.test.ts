@@ -118,6 +118,7 @@ const { procBackend } = await import("@/lib/proc");
 const { reserveRun, changeRun, updateRelayStore } = await import("@/lib/externalRelay/store");
 const { liveOwnerRelayConversation } = await import("@/lib/externalRelay/ownerAuthority");
 const { ownerTierFor } = await import("@/lib/externalRelay/profile");
+const { runOwnerAgent } = await import("@/lib/externalRelay/ownerRun");
 const { requestSchema } = await import("@/lib/externalRelay/protocol");
 const { contextRequest } = await import("@/lib/externalRelay/request.fixture");
 const { loadTasks } = await import("@/lib/tasks/store");
@@ -149,6 +150,37 @@ function ownerRun(sender: ReturnType<typeof actor>, isOwner = true, switchOn = t
 function relayArgs(key = "owner-seat-send") {
   return { clientRequestId: key, project: "project-b", text: "Please implement this work.", origin: { kind: "operator" } };
 }
+
+for (const finalText of ["[ignore]", "", "   ", null])
+  test(`a refused owner handoff followed by ${JSON.stringify(finalText)} reports an actionable outcome`, async () => {
+    const sender = actor(); const source = actor("project-b"); actor("project-a"); ownerRun(sender);
+    const report = { project: "project-b", sourceSeat: source.id, reportId: "report", reportText: "Proceed with the requested change?" };
+    changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, bridgeReport: report } }));
+    const ownerRequest = requestSchema.parse({ ...contextRequest, request_id: "owner-request", answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+        conversation: contextRequest.input.conversation.map(message => ({ ...message, text: ownerWords })),
+      },
+    });
+    const owner = { ...ownerTierFor({ ownerTier: true }, ownerRequest)!, bridgeReport: report };
+    const tools = toolsFor(sender);
+    const result = await runOwnerAgent({ request: ownerRequest, owner, accountId: "fixture",
+      target: { id: "target", name: "Target", answered_by: "install", fallback: "service", enabled: true, engine: "codex", model: "auto", effort: "low", project: null, concurrency: 1, hardCapMinutes: 3 },
+      hardCapMs: 2000, onConversation: () => {}, ports: {
+        launch: async () => ({ status: 202, body: { conversationId: sender.id } }),
+        observe: async () => {
+          const refusal = await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("refused-owner-outcome"), project: "project-a" });
+          expect(refusal).toMatchObject({ ok: false, code: "owner_report_seat_unavailable" });
+          return { state: "ended", finalText };
+        },
+        stop: async () => { throw new Error("a settled turn needs no cancellation"); },
+      },
+    }).done;
+    expect(delivered).toEqual([]);
+    expect(result).toMatchObject({ status: "done", answer: { action: "reply", reply_to: owner.messageId } });
+    const answer = result.answer as { text: string };
+    expect(answer.text).toContain("without reporting completion or a successful handoff");
+    expect(answer.text).toContain("Open the project's orchestrator seat and resend your request there");
+  });
 
 test("verified owner turn reaches the designated seat through MCP and HTTP with quoted authority", async () => {
   const sender = actor(); const recipient = actor("project-b"); ownerRun(sender);

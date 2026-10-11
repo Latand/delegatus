@@ -30,7 +30,7 @@ export function ownerRunPrompt(request: ExternalRelayRequest, owner: OwnerInstru
     section("conversation", input.conversation),
     ...(input.short_term_memory ? [section("short_term_memory", input.short_term_memory)] : []),
     ...(input.tools?.length ? [section("tools", input.tools)] : []),
-    `[Your last message is posted in that chat, where other people can read it. Never put secrets, keys, tokens, passwords, file contents or paths from this computer in it. Nobody can answer a question during this turn; ask the owner in your reply instead. Reply within about two minutes: while you work, the chat's next messages to this assistant are held or answered by the service. This turn is stopped at ${hardCapMinutes} minutes. Carry the owner's request through to a concrete outcome. For longer work, message the project's designated seat with send_message_to_orchestrator, quoting <owner_request> and the work requested. A verified owner relay carries operator authority to that seat. If the handoff is refused or unavailable, continue the work yourself with your tools. If you cannot proceed, explain what failed, what you completed or queued, and the concrete action the owner can take; never end at "nothing started" or hide a refusal with a silent sentinel. A board task for later must have status assigned so the seat tick wakes that project's seat with an unstarted-task item; create_task defaults to assigned for this owner turn. Read get_orchestrator and seat_tick_settings to check that the project has a designated seat and an enabled tick before relying on a board-only handoff. If it does not, do the work or explain that the owner must designate or enable the seat. Report the task title and project in your reply, and describe it as queued for the seat until execution is confirmed. You may also start a pipeline and report where the work went. Pass project on every board call; list_tasks and get_orchestrator tell you which projects exist. If you spawn an agent, pass notifyLauncher false. Write plain text of at most ${request.answer.max_chars} characters as your last message. To post nothing, make it exactly [ignore].${offersHandoff(request) ? " To hand this message back to the service's assistant, which can use <tools>, make it exactly [handoff]." : ""}]`,
+    `[Your last message is posted in that chat, where other people can read it. Never put secrets, keys, tokens, passwords, file contents or paths from this computer in it. Nobody can answer a question during this turn; ask the owner in your reply instead. Reply within about two minutes: while you work, the chat's next messages to this assistant are held or answered by the service. This turn is stopped at ${hardCapMinutes} minutes. Carry the owner's request through to a concrete outcome. For longer work, message the project's designated seat with send_message_to_orchestrator, quoting <owner_request> and the work requested. A verified owner relay carries operator authority to that seat. If the handoff is refused or unavailable, continue the work yourself with your tools. If you cannot proceed, explain what failed, what you completed or queued, and the concrete action the owner can take; never end at "nothing started" or hide a refusal with a silent sentinel. A board task for later must have status assigned so the seat tick wakes that project's seat with an unstarted-task item; create_task defaults to assigned for this owner turn. Read get_orchestrator and seat_tick_settings to check that the project has a designated seat and an enabled tick before relying on a board-only handoff. If it does not, do the work or explain that the owner must designate or enable the seat. Report the task title and project in your reply, and describe it as queued for the seat until execution is confirmed. You may also start a pipeline and report where the work went. Pass project on every board call; list_tasks and get_orchestrator tell you which projects exist. If you spawn an agent, pass notifyLauncher false. Write plain text of at most ${request.answer.max_chars} characters as your last message. Always report an outcome to the owner; an empty reply or [ignore] cannot complete this request.${offersHandoff(request) ? " To hand this message back to the service's assistant, which can use <tools>, make it exactly [handoff]." : ""}]`,
   ].join("\n");
 }
 
@@ -48,6 +48,15 @@ export function ownerClarificationAnswer(request: ExternalRelayRequest, owner: O
   const answer = ownerAnswer(question, request, owner);
   if (answer?.action !== "reply") throw new Error("owner clarification could not be rendered");
   return answer;
+}
+
+function ownerMissingOutcomeAnswer(request: ExternalRelayRequest, owner: OwnerInstruction) {
+  const ukrainian = /[а-яіїєґ]/iu.test(owner.text);
+  const explanation = ukrainian
+    ? "Агент завершив роботу без звіту про виконання чи успішну передачу. Відкрийте місце оркестратора потрібного проєкту й надішліть запит туди ще раз."
+    : "The agent ended without reporting completion or a successful handoff. Open the project's orchestrator seat and resend your request there.";
+  const compact = ukrainian ? "Без звіту. Ще /ai." : "No result. Retry /ai";
+  return ownerAnswer(Array.from(explanation).length <= request.answer.max_chars ? explanation : compact, request, owner);
 }
 
 export interface OwnerRunPorts {
@@ -345,7 +354,13 @@ export function runOwnerAgent(input: {
         if (settled || stopped) break;
         authorize();
         if (observed.state === "failed" || observed.turnError) { cancel("failed"); break; }
-        if (observed.state === "ended") { finish("done", ownerAnswer(observed.finalText ?? null, input.request, input.owner, input.credentials)); break; }
+        if (observed.state === "ended") {
+          const answer = ownerAnswer(observed.finalText ?? null, input.request, input.owner, input.credentials);
+          // A silent final message cannot discharge the owner's request. A
+          // service handoff continues it through the service's own assistant.
+          finish("done", !answer || answer.action === "ignore" ? ownerMissingOutcomeAnswer(input.request, input.owner) : answer);
+          break;
+        }
         await new Promise<void>(r => {
           const onAbort = () => { clearTimeout(wait); r(); };
           const wait = setTimeout(() => { wake.signal.removeEventListener("abort", onAbort); r(); }, ports.pollMs ?? 2000);
