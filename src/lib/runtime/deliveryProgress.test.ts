@@ -148,6 +148,36 @@ test("an unreadable cold row is left intact until an update can hydrate it", () 
   }
 });
 
+test("an inaccessible directory preserves saved history until the store can read it again", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const directory = path.join(root, "inaccessible-history");
+  const filename = path.join(directory, "progress.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("blocked-send", "conversation", { waitReason: "queued", originalKey: "saved-key" });
+  store.note("blocked-send", "conversation", { waitReason: "checking", attempted: true });
+  const before = structuredClone(store.get("blocked-send"))!;
+  store.close();
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  try {
+    fs.chmodSync(directory, 0o000);
+    reopened.note("blocked-send", "conversation", { waitReason: "dispatching", attempted: true });
+    expect(reopened.presence("blocked-send")).toBe("unknown");
+    expect(reopened.flush()).toBe(true); // No replacement is queued while the saved record is unreadable.
+    fs.chmodSync(directory, 0o700);
+    now += 1_000;
+    reopened.note("blocked-send", "conversation", { waitReason: "dispatching", attempted: true });
+    expect(reopened.flush()).toBe(true);
+    const record = readDeliveryProgress(["blocked-send"], filename).get("blocked-send")!;
+    expect(record.originalKey).toBe(before.originalKey);
+    expect(record.phaseHistory?.slice(0, 2)).toEqual(before.phaseHistory!);
+    expect(record.phaseHistory).toHaveLength(3);
+    expect(record.attempt).toBe(2);
+  } finally {
+    fs.chmodSync(directory, 0o700);
+    reopened.close();
+  }
+});
+
 test("phase history survives a restart, including changes within checking and the ending", () => {
   let now = Date.parse("2026-10-11T00:00:00.000Z");
   const filename = path.join(root, "phase-history.sqlite");

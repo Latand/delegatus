@@ -7,6 +7,18 @@ import { statePath } from "@/lib/configDir";
 
 import { isDeliveryWaitReason, type DeliveryWaitReason } from "./deliveryWaitReason";
 
+/** Access failures leave the file's existence unknown and must reach the
+    caller's read-failure handling instead of authorizing a replacement. */
+function progressFileExists(filename: string): boolean {
+  try {
+    fs.statSync(filename);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 /**
  * What each accepted message is waiting on, kept where the delivery queue can
  * always write it: `<state>/delivery-progress.sqlite`.
@@ -354,8 +366,9 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const current = this.records.get(operationId);
     if (current) return current;
     if (!this.loaded) return undefined;
-    if (this.filename === null || !fs.existsSync(this.filename)) return null;
+    if (this.filename === null) return null;
     try {
+      if (!progressFileExists(this.filename)) return null;
       const row = this.connection().query<{ record_json: string }, [string]>(
         "SELECT record_json FROM delivery_progress WHERE operation_id = ?",
       ).get(operationId);
@@ -379,8 +392,8 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     if (this.records.has(operationId)) return "present";
     if (this.filename === null) return "absent";
     if (!this.loaded) return "unknown";
-    if (!fs.existsSync(this.filename)) return "absent";
     try {
+      if (!progressFileExists(this.filename)) return "absent";
       return this.connection().query<{ found: number }, [string]>("SELECT 1 AS found FROM delivery_progress WHERE operation_id = ?").get(operationId) !== null
         ? "present" : "absent";
     } catch {
@@ -605,8 +618,9 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     /* A read that failed is tried again, at most once per retry interval:
        the store counts as loaded only once a read succeeded. */
     if (this.now() < this.loadRetryAt) return;
-    if (this.filename === null || !fs.existsSync(this.filename)) { this.loaded = true; return; }
+    if (this.filename === null) { this.loaded = true; return; }
     try {
+      if (!progressFileExists(this.filename)) { this.loaded = true; return; }
       /* Retained completions can outgrow the cache. Every open send must still
          be loaded; cold completed sends are read by operation id on demand. */
       const rows = this.connection().query<{ record_json: string }, [number, number]>(`
