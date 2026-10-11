@@ -112,7 +112,8 @@ test.skipIf(!powershell)("Windows retirement rejects a stale descendant row afte
   const script = template!.replaceAll("${group}", "10").replaceAll("${process.pid}", "99")
     .replaceAll("${windowsIdentity}", `10:${rootTime}`).replaceAll("System.Diagnostics.Process", "LeaseOwnershipProbe.Process");
   const log = path.join(root, "terminated");
-  const setup = `Add-Type -TypeDefinition @'
+  const setup = `$ProgressPreference='SilentlyContinue';
+Add-Type -TypeDefinition @'
 using System;
 using System.IO;
 namespace LeaseOwnershipProbe {
