@@ -742,9 +742,6 @@ function rowRefusal(state: EngineAccountsState, accountId: string, phone = false
   );
 }
 
-/** The footer slot's removal answer (#1857 §5.3, §5.4): the summary of what a
-    removal moved, the clean-up result, or a refusal whose row has left the
-    list. The phone draws it at the top of the engine section. */
 /** The removed default homes account setup offers back. One whose removal
     summary is still open is offered there instead, never twice. */
 function HiddenAccountOffers({ state, phone = false, className }: { state: EngineAccountsState; phone?: boolean; className: string }) {
@@ -762,6 +759,9 @@ function HiddenAccountOffers({ state, phone = false, className }: { state: Engin
   ));
 }
 
+/** The footer slot's removal answer (#1857 §5.3, §5.4): the summary of what a
+    removal moved, the clean-up result, or a refusal whose row has left the
+    list. The phone draws it at the top of the engine section. */
 function RemovalOutcome({ state, phone = false }: { state: EngineAccountsState; phone?: boolean }) {
   const removal = state.removal;
   const busy = state.mutation !== null;
