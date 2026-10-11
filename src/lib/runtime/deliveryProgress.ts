@@ -472,7 +472,34 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   /** Records that ended `uncertain`: the ones a later acknowledgement can still correct. */
   uncertain(): DeliveryProgressRecord[] {
     this.load();
-    return [...this.records.values()].filter((record) => record.terminal?.state === "uncertain");
+    const uncertain = new Map<string, DeliveryProgressRecord>();
+    /* Retention can outgrow the completion cache. An evicted ending still
+       needs the sweep that can carry its late acknowledgement into history. */
+    if (this.filename !== null) {
+      try {
+        if (progressFileExists(this.filename)) {
+          const rows = this.connection().query<{ record_json: string }, [number]>(`
+            SELECT record_json FROM delivery_progress
+            WHERE terminal = 1 AND updated_at >= ?
+              AND CASE WHEN json_valid(record_json)
+                THEN json_extract(record_json, '$.terminal.state') END = 'uncertain'
+          `).all(this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS);
+          for (const row of rows) {
+            const record = parseRecord(row.record_json);
+            if (record) uncertain.set(record.operationId, record);
+          }
+        }
+      } catch (error) {
+        console.error("[delivery progress] read failed", { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    /* The owner can have confirmed or rearmed a saved uncertain row since
+       its last flush. Those pending transitions win over the file. */
+    for (const record of this.records.values()) {
+      if (record.terminal?.state === "uncertain") uncertain.set(record.operationId, record);
+      else uncertain.delete(record.operationId);
+    }
+    return [...uncertain.values()];
   }
 
   forConversation(conversationIds: readonly string[]): DeliveryProgressRecord[] {

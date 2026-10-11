@@ -115,6 +115,40 @@ test("updates hydrate retained sends outside the startup cache and preserve thei
   }
 });
 
+test("uncertain enumeration includes cold rows and respects unflushed transitions", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "cold-uncertain.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  const ids = ["still-uncertain", "confirmed", "rearmed", "newly-uncertain"];
+  for (const id of ids) {
+    store.note(id, "conversation", { waitReason: "dispatching" });
+    if (id !== "newly-uncertain") store.settle(id, "uncertain", "lost acknowledgement");
+  }
+  store.close();
+  now += 1_000;
+  addRecentCompletions(filename, now);
+  // An unrelated malformed completion must not hide valid cold uncertain rows.
+  const corrupt = new Database(filename);
+  try {
+    corrupt.query("INSERT INTO delivery_progress VALUES (?, ?, ?, ?, ?, ?)")
+      .run("malformed-completion", "conversation", null, 1, now, "{");
+  } finally { corrupt.close(); }
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  try {
+    expect(reopened.uncertain().map((record) => record.operationId).sort())
+      .toEqual(["confirmed", "rearmed", "still-uncertain"]);
+    reopened.settle("confirmed", "delivered", null);
+    reopened.rearm("rearmed", "conversation", { waitReason: "checking" });
+    reopened.settle("newly-uncertain", "uncertain", "lost acknowledgement");
+    // The saved uncertain rows must not undo dirty delivery/rearm transitions.
+    expect(reopened.uncertain().map((record) => record.operationId).sort())
+      .toEqual(["newly-uncertain", "still-uncertain"]);
+    expect(reopened.flush()).toBe(true);
+    expect(reopened.uncertain().map((record) => record.operationId).sort())
+      .toEqual(["newly-uncertain", "still-uncertain"]);
+  } finally { reopened.close(); }
+});
+
 test("an unreadable cold row is left intact until an update can hydrate it", () => {
   let now = Date.parse("2026-10-11T00:00:00Z");
   const filename = path.join(root, "unreadable-cold-history.sqlite");
