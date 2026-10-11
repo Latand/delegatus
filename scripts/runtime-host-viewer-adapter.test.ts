@@ -36,7 +36,8 @@ import { pipelineStateCollectionSeeds } from "../src/lib/pipelines/store";
 import { workflowStateCollectionSeed } from "../src/lib/workflows/store";
 import { initializeStateCollections } from "../src/lib/state/sqliteStateStore";
 import { VIEWER_CONTROL_TOKEN_ENV } from "../src/lib/mcp/controlEndpoint";
-import { mcpProbeEnvironment, runBootstrapRelease } from "./runtime-host-viewer-adapter";
+import { candidateRehearsalVerdict, mcpProbeEnvironment, runBootstrapRelease } from "./runtime-host-viewer-adapter";
+import { CANDIDATE_PERFORMANCE_BOUNDS } from "../src/runtime-host/candidatePerformance";
 
 const root = path.resolve(import.meta.dir, "..");
 const adapter = path.join(root, "scripts", "runtime-host-viewer-adapter.ts");
@@ -1929,4 +1930,33 @@ exit 1
   } finally {
     server.stop(true);
   }
+});
+
+/* #2761: the image rehearsal has two halves; a candidate passes only when the
+   runtime host held and the performance gate ran and passed. */
+test("the candidate verdict requires the runtime-host rehearsal and the performance gate to pass", () => {
+  const host = {
+    checkedAt: "2026-10-11T21:00:00.000Z",
+    runtime: "bun 1.4.0",
+    succession: { predecessorReadyMs: 1_400, successorTookOverMs: 2_100, completed: true },
+    listener: { windowMs: 15_000, polls: 30, answered: 30, abandoned: 15 },
+    socket: { polls: 30, answered: 30, abandoned: 15 },
+    ok: true,
+  };
+  const gate = {
+    checkedAt: "2026-10-11T21:01:00.000Z",
+    runtime: "bun 1.4.0",
+    bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+    measurements: null,
+    breaches: [] as string[],
+    ok: true,
+  };
+  expect(candidateRehearsalVerdict(host, gate)).toEqual({ ok: true });
+  expect(candidateRehearsalVerdict(host, null)).toEqual({ ok: false, detail: "candidate performance gate did not run" });
+  expect(candidateRehearsalVerdict(host, { ...gate, ok: false, breaches: ["scope request max 25809.9ms exceeds 10000ms"] })).toEqual({
+    ok: false,
+    detail: "candidate performance gate refused the release: scope request max 25809.9ms exceeds 10000ms",
+  });
+  expect(candidateRehearsalVerdict({ ...host, ok: false, detail: "the stable listener stopped answering" }, gate))
+    .toEqual({ ok: false, detail: "the stable listener stopped answering" });
 });

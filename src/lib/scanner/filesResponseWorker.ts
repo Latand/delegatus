@@ -224,6 +224,23 @@ export function shutdownFilesResponseWorker(reason = "shutdown"): void {
   pool.__llvFilesResponseWorkerTail = undefined;
 }
 
+/** Let the resident worker finish what it was asked and exit on its own, then
+    forget it; one that outlives `timeoutMs` is stopped as `shutdown` stops it. */
+export async function drainFilesResponseWorker(reason = "drained", timeoutMs = 5_000): Promise<void> {
+  const worker = pool.__llvFilesResponseWorker ?? null;
+  if (!worker || worker.retired) return;
+  const exited = new Promise<void>((resolve) => {
+    if (worker.child.exitCode !== null || worker.child.signalCode !== null) resolve();
+    else worker.child.once("exit", () => resolve());
+  });
+  try { worker.child.stdin?.end(); } catch { /* the pipe is already gone */ }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); })]);
+  if (timer) clearTimeout(timer);
+  retire(worker, reason);
+  pool.__llvFilesResponseWorkerTail = undefined;
+}
+
 /**
  * A child's stdio pipes hold the event loop open on their own, so unrefing the
  * child alone would not let a Viewer — or a test runner — exit while a worker

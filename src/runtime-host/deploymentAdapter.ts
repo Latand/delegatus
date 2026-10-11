@@ -22,6 +22,7 @@ import type {
 } from "@/lib/runtime/contracts";
 
 import type { ViewerDeploymentAdapter } from "./deployment";
+import { candidatePerformanceEvidence, type CandidatePerformanceEvidence } from "./candidatePerformance";
 import { candidateLogExcerpt } from "./deploymentHealth";
 import { PROMOTE_ACTION_TIMEOUT_MS } from "./deploymentHotState";
 import type { McpHealthProbeAdmissions } from "./mcpHealthProbeAdmission";
@@ -44,8 +45,10 @@ const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
   "reconcile-mcp-runtime": 10 * 60_000,
   /* #1254: the candidate's runtime host is rehearsed inside a container from
      its own image — one succession plus a bounded hold — on top of the Viewer
-     and MCP probes this action already ran. */
-  "verify-candidate": 240_000,
+     and MCP probes this action already ran. #2761 adds the performance gate,
+     which seeds thirty thousand registry rows and measures about half a
+     minute of warm operation and handover in another container. */
+  "verify-candidate": 600_000,
   /* #1216: strictly larger than the adapter-side hand-over budgets it
      contains, so the adapter reports its own named reason instead of being
      killed mid-wait and leaving the operator a bare phase string. */
@@ -318,6 +321,12 @@ function evidence(value: unknown): ViewerHealthEvidence {
     || (item.containerLog !== undefined
       && (!Array.isArray(item.containerLog) || item.containerLog.some((line) => typeof line !== "string")))
   ) throw new Error("deployment adapter returned invalid health evidence");
+  let gate: CandidatePerformanceEvidence | undefined;
+  try {
+    gate = item.performance === undefined ? undefined : candidatePerformanceEvidence(item.performance);
+  } catch {
+    throw new Error("deployment adapter returned invalid candidate performance evidence");
+  }
   return {
     checkedAt: item.checkedAt,
     endpoint: item.endpoint,
@@ -331,7 +340,9 @@ function evidence(value: unknown): ViewerHealthEvidence {
     ...(item.containerLog === undefined ? {} : { containerLog: item.containerLog as string[] }),
     ...(item.mcpRuntime === undefined ? {} : { mcpRuntime: mcpHealthEvidence(item.mcpRuntime) }),
     ...(item.runtimeHost === undefined ? {} : { runtimeHost: runtimeHostEvidence(item.runtimeHost) }),
-    ok: item.ok,
+    ...(gate === undefined ? {} : { performance: gate }),
+    /* A refused performance gate refuses the candidate, whatever else passed. */
+    ok: item.ok && gate?.ok !== false,
     ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
   };
 }

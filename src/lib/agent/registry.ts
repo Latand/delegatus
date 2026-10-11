@@ -88,7 +88,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryConversationsForPath,
+  registryRowsMatching, registryKeysMatching, registryConversationsForPath, registryHasPathIndex,
   sqliteRegistryStoreImported,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
@@ -3466,7 +3466,27 @@ export function conversationLookupFromSnapshot(snapshot: RegistryFile): Conversa
     never mutate the returned conversations; mutating paths keep the cloning
     `conversationLookupFromSnapshot`. */
 export function readOnlyConversationLookupFromSnapshot(snapshot: RegistryFile): ConversationLookup {
-  return snapshotConversationLookup(snapshot, (conversation) => conversation);
+  if (!registryHasPathIndex(snapshot)) return snapshotConversationLookup(snapshot, (conversation) => conversation);
+  /* An indexed snapshot answers each path from the relational path index.
+     Enumerating every conversation per lookup read each cold history payload
+     again for every launch a projection resolved (#2761). */
+  const byPath = new Map<string, RegistryConversation | null>();
+  return {
+    conversationForPath(artifactPath) {
+      let conversation = byPath.get(artifactPath);
+      if (conversation === undefined) {
+        conversation = registryConversationsForPath(snapshot, artifactPath)[0] ?? null;
+        byPath.set(artifactPath, conversation);
+      }
+      return conversation;
+    },
+    canonicalConversationId(id) {
+      return resolveConversationAlias(snapshot, id);
+    },
+    conversation(id) {
+      return snapshot.conversations[resolveConversationAlias(snapshot, id)] ?? null;
+    },
+  };
 }
 
 function snapshotConversationLookup(
@@ -5545,7 +5565,7 @@ export class AgentRegistry {
   }
 
   /** Existing reaper hygiene owns these bounded storage-only moves. */
-  archiveInactiveRows(limit = 1_000): number {
+  archiveInactiveRows(limit?: number): number {
     assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");
     return this.sqliteMode === "sqlite" ? this.sqliteStore!.archiveInactive(limit) : 0;
   }

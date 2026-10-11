@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { Flow } from "@/lib/flows/types";
+import type { CandidatePerformanceEvidence } from "@/runtime-host/candidatePerformance";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { Workflow } from "@/lib/workflows/types";
 import type { RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
@@ -925,6 +926,9 @@ export interface ViewerHealthEvidence {
   mcpRuntime?: ViewerMcpRuntimeHealthEvidence;
   /** The candidate image's runtime host, rehearsed before promotion (#1254). */
   runtimeHost?: ViewerRuntimeHostHealthEvidence;
+  /** The candidate's registry and projection performance against retained
+      history, measured before promotion (#2761). */
+  performance?: CandidatePerformanceEvidence;
   ok: boolean;
   detail?: string;
 }

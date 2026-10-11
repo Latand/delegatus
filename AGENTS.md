@@ -214,6 +214,15 @@ in-container rehearsal under `bun-container` remains in `verify-candidate`
 before promotion. Docker images still build and publish on main and v* tags;
 PRs build only when image install, build or runtime inputs change.
 
+`verify-candidate` also runs the candidate performance gate
+(`src/runtime-host/candidatePerformanceRun.ts`, bounds and reasons in
+`docs/design/candidate-performance-gate.md`) in another throwaway container:
+a synthetic registry of about 30,000 rows of retained history, first boot,
+two concurrent writers, eight board scopes and a successor release. A breached
+bound refuses the candidate and the serving release keeps serving. Run it
+locally with `bun scripts/verify-viewer-runtime.ts --performance`; an empty
+registry proves nothing about a release that has to read history.
+
 Three consequences worth keeping:
 
 - **A failing socket write is a connection event, never a process event.**

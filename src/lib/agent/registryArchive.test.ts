@@ -126,6 +126,66 @@ test("keyed archive reads use the cold identity index after upgrading an existin
   } finally { db.close(); }
 });
 
+test("field lookups over cold history start from the archive's expression indexes and keep every row", () => {
+  const { open, filename } = fixture();
+  archiveAll(open());
+  const db = new Database(filename);
+  try {
+    // The view as #2762 first shipped it: identity from the mapping alone.
+    db.exec(`DROP VIEW registry_records;
+      CREATE VIEW registry_records AS
+      SELECT collection,row_key,value_json,row_order FROM registry_hot_rows
+      UNION ALL SELECT c.collection,c.row_key,a.value_json,a.row_order
+      FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id`);
+    const all = "SELECT * FROM registry_records ORDER BY collection,row_key";
+    const before = db.query(all).all();
+    installRegistryArchive(db);
+    expect(db.query(all).all()).toEqual(before);
+    const lookup = "SELECT row_key FROM registry_records WHERE collection=? AND json_extract(value_json,'$.command.operationId')=?";
+    const plan = db.query<{ detail: string }, [string, string]>(`EXPLAIN QUERY PLAN ${lookup}`)
+      .all("heldDeliveries", "archive-operation-0").map(row => row.detail);
+    expect(plan.some(detail => /SEARCH a USING INDEX registry_archive_operation/.test(detail))).toBe(true);
+    expect(plan.some(detail => /SCAN c\b|SEARCH c USING INDEX \S+ \(collection=\?\)$/.test(detail))).toBe(false);
+    expect(db.query(lookup).all("heldDeliveries", "archive-operation-0")).toEqual([{ row_key: "archive-delivery-0" }]);
+    expect(db.query(lookup).all("heldDeliveries", "missing-operation")).toEqual([]);
+  } finally { db.close(); }
+});
+
+test("a cold mapping naming another row's archive version keeps the conserving view until it is repaired", () => {
+  const { open, filename } = fixture();
+  archiveAll(open());
+  const db = new Database(filename);
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = (...values: unknown[]) => { warnings.push(values.join(" ")); };
+  try {
+    const target = db.query<{ archive_id: number }, []>(
+      "SELECT archive_id FROM registry_cold WHERE collection='receipts' AND row_key='archive-launch-0'").get()!;
+    const other = db.query<{ archive_id: number }, []>(
+      "SELECT archive_id FROM registry_cold WHERE NOT (collection='receipts' AND row_key='archive-launch-0') ORDER BY archive_id LIMIT 1").get()!;
+    const otherPayload = db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(other.archive_id)!.value_json;
+    db.run("UPDATE registry_cold SET archive_id=? WHERE collection='receipts' AND row_key='archive-launch-0'", [other.archive_id]);
+    db.run("DROP VIEW registry_records");
+    db.run("CREATE VIEW registry_records AS SELECT collection,row_key,value_json,row_order FROM registry_hot_rows");
+    open();
+    // The damaged mapping still reads under the identity its mapping gives it.
+    const keyed = "SELECT value_json FROM registry_records WHERE collection='receipts' AND row_key=?";
+    const ownPayload = db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(target.archive_id)!.value_json;
+    expect(db.query(keyed).get("archive-launch-0")).toEqual({ value_json: otherPayload });
+    expect(warnings.some(line => line.includes("1 cold mapping(s) name an archive version of another row"))).toBe(true);
+    expect(db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'").get()!.sql)
+      .not.toContain("a.collection=c.collection");
+    db.run("UPDATE registry_cold SET archive_id=? WHERE collection='receipts' AND row_key='archive-launch-0'", [target.archive_id]);
+    open();
+    expect(db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'").get()!.sql)
+      .toContain("a.collection=c.collection AND a.row_key=c.row_key");
+    expect(db.query(keyed).get("archive-launch-0")).toEqual({ value_json: ownPayload });
+  } finally {
+    console.warn = warn;
+    db.close();
+  }
+});
+
 for (const archived of [false,true]) {
   for (const external of [false,true]) {
     test(`detached reads preserve shared deltas after ${external ? "external" : "local"} ${archived ? "cold promotion" : "hot update"}`, () => {

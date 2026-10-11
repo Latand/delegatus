@@ -10,6 +10,7 @@ import type {
   ViewerRuntimeHostStartupPhase,
 } from "@/lib/runtime/contracts";
 
+import { CANDIDATE_PERFORMANCE_BOUNDS, candidatePerformanceBreaches, type CandidatePerformanceEvidence } from "./candidatePerformance";
 import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
 import { promotedViewerReadinessPhase } from "./deploymentHealth";
 import { PROMOTE_ACTION_TIMEOUT_MS } from "./deploymentHotState";
@@ -397,6 +398,67 @@ test("a refused runtime-host rehearsal carries its reason and the failing genera
   ));
 
   expect(await adapter.verifyCandidate(candidate)).toEqual(failing);
+});
+
+/* #2761: the performance gate's verdict crosses into the durable record, and a
+   refused gate refuses the candidate whatever the rest of the evidence says. */
+test("a refused candidate performance gate reaches the record and refuses the candidate", async () => {
+  const measured = {
+    dataset: { rows: 30_036, coldRows: 27_836, payloadBytes: 94_000_000, seedMs: 7_000 },
+    firstBoot: { registryOpenMs: 80, firstSnapshotMs: 2_100, coldProjectionMs: 4_200 },
+    grantWrites: { count: 40, p50Ms: 610, p95Ms: 640, maxMs: 700, mismatches: 0, failures: 0 },
+    externalWrites: { count: 300, p50Ms: 3, p95Ms: 7, maxMs: 30, mismatches: 0, failures: 0 },
+    keyedOperationReads: { count: 100, p50Ms: 1, p95Ms: 2, maxMs: 4 },
+    eventLoop: { p95Ms: 620, maxMs: 700 },
+    projection: { warmBuilds: { count: 60, p50Ms: 300, p95Ms: 500, maxMs: 900 }, queueWait: { count: 61, p50Ms: 900, p95Ms: 2_000, maxMs: 2_400 } },
+    scopeRequests: { count: 120, p50Ms: 140, p95Ms: 600, maxMs: 2_500, scopes: 8, failures: 0, maxQueueDepth: 8, refused: 0, expired: 0 },
+    worker: { spawns: 1, timeoutRetirements: 0, pidStable: true },
+    handover: { successorReadyMs: 6_000, successorSnapshotMs: 2_800, successorArchived: 2_000, grantMismatches: 0 },
+    sqliteBusy: 0,
+    runtimeTimeouts: 0,
+    deliveryEvidence: { pending: 16, uncertain: 8, preserved: true },
+    activeWorkers: { entries: 24, preserved: true },
+    stableProjection: true,
+  };
+  const breaches = candidatePerformanceBreaches(measured);
+  const performance: CandidatePerformanceEvidence = {
+    checkedAt: "2026-10-11T21:00:00.000Z",
+    runtime: "bun 1.4.0",
+    bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+    measurements: measured,
+    breaches,
+    ok: false,
+    detail: breaches[0],
+  };
+  const reported = {
+    checkedAt: "2026-10-11T20:59:00.000Z",
+    endpoint: "http://127.0.0.1:19312",
+    processReady: true,
+    rootStatus: 200,
+    authenticatedStatus: 200,
+    unauthorizedStatus: 403,
+    assets: [],
+    performance,
+    // A gate that reports a refusal refuses, even beside an ok it did not earn.
+    ok: true,
+  };
+  const candidate = { image: "viewer:test", container: "viewer-candidate", endpoint: "http://127.0.0.1:19312", revision: "a".repeat(40) };
+  const adapter = new HostCommandViewerDeploymentAdapter(async (action) => (action === "verify-candidate" ? reported : {}));
+
+  const evidence = await adapter.verifyCandidate(candidate);
+  expect(evidence.ok).toBe(false);
+  expect(evidence.performance).toEqual(performance);
+  expect(evidence.performance?.breaches).toEqual([
+    "grant-bearing write p95 640ms exceeds 350ms",
+    "grant-bearing write max 700ms exceeds 500ms",
+    "Viewer event-loop delay p95 620ms exceeds 50ms",
+    "Viewer event-loop delay max 700ms exceeds 500ms",
+  ]);
+
+  const forged = new HostCommandViewerDeploymentAdapter(async (action) => (
+    action === "verify-candidate" ? { ...reported, performance: { ...performance, breaches: "none" } } : {}
+  ));
+  await expect(forged.verifyCandidate(candidate)).rejects.toThrow("invalid candidate performance evidence");
 });
 
 test("issue 1272: runtime-host output is bounded and printable before it reaches the durable record", async () => {

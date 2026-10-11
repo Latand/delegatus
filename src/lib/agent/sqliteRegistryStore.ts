@@ -59,6 +59,35 @@ type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "
 const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId" };
 const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
 const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
+const projectionReaders = new WeakMap<object, (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>>();
+
+/**
+ * A narrow, immutable reading of every row of one collection (#2761).
+ *
+ * Whole-history passes in a projection need a few identity fields of every
+ * row, and enumerating the rows themselves parses, normalizes and freezes each
+ * cold payload again on every pass. A projector names what it reads; over a
+ * SQLite view its result for an archived version is computed once and kept,
+ * because archived versions never change. `project` sees the normalized row
+ * and must not read its MCP grant lists, which a projection does not pin.
+ * `id` must be unique to the projector's code.
+ */
+export interface RegistryRowProjector<C extends RowCollection, T> {
+  readonly id: string;
+  readonly collection: C;
+  project(row: RegistryFile[C][string]): T;
+}
+
+/** Every row of the projector's collection, in collection order, projected. */
+export function registryRowProjection<C extends RowCollection, T>(
+  file: Pick<RegistryFile, C>,
+  projector: RegistryRowProjector<C, T>,
+): Array<[string, T]> {
+  const reader = projectionReaders.get(file);
+  if (reader) return reader(projector.collection, projector as RegistryRowProjector<RowCollection, unknown>) as Array<[string, T]>;
+  const rows = file[projector.collection] as Record<string, RegistryFile[C][string]>;
+  return Object.keys(rows).map(key => [key, projector.project(rows[key]!)]);
+}
 
 /** A reader's frozen copy of one row. `stored` is the stored JSON a complete
     load decided it from and `grants` the MCP lists that decision left on it;
@@ -109,6 +138,8 @@ class RegistryReaderViews {
     if (keyed) keyedReaders.set(frozen, keyed);
     const paths = pathReaders.get(file);
     if (paths) pathReaders.set(frozen, paths);
+    const projections = projectionReaders.get(file);
+    if (projections) projectionReaders.set(frozen, projections);
     return frozen;
   }
 
@@ -170,11 +201,25 @@ function lookupValue(row: unknown, field: LookupField): unknown {
   return field.split(".").reduce<unknown>((value, part) => value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined, row);
 }
 
+/** Whether path lookups on this file read the relational path index rather
+    than enumerating every conversation, cold history included. */
+export function registryHasPathIndex(file: RegistryFile): boolean {
+  return pathReaders.has(file);
+}
+
 export function registryConversationsForPath(file: RegistryFile, path: string): RegistryFile["conversations"][string][] {
   const keys = pathReaders.get(file)?.(path);
   return keys ? keys.map(key => file.conversations[key]!).filter(Boolean) : Object.values(file.conversations).filter(row =>
     row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path));
 }
+
+/* The owners of one transcript path, in collection order. Each owner's order
+   is read by its key: joining the path index to the records view made SQLite
+   expand every conversation of the view per lookup, 16 ms apiece over a
+   retained registry (#2761). */
+const conversationPathSql = (records: string) => `SELECT conversation_id FROM (
+  SELECT p.conversation_id, (SELECT r.row_order FROM ${records} r WHERE r.collection='conversations' AND r.row_key=p.conversation_id) AS row_order
+  FROM registry_conversation_paths p WHERE p.path=?) WHERE row_order IS NOT NULL ORDER BY row_order`;
 
 type StoredRow = { collection: string; row_key: string; value_json: string; row_order: number };
 type MetaRow = { key: string; value: string };
@@ -202,6 +247,31 @@ type GrantDecisions = {
 };
 type GrantProfileRow = { launchProfile?: { mcpServers?: string[] } | null; generations?: { launchProfile?: { mcpServers?: string[] } }[] };
 type ColdGrantDecision = { lists: (string[] | undefined)[]; dependencies: Set<string> };
+/** A mutation's own version of the rows it rewrote: undefined for a row it has
+    not touched, null for one it deleted. */
+type TransactionGrantRows = {
+  row: (collection: RowCollection, key: string) => { row: unknown } | null | undefined;
+  dirty: (collection: RowCollection) => Iterable<string>;
+};
+
+/** Stored identity matches, corrected by the rows this transaction rewrote:
+    a rewritten row is selected exactly when its current version matches. */
+function transactionSelection<R>(
+  transaction: TransactionGrantRows | undefined,
+  collection: RowCollection,
+  stored: readonly string[],
+  matches: (row: R) => boolean,
+): string[] {
+  if (!transaction) return [...stored];
+  const selected = new Set(stored);
+  for (const key of transaction.dirty(collection)) {
+    const local = transaction.row(collection,key);
+    if (local === undefined) continue;
+    if (local && matches(local.row as R)) selected.add(key);
+    else selected.delete(key);
+  }
+  return [...selected];
+}
 
 const authorityDependency = (kind: string, key: string) => `${kind}\u0000${key}`;
 
@@ -536,9 +606,25 @@ export class SqliteAgentRegistryStore {
       Reverse dependencies also track absent attestors and identity selectors. */
   private readonly coldGrantDecisions = new Map<number, ColdGrantDecision>();
   private readonly coldGrantTargets = new Map<string, Set<number>>();
+  /** The cold layer of the last view: the mapping it was built from and, per
+      collection, the hot rows it merged and the collection it produced. A
+      refresh reuses a collection whose cold versions, hot rows and pinned
+      grant decisions are all unchanged (#2761). */
+  private coldViewCache: {
+    signature: string;
+    headers: readonly { collection: RowCollection; row_key: string; archive_id: number }[];
+    forgets: number;
+    collections: Map<RowCollection, { hot: Map<string, unknown>; deliveries?: Map<string, unknown>; synthetic: string; built: Record<string, unknown> }>;
+  } | null = null;
+  /** Counts forgotten cold grant decisions; a change rebuilds the grant-bearing collections. */
+  private coldGrantForgets = 0;
+  /** Per projector, its result for each current archived version. */
+  private readonly coldRowProjectionResults = new Map<string, Map<number, unknown>>();
   private coldGrantCursor: { changeId: number; stamp: string } | null = null;
   private coldKeys = new Set<string>();
   private coldKeysStamp = "";
+  /** The change journal position the cold key set was read at; 0 forces a full read. */
+  private coldKeysChangeId = 0;
   private changesReady = false;
   private recordsSource = "registry_rows";
   private readonly localRows = new Map<string, { dataVersion: string; valueJson: string | null }>();
@@ -552,6 +638,8 @@ export class SqliteAgentRegistryStore {
       sixty such rows cost startup half a minute of blocked event loop. */
   private grantDecisions: GrantDecisions | null = null;
   private grantJournalReady = false;
+  /** Whether registry_generation_identities is installed and backfilled. */
+  private generationIdentitiesReady = false;
 
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   /** Runtime half of {@link DecidedRegistryFile}: the files this store has
@@ -610,6 +698,7 @@ export class SqliteAgentRegistryStore {
       this.recordsSource = this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
       this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
       this.grantJournalReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get());
+      this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
       return;
     }
     /* Bound to the file at its name: a registry the activation fallback
@@ -687,6 +776,12 @@ export class SqliteAgentRegistryStore {
         && !["conversationId", "artifactPath", "command.operationId", "alias"].includes(field)) continue;
       this.db.exec(`CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === 'alias' ? " WHERE collection = 'conversationAliases'" : ''}`);
     }
+    /* A receipt's grant decision selects the lineage edges its launch created.
+       The archive indexes that field; without the hot half each decision parsed
+       every edge, about 6 ms apiece over a retained registry (#2761). */
+    if (options.allowArchiveMigration !== false) {
+      this.db.exec("CREATE INDEX IF NOT EXISTS registry_lookup_evidence_launchId ON registry_rows(collection, json_extract(value_json, '$.evidence.launchId'), row_order)");
+    }
     // Array paths need a relational index. Triggers cover every writer,
     // including older releases sharing this journal during handover.
     this.db.exec(`
@@ -726,6 +821,46 @@ export class SqliteAgentRegistryStore {
         "INSERT OR REPLACE INTO registry_meta(key, value) VALUES ('conversation_paths_ready', '1')",
       ]);
     }
+    // Each generation's entry identity and path, so a grant decision finds the
+    // conversations attesting to an entry through an index. Expanding every
+    // conversation's generations instead cost 34 ms per decision (#2761). Triggers keep it
+    // current for every writer, including a predecessor during handover.
+    if (options.allowArchiveMigration !== false && this.meta("generation_identities_version") !== "1") {
+      assertStateStartupMutation(path.dirname(filename), "agent registry generation identity index");
+      const identities = (row: "NEW") => `INSERT INTO registry_generation_identities(conversation_id, entry_key, path)
+        SELECT ${row}.row_key, json_extract(${row}.value_json, '$.engine') || ':' || json_extract(g.value, '$.id'), json_extract(g.value, '$.path')
+        FROM json_each(${row}.value_json, '$.generations') g`;
+      this.runAtomically([
+        `CREATE TABLE IF NOT EXISTS registry_generation_identities (
+          conversation_id TEXT NOT NULL, entry_key TEXT, path TEXT
+        )`,
+        "CREATE INDEX IF NOT EXISTS registry_generation_identities_entry ON registry_generation_identities(entry_key)",
+        "CREATE INDEX IF NOT EXISTS registry_generation_identities_path ON registry_generation_identities(path)",
+        "CREATE INDEX IF NOT EXISTS registry_generation_identities_owner ON registry_generation_identities(conversation_id)",
+        "DROP TRIGGER IF EXISTS registry_generation_identities_insert",
+        "DROP TRIGGER IF EXISTS registry_generation_identities_update",
+        "DROP TRIGGER IF EXISTS registry_generation_identities_delete",
+        `CREATE TRIGGER registry_generation_identities_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
+          ${identities("NEW")};
+        END`,
+        `CREATE TRIGGER registry_generation_identities_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' OR OLD.collection = 'conversations' BEGIN
+          DELETE FROM registry_generation_identities WHERE conversation_id = OLD.row_key AND OLD.collection = 'conversations';
+          INSERT INTO registry_generation_identities(conversation_id, entry_key, path)
+            SELECT NEW.row_key, json_extract(NEW.value_json, '$.engine') || ':' || json_extract(g.value, '$.id'), json_extract(g.value, '$.path')
+            FROM json_each(NEW.value_json, '$.generations') g WHERE NEW.collection = 'conversations';
+        END`,
+        `CREATE TRIGGER registry_generation_identities_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
+          DELETE FROM registry_generation_identities WHERE conversation_id = OLD.row_key;
+        END`,
+        "DELETE FROM registry_generation_identities",
+        `INSERT INTO registry_generation_identities(conversation_id, entry_key, path)
+          SELECT r.row_key, json_extract(r.value_json, '$.engine') || ':' || json_extract(g.value, '$.id'), json_extract(g.value, '$.path')
+          FROM registry_rows r, json_each(r.value_json, '$.generations') g WHERE r.collection = 'conversations'`,
+        `INSERT INTO registry_meta(key, value) VALUES ('generation_identities_version', '1')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      ]);
+    }
+    this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
     this.secureFiles();
     this.importFirstBoot(options.initialSnapshot, options.verifyImport);
     if (this.changesReady) this.refreshColdKeys();
@@ -741,6 +876,11 @@ export class SqliteAgentRegistryStore {
     } finally {
       [this.onSnapshotLoad, this.onRowPayloadRead, this.onRowPayloadParse, this.onRevisionQuery] = observers;
     }
+  }
+
+  private generationIdentitiesInstalled(db: BunDatabase): boolean {
+    if (!db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_generation_identities'").get()) return false;
+    return db.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key = 'generation_identities_version'").get()?.value === "1";
   }
 
   /** Whether the first-boot import has committed. */
@@ -763,9 +903,12 @@ export class SqliteAgentRegistryStore {
     this.coldRowProjections.clear();
     this.coldGrantDecisions.clear();
     this.coldGrantTargets.clear();
+    this.coldRowProjectionResults.clear();
+    this.coldViewCache = null;
     this.coldGrantCursor = null;
     this.coldKeys.clear();
     this.coldKeysStamp = "";
+    this.coldKeysChangeId = 0;
     this.grantDecisions = null;
     this.snapshotChangeId = 0;
     this.localRows.clear();
@@ -774,6 +917,7 @@ export class SqliteAgentRegistryStore {
     this.grantJournalReady = Boolean(db.query(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'",
     ).get());
+    this.generationIdentitiesReady = this.generationIdentitiesInstalled(db);
   }
 
   snapshot(): SqliteRegistrySnapshot {
@@ -833,13 +977,33 @@ export class SqliteAgentRegistryStore {
   private refreshColdKeys(): void {
     const stamp = this.storeStamp();
     if (stamp === this.coldKeysStamp) return;
-    this.coldKeys = new Set(this.db.query<{ collection: string; row_key: string }, []>(
-      "SELECT collection,row_key FROM registry_cold").all().map(row => grantDecisionKey(row.collection,row.row_key)));
-    for (const [collection,rows] of this.rowCache) {
-      for (const key of rows.keys()) if (this.coldKeys.has(grantDecisionKey(collection,key))) rows.delete(key);
+    /* Another writer committed. Replay only the journalled identities since the
+       last read; rereading the whole mapping cost every transaction a scan of
+       every cold row while two writers alternated (#2761). A trimmed or empty
+       journal, or one that went backwards, takes the complete read. */
+    const changeId = this.changeId();
+    const first = this.coldKeysChangeId
+      ? this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq : 0;
+    if (this.coldKeysChangeId && first > 0 && first <= this.coldKeysChangeId + 1 && changeId >= this.coldKeysChangeId) {
+      const changed = this.db.query<{ collection: string; row_key: string; cold: number }, [number]>(
+        `SELECT DISTINCT j.collection,j.row_key,EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection=j.collection AND c.row_key=j.row_key) AS cold
+          FROM registry_changes j WHERE j.seq>?`).all(this.coldKeysChangeId);
+      for (const { collection,row_key: key,cold } of changed) {
+        const identity = grantDecisionKey(collection,key);
+        if (!cold) { this.coldKeys.delete(identity); continue; }
+        this.coldKeys.add(identity);
+        this.rowCache.get(collection as RowCollection)?.delete(key);
+      }
+    } else {
+      this.coldKeys = new Set(this.db.query<{ collection: string; row_key: string }, []>(
+        "SELECT collection,row_key FROM registry_cold").all().map(row => grantDecisionKey(row.collection,row.row_key)));
+      for (const [collection,rows] of this.rowCache) {
+        for (const key of rows.keys()) if (this.coldKeys.has(grantDecisionKey(collection,key))) rows.delete(key);
+      }
     }
     if (this.coldKeys.size) this.grantDecisions = null;
     this.coldKeysStamp = stamp;
+    this.coldKeysChangeId = changeId;
   }
 
   private loadHotInTransaction(): SqliteRegistrySnapshot {
@@ -1016,14 +1180,22 @@ export class SqliteAgentRegistryStore {
   /** Assemble every possible attestor of one grant through indexed identity
       reads, including cold contradictions. A receipt cannot pick its attestor
       by editing its own conversation id or embedded session key. */
-  private decideStoredRow(collection: RowCollection, key: string, row: unknown, dependencies?: Set<string>): unknown {
+  private decideStoredRow(collection: RowCollection, key: string, row: unknown, dependencies?: Set<string>, transaction?: TransactionGrantRows): unknown {
     const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {}, conversations: {}, lineageEdges: {} };
     const records = (kind: RowCollection) => input[kind] as Record<string, unknown>;
-    records(collection)[key] = structuredClone(row);
+    /* A transaction's rows can hold the tracking proxies of other rows, which
+       structured cloning refuses; they persist as JSON, so they copy as JSON. */
+    const copy = (value: unknown) => transaction ? JSON.parse(JSON.stringify(value)) as unknown : structuredClone(value);
+    records(collection)[key] = copy(row);
     dependencies?.add(authorityDependency("row",grantDecisionKey(collection,key)));
     const read = (kind: RowCollection, id: string) => {
       dependencies?.add(authorityDependency("row",grantDecisionKey(kind,id)));
       if (Object.hasOwn(records(kind),id)) return;
+      const local = transaction?.row(kind,id);
+      if (local !== undefined) {
+        if (local) records(kind)[id] = copy(local.row);
+        return;
+      }
       const raw = this.db.query<{ value_json: string }, [string,string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`).get(kind,id);
       this.onRowPayloadRead?.(kind,raw ? 1 : 0);
       if (raw) records(kind)[id] = JSON.parse(raw.value_json);
@@ -1033,16 +1205,21 @@ export class SqliteAgentRegistryStore {
     if (entryKey || subject.artifactPath) {
       if (entryKey) dependencies?.add(authorityDependency("entry",entryKey));
       if (subject.artifactPath) dependencies?.add(authorityDependency("path",subject.artifactPath));
-      const owners = this.db.query<{ row_key: string }, [string|null,string|null]>(`SELECT DISTINCT r.row_key FROM ${this.recordsSource} r,json_each(r.value_json,'$.generations') g
-        WHERE r.collection='conversations' AND (json_extract(r.value_json,'$.engine')||':'||json_extract(g.value,'$.id')=? OR json_extract(g.value,'$.path')=?)`)
-        .all(entryKey,subject.artifactPath ?? null);
-      for (const owner of owners) read("conversations",owner.row_key);
+      const owners = (this.generationIdentitiesReady
+        ? this.db.query<{ row_key: string }, [string|null,string|null]>(`SELECT DISTINCT i.conversation_id AS row_key FROM registry_generation_identities i
+          WHERE (i.entry_key=?1 OR i.path=?2) AND EXISTS (SELECT 1 FROM ${this.recordsSource} r WHERE r.collection='conversations' AND r.row_key=i.conversation_id)`)
+        : this.db.query<{ row_key: string }, [string|null,string|null]>(`SELECT DISTINCT r.row_key FROM ${this.recordsSource} r,json_each(r.value_json,'$.generations') g
+          WHERE r.collection='conversations' AND (json_extract(r.value_json,'$.engine')||':'||json_extract(g.value,'$.id')=? OR json_extract(g.value,'$.path')=?)`))
+        .all(entryKey,subject.artifactPath ?? null).map(owner => owner.row_key);
+      for (const id of transactionSelection(transaction,"conversations",owners,(candidate: { engine?: string; generations?: { id?: string; path?: string }[] }) =>
+        Boolean(candidate.generations?.some(generation => (entryKey !== null && `${candidate.engine}:${generation.id}` === entryKey)
+          || (Boolean(subject.artifactPath) && generation.path === subject.artifactPath))))) read("conversations",id);
     }
     if (subject.conversationId) read("conversations",subject.conversationId);
     if (collection === "receipts") {
       dependencies?.add(authorityDependency("launch",key));
-      const edges = this.db.query<{ row_key: string }, [string]>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='lineageEdges' AND json_extract(value_json,'$.evidence.launchId')=?`).all(key);
-      for (const edge of edges) read("lineageEdges",edge.row_key);
+      const edges = this.db.query<{ row_key: string }, [string]>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='lineageEdges' AND json_extract(value_json,'$.evidence.launchId')=?`).all(key).map(edge => edge.row_key);
+      for (const id of transactionSelection(transaction,"lineageEdges",edges,(edge: { evidence?: { launchId?: string } }) => edge.evidence?.launchId === key)) read("lineageEdges",id);
     }
     for (const id of Object.keys(records("conversations"))) read("lineageEdges",id);
     for (const edge of Object.values(records("lineageEdges")) as { parentConversationId?: string; evidence?: { launchId?: string } }[]) {
@@ -1054,7 +1231,10 @@ export class SqliteAgentRegistryStore {
     return (file[collection] as Record<string, unknown>)[key];
   }
 
-  archiveInactive(limit = 1_000): number {
+  /* 250 rows per pass keeps the write lock short: a 1,000-row pass held it for
+     about 160 ms on an idle machine and 0.8 s on a loaded one, and every
+     writer waits that long synchronously (#2761). */
+  archiveInactive(limit = 250): number {
     if (!this.changesReady) return 0;
     assertStateStartupMutation(path.dirname(this.filename), "agent registry archive");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) throw new RangeError("invalid registry archive batch limit");
@@ -1106,6 +1286,7 @@ export class SqliteAgentRegistryStore {
   private forgetColdGrant(id: number): void {
     const previous = this.coldGrantDecisions.get(id);
     if (!previous) return;
+    this.coldGrantForgets += 1;
     for (const dependency of previous.dependencies) {
       const targets = this.coldGrantTargets.get(dependency)!;
       targets.delete(id);
@@ -1125,6 +1306,7 @@ export class SqliteAgentRegistryStore {
     if (changeId < previous.changeId || first > previous.changeId + 1 || first === 0) {
       this.coldGrantDecisions.clear();
       this.coldGrantTargets.clear();
+      this.coldGrantForgets += 1;
       return changeId;
     }
     const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
@@ -1156,9 +1338,14 @@ export class SqliteAgentRegistryStore {
       `complete` says the file is a complete load through the parse cache. */
   private rememberReadOnly(snapshot: StampedSnapshot, complete: boolean): StampedSnapshot {
     const identity = databaseFileIdentity(this.filename);
-    const headers = this.changesReady ? this.db.query<{ collection: RowCollection; row_key: string; archive_id: number }, []>(
+    /* Archive ids only grow, so the mapping's count, sum and largest id change
+       whenever a version is archived, promoted or deleted. */
+    const signature = this.changesReady ? JSON.stringify(this.db.query<{ count: number; total: number; largest: number }, []>(
+      "SELECT COUNT(*) AS count,COALESCE(SUM(archive_id),0) AS total,COALESCE(MAX(archive_id),0) AS largest FROM registry_cold").get()) : "";
+    const cache = this.coldViewCache?.signature === signature ? this.coldViewCache : null;
+    const headers = cache ? cache.headers : this.changesReady ? this.db.query<{ collection: RowCollection; row_key: string; archive_id: number }, []>(
       "SELECT c.collection,c.row_key,c.archive_id FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id ORDER BY a.row_order").all() : [];
-    this.rememberColdProjections(headers);
+    if (!cache) this.rememberColdProjections(headers);
     const coldGrantChangeId = this.refreshColdGrantDecisions(snapshot.stamp);
     const syntheticOwners = new Map<string,string>();
     if (headers.some(header => header.collection === "heldDeliveries")) {
@@ -1176,6 +1363,7 @@ export class SqliteAgentRegistryStore {
       let keys = coldKeys.get(header.collection);
       if (!keys) coldKeys.set(header.collection,keys = new Set());
       keys.add(header.row_key);
+      if (cache) continue;
       this.rowCache.get(header.collection)?.delete(header.row_key);
       this.localRows.delete(grantDecisionKey(header.collection,header.row_key));
     }
@@ -1196,7 +1384,37 @@ export class SqliteAgentRegistryStore {
     this.readOnlyHotFile = this.readerViews.view(hot,storedJson);
     const file = { ...this.readOnlyHotFile };
     const collections = new Map<RowCollection, Record<string, unknown>>();
+    /* A collection is reused only when every input to its getters is the
+       same: its cold versions, its hot rows (frozen view rows are shared while
+       unchanged), its pinned grant decisions, and for operation owners the
+       deliveries they normalize against and the owners synthesized from them. */
+    const hotRows = (collection: RowCollection) => new Map(Object.entries(file[collection] as Record<string, unknown>));
+    const sameRows = (left: Map<string, unknown> | undefined, right: Map<string, unknown>) =>
+      left !== undefined && left.size === right.size && [...right].every(([key,row]) => left.get(key) === row);
+    const synthetic = JSON.stringify([...syntheticOwners]);
+    const nextCache: NonNullable<typeof this.coldViewCache> = { signature,headers,forgets: this.coldGrantForgets,collections: new Map() };
+    const reused = new Set<RowCollection>();
+    const layered = [...new Set([...coldKeys.keys(),...(syntheticOwners.size ? ["deliveryOperationOwners" as const] : [])])];
+    /* Read every hot side before any collection is replaced by a merged one. */
+    const hotSides = new Map(layered.map(collection => [collection,hotRows(collection)] as const));
+    const hotDeliveries = layered.includes("deliveryOperationOwners") ? hotRows("heldDeliveries") : undefined;
+    for (const collection of layered) {
+      const previous = cache?.collections.get(collection);
+      const hot = hotSides.get(collection)!;
+      const deliveries = collection === "deliveryOperationOwners" ? hotDeliveries : undefined;
+      const reusable = previous && sameRows(previous.hot,hot) && previous.synthetic === synthetic
+        && (!deliveries || sameRows(previous.deliveries,deliveries))
+        && (!READER_GRANT_COLLECTIONS.has(collection) || cache!.forgets === this.coldGrantForgets);
+      if (reusable) {
+        (file as unknown as Record<string, unknown>)[collection] = previous.built;
+        reused.add(collection);
+        nextCache.collections.set(collection,previous);
+      } else {
+        nextCache.collections.set(collection,{ hot,...(deliveries ? { deliveries } : {}),synthetic,built: {} });
+      }
+    }
     for (const header of headers) {
+      if (reused.has(header.collection)) continue;
       let rows = collections.get(header.collection);
       if (!rows) collections.set(header.collection,rows = { ...file[header.collection] });
       const { collection,row_key: key,archive_id: id } = header;
@@ -1254,7 +1472,7 @@ export class SqliteAgentRegistryStore {
         return row;
       } });
     }
-    if (syntheticOwners.size) {
+    if (syntheticOwners.size && !reused.has("deliveryOperationOwners")) {
       let rows = collections.get("deliveryOperationOwners");
       if (!rows) collections.set("deliveryOperationOwners",rows = { ...file.deliveryOperationOwners });
       for (const [operationId,deliveryId] of syntheticOwners) {
@@ -1276,7 +1494,9 @@ export class SqliteAgentRegistryStore {
         for (const key of Object.keys(descriptors)) if (!Object.hasOwn(ordered,key)) Object.defineProperty(ordered,key,descriptors[key]!);
       }
       (file as unknown as Record<string, unknown>)[collection] = Object.freeze(ordered);
+      nextCache.collections.get(collection)!.built = ordered;
     }
+    this.coldViewCache = nextCache;
     this.coldGrantCursor = { changeId: coldGrantChangeId,stamp: snapshot.stamp };
     keyedReaders.set(file,(collection,field,value) => {
       const values = typeof value === "string" ? [value] : value;
@@ -1284,11 +1504,65 @@ export class SqliteAgentRegistryStore {
       return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM ${this.recordsSource} WHERE collection=? AND json_extract(value_json,'${LOOKUP_PATHS[field]}') IN (${values.map(() => "?").join(",")}) ORDER BY row_order`)
         .all(collection,...values).map(row => row.row_key);
     });
+    const coldIds = new Map<RowCollection, Map<string, number>>();
+    const currentIds = new Set<number>();
+    for (const header of headers) {
+      let ids = coldIds.get(header.collection);
+      if (!ids) coldIds.set(header.collection,ids = new Map());
+      ids.set(header.row_key,header.archive_id);
+      currentIds.add(header.archive_id);
+    }
+    for (const results of this.coldRowProjectionResults.values()) {
+      for (const id of results.keys()) if (!currentIds.has(id)) results.delete(id);
+    }
+    projectionReaders.set(file,(collection,projector) => this.projectRows(file,collection,projector,coldIds.get(collection),identity));
     if (this.changesReady) pathReaders.set(file,path => this.db.query<{ conversation_id: string }, [string]>(
-      `SELECT p.conversation_id FROM registry_conversation_paths p JOIN ${this.recordsSource} r ON r.collection='conversations' AND r.row_key=p.conversation_id WHERE p.path=? ORDER BY r.row_order`)
+      conversationPathSql(this.recordsSource))
       .all(path).map(row => row.conversation_id));
     this.readOnlyCache = Object.freeze({ ...snapshot,file: Object.freeze(file) });
     return this.readOnlyCache;
+  }
+
+  /** Hot rows project from the view; an archived version projects once, read
+      in batches straight from the archive and normalized as its accessor
+      would normalize it, and the result is kept while the version is current. */
+  private projectRows(
+    file: RegistryFile,
+    collection: RowCollection,
+    projector: RegistryRowProjector<RowCollection, unknown>,
+    cold: ReadonlyMap<string, number> | undefined,
+    identity: string | null,
+  ): Array<[string, unknown]> {
+    if (collection === "deliveryOperationOwners") throw new Error("operation owners normalize against their deliveries; project them from the rows");
+    const rows = file[collection] as Record<string, unknown>;
+    const keys = Object.keys(rows);
+    if (!cold?.size) return keys.map(key => [key, projector.project(rows[key] as never)]);
+    let results = this.coldRowProjectionResults.get(projector.id);
+    if (!results) this.coldRowProjectionResults.set(projector.id,results = new Map());
+    const missing: Array<[string, number]> = [];
+    for (const [key,id] of cold) if (!results.has(id)) missing.push([key,id]);
+    if (missing.length) {
+      if (databaseFileIdentity(this.filename) !== identity) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+      const keyOf = new Map(missing.map(([key,id]) => [id,key]));
+      const select = (count: number) => this.db.query<{ id: number; value_json: string }, number[]>(
+        `SELECT id,value_json FROM registry_archive WHERE id IN (${Array.from({ length: count },() => "?").join(",")})`);
+      for (let offset = 0; offset < missing.length; offset += 500) {
+        const batch = missing.slice(offset,offset+500).map(([,id]) => id);
+        const stored = select(batch.length).all(...batch);
+        this.onRowPayloadRead?.(collection,stored.length);
+        this.onRowPayloadParse?.(collection,stored.length);
+        for (const { id,value_json: json } of stored) {
+          const key = keyOf.get(id)!;
+          const normalized = this.normalizePartial({ version: 2,entries: {},receipts: {},[collection]: { [key]: JSON.parse(json) } });
+          const row = (normalized[collection] as Record<string, unknown>)[key];
+          results.set(id,row === undefined ? undefined : deepFreeze(projector.project(row as never)));
+        }
+      }
+    }
+    return keys.map(key => {
+      const id = cold.get(key);
+      return [key, id === undefined ? projector.project(rows[key] as never) : results.get(id)];
+    });
   }
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
@@ -1967,6 +2241,22 @@ export class SqliteAgentRegistryStore {
        revision gets what that decision gave it, and a row this transaction
        rewrote is not re-decided, as before. */
     let recordedDecisions: GrantDecisions | null | undefined;
+    /* What this transaction itself holds for a row: undefined while it has not
+       touched the row, null once it deleted it. A scoped decision reads the
+       transaction's own version of every attestor it rewrote. */
+    const rawRows = new Map<RowCollection, (key: string) => unknown>();
+    const transactionRows: TransactionGrantRows = {
+      row: (kind, id) => {
+        if (!dirtyRows.get(kind)?.has(id)) return undefined;
+        const row = rawRows.get(kind)?.(id);
+        return row === undefined ? null : { row };
+      },
+      dirty: kind => dirtyRows.get(kind) ?? [],
+    };
+    /* Rows a scoped decision already ran over in this transaction. Like a row
+       the recorded decision answered, such a row is not decided again when the
+       transaction rewrites it or serializes it (#2761). */
+    const scopedDecided = new Set<string>();
     /* Every row leaves a loader through here. A row at the baseline is admitted
        untouched; anything claiming more is only returned once the decision has
        run over the whole file, including the rows attesting to this one. */
@@ -1976,6 +2266,27 @@ export class SqliteAgentRegistryStore {
       // Read-only authority checks need the subject and its independent
       // attestors, including cold evidence, rather than every historical row.
       if (readOnly && this.coldKeys.size && unchanged()) return this.decideStoredRow(collection,key,row) as T;
+      /* A mutation over a registry with cold history decides the same way, over
+         the subject, its attestors and this transaction's own rewrites of them.
+         Assembling the whole file instead read every historical row for each
+         grant-bearing write: 20,839 payloads and 1.2 s per write (#2761). */
+      if (!readOnly && this.coldKeys.size && ![...reorderedCollections].some(kind => GRANT_COLLECTIONS.has(kind))) {
+        const identity = grantDecisionKey(collection,key);
+        if (scopedDecided.has(identity)) return row;
+        scopedDecided.add(identity);
+        const decided = grantLists(collection,this.decideStoredRow(collection,key,row,undefined,transactionRows) as GrantProfileRow);
+        const candidate = row as GrantProfileRow;
+        const profiles = collection === "conversations" ? (candidate.generations ?? []).map(generation => generation.launchProfile) : [candidate.launchProfile];
+        let rewritten = false;
+        for (const [index,profile] of profiles.entries()) {
+          const list = decided[index];
+          if (!profile || !list || isDeepStrictEqual(profile.mcpServers,list)) continue;
+          profile.mcpServers = [...list];
+          rewritten = true;
+        }
+        if (rewritten) dirtyRows.get(collection)?.add(key);
+        return row;
+      }
       if (recordedDecisions === undefined) {
         if (readOnly && unchanged() && !recordHolds()) {
           /* The same decision over the same revision, read in this transaction
@@ -2015,7 +2326,7 @@ export class SqliteAgentRegistryStore {
       if (reorderedCollections.has("conversations")) return Object.values(file.conversations)
         .filter(row => row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path)).map(row => row.id);
       const keys = new Set(this.db.query<{ conversation_id: string }, [string]>(
-        `SELECT p.conversation_id FROM registry_conversation_paths p JOIN ${this.recordsSource} r ON r.collection = 'conversations' AND r.row_key = p.conversation_id WHERE p.path = ? ORDER BY r.row_order`,
+        conversationPathSql(this.recordsSource),
       ).all(path).map(row => row.conversation_id));
       for (const key of dirtyRows.get("conversations") ?? []) {
         const row = file.conversations[key];
@@ -2092,6 +2403,7 @@ export class SqliteAgentRegistryStore {
           let allRowsLoaded = false;
           let storedPayloadRows: Pick<StoredRow, "row_key" | "value_json">[] | null = null;
           const rowProxies = new Map<string, WeakMap<object, object>>();
+          rawRows.set(collection, key => deleted.has(key) || !Object.hasOwn(rows, key) ? undefined : rows[key]);
           const storedRow = this.db.query<Pick<StoredRow, "value_json">, [string, string]>(
             `SELECT value_json FROM ${this.recordsSource} WHERE collection = ? AND row_key = ?`,
           );
@@ -2476,11 +2788,17 @@ export class SqliteAgentRegistryStore {
       `).run(collection, key, JSON.stringify(value), order);
       return;
     }
+    /* The next position comes from the two order indexes. Aggregating over
+       registry_records expanded every cold row of the collection on each
+       insert, under the writer lock (#2761). */
+    const archived = this.changesReady
+      ? `(SELECT MAX(row_order) FROM registry_archive WHERE collection=?6)` : "NULL";
     this.db.query(`
       INSERT INTO registry_rows(collection, row_key, value_json, row_order)
-      SELECT ?, ?, ?, COALESCE((SELECT row_order FROM ${this.recordsSource} WHERE collection=? AND row_key=?),MAX(row_order) + 1,0) FROM ${this.recordsSource} WHERE collection = ?
+      SELECT ?1, ?2, ?3, COALESCE((SELECT row_order FROM ${this.recordsSource} WHERE collection=?4 AND row_key=?5),
+        MAX(COALESCE((SELECT MAX(row_order) FROM registry_rows WHERE collection=?6),-1), COALESCE(${archived},-1)) + 1) WHERE true
       ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json
-    `).run(collection, key, JSON.stringify(value), collection,key,collection);
+    `).run(collection, key, JSON.stringify(value), collection, key, collection);
   }
 
   private persistRowOrder(collection: RowCollection, keys: string[]): void {

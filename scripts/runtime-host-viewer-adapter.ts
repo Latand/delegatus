@@ -54,6 +54,13 @@ import {
   parseRuntimeHostRehearsalReport,
   runtimeHostRehearsalDockerArgs,
 } from "../src/runtime-host/hostRehearsal";
+import {
+  CANDIDATE_PERFORMANCE_BOUNDS,
+  candidatePerformanceDetail,
+  candidatePerformanceDockerArgs,
+  parseCandidatePerformanceReport,
+  type CandidatePerformanceEvidence,
+} from "../src/runtime-host/candidatePerformance";
 import { McpHealthProbeAdmissions } from "../src/runtime-host/mcpHealthProbeAdmission";
 import type { McpHealthProbeAdmissionConsumer } from "../src/runtime-host/mcpHealthProbeAdmissionChannel";
 import { VIEWER_CONTROL_TOKEN_ENV } from "../src/lib/mcp/controlEndpoint";
@@ -724,6 +731,50 @@ async function rehearseCandidateRuntimeHost(
   }
 }
 
+/** How long the in-container performance gate may take, seeding included. */
+const CANDIDATE_PERFORMANCE_TIMEOUT_MS = 300_000;
+
+/**
+ * #2761: the candidate's registry and projection performance, measured before
+ * promotion against thirty thousand rows of synthetic retained history, inside
+ * a throwaway container from the candidate image. A release that answered
+ * every probe still timed out the board's projection in production, because
+ * the probes ran against an empty registry. A gate that cannot run, or a
+ * report that cannot be read, refuses the candidate.
+ */
+async function measureCandidatePerformance(
+  candidate: ViewerReleaseIdentity,
+  reportPhase?: (phase: string) => void,
+): Promise<CandidatePerformanceEvidence> {
+  reportPhase?.("measuring the candidate against retained registry history");
+  const { stdout, stderr } = await commandResult(candidatePerformanceDockerArgs(candidate.image), { timeoutMs: CANDIDATE_PERFORMANCE_TIMEOUT_MS });
+  try {
+    return parseCandidatePerformanceReport(`${stdout}\n${stderr}`);
+  } catch (error) {
+    return {
+      checkedAt: new Date().toISOString(),
+      runtime: "unknown",
+      bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+      measurements: null,
+      breaches: [],
+      ok: false,
+      detail: `the candidate performance gate did not report: ${error instanceof Error ? error.message : String(error)}`,
+      log: stderr.split("\n").filter(Boolean).slice(-20),
+    };
+  }
+}
+
+/** The candidate verdict once the Viewer and MCP probes passed: both halves of
+    the image rehearsal must pass. Exported for the gate's own tests. */
+export function candidateRehearsalVerdict(
+  runtimeHost: ViewerRuntimeHostHealthEvidence,
+  performance: CandidatePerformanceEvidence | null,
+): { ok: boolean; detail?: string } {
+  if (!runtimeHost.ok) return { ok: false, detail: runtimeHost.detail ?? "candidate runtime-host gate failed" };
+  if (!performance) return { ok: false, detail: "candidate performance gate did not run" };
+  return performance.ok ? { ok: true } : { ok: false, detail: candidatePerformanceDetail(performance) };
+}
+
 async function verify(
   candidate: ViewerReleaseIdentity,
   endpoint: string,
@@ -766,12 +817,15 @@ async function verify(
      rehearsal belongs to the candidate, before anything is switched. */
   if (promoted) return { ...viewer, mcpRuntime, ok: true };
   const runtimeHost = await rehearseCandidateRuntimeHost(candidate, options.reportPhase);
+  const performance = runtimeHost.ok ? await measureCandidatePerformance(candidate, options.reportPhase) : null;
+  const verdict = candidateRehearsalVerdict(runtimeHost, performance);
   return {
     ...viewer,
     mcpRuntime,
     runtimeHost,
-    ok: runtimeHost.ok,
-    ...(runtimeHost.ok ? {} : { detail: runtimeHost.detail ?? "candidate runtime-host gate failed" }),
+    ...(performance ? { performance } : {}),
+    ok: verdict.ok,
+    ...(verdict.detail ? { detail: verdict.detail } : {}),
   };
 }
 

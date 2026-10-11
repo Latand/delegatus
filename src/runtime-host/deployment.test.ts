@@ -25,6 +25,7 @@ import { managedIdempotencyKey, readManagedRecord } from "@/lib/selfUpdate/manag
 import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
 import { idleCheck, type Revision } from "@/lib/selfUpdate/types";
 
+import { CANDIDATE_PERFORMANCE_BOUNDS } from "./candidatePerformance";
 import { ViewerDeploymentCoordinator, type ViewerDeploymentAdapter } from "./deployment";
 import { viewerCandidateDockerArgs, viewerComposeServiceFromConfig } from "./candidateContainer";
 import { RuntimeHost } from "./host";
@@ -860,6 +861,45 @@ test("issue 518: a failed candidate never stages a runtime-host successor", asyn
   expect(store.viewerDeployment(receipt.deploymentId)).toMatchObject({ phase: "failed", terminal: true });
   expect(adapter.calls.filter((call) => call.startsWith("stage-host-successor:"))).toEqual([]);
   expect(handoffs).toEqual([]);
+  store.close();
+});
+
+/* #2761: a candidate the performance gate refuses is retired before anything
+   is switched, and the release that was serving keeps serving. */
+test("a candidate refused by the performance gate is retired and the serving release is kept", async () => {
+  const store = journal("performance-refused-candidate");
+  const adapter = new FakeDeploymentAdapter();
+  const serving = adapter.current;
+  adapter.candidateHealth = {
+    ...healthy("http://127.0.0.1/candidate"),
+    performance: {
+      checkedAt: "2026-10-11T21:00:00.000Z",
+      runtime: "bun 1.4.0",
+      bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+      measurements: null,
+      breaches: ["grant-bearing write max 1407ms exceeds 500ms", "warm projection build p95 4467ms exceeds 1000ms"],
+      inducedDelayMs: 600,
+      ok: false,
+      detail: "grant-bearing write max 1407ms exceeds 500ms",
+    },
+    ok: false,
+    detail: "candidate performance gate refused the release: grant-bearing write max 1407ms exceeds 500ms; warm projection build p95 4467ms exceeds 1000ms",
+  };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+
+  const receipt = await coordinator.requestViewerDeployment({ idempotencyKey: "deploy-performance-refused" });
+  if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+  const status = await coordinator.waitForDeployment(receipt.deploymentId);
+
+  expect(status).toMatchObject({
+    phase: "failed",
+    terminal: true,
+    error: "candidate performance gate refused the release: grant-bearing write max 1407ms exceeds 500ms; warm projection build p95 4467ms exceeds 1000ms",
+  });
+  expect(status?.health.at(-1)?.performance?.breaches).toHaveLength(2);
+  expect(adapter.calls).toContain(`retire:${status?.candidate?.container}`);
+  expect(adapter.calls.filter((call) => call.startsWith("promote:") || call.startsWith("rollback:"))).toEqual([]);
+  expect(adapter.current).toEqual(serving);
   store.close();
 });
 
