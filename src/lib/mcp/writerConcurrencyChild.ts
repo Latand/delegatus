@@ -15,7 +15,9 @@ if (!stateDir || !writer || !readyPath || !releasePath) throw new Error("writer 
 
 if (process.env.LLV_WRITER_NO_PROCESS_IDENTITY === "1") {
   const { procBackend } = await import("@/lib/proc");
-  procBackend.processIdentity = () => null;
+  const processIdentity = procBackend.processIdentity.bind(procBackend);
+  // Only the lease owner lacks identity; the fixture's parent remains verifiable.
+  procBackend.processIdentity = (pid) => pid === process.pid ? null : processIdentity(pid);
 }
 
 let gated = false;

@@ -11,6 +11,7 @@ type Step = {
   if?: string;
   "working-directory"?: string;
   "timeout-minutes"?: number;
+  "continue-on-error"?: boolean;
   with?: Record<string, string>;
 };
 type Job = { env: Record<string, string>; steps: Step[] };
@@ -27,10 +28,120 @@ const workflows = names.map((name) => {
 const jobs = workflows.map((workflow, index) => workflow.jobs[names[index]!]!);
 const step = (job: Job, name: string) => job.steps.find((entry) => entry.name === name)!;
 
+// Execute the publication suffix with GitHub's step timeout, continue-on-error
+// and original-outcome warning semantics. The CLI double supplies independent
+// baseline, scanner and candidate verdicts without repository or network calls.
+function runPublication(extra: Record<string, string> = {}, budget = "130s") {
+  const root = mkdtempSync(join(tmpdir(), "privacy-repair-workflow-"));
+  try {
+    const log = join(root, "calls");
+    for (const directory of ["trusted", "candidate"]) {
+      mkdirSync(join(root, directory, "scripts"), { recursive: true });
+      writeFileSync(join(root, directory, "scripts/privacy-fixture.test.ts"), "");
+    }
+    mkdirSync(join(root, "trusted/node_modules"));
+    writeFileSync(join(root, "bun"), `#!/bin/bash
+directory="$(basename "$PWD")"
+printf '%s:%s\\n' "$directory" "$1" >> "$CALL_LOG"
+if [[ "$1" == test && "$STALL_DIRECTORY" == "$directory" ]]; then exec sleep 30; fi
+case "$directory:$1" in
+  trusted:test) exit "$BASELINE_EXIT" ;;
+  trusted:scripts/privacy-publication-gate.ts) exit "$SCAN_EXIT" ;;
+  candidate:test) exit "$CANDIDATE_EXIT" ;;
+  *) exit 99 ;;
+esac
+`, { mode: 0o755 });
+    const job = jobs[0]!;
+    const baseline = step(job, "Verify privacy gate behavior");
+    const warning = step(job, "Report trusted privacy self-test failure");
+    expect(baseline.id).toBe("trusted-tests");
+    expect(baseline["continue-on-error"]).toBe(true);
+    expect(warning.if).toBe("steps.trusted-tests.outcome == 'failure'");
+    const first = job.steps.indexOf(baseline);
+    let baselineCode = 0;
+    let code = 0;
+    let text = "";
+    for (const entry of job.steps.slice(first)) {
+      if (entry === warning && baselineCode === 0) continue;
+      // Only the wall-clock duration changes in timeout controls.
+      const command = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry.run!.replace("130s", budget)];
+      // A local timeout supplies the runner's step deadline. The candidate's
+      // shell still enforces its own timeout exactly as the workflow declares.
+      if (entry === baseline) command.unshift("timeout", "--kill-after=5s", budget === "130s" ? `${entry["timeout-minutes"]}m` : budget);
+      const result = Bun.spawnSync(command, {
+        cwd: join(root, entry["working-directory"]!),
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALL_LOG: log, BASELINE_EXIT: "1", SCAN_EXIT: "0", CANDIDATE_EXIT: "0", STALL_DIRECTORY: "", ...extra },
+        stdout: "pipe", stderr: "pipe",
+      });
+      text += result.stdout.toString() + result.stderr.toString();
+      code = result.exitCode;
+      if (entry === baseline) baselineCode = code;
+      if (code !== 0 && entry["continue-on-error"]) { code = 0; continue; }
+      if (code !== 0) break;
+    }
+    return { code, baselineCode, text, calls: readFileSync(log, "utf8").trim().split("\n") };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("a repair candidate reaches trusted inspection and passes despite red main self-tests", () => {
+  const result = runPublication();
+  expect(result.code).toBe(0);
+  expect(result.baselineCode).toBe(1);
+  expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
+  expect(result.text).toContain("::warning title=Trusted privacy self-tests::");
+});
+
+test("a green baseline completes publication without a baseline warning", () => {
+  const result = runPublication({ BASELINE_EXIT: "0" });
+  expect(result.code).toBe(0);
+  expect(result.baselineCode).toBe(0);
+  expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
+  expect(result.text).not.toContain("::warning");
+});
+
+test("trusted inspection refusal blocks publication and candidate execution despite red baseline", () => {
+  const scan = step(jobs[0]!, "Scan changed publication surfaces, commit messages and the merge boundary");
+  expect(scan["working-directory"]).toBe("trusted");
+  expect(scan["continue-on-error"]).toBeUndefined();
+  expect(scan.if).toBeUndefined();
+  expect(scan.run).toContain("--repository ../candidate --require-known-values --check-commits");
+  for (const exit of ["1", "78"]) {
+    const result = runPublication({ SCAN_EXIT: exit });
+    expect(result.code).toBe(Number(exit));
+    expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts"]);
+  }
+});
+
+test("candidate self-test failure still blocks publication after a red baseline", () => {
+  const candidate = step(jobs[0]!, "Verify candidate privacy gate behavior within budget");
+  expect(candidate["continue-on-error"]).toBeUndefined();
+  expect(candidate.if).toBeUndefined();
+  const result = runPublication({ CANDIDATE_EXIT: "1" });
+  expect(result.code).toBe(1);
+  expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
+});
+
+test("a stalled baseline is diagnosed before inspection and candidate tests proceed", () => {
+  const result = runPublication({ STALL_DIRECTORY: "trusted" }, "0.1s");
+  expect(result.code).toBe(0);
+  expect(result.text).toContain("::warning title=Trusted privacy self-tests::");
+  expect(result.baselineCode).toBe(124);
+  expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
+});
+
+test("a stalled candidate still refuses publication after a red baseline", () => {
+  const result = runPublication({ STALL_DIRECTORY: "candidate" }, "0.1s");
+  expect(result.code).toBe(124);
+  expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
+});
+
 test("candidate privacy tests run last with a failing time budget", () => {
   const job = jobs[0]!;
   const trusted = step(job, "Verify privacy gate behavior");
   expect(trusted["working-directory"]).toBe("trusted");
+  expect(trusted["timeout-minutes"]).toBe(3);
   expect(trusted.run).toBe("bun test scripts/privacy-*.test.ts");
   const candidate = step(job, "Verify candidate privacy gate behavior within budget");
   expect(job.steps.at(-1)).toBe(candidate);

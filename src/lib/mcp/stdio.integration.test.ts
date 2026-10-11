@@ -157,6 +157,90 @@ test("the real stdio server releases retained handles when its client disappears
   expect(exited).toBe(0);
 }, 15_000);
 
+test("a launched stdio server retries local initialization after a receipt database lock clears", async () => {
+  const sandbox = sandboxDir("llv-mcp-local-retry-");
+  const environment = identifiedEnvironment(sandbox, { LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" });
+  const filename = path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite");
+  const { SqliteMcpReceiptStore } = await import("./server");
+  new SqliteMcpReceiptStore(filename).close();
+  const holder = new Database(filename, { strict: true });
+  holder.exec("BEGIN IMMEDIATE");
+  let session: McpSession | undefined;
+  try {
+    session = await startMcp(environment, "local-initialization-retry");
+    const read = () => session!.client.callTool({ name: "list_tasks", arguments: { ids: ["absent"] } });
+    const failures = await Promise.all([read(), read()]);
+    for (const failure of failures) {
+      expect(failure.isError).toBe(true);
+      expect(JSON.stringify(failure.content)).toContain("database is locked");
+    }
+    holder.exec("ROLLBACK");
+    // The same stdio session must recover without reconnecting or restarting.
+    for (const result of await Promise.all([read(), read()])) {
+      expect(result.structuredContent).toMatchObject({ ok: true, tasks: [] });
+    }
+    expect((await read()).structuredContent).toMatchObject({ ok: true, tasks: [] });
+  } finally {
+    holder.close();
+    await session?.close();
+  }
+}, 30_000);
+
+test("a launched stdio server releases repeated large read answers without loading its domain stores", async () => {
+  const sandbox = sandboxDir("llv-mcp-large-reads-");
+  let calls = 0;
+  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as { id: string; params: { name: string } };
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [], structuredContent: {
+      ok: true, toolName: body.params.name, clientRequestId: null, replayed: false,
+      sequence: ++calls, payload: `${calls}:` + "synthetic answer ".repeat(128_000),
+    } } });
+  } });
+  const environment = isolatedEnvironment(sandbox, {
+    LLV_SPAWN_CAPABILITY: "a".repeat(43), LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${http.port}`,
+  });
+  const commandFile = path.join(sandbox, "sample");
+  const transport = new OwnedStdioClientTransport({ command: process.execPath, cwd: process.cwd(), env: environment, stderr: "pipe", args: ["-e", `
+    import fs from "node:fs";
+    import { heapStats } from "bun:jsc";
+    import { startViewerMcpServer } from "./src/lib/mcp/server";
+    await startViewerMcpServer();
+    setInterval(() => {
+      if (!fs.existsSync(${JSON.stringify(commandFile)})) return;
+      const label = fs.readFileSync(${JSON.stringify(commandFile)}, "utf8");
+      fs.unlinkSync(${JSON.stringify(commandFile)});
+      Bun.gc(true);
+      const stats = heapStats();
+      fs.writeFileSync(${JSON.stringify(sandbox)} + "/" + label + ".json", JSON.stringify({ heap: stats.heapSize + stats.extraMemorySize }));
+    }, 25);
+  `] });
+  const client = new Client({ name: "large-read-memory", version: "1" });
+  const sample = async (label: string): Promise<number> => {
+    const file = path.join(sandbox, `${label}.json`);
+    fs.writeFileSync(commandFile, label);
+    const deadline = Date.now() + 5_000;
+    while (!fs.existsSync(file) && Date.now() < deadline) await Bun.sleep(25);
+    return (JSON.parse(fs.readFileSync(file, "utf8")) as { heap: number }).heap;
+  };
+  try {
+    await client.connect(transport);
+    const before = await sample("before");
+    let answeredBytes = 0;
+    for (let index = 0; index < 12; index++) {
+      const result = await client.callTool({ name: "board_snapshot", arguments: {} });
+      expect(result.structuredContent).toMatchObject({ ok: true, sequence: index + 1 });
+      const payload = (result.structuredContent as Record<string, unknown> | undefined)?.payload;
+      if (typeof payload === "string") answeredBytes += Buffer.byteLength(payload);
+    }
+    const after = await sample("after");
+    console.log(JSON.stringify({ largeReadMemory: { calls, answeredBytes, retainedHeapBytes: after - before } }));
+    expect(calls).toBe(12);
+    expect(answeredBytes).toBeGreaterThan(24 * 1024 * 1024);
+    expect(after - before).toBeLessThan(8 * 1024 * 1024);
+    expect(fs.existsSync(path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite"))).toBe(false);
+  } finally { await client.close(); await transport.close(); http.stop(true); }
+}, 30_000);
+
 test("store reads stay independent of a slow host, held pipeline lease and same-client HTTP call", async () => {
   const sandbox = sandboxDir("llv-mcp-read-latency-");
   const socketPath = path.join(sandbox, "host.sock");

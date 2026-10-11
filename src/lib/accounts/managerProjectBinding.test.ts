@@ -739,3 +739,30 @@ test.each(["claude", "codex"] as const)("automatic %s recovery admission checks 
   const recovered = await resolveProjectSpawnAfterLiveRead(engine, request, { probe: provider.port });
   expect(recovered.kind === "available" && recovered.account.accountId).toBe(target);
 });
+
+/* Task d7759de2: routing a crash or a race left on an account the operator
+   removed (a hidden Main, a retired managed account) names nothing. A launch
+   that names no account, and a project launch on an unbound project, resolve
+   to a listed account instead of failing on the removed one. */
+for (const removal of ["hidden Main", "retired account"] as const) {
+  test(`routing left on a ${removal} is never what a launch resolves to`, async () => {
+    const { hideLegacyCodexAccount, removeManagedCodexAccount } = await import("./codex");
+    registryWith(reserved, []);
+    let removed = "default";
+    if (removal === "hidden Main") hideLegacyCodexAccount();
+    else {
+      const gone = createManagedCodexAccount("Gone carrier");
+      removeManagedCodexAccount(gone.id);
+      removed = gone.id;
+    }
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    agentRegistry().setEngineRouting("codex", removed);
+    const listed = listCodexAccounts().map((account) => account.id);
+    expect(listed).not.toContain(removed);
+
+    expect(listed).toContain(accountManager.resolveSpawn("codex").accountId);
+    const project = accountManager.resolveProjectSpawn("codex", { project: ATLAS, preferredId: null });
+    expect(project.kind).toBe("available");
+    if (project.kind === "available") expect(listed).toContain(project.account.accountId);
+  });
+}

@@ -190,6 +190,11 @@ test.each([
   const stateDirectory = path.join(directory, "state");
   const previousStateDirectory = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = stateDirectory;
+  const { recordLessonRequest, leaveLessons } = await import("@/lib/memory/roleStore");
+  const source = { project: "startup-rules", pipelineId: "startup-rules", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_startup_rules" };
+  const rule = "Check the current owner before replaying a persisted acknowledgement.";
+  recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
+  leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: "An acknowledgement was replayed with a different owner." }], none: null });
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const artifactPath = "/managed/sessions/startup-thread.jsonl";
   const conversation = registry.ensureConversation("codex", artifactPath, "managed");
@@ -221,6 +226,7 @@ test.each([
       role: "worker",
       goal: null,
       plan: null,
+      learnedRules: { project: source.project, roleId: source.roleId },
     },
     status: "dead",
     host: null,
@@ -263,6 +269,8 @@ test.each([
   const codexCleanup = (codexOptions as { releaseCleanup?: () => void }).releaseCleanup;
   const claudeCleanup = (claudeOptions as { releaseCleanup?: () => void }).releaseCleanup;
   expect((codexOptions as { serviceTier?: string }).serviceTier).toBe(expectedTier);
+  expect((codexOptions as { developerInstructions?: string }).developerInstructions).toContain(rule);
+  expect((claudeOptions as { appendSystemPrompt?: string }).appendSystemPrompt).toContain(rule);
   expect(codexOptions).toMatchObject({
     cwd: "/repo",
     codexHome: "/managed",
