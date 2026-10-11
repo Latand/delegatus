@@ -52,11 +52,13 @@ export async function publishRelayMessage(relay: Pick<PairedRelay, "api_base" | 
         if (error.status === 404) return "unavailable";
         if (error.status === 403) return "not_allowed";
         if (error.status && error.status !== 429 && error.status < 500) return "refused";
-        if (attempt < 3 && error.status === 429) {
+        if (error.status === 429) {
           const seconds = error.retryAfterSeconds;
           // No immediate retry when the service supplies an unusable delay.
           if (seconds === null || seconds <= 0 || seconds > 86400) return "unconfirmed";
+          // Keep sibling publications behind the last refusal's delay too.
           await sleep(Math.ceil(seconds * 1000));
+          if (attempt === 3) return "unconfirmed";
           continue;
         }
       }

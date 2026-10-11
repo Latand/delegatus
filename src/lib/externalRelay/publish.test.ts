@@ -61,6 +61,31 @@ test("transient failures stop after four attempts", async () => {
   } finally { await server.close(); }
 });
 
+test("the final 429 holds the pairing queue until its supplied delay expires", async () => {
+  const bodies: unknown[] = [], times: number[] = [], waits: number[] = [];
+  let time = 0;
+  const server = await startTestRelay((_request, body) => {
+    bodies.push(body); times.push(time);
+    return bodies.length <= 4
+      ? { status: 429, body: { error: { code: "rate_limited", retry_after_s: 60 } } }
+      : { body: { message_key: "m_fixture", replayed: false } };
+  });
+  const paired = { id: "fixture", api_base: `${server.origin}/v1`, credential: "q".repeat(43) } as PairedRelay;
+  const publisher = createRelayPublisher(() => ({ relay: paired, targetId: "fixture" }), {
+    now: () => time, sleep: async ms => { waits.push(ms); time += ms; },
+  });
+  try {
+    expect(await Promise.all([publisher(receipt), publisher({ ...receipt, messageId: 18 })]))
+      .toEqual(["unconfirmed", "published"]);
+    expect(waits).toEqual([60000, 60000, 60000, 60000]);
+    expect(times).toEqual([0, 60000, 120000, 180000, 240000]);
+    expect(bodies).toEqual([
+      ...Array.from({ length: 4 }, () => relayPublishBody(receipt)),
+      relayPublishBody({ ...receipt, messageId: 18 }),
+    ]);
+  } finally { await server.close(); }
+});
+
 for (const status of [403, 404]) test(`queued publications share the ${status} cooldown and recover later`, async () => {
   let calls = 0, time = 0;
   const server = await startTestRelay(() => { calls++; return calls === 1
