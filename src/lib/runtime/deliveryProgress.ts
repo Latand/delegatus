@@ -244,7 +244,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const advanced = reasonChanged || note.attempted === true || note.progressed === true;
     this.put({
       ...current,
-      ...(advanced || detail !== current.detail ? withPhase(current, { phase: note.waitReason, reason: detail, at: reasonChanged ? since : at }) : {}),
+      ...(advanced || detail !== current.detail ? withPhase(current, { phase: note.waitReason, reason: detail, at: since }) : {}),
       conversationId,
       originalKey: note.originalKey ?? current.originalKey,
       kind: note.kind ?? current.kind,

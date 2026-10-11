@@ -44,4 +44,5 @@ Separate totals show ingress to echo and echo to delivery confirmation when
 both endpoints exist. Open spans and endpoints outside the window are omitted.
 The report names records with missing or truncated history, so absent phases
 remain visible as a measurement limit. It opens SQLite read-only, streams rows
-and performs no migration, cleanup or state write.
+and performs no migration, cleanup or delivery-record write. SQLite can create
+its usual WAL coordination sidecars when opening a read-only connection.

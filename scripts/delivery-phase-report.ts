@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import path from "node:path";
 import { Database } from "bun:sqlite";
-import { deliveryProgressPath, type DeliveryProgressRecord } from "../src/lib/runtime/deliveryProgress";
+import type { DeliveryProgressRecord } from "../src/lib/runtime/deliveryProgress";
+import { archiveDirectory } from "../src/lib/reviewHistory/reader";
 import { stateOwner } from "../src/lib/stateOwnership";
 
 function timestamp(value: string | undefined): number {
@@ -33,7 +35,7 @@ export function deliveryPhaseReport(args: string[]): string {
   if (!process.env.LLV_STATE_DIR?.trim() && !stateOwner()) {
     throw new Error("Set LLV_STATE_DIR explicitly, or inherit a valid LLV_STATE_OWNER");
   }
-  const filename = deliveryProgressPath();
+  const filename = path.join(archiveDirectory(), "delivery-progress.sqlite");
   if (!fs.existsSync(filename)) throw new Error("No delivery progress database exists in the chosen state directory");
   const db = new Database(filename, { readonly: true, strict: true });
   const samples = new Map<string, number[]>();

@@ -42,6 +42,35 @@ test("a report without a chosen state directory or inherited owner refuses inste
   expect(result.stderr.toString()).toContain("LLV_STATE_DIR");
 });
 
+test.each(["delegatus", "agent-log-viewer"])("an activated inherited owner reports from %s without migrating or linking state", (app) => {
+  const home = path.join(root, `owner-${app}`);
+  const config = path.join(home, "config");
+  const state = path.join(config, app, "state");
+  const filename = path.join(state, "delivery-progress.sqlite");
+  const store = new DeliveryProgressStore(filename, () => Date.parse("2026-10-11T00:00:00Z"), noTimer);
+  store.note("owner-send", "conversation", { waitReason: "queued" });
+  store.close();
+  const before = fs.readFileSync(filename);
+  const stateFiles = fs.readdirSync(state).sort();
+  const configFiles = fs.readdirSync(config).sort();
+  const activation = path.join(import.meta.dir, "../src/lib/state/stateMutationBarrier.ts");
+  const result = Bun.spawnSync([process.execPath, "-e", `
+    const [activation, script] = process.argv.slice(-2);
+    const { openStateMutationActivation } = await import(activation);
+    const { deliveryPhaseReport } = await import(script);
+    openStateMutationActivation();
+    console.log(deliveryPhaseReport(["--since", "2026-10-11T00:00:00Z", "--until", "2026-10-11T00:01:00Z"]));
+  `, activation, script], {
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: config, LLV_STATE_DIR: "", LLV_STATE_OWNER: "viewer", NODE_ENV: "production" },
+  });
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toContain("records=1");
+  expect(fs.readFileSync(filename)).toEqual(before);
+  // SQLite can open WAL coordination sidecars even for a read-only handle.
+  expect(fs.readdirSync(state).filter(name => !/\.sqlite-(wal|shm)$/.test(name)).sort()).toEqual(stateFiles);
+  expect(fs.readdirSync(config).sort()).toEqual(configFiles);
+});
+
 test("the report includes observation times added to an older record and omits unfinished spans", () => {
   const state = path.join(root, "observations");
   const store = new DeliveryProgressStore(path.join(state, "delivery-progress.sqlite"), () => Date.parse("2026-10-10T00:00:00Z"), noTimer);

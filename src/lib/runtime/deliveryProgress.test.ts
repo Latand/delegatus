@@ -41,6 +41,28 @@ test("phase history survives a restart, including changes within checking and th
   expect(readDeliveryProgress(["history-send"], filename).get("history-send")).toMatchObject({ phaseHistory: expect.any(Array) });
 });
 
+test("a late checking detail keeps its supplied start time without advancing delivery clocks", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "late-detail.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("late-detail-send", "conversation", { waitReason: "checking", detail: "reading journal" });
+  const before = structuredClone(store.get("late-detail-send"))!;
+  now += 1_000;
+  store.note("late-detail-send", "conversation", {
+    waitReason: "checking", detail: "claiming writer", sinceMs: Date.parse("2026-10-11T00:00:00.200Z"),
+  });
+  store.close();
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  expect(reopened.get("late-detail-send")).toMatchObject({
+    phaseSince: before.phaseSince, lastProgressAt: before.lastProgressAt, attempt: before.attempt,
+    phaseHistory: [
+      { phase: "checking", reason: "reading journal", at: "2026-10-11T00:00:00.000Z" },
+      { phase: "checking", reason: "claiming writer", at: "2026-10-11T00:00:00.200Z" },
+    ],
+  });
+  reopened.close();
+});
+
 test("history and writes stay bounded through polling, retries and late confirmation", () => {
   let now = Date.parse("2026-10-11T00:00:00.000Z");
   const filename = path.join(root, "bounded-history.sqlite");
