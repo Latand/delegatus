@@ -378,7 +378,13 @@ function revisionView(revision: RuleRevision): RuleRevisionView {
     ...(revision.source ? { roleId: revision.source.roleId, fixRound: revision.source.fixRound } : {}) };
 }
 
-function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>): RuleView {
+function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>, history: RoleMemoryScopeRow["history"]): RuleView {
+  const agentRevision = history.filter(change => change.by === "agent" && (change.added.includes(row.id) || change.merged.some(item => item.into === row.id) || change.rewritten?.some(item => item.id === row.id)))
+    .reduce((latest, change) => Math.max(latest, change.revision), 0);
+  const curatorRevision = history.filter(change => change.by === "curator" && !change.revertedAt)
+    .reduce((latest, change) => Math.max(latest, change.revision), 0);
+  const awaitingCuration = !row.curatedAt || (agentRevision && curatorRevision ? agentRevision > curatorRevision
+    : row.revisedBy?.by === "agent" && row.revisedBy.at > row.curatedAt);
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints,
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
@@ -386,6 +392,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
     ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),
     ...(row.curatedAt ? { curatedAt: row.curatedAt } : {}),
+    awaitingCuration: !!awaitingCuration,
     ...(row.keptByOperatorAt ? { keptByOperatorAt: row.keptByOperatorAt } : {}),
     ...(row.note ? { note: row.note } : {}), ...(row.where ? { where: row.where } : {}), ...(row.against ? { against: row.against } : {}),
     ...(row.mergedFrom ? { mergedFrom: row.mergedFrom } : {}), ...(row.movedFrom ? { movedFrom: row.movedFrom } : {}), ...(row.splitFrom ? { splitFrom: row.splitFrom } : {}),
@@ -414,7 +421,7 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
       scope, kind: scopeKind(scope), roleId: scopeRole(scope), revision: held?.revision ?? 0,
       chars: scopeChars(active), bound: ROLE_MEMORY_BOUND,
       addedToday: active.filter((row) => now - Date.parse(row.createdAt) < DAY_MS).length,
-      active: active.map((row) => view(row, now, rulesById)), left: left.map((row) => view(row, now, rulesById)),
+      active: active.map((row) => view(row, now, rulesById, held?.history ?? [])), left: left.map((row) => view(row, now, rulesById, held?.history ?? [])),
     };
   });
   return { project: canonical, enabled: roleMemoryEnabled(), scopes, curation: curationView(canonical, now) };

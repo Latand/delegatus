@@ -163,6 +163,8 @@ export interface RuleView {
   changedAt: string;
   revisedBy?: RuleRevisionView;
   curatedAt?: string;
+  /** Derived from scope history; optional for older API answers. */
+  awaitingCuration?: boolean;
   keptByOperatorAt?: string;
   note?: string;
   where?: string;

@@ -107,6 +107,25 @@ test.each(["succeeded", "failed"] as const)("a %s pass counts later lessons and 
   expect(pass(NOW + 31 * 60_000)).not.toBeNull();
   expect(curationStatus(PROJECT, NOW + 31 * 60_000).newLessons).toBe(0);
 });
+test("curator reads and the window distinguish rewrites across the same clock instant", () => {
+  const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
+  const shown = () => projectView(PROJECT).scopes.find(item => item.scope === scope)!.active.find(item => item.id === one)!;
+  expect(shown().awaitingCuration).toBe(true);
+  applyCuration(p, input({ [scope]: [one] }), at());
+  expect(shown().awaitingCuration).toBe(false);
+  const source: RuleSource = { project: PROJECT, pipelineId: "clock-read", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "clock-reader" };
+  recordLessonRequest({ ...source, at: at() });
+  leaveLessons({ request: source, source, lessons: [], rewrite: { id: one, rule: "Inspect the current readers before changing stored guidance.", why }, none: null, now: at() });
+  expect(shown().awaitingCuration).toBe(true);
+  const page = readCuration(p, scope);
+  expect("rules" in page && page.rules.find(item => item.id === one)?.newSincePass).toBe(true);
+  ended(p);
+  const next = pass(NOW + CURATION_INTERVAL_MS + 1000);
+  applyCuration(next, input({ [scope]: [one] }), at());
+  expect(shown().awaitingCuration).toBe(false);
+  const reread = readCuration(next, scope);
+  expect("rules" in reread && reread.rules.find(item => item.id === one)?.newSincePass).toBe(false);
+});
 test("scope rereads retain departures from every call of the current pass", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: [two] }, { archive: [{ id: one, reason: "stale", note: "The first old command was replaced." }] }), at(100));

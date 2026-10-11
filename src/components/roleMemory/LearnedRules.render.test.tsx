@@ -56,4 +56,9 @@ test("both role levels and earlier text render with a return control", () => {
   const rewritten = { ...rule, curatedAt: "2026-10-11T00:00:00.000Z", revisedBy: { by: "agent" as const, at: "2026-10-11T00:01:00.000Z", roleId: "builder" } };
   const revised = renderToStaticMarkup(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active: [rewritten] }} focusRule="one" onDelete={() => {}} onRestore={() => {}} />);
   expect(revised).toContain("awaiting curator");
+  const sameClock = { ...rewritten, revisedBy: { ...rewritten.revisedBy, at: rewritten.curatedAt }, awaitingCuration: true };
+  const pending = renderToStaticMarkup(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active: [sameClock] }} focusRule="one" onDelete={() => {}} onRestore={() => {}} />);
+  expect(pending).toContain("awaiting curator");
+  const reviewed = renderToStaticMarkup(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active: [{ ...rewritten, awaitingCuration: false }] }} focusRule="one" onDelete={() => {}} onRestore={() => {}} />);
+  expect(reviewed).not.toContain("awaiting curator");
 });

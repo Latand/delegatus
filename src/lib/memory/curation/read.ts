@@ -38,7 +38,7 @@ export function readCuration(pass: CuratorPass, scope?: string, cursor?: string,
     ? history.filter(h => h.by === "curator" && h.pass !== pass.id).map(h => h.at).sort().at(-1) ?? ""
     : since;
   const entries: Record<string, unknown>[] = [
-    ...(rules?.active.slice().reverse().map(({ versions, ...rule }) => ({ kind: "active", ...rule, newSincePass: rule.changedAt > since, versionCount: versions?.length ?? 0, earlierText: versions?.at(-1) })) ?? []),
+    ...(rules?.active.slice().reverse().map(({ versions, ...rule }) => ({ kind: "active", ...rule, newSincePass: !!rule.awaitingCuration || rule.changedAt > since, versionCount: versions?.length ?? 0, earlierText: versions?.at(-1) })) ?? []),
     ...(rules?.left.filter(rule => rule.reason === "budget" || rule.changedAt > departuresSince).map(({ versions, ...rule }) => ({ kind: "left", ...rule, versionCount: versions?.length ?? 0 })) ?? []),
   ];
   if (role && !isCrossProjectRoleScope(scope)) entries.push(...all.flatMap(row => row.kind === "rule" && row.state === "active" && !row.versionOf && canonicalScope(row.scope) !== scope && scopeRole(row.scope) === role && !isCrossProjectRoleScope(row.scope) ? [{ kind: "other-project", id: row.id, scope: canonicalScope(row.scope), rule: row.rule, why: row.why, readOnly: true }] : []));

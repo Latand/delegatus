@@ -174,7 +174,7 @@ function RuleRow({ rule, kind, focused, scopeRole, onDelete, onRevert }: { rule:
   /* Who left it is news only where it differs from the scope's own role. */
   const author = rule.roleId && rule.roleId !== scopeRole ? roleNameById(t, rule.roleId) : null;
   const revision = rule.revisedBy;
-  const awaitingCurator = !rule.curatedAt || revision?.by === "agent" && revision.at > rule.curatedAt;
+  const awaitingCurator = rule.awaitingCuration ?? (!rule.curatedAt || revision?.by === "agent" && revision.at > rule.curatedAt);
   const meta = [rule.keptByOperatorAt ? t("roleMemory.kept") : awaitingCurator ? t("roleMemory.unreviewed") : null, revision ? t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") }) : author, (revision?.fixRound ?? rule.fixRound) ? t("roleMemory.fixRound") : null, rule.mergedFrom?.length ? t("roleMemory.mergedFrom", { count: rule.mergedFrom.length }) : null].filter(Boolean).join(" · ");
   return (
     <li ref={row} data-learned-rule={rule.id} data-focused={focused ? "" : undefined} data-open={open ? "" : undefined}
