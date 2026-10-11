@@ -15175,9 +15175,9 @@ describe("model glyphs in place of the stage dot", () => {
   const WORD_HOSTS = new Set(["pnode", "pane-head"]);
   /* The model words a host's accessible text must carry: the catalogue's short
      label, which the identity sentence and the identity line both print. */
-  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
+  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 5.5", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
   /* The pane head's glyph names itself with the catalogue's full label. */
-  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
+  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 5.5", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
   /* The stage state a glyph reading stands for in this fixture, for the words its name must end on. */
   const STATE_OF_READING: Record<string, string> = { running: "running", waiting: "pending", passed: "passed", failed: "failed", needs: "needs_decision" };
   /* The legend: every word on the three cards hidden, so only the drawings
@@ -27472,6 +27472,168 @@ describe("prototype review: a decided round retires the earlier undecided rounds
   }, 600_000);
 });
 
+describe("prototype review: a decision answers at once and its message is delivered in the background", () => {
+  /*
+   * The operator chooses on the search task's review and saves while the
+   * server holds the write back: the review keeps the choice and the words
+   * and claims nothing until the decision is written. The written answer
+   * collapses it into the saved decision, with nothing left to wait for and
+   * nothing asked on close; the background delivery then reads on its way and
+   * delivered. The
+   * disk task's decision has kept failing: its review warns and offers to send
+   * again, its card is marked, and the needs-you list carries it. At 1440 and
+   * 390, in Ukrainian, light.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "answers at once"
+   *
+   * Frames go to PROTOTYPE_REVIEW_PNG_DIR (default `.artifacts/prototype-review/`);
+   * readings to `evidence/prototype-review/optimistic-decision.json`.
+   */
+  const SIZES = [
+    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+
+  browserTest("prototype review: saving collapses into the saved decision once the server has written it; delivery reads saved, delivering, delivered, and a failing one asks for attention", async () => {
+    const out = path.resolve(".artifacts/prototype-review");
+    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/prototype-review", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const REVIEW = "[data-prototype-review]";
+    try {
+      for (const size of SIZES) {
+        const lang = "uk" as const;
+        const label = `${size.name}-${lang}-light`;
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=1`, size.viewport, "light", lang, "reduce", size.phone);
+        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `optimistic-${label}-${name}.png`) });
+        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
+        /* The phone's sheet draws the decision and the field in its own footer, outside the review's scrolling body. */
+        const scope = size.phone ? "[data-mobile2-sheet=prototype-review]" : REVIEW;
+        const open = (taskId: string, reviewId: string) => page.evaluate(({ taskId, reviewId }) => {
+          window.dispatchEvent(new CustomEvent("llv:open-prototype-review", { detail: { kind: "prototype-review", taskId, reviewId, from: "card" } }));
+        }, { taskId, reviewId });
+        const footer = () => page.evaluate((scope) => {
+          const line = document.querySelector<HTMLElement>("[data-prototype-delivery]");
+          return {
+            phase: line?.dataset.prototypeDeliveryPhase ?? null,
+            words: line?.querySelector("[data-prototype-delivery-said]")?.textContent ?? null,
+            retry: Boolean(line?.querySelector("[data-prototype-retry]")),
+            field: Boolean(document.querySelector(`${scope} [data-prototype-comment-field]`)),
+            save: Boolean(document.querySelector("[data-prototype-save]")),
+            chosen: [...document.querySelectorAll<HTMLElement>("[data-prototype-chosen]")].map((chip) => chip.dataset.prototypeChosen),
+            comment: document.querySelector("[data-prototype-comment]")?.textContent ?? null,
+          };
+        }, scope);
+        try {
+          await page.waitForSelector(size.phone ? "[data-phone-kanban]" : "[data-prototype-button]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(400);
+
+          /* Before: two variants chosen and a comment written. */
+          await open("t-search", "r-search");
+          await page.waitForSelector(`${scope} [data-prototype-comment-field]`, { timeout: 10_000 });
+          for (const number of [2, 3]) {
+            if (size.phone) await page.locator(`${REVIEW} button[data-prototype-variant="${number}"]`).click();
+            await page.locator(`${REVIEW} [data-prototype-choose="${number}"]`).click();
+          }
+          const comment = "Шапка з двох колонок, рядки з таблиці.";
+          await page.locator(`${scope} [data-prototype-comment-field]`).fill(comment);
+          await page.waitForTimeout(250);
+          record("before", await footer());
+          await shot("before-submit");
+
+          /* The press: the server holds the write, and the review keeps the choice and the words and claims nothing. */
+          await page.evaluate(() => {
+            const fixture = window as unknown as { protoSavePhase?: string; protoHoldSave: () => void };
+            fixture.protoSavePhase = "saved";
+            fixture.protoHoldSave();
+          });
+          await page.locator("[data-prototype-save]").click();
+          await page.waitForSelector("[data-prototype-save]:disabled", { timeout: 5_000 });
+          await page.waitForTimeout(150);
+          const saving = { ...await footer(), held: await page.evaluate(() => Boolean((window as unknown as { protoHeldSave?: unknown }).protoHeldSave)),
+            value: await page.locator(`${scope} [data-prototype-comment-field]`).inputValue().catch(() => null) };
+          record("saving", saving);
+          await shot("saving");
+          if (!saving.held) failures.push(`${label}: the server had already written the decision when the saving frame was taken`);
+          if (!saving.field || saving.phase !== null || saving.value !== comment) failures.push(`${label}: while the write is held the review reads ${JSON.stringify(saving)}, expected the choice and the words still in place`);
+
+          /* The written answer: the review collapses into the saved decision. */
+          const released = Date.now();
+          await page.evaluate(() => (window as unknown as { protoReleaseSave: () => void }).protoReleaseSave());
+          await page.waitForSelector('[data-prototype-delivery-phase="saved"]', { timeout: 5_000 });
+          const collapsedMs = Date.now() - released;
+          await page.waitForTimeout(150);
+          const after = { ...await footer(), collapsedMs };
+          record("after-submit", after);
+          await shot("after-submit");
+          if (after.field || after.save || after.words !== tr("proto.saved.saved") || after.retry) failures.push(`${label}: right after the write the review reads ${JSON.stringify(after)}, expected the saved decision alone`);
+          if (JSON.stringify(after.chosen) !== JSON.stringify(["2", "3"]) || after.comment !== comment) failures.push(`${label}: the saved decision shows ${JSON.stringify(after)}`);
+
+          /* The background delivery: on its way, then delivered. */
+          await page.evaluate(() => (window as unknown as { protoPhase: (task: string, phase: string) => void }).protoPhase("t-search", "delivering"));
+          await page.waitForSelector('[data-prototype-delivery-phase="delivering"]', { timeout: 6_000 });
+          await page.waitForTimeout(150);
+          const delivering = await footer();
+          record("delivering", delivering);
+          await shot("delivering");
+          if (delivering.words !== tr("proto.saved.delivering") || delivering.retry) failures.push(`${label}: on its way the line reads ${JSON.stringify(delivering)}`);
+          await page.evaluate(() => (window as unknown as { protoPhase: (task: string, phase: string) => void }).protoPhase("t-search", "delivered"));
+          await page.waitForSelector('[data-prototype-delivery-phase="delivered"]', { timeout: 6_000 });
+          await page.waitForTimeout(150);
+          const delivered = await footer();
+          record("delivered", delivered);
+          await shot("delivered");
+          if (delivered.words !== tr("proto.saved.delivered") || delivered.retry) failures.push(`${label}: delivered, the line reads ${JSON.stringify(delivered)}`);
+
+          /* Closing loses nothing, so nothing asks. */
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(250);
+          const closed = await page.evaluate((review) => ({ review: Boolean(document.querySelector(review)), guard: Boolean(document.querySelector("[data-prototype-guard]")) }), REVIEW);
+          record("closed", closed);
+          if (closed.review || closed.guard) failures.push(`${label}: closing the saved review left ${JSON.stringify(closed)}`);
+
+          /* A decision whose message keeps failing: the card, the needs-you list and its review. */
+          await page.evaluate(() => (window as unknown as { protoPhase: (task: string, phase: string) => void }).protoPhase("t-disk", "attention"));
+          await page.waitForTimeout(400);
+          const LIST = size.phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+          await page.locator(size.phone ? "[data-mobile2-attention-count]" : "[data-attention-count]").click();
+          await page.waitForSelector(`${LIST} [data-attention-prototype="t-disk"]`, { timeout: 10_000 });
+          await page.waitForTimeout(250);
+          const row = await page.evaluate((list) => document.querySelector(`${list} [data-attention-prototype="t-disk"]`)?.textContent ?? null, LIST);
+          record("attention-row", row);
+          await shot("attention-list");
+          if (!row?.includes(tr("proto.notice.undelivered"))) failures.push(`${label}: the needs-you row of the failing decision reads ${JSON.stringify(row)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(250);
+          await open("t-disk", "r-disk");
+          await page.waitForSelector('[data-prototype-delivery-phase="attention"]', { timeout: 10_000 });
+          await page.waitForTimeout(250);
+          const attention = await footer();
+          record("attention", attention);
+          await shot("attention");
+          if (attention.words !== tr("proto.saved.attention") || !attention.retry) failures.push(`${label}: the failing decision's line reads ${JSON.stringify(attention)}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await shot("failed-here").catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync("evidence/prototype-review/optimistic-decision.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
 describe("orchestrator wire routing across the board's layouts", () => {
   /* docs/design/orchestrator-wire-routing.md: every seat/card layout the board
      produces, one seat action each, and the route the layer draws for it —
@@ -28373,6 +28535,110 @@ describe("account chips with the weekly limit left: the launch chooser and the r
         await page.screenshot({ path: path.join(out, "build-rotate-390-uk-dark-late-readings.png") });
         expect(pageErrors, "page errors").toEqual([]);
       } finally { await context.close(); }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 300_000);
+});
+
+describe("the sidebar names each account's weekly limit left, Claude as Codex", () => {
+  /*
+   * The operator's reading (2026-10-11): a Claude account with 77 % of its week and 36 % of its 5-hour window left
+   * read 36 in the sidebar. Over the board fixture with `&accountpicker=1&sidebarweekly=1`: Claude «Main» 77 % week
+   * and 36 % 5h, «Work» a week only (41 %), «Night» a 5-hour window only (70 %); Codex 78 % and 23 %, weekly only.
+   * The desktop sidebar footer at 1440 and 1000, dark and light, one line per account (each names the week), then
+   * «All windows»; the phone's accounts screen at 390, where the phone keeps its account lines. en and uk.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 SIDEBAR_WEEKLY_OUT=<dir> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "weekly limit left, Claude as Codex"
+   *
+   * The frames go to `SIDEBAR_WEEKLY_OUT`, outside the repository; the readings go to evidence/sidebar-weekly.
+   */
+  browserTest("every account line names its week, a 5-hour figure only under its own label, and a missing week says so", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-weekly-"));
+    const out = process.env.SIDEBAR_WEEKLY_OUT ? path.resolve(process.env.SIDEBAR_WEEKLY_OUT) : path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
+        const left = (percent: number) => `${tr("limits.weekValue")} ${percent}%`;
+
+        /* The desktop sidebar at 1440 and 1000, dark and light: one line per account, then every window behind «All windows». */
+        for (const [width, scheme] of [[1440, "dark"], [1440, "light"], [1000, "dark"], [1000, "light"]] as const) {
+          const name = `sidebar-${width}-${scheme}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width, height: VIEWPORT.height }, scheme, lang, "reduce");
+          try {
+            await page.locator('[data-engine-limits="claude"] [data-footer-account="night"]').waitFor({ timeout: 40_000 });
+            await page.locator('[data-engine-limits="codex"] [data-footer-account="review"] [data-meter-value]').waitFor({ timeout: 15_000 });
+            await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+            const lines = () => page.locator("[data-engine-limits] [data-footer-account]").evaluateAll((rows) => rows.map((row) => ({
+              engine: row.closest("[data-engine-limits]")?.getAttribute("data-engine-limits"), id: row.getAttribute("data-footer-account"),
+              text: (row as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+              value: (row.querySelector("[data-meter-value]") ?? row.querySelector("[data-limits-reason]"))?.textContent ?? null,
+              bar: row.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar") ?? null,
+              overflow: row.scrollWidth > row.clientWidth + 0.5,
+            })));
+            const compact = await lines();
+            const value = (engine: string, id: string) => compact.find((row) => row.engine === engine && row.id === id)?.value;
+            expect([value("claude", "default"), value("claude", "work"), value("claude", "night")], `${name} Claude lines`).toEqual([left(77), left(41), tr("limits.noWeekly")]);
+            expect([value("codex", "default"), value("codex", "review")], `${name} Codex lines`).toEqual([left(78), left(23)]);
+            expect(compact.map((row) => row.bar), `${name} bars`).toEqual(["77", "41", null, "78", "23"]);
+            expect(compact.filter((row) => row.overflow).map((row) => row.text), `${name} lines hold their contents`).toEqual([]);
+            const footerText = await page.locator("[data-rail-footer]").innerText();
+            expect(footerText, `${name} no 5-hour figure on a line`).not.toMatch(/\b(36|70)%/);
+            expect(compact.filter((row) => row.value?.endsWith("%") && !row.value.startsWith(tr("limits.weekValue"))).map((row) => row.text), `${name} every percent on a line names the week`).toEqual([]);
+            await page.mouse.move(0, 0);
+            const footer = (await page.locator("[data-rail-footer]").boundingBox())!;
+            await page.screenshot({ path: path.join(out, `${name}-lines.png`), clip: { x: 0, y: Math.max(0, footer.y - 40), width: Math.ceil(footer.x + footer.width), height: Math.min(VIEWPORT.height, footer.y + footer.height + 4) - Math.max(0, footer.y - 40) } });
+
+            await page.click("[data-rail-footer-detail]");
+            await page.locator('[data-engine-limits="claude"] [data-limits-windows]').waitFor({ timeout: 10_000 });
+            const windows = await page.locator('[data-engine-limits="claude"] [data-limits-windows] [data-meter-window]').evaluateAll((rows) => rows.map((row) => (row as HTMLElement).innerText.replace(/\s+/g, " ").trim()));
+            const detailLine = await page.locator('[data-engine-limits="claude"] [data-footer-account-active="true"] [data-meter-value]').textContent();
+            expect(detailLine, `${name} the line under «All windows»`).toBe(left(77));
+            expect(windows.some((row) => row.startsWith(tr("limits.5h")) && row.includes("36%")), `${name} the 5-hour figure under its label: ${JSON.stringify(windows)}`).toBe(true);
+            expect(windows.some((row) => row.startsWith(tr("limits.week")) && row.includes("77%")), `${name} the week under its label`).toBe(true);
+            const detailBox = (await page.locator("[data-rail-footer]").boundingBox())!;
+            await page.screenshot({ path: path.join(out, `${name}-all-windows.png`), clip: { x: 0, y: Math.max(0, detailBox.y - 40), width: Math.ceil(detailBox.x + detailBox.width), height: Math.min(VIEWPORT.height, detailBox.y + detailBox.height + 4) - Math.max(0, detailBox.y - 40) } });
+            expect(pageErrors, `${name} page errors`).toEqual([]);
+            readings.push({ shot: name, lines: compact, allWindows: { line: detailLine, windows } });
+          } finally { await context.close(); }
+        }
+
+        /* The phone: its account lines are the accounts screen behind the menu; each corner names the week. */
+        {
+          const name = `accounts-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
+          try {
+            await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 40_000 });
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-go="accounts"]');
+            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(4).waitFor({ timeout: 15_000 });
+            await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+            const cards = await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').evaluateAll((elements) => elements.map((card) => {
+              const corner = card.querySelector<HTMLElement>("[data-mobile2-account-corner]");
+              const box = corner?.getBoundingClientRect();
+              return {
+                id: card.getAttribute("data-mobile2-account"), corner: corner?.innerText.replace(/\s+/g, " ").trim() ?? null,
+                inside: box ? box.right <= innerWidth + 0.5 && box.left >= -0.5 : null,
+              };
+            }));
+            const week = (percent: number) => `${tr("mobile2.meter.left", { left: percent })} ${tr("limits.week")}`;
+            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([week(77), week(41), tr("limits.noWeekly"), week(78), week(23)]);
+            expect(cards.every((card) => card.inside !== false), `${name} corners inside the screen`).toBe(true);
+            expect(await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth)), `${name} no sideways scroll`).toBe(0);
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            expect(pageErrors, `${name} page errors`).toEqual([]);
+            readings.push({ shot: name, cards });
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/sidebar-weekly", { recursive: true });
+      fs.writeFileSync("evidence/sidebar-weekly/readings.json", JSON.stringify(readings, null, 2) + "\n");
     } finally {
       await browser.close();
       server.stop();

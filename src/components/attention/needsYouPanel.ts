@@ -155,7 +155,7 @@ export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { pat
 
 /** The desktop panel's words, also returned by the project read. */
 export function needsYouRowText(t: TFunction, entry: MobileAttentionEntry): { title: string; line: string } {
-  if (entry.kind === "prototype") return { title: entry.notice.title, line: t("proto.notice.open") };
+  if (entry.kind === "prototype") return { title: entry.notice.title, line: t(entry.notice.undelivered ? "proto.notice.undelivered" : "proto.notice.open") };
   if (entry.kind === "update") return { title: t("selfUpdate.auto.decision.title"), line: t("selfUpdate.auto.decision.body") };
   return entry.kind === "conversation"
     ? { title: entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90), line: reasonLine(t, entry.item.reason) }

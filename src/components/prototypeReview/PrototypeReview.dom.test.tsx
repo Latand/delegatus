@@ -52,6 +52,8 @@ mock.module("@/hooks/useDictation", () => ({
 }));
 
 const { PrototypeReview } = await import("./PrototypeReview");
+const { PrototypeReviewHost } = await import("./PrototypeReviewHost");
+const { openPrototypeReview } = await import("@/hooks/usePrototypeReview");
 
 const media = (id: string) => ({ id: id.repeat(64), mime: "image/png" as const, bytes: 8, available: false, url: null });
 const variant = (number: number, name: string) => ({ number, name, description: `${name} layout.`, frames: [{ image: media(String(number)), caption: "Board" }], videos: [] });
@@ -690,5 +692,307 @@ describe("short questionnaire", () => {
     await mountQuestions();
     expect(document.body.textContent).toContain("Choose any");
     expect(document.querySelector('[data-prototype-option="place:1"]')?.className).not.toContain("opacity-60");
+  });
+});
+
+describe("a saved decision answers at once", () => {
+  const typeComment = async (value: string) => {
+    const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+    const props = (field as unknown as Record<string, { onChange: (event: { target: { value: string } }) => void }>)[Object.keys(field).find((key) => key.startsWith("__reactProps$"))!]!;
+    await act(async () => { props.onChange({ target: { value } }); });
+  };
+  /* The server answers a save only when the case lets it, as a seat that does not answer would hold it. */
+  function heldServer(answer: (body: { chosen: number[]; comment: string }) => Response) {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      if (init?.method !== "POST") return new Response(JSON.stringify(reviewRead()), { status: 200 });
+      const body = JSON.parse(String(init.body));
+      posted.push(body);
+      await held;
+      return answer(body);
+    }) as typeof fetch;
+    return { release, posted };
+  }
+  async function mount(onClose: () => void = () => {}) {
+    const host = dom.document.createElement("div") as unknown as HTMLElement;
+    dom.document.body.appendChild(host as never);
+    root = createRoot(host);
+    await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={onClose} />); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  }
+
+  const pressClose = () => act(async () => { document.querySelector<HTMLElement>("[data-prototype-close]")!.click(); });
+  const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+
+  test("a save reads as saved only once the server has written it; a close pressed meanwhile waits for that and then closes", async () => {
+    const server = heldServer((body) => {
+      const read = reviewRead(body);
+      read.rounds[0]!.decision!.delivery = { state: "pending", retryable: true, phase: "saved" };
+      return new Response(JSON.stringify(read), { status: 200 });
+    });
+    let closed = 0;
+    await mount(() => { closed += 1; });
+    await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.click(); });
+    await typeComment("Roomier, please.");
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); });
+    await settle();
+    expect(server.posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [2], comment: "Roomier, please." }]);
+    // The server has not written it: the review still holds the choice and the words, and claims nothing.
+    expect(document.querySelector("[data-prototype-decision]")).toBeNull();
+    expect(document.querySelector("[data-prototype-delivery]")).toBeNull();
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("Roomier, please.");
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(true);
+    // A close now waits for the server's word: nothing closes and nothing asks yet.
+    await pressClose();
+    expect(closed).toBe(0);
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+    await act(async () => { server.release(); });
+    await settle();
+    expect(document.querySelector("[data-prototype-comment-field]")).toBeNull();
+    expect([...document.querySelectorAll<HTMLElement>("[data-prototype-chosen]")].map((chip) => chip.dataset.prototypeChosen)).toEqual(["2"]);
+    expect(document.querySelector("[data-prototype-comment]")?.textContent).toBe("Roomier, please.");
+    const line = document.querySelector<HTMLElement>("[data-prototype-delivery]")!;
+    expect(line.dataset.prototypeDeliveryPhase).toBe("saved");
+    expect(line.textContent).toBe("Decision saved");
+    expect(closed).toBe(1);
+    // Saved, the review closes without asking.
+    await pressClose();
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+    expect(closed).toBe(2);
+  });
+
+  test("a save the server refuses keeps the choice and the words where they were, says why, and a close pressed meanwhile stays open", async () => {
+    const server = heldServer(() => new Response(JSON.stringify({ error: "prototype review is unavailable" }), { status: 503 }));
+    let closed = 0;
+    await mount(() => { closed += 1; });
+    await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="1"]')!.click(); });
+    await typeComment("Keep these words.");
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); });
+    await settle();
+    await pressClose();
+    await act(async () => { server.release(); });
+    await settle();
+    expect(closed).toBe(0);
+    expect(document.querySelector("[data-prototype-decision]")).toBeNull();
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("Keep these words.");
+    expect(document.querySelector<HTMLElement>('[data-prototype-choose="1"]')!.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector("[data-prototype-error]")?.textContent).toContain("prototype review is unavailable");
+    // The words are still unsaved, so a close asks first.
+    await pressClose();
+    expect(document.querySelector("[data-prototype-guard]")).not.toBeNull();
+    expect(closed).toBe(0);
+  });
+
+  /* The page's one review surface, as the board mounts it: closing and opening another task really unmount the review. */
+  function hostServer(answer: "commit" | "refuse") {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let decided: { chosen: number[]; comment: string } | null = null;
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      const taskId = decodeURIComponent(String(url).split("/")[3] ?? "");
+      if (init?.method !== "POST") {
+        const read = reviewRead(taskId === "task-1" ? decided ?? undefined : undefined);
+        if (read.rounds[0]!.decision) read.rounds[0]!.decision.delivery = { state: "pending", retryable: true, phase: "delivering" };
+        return new Response(JSON.stringify({ ...read, taskId }), { status: 200 });
+      }
+      const body = JSON.parse(String(init.body));
+      posted.push(body);
+      await held;
+      if (answer === "refuse") return new Response(JSON.stringify({ error: "prototype review is unavailable" }), { status: 503 });
+      decided = { chosen: body.chosen, comment: body.comment };
+      const read = reviewRead(decided);
+      read.rounds[0]!.decision!.delivery = { state: "pending", retryable: true, phase: "saved" };
+      return new Response(JSON.stringify(read), { status: 200 });
+    }) as typeof fetch;
+    return { release, posted };
+  }
+  async function mountHost() {
+    const host = dom.document.createElement("div") as unknown as HTMLElement;
+    dom.document.body.appendChild(host as never);
+    root = createRoot(host);
+    await act(async () => { root!.render(<PrototypeReviewHost tasks={[]} />); });
+  }
+  const openReview = async (taskId: string) => {
+    await act(async () => { openPrototypeReview({ kind: "prototype-review", taskId, reviewId: `pr_${"a".repeat(32)}`, from: "card" }); });
+    await settle();
+  };
+  const reviewOf = () => document.querySelector<HTMLElement>("[data-prototype-review]");
+
+  test("a refused save whose review was replaced meanwhile comes back with the choice, the exact words and the reason when the review opens again", async () => {
+    const server = hostServer("refuse");
+    await mountHost();
+    await openReview("task-1");
+    await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.click(); });
+    await typeComment("  Roomier,\nplease. ");
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); });
+    await settle();
+    // Another task's review takes the surface: the first one is unmounted with its save in flight.
+    await openReview("task-2");
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("");
+    await act(async () => { server.release(); });
+    await settle();
+    await pressClose();
+    expect(reviewOf()).toBeNull();
+    await openReview("task-1");
+    expect(server.posted).toHaveLength(1);
+    expect(document.querySelector("[data-prototype-decision]")).toBeNull();
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("  Roomier,\nplease. ");
+    expect(document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector<HTMLElement>('[data-prototype-choose="1"]')!.getAttribute("aria-checked")).toBe("false");
+    expect(document.querySelector("[data-prototype-error]")?.textContent).toContain("prototype review is unavailable");
+    // Once the review has it again, it is not kept twice: a discard and a reopen start clean.
+    await pressClose();
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-discard]")!.click(); });
+    expect(reviewOf()).toBeNull();
+    await openReview("task-1");
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("");
+    expect(document.querySelector("[data-prototype-error]")).toBeNull();
+  });
+
+  test("a refused save whose review was closed by a second press comes back with its choice when the review opens again", async () => {
+    const server = hostServer("refuse");
+    await mountHost();
+    await openReview("task-1");
+    await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.click(); });
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); });
+    await settle();
+    await pressClose();
+    expect(reviewOf()).not.toBeNull();
+    // The operator insists: the second press closes, and the review is gone.
+    await pressClose();
+    expect(reviewOf()).toBeNull();
+    await act(async () => { server.release(); });
+    await settle();
+    await openReview("task-1");
+    expect(document.querySelector("[data-prototype-decision]")).toBeNull();
+    expect(document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector("[data-prototype-error]")?.textContent).toContain("prototype review is unavailable");
+  });
+
+  test("a written save closes the review it was asked to close, before the seat has the message; it opens again on the saved decision", async () => {
+    const server = hostServer("commit");
+    await mountHost();
+    await openReview("task-1");
+    await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.click(); });
+    await typeComment("Roomier, please.");
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); });
+    await settle();
+    await pressClose();
+    expect(reviewOf()).not.toBeNull();
+    await act(async () => { server.release(); });
+    await settle();
+    expect(reviewOf()).toBeNull();
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+    await openReview("task-1");
+    expect(server.posted).toHaveLength(1);
+    expect(document.querySelector("[data-prototype-comment-field]")).toBeNull();
+    expect(document.querySelector("[data-prototype-comment]")?.textContent).toBe("Roomier, please.");
+    expect(document.querySelector<HTMLElement>("[data-prototype-delivery]")!.dataset.prototypeDeliveryPhase).toBe("delivering");
+  });
+
+  /* Two waiting rounds of one task: the earlier one is saved, the later one may still hold the operator's words. */
+  const earlier = `pr_${"a".repeat(32)}`;
+  const later = `pr_${"b".repeat(32)}`;
+  function twoRoundServer() {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let decided: { chosen: number[]; comment: string } | null = null;
+    const posted: unknown[] = [];
+    const read = (): PrototypeReviewRead => {
+      const first = reviewRead(decided ?? undefined).rounds[0]!;
+      if (first.decision) first.decision.delivery = { state: "pending", retryable: true, phase: "saved" };
+      return { taskId: "task-1", waitingReviewId: later, rounds: [first, { ...reviewRead().rounds[0]!, id: later, title: "Spacing", createdAt: "2026-10-06T12:00:00.000Z" }] };
+    };
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      if (init?.method !== "POST") return new Response(JSON.stringify(read()), { status: 200 });
+      const body = JSON.parse(String(init.body));
+      posted.push(body);
+      await held;
+      decided = { chosen: body.chosen, comment: body.comment };
+      return new Response(JSON.stringify(read()), { status: 200 });
+    }) as typeof fetch;
+    return { release, posted };
+  }
+  /* Opens the later round, writes its words if any, then saves the earlier round's choice and presses Close while the server holds the save. */
+  async function saveEarlierAndClose(laterWords: string) {
+    const server = twoRoundServer();
+    await mountHost();
+    await act(async () => { openPrototypeReview({ kind: "prototype-review", taskId: "task-1", reviewId: later, from: "card" }); });
+    await settle();
+    if (laterWords) await typeComment(laterWords);
+    await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${earlier}"]`)!.click(); });
+    await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.click(); });
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); });
+    await settle();
+    await pressClose();
+    expect(reviewOf()).not.toBeNull();
+    await act(async () => { server.release(); });
+    await settle();
+    expect(server.posted).toEqual([{ reviewId: earlier, chosen: [2], comment: "" }]);
+  }
+
+  test("a written save asked to close keeps the review and asks when another round still holds unsaved words; keeping leaves them exact, discarding closes", async () => {
+    await saveEarlierAndClose("  Tighter,\nplease. ");
+    expect(reviewOf()).not.toBeNull();
+    expect(document.querySelector("[data-prototype-guard]")).not.toBeNull();
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-keep]")!.click(); });
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+    // The earlier round is decided; the later one still waits with its words as they were written.
+    await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${later}"]`)!.click(); });
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("  Tighter,\nplease. ");
+    await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${earlier}"]`)!.click(); });
+    expect(document.querySelector("[data-prototype-comment-field]")).toBeNull();
+    expect(document.querySelector<HTMLElement>("[data-prototype-delivery]")!.dataset.prototypeDeliveryPhase).toBe("saved");
+    // A close now asks again, and only the discard closes.
+    await pressClose();
+    expect(document.querySelector("[data-prototype-guard]")).not.toBeNull();
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-discard]")!.click(); });
+    expect(reviewOf()).toBeNull();
+  });
+
+  test("a written save asked to close closes at once when no other round holds unsaved words, before the seat has the message", async () => {
+    await saveEarlierAndClose("");
+    expect(reviewOf()).toBeNull();
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+  });
+
+  for (const [phase, words, retry] of [
+    ["saved", "Decision saved", false],
+    ["delivering", "Decision saved · delivering to the orchestrator", false],
+    ["delivered", "Decision saved · delivered to the orchestrator", false],
+    ["waiting-seat", "Decision saved · it goes to the orchestrator once the project has one", false],
+    ["attention", "Decision saved, but the orchestrator has not received it yet. Still trying.Send again", true],
+  ] as const) {
+    test(`a ${phase} delivery reads «${words.replace("Send again", "")}»${retry ? " and offers to send again" : " with nothing to press"}`, async () => {
+      const read = reviewRead({ chosen: [1], comment: "" });
+      read.rounds[0]!.decision!.delivery = { state: phase === "delivered" ? "sent" : phase === "attention" ? "failed" : phase === "waiting-seat" ? "no-orchestrator" : "pending", retryable: phase !== "delivered", phase };
+      await mountReview(read);
+      const line = document.querySelector<HTMLElement>("[data-prototype-delivery]")!;
+      expect(line.dataset.prototypeDeliveryPhase).toBe(phase);
+      expect(line.textContent).toBe(words);
+      expect(Boolean(line.querySelector("[data-prototype-retry]"))).toBe(retry);
+      expect(line.className).toContain(phase === "delivered" ? "text-success" : phase === "attention" ? "text-warning" : "text-muted");
+    });
+  }
+
+  test("a retry shows the message on its way at once", async () => {
+    const read = reviewRead({ chosen: [1], comment: "" });
+    read.rounds[0]!.decision!.delivery = { state: "failed", retryable: true, phase: "attention" };
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") { posted.push(JSON.parse(String(init.body))); await held; }
+      return new Response(JSON.stringify(read), { status: 200 });
+    }) as typeof fetch;
+    await mount();
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-retry]")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, retry: true }]);
+    expect(document.querySelector<HTMLElement>("[data-prototype-delivery]")!.dataset.prototypeDeliveryPhase).toBe("delivering");
+    expect(document.querySelector("[data-prototype-retry]")).toBeNull();
+    await act(async () => { release(); await new Promise((resolve) => setTimeout(resolve, 20)); });
   });
 });

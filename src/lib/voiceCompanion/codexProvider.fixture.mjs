@@ -2,6 +2,11 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 
+if (process.argv.includes("--version")) {
+  console.log("codex-cli 0.162.1");
+  process.exit(0);
+}
+
 const root = process.env.VOICE_STUB_ROOT;
 const mode = process.env.VOICE_STUB_MODE;
 fs.writeFileSync(`${root}/pid`, String(process.pid));
@@ -10,6 +15,16 @@ const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 const note = (method, params) => send({ method, params });
 const threadId = "voice_thread";
 const readArgs = { project: null, statuses: null, openOnly: true, query: null, ids: null, cursor: null, limit: null, refresh: null };
+if (mode === "replay") {
+  let consumed = 0;
+  setInterval(() => {
+    const file = `${root}/replay`;
+    if (!fs.existsSync(file)) return;
+    const rows = fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
+    for (const row of rows.slice(consumed)) send(JSON.parse(row));
+    consumed = rows.length;
+  }, 10);
+}
 readline.createInterface({ input: process.stdin }).on("line", line => {
   const message = JSON.parse(line);
   fs.appendFileSync(`${root}/wire`, `${line}\n`);
