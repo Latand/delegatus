@@ -47,11 +47,17 @@
  * with its path, a refusal on the last row after the list was scrolled by hand
  * (the block and its buttons must sit inside the list), the summary with all
  * six lines, the summary with a sign-in
- * file left behind, and the clean-up result with names that need a look — at
- * 1440 and 1280 in en and uk, light and dark — and the phone at 390 × 844 for
- * the refusal and the summary. Nothing is clamped or clipped, the path keeps
+ * file left behind, and the clean-up result with names that need a look; a
+ * refusal naming its live work as links into each conversation, and Main
+ * removed through the same control — armed, hidden with its folder left in
+ * place, and shown again from account setup once its summary is closed; and
+ * the Copilot list in the rail footer with the same control — a managed
+ * account armed, a refusal naming live work, Default armed, hidden and
+ * offered back, then shown again (task d7759de2) — at 1440 and 1280 in en and
+ * uk, light and dark — and the phone at 390 × 844 for the refusal, the
+ * summary, the live work, and hidden Main with its offer under the add row. Nothing is clamped or clipped, the path keeps
  * its account id visible, the blocks stay inside the panel, and the phone's
- * targets are 44 px.
+ * targets (buttons and links) are 44 px.
  *
  * With BOARD_CAPTURE_CASE=claude-login it renders the accounts panel while a
  * Claude sign-in waits for its code, answered by a network stub so no login
@@ -2955,7 +2961,7 @@ interface RemovalReading {
   pathId: { text: string; visible: boolean } | null;
   /** The displayed path, home folded to `~`. */
   pathShown: string | null;
-  /** Buttons inside the block, for the phone's 44 px rule. */
+  /** Buttons and links inside the block, for the phone's 44 px rule. */
   targets: { name: string; w: number; h: number }[];
   /** For a last-row refusal: the block and its buttons against the scrolling list. */
   fold?: unknown;
@@ -2995,7 +3001,7 @@ function readRemoval(selector: string): RemovalReading {
     clipped,
     pathId,
     pathShown: shown?.textContent ?? null,
-    targets: [...element.querySelectorAll("button")].map((button) => {
+    targets: [...element.querySelectorAll("button, a[href]")].map((button) => {
       const r = button.getBoundingClientRect();
       return { name: button.getAttribute("aria-label") || button.textContent?.trim() || "", w: r.width, h: r.height };
     }),
@@ -3004,6 +3010,16 @@ function readRemoval(selector: string): RemovalReading {
 
 /** Composed rather than written out: an archive path under an invented home, so the `~` fold is exercised. */
 const inventedArchive = (id: string) => ["", "home", "demo", ".config", "agent-log-viewer", "shared", "claude", "retired", id].join("/");
+/** Main's own folder under the same invented home, which a removal leaves in place. */
+const inventedMainHome = ["", "home", "demo", ".claude"].join("/");
+/** Live work a refusal names (task d7759de2): a titled conversation, one
+    without a title, and a launch known only by its transcript. */
+const liveWork = [
+  { conversationId: "conversation_capture_onboarding", path: null, title: "Rewrite the onboarding copy for the accounts panel and its phone screen" },
+  { conversationId: "conversation_capture_review", path: null, title: "Review" },
+  { conversationId: null, path: ["", "srv", "sessions", "rollout-2026-10-11T02-25-00-capture.jsonl"].join("/"), title: null },
+];
+const hiddenMainAnswer: Answer = { status: 200, body: { removed: { id: "default" }, hidden: { home: inventedMainHome }, cleanupPending: false, moved: { archive: null, files: 0, bytes: 0 }, conversationsRewritten: 0, pinsCleared: 1, deliveriesDropped: 0, migrationsSettled: 0, bindingsCleared: 1 } };
 
 type Answer = { status: number; body: unknown };
 
@@ -3030,12 +3046,17 @@ async function accountRemovalMain(): Promise<void> {
     await waitForServer(baseUrl, server);
     await waitForBoard(baseUrl, true);
     await Bun.sleep(3_000);
+    /* The telemetry notice sits where the footer panel opens. */
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 
-    /* Every DELETE is answered here and never reaches the server; the list read drops what a
-       stubbed success removed, the way the real one would. */
+    /* Every DELETE is answered here and never reaches the server; the list read and the project's
+       bindings read drop what a stubbed success removed, the way the real ones would. */
     const stubbed = async (context: Awaited<ReturnType<Browser["newContext"]>>) => {
       const gone = new Set<string>();
+      /* A removal drops the account's bindings for good; Show again lists the account and leaves them dropped. */
+      const unbound = new Set<string>();
       let next: Answer | null = null;
       let hold: Promise<void> | null = null;
       const deletes: unknown[] = [];
@@ -3043,25 +3064,72 @@ async function accountRemovalMain(): Promise<void> {
       await context.route("**/api/accounts", async (route) => {
         try {
           const response = await route.fetch();
-          const body = await response.json() as { claude?: { accounts?: { id: string }[] } };
+          const body = await response.json() as { claude?: { accounts?: { id: string }[]; hidden?: { id: string; label: string }[] } };
           if (body.claude?.accounts) body.claude.accounts = body.claude.accounts.filter((account) => !gone.has(account.id));
+          if (body.claude) body.claude.hidden = gone.has("default") ? [{ id: "default", label: "Main" }] : [];
           await route.fulfill({ response, json: body });
         } catch {
           /* the context is gone */
         }
       });
+      await context.route("**/api/account-project-bindings**", async (route) => {
+        try {
+          const response = await route.fetch();
+          const body = await response.json() as { engines?: Record<string, { allowed?: { accountId: string }[]; carrying?: { accountId: string }[] } | undefined> };
+          const claude = body.engines?.claude;
+          if (claude) {
+            claude.allowed = claude.allowed?.filter((account) => !unbound.has(account.accountId));
+            claude.carrying = claude.carrying?.filter((account) => !unbound.has(account.accountId));
+          }
+          await route.fulfill({ response, json: body });
+        } catch {
+          /* the context is gone */
+        }
+      });
+      /* The Copilot list is answered here whole: the capture machine has no Copilot CLI, and its
+         DELETE and Show again change only this list, the way the real route would. */
+      const copilotGone = new Set<string>();
+      let copilotNext: Answer | null = null;
+      const copilotBody = () => ({
+        cli: { present: true, reason: null },
+        active: "work",
+        accounts: [
+          { id: "default", label: "Default", kind: "legacy", active: false, auth: "signed_in", user: "demo-user", loginCommand: null, login: null },
+          { id: "work", label: "Work", kind: "managed", active: true, auth: "signed_in", user: "demo-user", loginCommand: null, login: null },
+        ].filter((account) => !copilotGone.has(account.id)),
+        hidden: copilotGone.has("default") ? [{ id: "default", label: "Default" }] : [],
+      });
+      await context.route("**/api/accounts/copilot", async (route) => {
+        const method = route.request().method();
+        const request = (method === "GET" ? null : route.request().postDataJSON()) as { id?: string; action?: string } | null;
+        if (method === "DELETE") {
+          deletes.push(request);
+          const answer = copilotNext ?? { status: 500, body: { code: "removal_failed" } };
+          if (answer.status === 200 && request?.id) copilotGone.add(request.id);
+          return route.fulfill({ status: answer.status, contentType: "application/json", body: JSON.stringify(answer.status === 200 ? { ...copilotBody(), removed: { id: request?.id } } : answer.body) });
+        }
+        if (method === "POST" && request?.action === "restore" && request.id) copilotGone.delete(request.id);
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(copilotBody()) });
+      });
       await context.route("**/api/accounts/claude", async (route) => {
+        /* Show again answers here too, and lists the hidden account back. */
+        if (route.request().method() === "POST" && (route.request().postDataJSON() as { action?: string } | null)?.action === "restore") {
+          const request = route.request().postDataJSON() as { id?: string };
+          if (request.id) gone.delete(request.id);
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ restored: { id: request.id } }) });
+        }
         if (route.request().method() !== "DELETE") return route.continue();
         const request = route.request().postDataJSON() as { id?: string };
         deletes.push(request);
         if (hold) await hold;
         const answer = next ?? { status: 500, body: { code: "removal_failed" } };
-        if (answer.status === 200 && request.id) gone.add(request.id);
+        if (answer.status === 200 && request.id) { gone.add(request.id); unbound.add(request.id); }
         await route.fulfill({ status: answer.status, contentType: "application/json", body: JSON.stringify(answer.body) });
       });
       return {
         deletes,
         answer(value: Answer) { next = value; },
+        answerCopilot(value: Answer) { copilotNext = value; },
         holdNext(): () => void {
           let release: () => void = () => {};
           hold = new Promise<void>((resolve) => { release = () => { hold = null; resolve(); }; });
@@ -3078,12 +3146,12 @@ async function accountRemovalMain(): Promise<void> {
       await page.waitForSelector('[role="dialog"] [data-account-row]');
       await page.waitForTimeout(400);
     };
-    const shoot = async (page: Page, name: string) => {
-      const panel = await page.evaluate(() => {
-        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) => /Claude/.test(element.getAttribute("aria-label") ?? ""));
+    const shoot = async (page: Page, name: string, dialogLabel = "Claude") => {
+      const panel = await page.evaluate((label: string) => {
+        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) => (element.getAttribute("aria-label") ?? "").includes(label));
         const r = dialog?.getBoundingClientRect();
         return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null;
-      });
+      }, dialogLabel);
       if (panel) await page.screenshot({ path: path.join(OUT_DIR, `removal-${name}.png`), clip: { x: Math.max(0, panel.x - 8), y: Math.max(0, panel.y - 8), width: panel.w + 16, height: panel.h + 16 } });
     };
     const check = (tag: string, state: string, reading: RemovalReading, expect: { text?: string[]; phone?: boolean }) => {
@@ -3096,8 +3164,14 @@ async function accountRemovalMain(): Promise<void> {
     };
 
     const cases = [1440, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
+    /* A page adopts the language the server keeps, so each context writes its own first. */
+    const writeLocale = async (lang: "en" | "uk") => {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`writing the ${lang} locale answered ${localeWrite.status}`);
+    };
     for (const { width, lang, colorScheme } of cases) {
       const tag = `${width}-${lang}-${colorScheme}`;
+      await writeLocale(lang);
       const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
       await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
@@ -3150,6 +3224,18 @@ async function accountRemovalMain(): Promise<void> {
       must(readings.archive.pathId?.text === idB && readings.archive.pathId.visible, `${tag} archive_unavailable: the path's account id is ${JSON.stringify(readings.archive.pathId)}`);
       must(readings.archive.pathShown?.startsWith("~/") ?? false, `${tag} archive_unavailable: the path reads «${readings.archive.pathShown}»`);
       await shoot(page, `${tag}-archive`);
+
+      /* Live work named as links into each conversation, the rest counted (task d7759de2). */
+      stub.answer({ status: 409, body: { code: "account_removal_blocked", blockers: ["live_sessions", "current_conversations"], sessions: liveWork, sessionCount: 7 } });
+      await arm(idB);
+      await confirm(idB);
+      await page.waitForSelector(`[data-account-refusal="${idB}"] [data-account-refusal-sessions]`);
+      await page.waitForTimeout(300);
+      readings.liveWork = await page.evaluate(readRemoval, `[data-account-refusal="${idB}"]`);
+      check(tag, "live work", readings.liveWork, { text: [lang === "uk" ? "і ще 4" : "and 4 more", liveWork[0]!.title!] });
+      const liveLinks = await page.evaluate((id: string) => [...document.querySelectorAll(`[data-account-refusal="${id}"] [data-account-refusal-sessions] a[href]`)].map((link) => link.getAttribute("href")), idB);
+      must(liveLinks.length === 3 && liveLinks[0] === "#c=conversation_capture_onboarding" && liveLinks[2]!.startsWith("#f="), `${tag} live work: the links are ${JSON.stringify(liveLinks)}`);
+      await shoot(page, `${tag}-live-work`);
 
       /* The last row, scrolled to by hand and clicked with the mouse where it is painted, so nothing
          scrolls for the driver: the refusal has to bring its own block, action button included, into the list. */
@@ -3234,6 +3320,101 @@ async function accountRemovalMain(): Promise<void> {
       readings.cleanup = await page.evaluate(readRemoval, '[data-account-removal-card="cleanup"]');
       check(tag, "clean-up", readings.cleanup, { text: ["claude-r2.lock", "+2"] });
       await shoot(page, `${tag}-cleanup`);
+
+      /* Main through the same control (task d7759de2): armed, hidden with its folder left in place, shown again. */
+      await arm("default");
+      readings.mainArmed = await page.evaluate(readRemoval, '[data-account-remove-armed="default"]');
+      check(tag, "Main armed", readings.mainArmed, { text: [lang === "uk" ? "нічого не видаляється" : "Nothing in its own folder is deleted"] });
+      await shoot(page, `${tag}-main-armed`);
+      stub.answer(hiddenMainAnswer);
+      await confirm("default");
+      await page.waitForSelector('[data-account-removal-restore="offered"]');
+      await page.waitForTimeout(400);
+      readings.mainHidden = await page.evaluate(readRemoval, '[data-account-removal-card="removed"]');
+      check(tag, "Main hidden", readings.mainHidden, { text: [lang === "uk" ? "Лишилися на місці" : "Left where they are", "~/.claude"] });
+      must(await page.evaluate(() => document.querySelector('[data-account-row="default"]') === null), `${tag} Main hidden: Main is still listed`);
+      must(!readings.mainHidden.text.includes(lang === "uk" ? "Перенесено" : "Moved"), `${tag} Main hidden: the card says something moved`);
+      await shoot(page, `${tag}-main-hidden`);
+      /* The summary closed, account setup still offers Main back, under the add-account form. */
+      await page.click(`[data-account-removal-card="removed"] button[aria-label="${lang === "uk" ? "Закрити підсумок" : "Close the summary"}"]`);
+      await page.waitForSelector('[data-account-hidden-offer="default"]');
+      await page.waitForTimeout(300);
+      readings.mainOffer = await page.evaluate(readRemoval, '[data-account-hidden-offer="default"]');
+      check(tag, "Main offered back", readings.mainOffer, { text: [lang === "uk" ? "Main прибрано з Delegatus" : "Main is removed from Delegatus", lang === "uk" ? "Повернути Main" : "Show Main again"] });
+      await shoot(page, `${tag}-main-offer`);
+      await page.click('[data-account-restore="default"]');
+      await page.waitForSelector('[data-account-row="default"]');
+      await page.waitForTimeout(300);
+      must(await page.evaluate(() => document.querySelector("[data-account-hidden-offer]") === null), `${tag} Main shown again: the offer stays up`);
+      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-row="default"] button');
+      check(tag, "Main shown again", readings.mainRestored, { text: ["Main"] });
+      await shoot(page, `${tag}-main-restored`);
+
+      /* The Copilot list in the rail footer, through the same control (task d7759de2). */
+      await page.click('[role="dialog"]:has([data-account-row]) header button');
+      await page.waitForSelector('[role="dialog"] [data-account-row]', { state: "detached" });
+      if (await page.$('[data-rail-footer="folded"]')) await page.click("[data-rail-footer-toggle]");
+      await page.waitForSelector('[data-engine-limits="copilot"] > button');
+      await page.click('[data-engine-limits="copilot"] > button');
+      await page.waitForSelector('[data-engine-limits="copilot"] [data-copilot-account="work"]');
+      await page.waitForTimeout(300);
+      const copilotLabel = "Copilot";
+      const copilotPanel = () => page.evaluate(() => {
+        const dialog = document.querySelector('[data-engine-limits="copilot"] [role="dialog"]');
+        const r = dialog?.getBoundingClientRect();
+        return r ? { x: r.x, y: r.y, w: r.width, h: r.height, viewport: window.innerHeight } : null;
+      });
+      const panelFits = async (state: string) => {
+        const box = await copilotPanel();
+        must(box !== null && box.y >= -0.5 && box.y + box.h <= box.viewport + 0.5, `${tag} Copilot ${state}: the open list runs out of the window (${JSON.stringify(box)})`);
+        return box;
+      };
+      await page.click('[data-account-remove="work"]');
+      await page.waitForSelector('[data-account-remove-armed="work"]');
+      readings.copilotArmed = await page.evaluate(readRemoval, '[data-account-remove-armed="work"]');
+      check(tag, "Copilot armed", readings.copilotArmed, { text: [lang === "uk" ? "Файл входу буде видалено" : "Its sign-in file is deleted"] });
+      await panelFits("armed");
+      await shoot(page, `${tag}-copilot-armed`, copilotLabel);
+      stub.answerCopilot({ status: 409, body: { code: "account_removal_blocked", blockers: ["live_sessions"], sessions: liveWork, sessionCount: 4 } });
+      await page.click('[data-account-remove-confirm="work"]');
+      await page.waitForSelector('[data-copilot-account="work"] [data-account-refusal="work"] [data-account-refusal-sessions]');
+      await page.waitForTimeout(300);
+      readings.copilotRefusal = await page.evaluate(readRemoval, '[data-copilot-account="work"] [data-account-refusal="work"]');
+      check(tag, "Copilot refusal", readings.copilotRefusal, { text: [liveWork[0]!.title!, lang === "uk" ? "і ще 1" : "and 1 more"] });
+      const refusalText = await page.evaluate(() => {
+        const text = document.querySelector('[data-copilot-account="work"] [data-account-refusal="work"] > div');
+        return text ? text.getBoundingClientRect().width : 0;
+      });
+      must(refusalText >= 120, `${tag} Copilot refusal: its text column is ${refusalText}px wide`);
+      (readings.copilotRefusal as RemovalReading & { textColumn?: number }).textColumn = refusalText;
+      await panelFits("refusal");
+      await shoot(page, `${tag}-copilot-refusal`, copilotLabel);
+      await page.click(`[data-account-refusal="work"] button[aria-label="${lang === "uk" ? "Закрити повідомлення" : "Close this message"}"]`);
+      await page.click('[data-account-remove="default"]');
+      await page.waitForSelector('[data-account-remove-armed="default"]');
+      readings.copilotDefaultArmed = await page.evaluate(readRemoval, '[data-account-remove-armed="default"]');
+      check(tag, "Copilot Default armed", readings.copilotDefaultArmed, { text: [lang === "uk" ? "його можна повернути" : "you can show it again"] });
+      await panelFits("Default armed");
+      await shoot(page, `${tag}-copilot-default-armed`, copilotLabel);
+      stub.answerCopilot({ status: 200, body: null });
+      await page.click('[data-account-remove-confirm="default"]');
+      await page.waitForSelector('[data-engine-limits="copilot"] [data-account-hidden-offer="default"]');
+      await page.waitForTimeout(300);
+      must(await page.evaluate(() => document.querySelector('[data-copilot-account="default"]') === null), `${tag} Copilot Default hidden: Default is still listed`);
+      readings.copilotDefaultHidden = await page.evaluate(readRemoval, '[data-engine-limits="copilot"] [data-account-hidden-offer="default"]');
+      check(tag, "Copilot Default offered back", readings.copilotDefaultHidden, { text: [lang === "uk" ? "Default прибрано з Delegatus" : "Default is removed from Delegatus", lang === "uk" ? "Повернути Default" : "Show Default again"] });
+      await panelFits("Default hidden");
+      await shoot(page, `${tag}-copilot-default-hidden`, copilotLabel);
+      await page.click('[data-engine-limits="copilot"] [data-account-restore="default"]');
+      await page.waitForSelector('[data-copilot-account="default"]');
+      await page.waitForTimeout(300);
+      must(await page.evaluate(() => document.querySelector('[data-engine-limits="copilot"] [data-account-hidden-offer]') === null), `${tag} Copilot Default shown again: the offer stays up`);
+      readings.copilotDefaultRestored = await page.evaluate(readRemoval, '[data-copilot-account="default"]');
+      /* The sign-in line may truncate (its title holds it whole); the account's name may not. */
+      readings.copilotDefaultRestored.clipped = readings.copilotDefaultRestored.clipped.filter((entry) => !entry.includes("demo-user"));
+      check(tag, "Copilot Default shown again", readings.copilotDefaultRestored, { text: ["Default"] });
+      await panelFits("Default shown again");
+      await shoot(page, `${tag}-copilot-default-restored`, copilotLabel);
       must(stub.deletes.every((body) => !(body as { force?: unknown }).force), `${tag}: a DELETE carried a force flag`);
       report[tag] = { readings, deletes: stub.deletes.length };
       await context.close();
@@ -3243,8 +3424,9 @@ async function accountRemovalMain(): Promise<void> {
        width behind a held answer, the window narrows to the phone, and the answer lands on the
        phone's accounts screen. */
     for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) {
-      for (const kind of ["refusal", "summary"] as const) {
+      for (const kind of ["refusal", "summary", "live", "hidden"] as const) {
         const tag = `390-${lang}-${colorScheme}-${kind}`;
+        await writeLocale(lang);
         const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, hasTouch: true, colorScheme, reducedMotion: "reduce" });
         await context.addInitScript(seedInit);
         await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
@@ -3254,11 +3436,15 @@ async function accountRemovalMain(): Promise<void> {
         await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
         await page.waitForTimeout(1_500);
         await openPanel(page);
-        const id = await rowIdOf(page, "Account B");
+        const id = kind === "hidden" ? "default" : await rowIdOf(page, "Account B");
         if (!id) { must(false, `${tag}: the seeded row is missing`); await context.close(); continue; }
         stub.answer(kind === "refusal"
           ? { status: 409, body: { code: "account_removal_blocked", blockers: ["current_conversations"] } }
-          : { status: 200, body: { removed: { id }, cleanupPending: true, moved: { archive: inventedArchive(id), files: 1284, bytes: 2_100_000_000 }, conversationsRewritten: 37, pinsCleared: 2, deliveriesDropped: 1, migrationsSettled: 1 } });
+          : kind === "live"
+            ? { status: 409, body: { code: "account_removal_blocked", blockers: ["live_sessions"], sessions: liveWork, sessionCount: 3 } }
+            : kind === "hidden"
+              ? hiddenMainAnswer
+              : { status: 200, body: { removed: { id }, cleanupPending: true, moved: { archive: inventedArchive(id), files: 1284, bytes: 2_100_000_000 }, conversationsRewritten: 37, pinsCleared: 2, deliveriesDropped: 1, migrationsSettled: 1 } });
         const release = stub.holdNext();
         await page.click(`[data-account-remove="${id}"]`);
         await page.click(`[data-account-remove-confirm="${id}"]`);
@@ -3268,13 +3454,19 @@ async function accountRemovalMain(): Promise<void> {
         await page.click('[data-mobile2-menu-row="accounts"]');
         await page.waitForSelector("[data-mobile2-accounts]");
         release();
-        const selector = kind === "refusal" ? `[data-mobile2-account="${id}"] [data-account-refusal="${id}"]` : '[data-mobile2-accounts-engine="claude"] [data-account-removal-card="removed"]';
+        const refusing = kind === "refusal" || kind === "live";
+        const selector = refusing ? `[data-mobile2-account="${id}"] [data-account-refusal="${id}"]` : '[data-mobile2-accounts-engine="claude"] [data-account-removal-card="removed"]';
         await page.waitForSelector(selector, { timeout: 30_000 });
         await page.waitForTimeout(400);
         const reading = await page.evaluate(readRemoval, selector);
-        check(tag, kind, reading, { phone: true });
-        if (kind === "summary") {
-          must(reading.pathId?.text === id && reading.pathId.visible, `${tag}: the path's account id is ${JSON.stringify(reading.pathId)}`);
+        check(tag, kind, reading, { phone: true, ...(kind === "live" ? { text: [liveWork[0]!.title!] } : kind === "hidden" ? { text: ["~/.claude"] } : {}) });
+        if (kind === "live") {
+          const links = await page.evaluate((account: string) => document.querySelectorAll(`[data-account-refusal="${account}"] [data-account-refusal-sessions] a[href]`).length, id);
+          must(links === 3, `${tag}: ${links} live-work links`);
+        }
+        if (kind === "hidden") must(await page.evaluate(() => document.querySelector('[data-mobile2-accounts-engine="claude"] [data-mobile2-account="default"]') === null), `${tag}: Claude Main is still listed`);
+        if (kind === "summary" || kind === "hidden") {
+          if (kind === "summary") must(reading.pathId?.text === id && reading.pathId.visible, `${tag}: the path's account id is ${JSON.stringify(reading.pathId)}`);
           const leads = await page.evaluate(() => {
             const section = document.querySelector('[data-mobile2-accounts-engine="claude"]');
             const card = section?.querySelector('[data-account-removal-card="removed"]');
@@ -3282,6 +3474,22 @@ async function accountRemovalMain(): Promise<void> {
             return Boolean(card && first && card.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING);
           });
           must(leads, `${tag}: the summary does not lead the engine section`);
+          if (kind === "hidden") {
+            /* Closed, the summary leaves Main offered back under the add row. */
+            await page.screenshot({ path: path.join(OUT_DIR, `removal-${tag}.png`), fullPage: false });
+            await page.click(`[data-mobile2-accounts-engine="claude"] [data-account-removal-card="removed"] button[aria-label="${lang === "uk" ? "Закрити підсумок" : "Close the summary"}"]`);
+            const offerSelector = '[data-mobile2-accounts-engine="claude"] [data-account-hidden-offer="default"]';
+            await page.waitForSelector(offerSelector);
+            await page.locator(offerSelector).scrollIntoViewIfNeeded();
+            await page.waitForTimeout(300);
+            const offer = await page.evaluate(readRemoval, offerSelector);
+            check(`${tag}-offer`, "Main offered back", offer, { phone: true, text: [lang === "uk" ? "Повернути Main" : "Show Main again"] });
+            report[`${tag}-offer`] = offer;
+            await page.screenshot({ path: path.join(OUT_DIR, `removal-${tag}-offer.png`), fullPage: false });
+            report[tag] = reading;
+            await context.close();
+            continue;
+          }
         } else {
           const inside = await page.evaluate((account: string) => {
             const card = document.querySelector(`[data-mobile2-account="${account}"]`)!.getBoundingClientRect();

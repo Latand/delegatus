@@ -402,6 +402,21 @@ export function unbindAccountFromProject(
 }
 
 /**
+ * Drops every binding of an account that left Delegatus, so no project's
+ * pool names it again. A project whose only binding it was is unbound
+ * afterwards, as it was before anyone bound it. Returns how many rows went.
+ */
+export function forgetAccountProjectBindings(engine: BindingEngine, accountId: string): number {
+  return withAccountMutationLock(() => {
+    const current = readBindings();
+    const next = current.filter((binding) => binding.engine !== engine || binding.accountId !== accountId);
+    if (next.length === current.length) return 0;
+    if (!writeBindings(next)) throw new Error("the account's project bindings could not be removed");
+    return current.length - next.length;
+  });
+}
+
+/**
  * The accounts `project` may use for `engine`, or `null` when the project has
  * no binding for that engine — which means every account, exactly as before.
  * `null` and `[]` are deliberately different answers: an empty array is a
