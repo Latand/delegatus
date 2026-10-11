@@ -13,7 +13,7 @@ import { DeliveryProgressStore } from "./deliveryProgress";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { handleRuntimeRetry } from "./http";
 import { StructuredDeliveryQueue, type StructuredDeliveryEffect } from "./structuredDeliveryQueue";
-import { deliverHeldStructuredMessage } from "./structuredMessageDelivery";
+import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { recordDirectWait } from "./recordWait";
 
 function deferred<T>() {
@@ -77,6 +77,48 @@ function fixture() {
   return { root, registry, journal, progress, operationId, key, reservation, conversation, publish, client, dependencies,
     retry, uncertain, ledger, host, queue, kicks: () => kicks,
     close() { progress.close(); journal.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); } };
+}
+
+for (const step of ["checking", "dispatching"] as const) {
+  for (const unreadable of [false, true]) test(`live same-key resend preserves the queue's ${step} record, attempt and deadline and sends once (journal unreadable: ${unreadable})`, async () => {
+    const f = fixture();
+    const blocked = deferred<void>();
+    const queue = f.queue();
+    let inputs = 0;
+    const send = f.host.send.bind(f.host);
+    f.host.send = async entry => { inputs += 1; if (step === "dispatching") await blocked.promise; return send(entry); };
+    if (step === "checking") {
+      const health = f.host.health.bind(f.host);
+      f.host.health = async () => { await blocked.promise; return health(); };
+    }
+    try {
+      f.uncertain();
+      expect((await f.retry()).status).toBe(202);
+      await queue.drain();
+      await Bun.sleep(40);
+      await queue.tick();
+      const before = structuredClone(f.progress.get(f.operationId)!);
+      const reservation = structuredClone(f.registry.snapshot().heldDeliveries[f.reservation.id]);
+      expect(before.waitReason).toBe(step);
+      expect(before.stalledSince).not.toBeNull();
+      if (unreadable) f.client.operationStatus = async () => { throw new RuntimeHostUnavailableError("journal read failed"); };
+      const result = await enqueueStructuredMessage({ path: f.conversation.generations[0]!.path,
+        conversationId: f.conversation.id, clientMessageId: f.key, text: f.reservation.text, policy: "queue" }, f.dependencies);
+      expect(result).toMatchObject({ ok: true, operationId: f.operationId });
+      expect(f.progress.get(f.operationId)).toEqual(before);
+      expect(f.registry.snapshot().heldDeliveries[f.reservation.id]).toEqual(reservation);
+      blocked.resolve();
+      await until(() => f.ledger.writes.length === 1);
+      await queue.drain();
+      expect(inputs).toBe(1);
+    } finally {
+      blocked.resolve();
+      await Bun.sleep(40);
+      await queue.drain();
+      queue.retire();
+      f.close();
+    }
+  });
 }
 
 for (const step of ["checking", "dispatching"] as const) {
