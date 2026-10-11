@@ -1540,7 +1540,7 @@ browserTest("agent-delivered seat message keeps its author at desktop and phone 
 /* The same seat conversation, with the messages that reached it while its turn
    ran. Served on the agent-label route, the fixture's seat with a delivered
    transcript and its provenance answer. */
-browserTest("messages delivered mid-turn show once, in place, with their senders at desktop and phone widths in both languages", async () => {
+browserTest("messages delivered mid-turn show once, in place, with their senders at 1440, 1000 and 390 px, light and dark, in both languages", async () => {
   const evidence = midTurnDeliveryEvidence();
   const { base, stop } = await serveFixture({ "/evidence/agent-message-label": evidence });
   const out = path.join(os.homedir(), "Pictures/delegatus-review/mid-turn-delivery");
@@ -1552,8 +1552,8 @@ browserTest("messages delivered mid-turn show once, in place, with their senders
   const browser = await chromium.connect(browserServer.wsEndpoint());
   const readings = [];
   try {
-    for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
-      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark",
+    for (const scheme of ["dark", "light"] as const) for (const locale of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme,
         ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
       try {
         await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
@@ -1601,7 +1601,7 @@ browserTest("messages delivered mid-turn show once, in place, with their senders
         expect(body).not.toContain("sent a new message while you were working");
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         expect(pageErrors).toEqual([]);
-        await page.screenshot({ path: path.join(out, `${width}-${locale}-end.png`) });
+        await page.screenshot({ path: path.join(out, `${width}-${scheme}-${locale}-end.png`) });
         /* Scroll the visible pane up the way the operator would, so the live
            tail lets go and the first message is in frame. */
         const first = page.getByText(MID_TURN_DELIVERIES[0].text, { exact: true }).last();
@@ -1614,17 +1614,18 @@ browserTest("messages delivered mid-turn show once, in place, with their senders
           await page.mouse.wheel(0, -250);
           await page.waitForTimeout(120);
         }
-        await page.screenshot({ path: path.join(out, `${width}-${locale}-start.png`) });
-        readings.push({ locale, width, panes: panes.map((rows) => MID_TURN_DELIVERIES.map((delivery, index) => ({ id: delivery.id, ...rows[index] }))), pageErrors });
+        await page.screenshot({ path: path.join(out, `${width}-${scheme}-${locale}-start.png`) });
+        readings.push({ scheme, locale, width, panes: panes.map((rows) => MID_TURN_DELIVERIES.map((delivery, index) => ({ id: delivery.id, ...rows[index] }))), pageErrors });
       } finally { await context.close(); }
     }
+    expect(readings).toHaveLength(12);
     fs.mkdirSync("evidence/mid-turn-delivery", { recursive: true });
     fs.writeFileSync("evidence/mid-turn-delivery/rows.json", JSON.stringify(readings, null, 2) + "\n");
   } finally {
     await browser.close(); await browserServer.close(); stop();
     fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
   }
-}, 120_000);
+}, 300_000);
 
 browserTest("composer queue: a lost seat read drains once on the phone and survives reload", async () => {
   const { base, stop } = await serveFixture();
