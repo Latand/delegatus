@@ -101,7 +101,7 @@ test("X4 response schema pin agrees with an external Celestia OpenAPI document w
     expect(openapi.components.schemas[name], name).toEqual(schema);
   }
   for (const [name, schema] of Object.entries(operations)) {
-    const operation = Object.values(openapi.paths).flatMap(Object.values).find((op) => op.operationId === name);
+    const operation = Object.values(openapi.paths).flatMap((methods) => Object.values(methods)).find((op) => op.operationId === name);
     expect(operation, name).toBeDefined();
     const responses = Object.entries(operation!.responses!).filter(([status]) => status.startsWith("2"));
     const bodies = responses.flatMap(([, response]) => response.content?.["application/json"]?.schema ?? []);
