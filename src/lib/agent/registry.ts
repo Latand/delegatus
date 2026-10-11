@@ -17,7 +17,7 @@ import {
   sameRecordedProcessIdentity,
   type ProcessIdentity,
 } from "@/lib/processIdentity";
-import { durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
+import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -1205,6 +1205,7 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
     allowSubagents: current.allowSubagents || requested.allowSubagents,
     /* Clean once, clean for good: a resume never brings memory back. */
     ...(current.cleanMemory || requested.cleanMemory ? { cleanMemory: true } : {}),
+    ...(current.learnedRules ?? requested.learnedRules ? { learnedRules: current.learnedRules ?? requested.learnedRules } : {}),
     mcpServers: current.mcpServers,
     /* The plugin grant was decided at spawn from the session's origin; a
        resume replays the durable value and can never widen it (issue #687). */
@@ -5716,10 +5717,17 @@ export class AgentRegistry {
         }
       }
       const requestedTitle = input.launchProfile?.title;
+      const existingAttempt = input.clientAttemptId
+        ? Object.values(file.receipts).find((receipt) => receipt.clientAttemptId === input.clientAttemptId)
+        : null;
       const requestedProfile = emptyLaunchProfile({
         cwd: input.cwd,
         ...(input.launchProfile ?? {}),
-        title: durableSemanticTitle(requestedTitle),
+        /* A replay that omits title keeps the admitted name before deriving a
+           fresh one; an explicit title still participates in compatibility. */
+        title: durableSemanticTitle(requestedTitle) ?? (requestedTitle == null
+          ? durableSemanticTitle(existingAttempt?.launchProfile.title) ?? firstMeaningfulPromptLine(input.launchDisplay?.prompt, 80)
+          : null),
         ...(explicitProject ? { project: explicitProject } : {}),
         parentConversationId,
       });
@@ -5745,7 +5753,7 @@ export class AgentRegistry {
         throw new Error("conversation migration prevents resume succession");
       }
       if (input.clientAttemptId) {
-        const existing = Object.values(file.receipts).find((receipt) => receipt.clientAttemptId === input.clientAttemptId);
+        const existing = existingAttempt;
         if (existing) {
           const existingTitle = durableSemanticTitle(existing.launchProfile.title);
           const requestedTitle = durableSemanticTitle(profile.title);

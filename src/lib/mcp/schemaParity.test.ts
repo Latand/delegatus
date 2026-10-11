@@ -1041,9 +1041,9 @@ test("the launch tools publish the task binding fields agents must pass", async 
        call naming no parent gets a placeholder card — a duplicate — and one
        naming a parent joins that parent's card. */
     expect(taskId?.description).toContain("this tool never infers one from the caller");
-    expect(taskId?.description).toContain("it is given a placeholder task of its own, which is a duplicate card");
+    expect(taskId?.description).toContain("it is given a named task of its own, which is a duplicate card");
     expect(taskId?.description).not.toContain("lands on the manager's own seat card");
-    expect(spawn?.description).toContain("it is given a placeholder task of its own — a duplicate card");
+    expect(spawn?.description).toContain("it is given a named task of its own — a duplicate card");
     /* A reviewer that names a parent joins that parent's card beside the
        reviewed work's (membership.test.ts), so it is told to pass taskId too. */
     expect(taskId?.description).toContain("so pass taskId on reviewer spawns too — an explicit id wins over inheritance");
