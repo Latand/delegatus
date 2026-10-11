@@ -244,7 +244,8 @@ The row's sentence is Ukrainian text Delegatus already holds; nothing is generat
   filled from `refs`.
 
 The meta line under it: `#2698 · злито 02:21` (the number links to the PR's
-`url`), `задачу закрито 03:30`, `деплой 1c41d361 · 04:34`. A row from another
+`url`), `задачу закрито 03:30`, `деплой · 04:34`. The deploy's commit is an id the
+operator does not need; the time and the sentence say what happened. A row from another
 project than the one on screen names its project first, as the decision rows'
 sections do.
 
@@ -279,23 +280,33 @@ The section head: «Готово · N» and the accent «Прийняти всі
 this order:
 
 1. Visible changes, each its own row: thumbnail (expand mark in its corner),
-   the sentence, the meta line, «Прийняти». On the phone the button is the
-   square check of the frames.
+   the sentence, the meta line, and «Прийняти» at the row's right end as the
+   square check an expanded group's members carry (a finger's 44 px on the
+   phone). No row keeps a line for its button.
 2. Deploys and publications, each its own row: icon (`Rocket`, `Globe`),
    sentence, meta, «Прийняти».
 3. **«Технічні виправлення · N»**: every landed PR without a frame. One row:
-   `GitMerge` icon, the first three sentences shortened and «і ще N», «Прийняти
-   N», a chevron. Expanded, each member is a line: the task's icon, `#number`
-   linked, the sentence, its own check.
+   `GitMerge` icon, short topics and «і ще N», the double check with N and a
+   chevron at the right end. A topic is a sentence's first clause cut at a
+   word to at most three words, with no ellipsis and lower case after the first
+   (an acronym or, in Ukrainian copy, a Latin name keeps its case); topics are
+   listed while they fit about two short lines and «і ще N» names the rest,
+   never cut. Expanded, each member is a line: the task's icon, `#number`
+   linked, the sentence, its own check, and the head repeats no member: it
+   shows only «N прийнято» once some are accepted.
 4. **«Без PR · N»**: pipelines finished without a PR and tasks closed with no
    pipeline, the same group anatomy (`CircleCheck`).
 5. Incidents and limits, each its own row (`TriangleAlert`, `Gauge`): sentence
    and «Прийняти».
 
 An item acknowledged while the panel or the sheet is open collapses in place to
-«<назва> · прийнято» with «Повернути», and leaves when the panel closes or the
+«<назва> · прийнято» with «Повернути» (the name is the sentence's first clause,
+«Лендінг #2691 · прийнято»; it wraps rather than clips, and «· прийнято» is
+never cut), and leaves when the panel closes or the
 sheet is dismissed. In an expanded group an acknowledged member keeps its line
-with a filled check, and the group head reads «6 з 10 · 4 прийнято» with
+with a filled check, and the group head reads «6 з 10 · 4 прийнято» (the
+desktop keeps «6 з 10» beside the name, the phone moves it onto the line under
+it, where it never breaks) with
 «Прийняти 6». The phone shows the same receipt row; the desktop head's Undo
 stays for dismissals only.
 

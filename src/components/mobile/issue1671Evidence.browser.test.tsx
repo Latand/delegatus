@@ -7495,6 +7495,39 @@ describe("«Готово» in the phone sheet", () => {
           }));
           expect(geometry.right).toBeLessThanOrEqual(390);
           expect(geometry.overflow).toBe(false);
+          const read = () => section.evaluate((element) => {
+            const text = (node: Element | null) => (node as HTMLElement | null)?.innerText.trim() ?? "";
+            const rows = [...element.querySelectorAll<HTMLElement>("[data-done-row]")].map((row) => {
+              const check = row.querySelector<HTMLElement>("[data-done-accept]")!.getBoundingClientRect();
+              const sentence = row.querySelector<HTMLElement>("[data-done-sentence]")!.getBoundingClientRect();
+              const meta = row.querySelector<HTMLElement>("[data-done-meta]")!.getBoundingClientRect();
+              return { key: row.getAttribute("data-done-row"), checkRight: Math.round(element.getBoundingClientRect().right - check.right), ownLine: check.top >= Math.max(sentence.bottom, meta.bottom) - 1 };
+            });
+            const lines = [...element.querySelectorAll<HTMLElement>("[data-done-group-line]")].map((node) => ({ text: text(node), count: Number(node.closest("[data-done-group]")!.getAttribute("data-done-group-count")) }));
+            const receipts = [...element.querySelectorAll<HTMLElement>("[data-done-receipt-text]")].map((node) => {
+              const mark = node.lastElementChild!.getBoundingClientRect();
+              return { text: node.textContent!.replace(/\u00a0/g, " ").trim(), markClipped: mark.right > node.getBoundingClientRect().right + 0.5 || mark.width < 1 };
+            });
+            const heads = [...element.querySelectorAll<HTMLElement>("[data-done-group-title]")].map((node) => {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const tops = [...new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))];
+              return { text: text(node), lines: tops.length };
+            });
+            return { rows, lines, receipts, heads, hash: /\b[0-9a-f]{7,40}\b/.test(text(element)) };
+          });
+          const morning = await read();
+          expect(morning.rows.every((row) => !row.ownLine), "no row keeps a line for its check").toBe(true);
+          expect(morning.hash, "no commit hash in «Готово»").toBe(false);
+          for (const { text, count } of morning.lines) {
+            /* Short topics, no cut word, lower case after the first, and «і ще N» for the rest. */
+            expect(text).not.toContain("…");
+            const [listed, rest] = text.split(" і ще ");
+            const topics = listed!.split(", ");
+            expect(topics.slice(1).every((topic) => !/^[А-ЯІЇЄҐ]/.test(topic)), text).toBe(true);
+            expect(Number(rest ?? 0), text).toBe(count - topics.length);
+          }
+          expect(morning.heads.every((head) => head.lines === 1), JSON.stringify(morning.heads)).toBe(true);
           await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.screenshot({ path: path.join(out, `${scheme}-1-sheet.png`) });
 
@@ -7512,19 +7545,43 @@ describe("«Готово» in the phone sheet", () => {
           await section.locator('[data-done-receipt="pr:example/delegatus#2691"]').waitFor();
           expect(await badgeCount()).toBe(decisions + doneCount - 2);
           await section.locator('[data-done-group-toggle="technical"]').click();
+          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').count()).toBe(0);
+          await section.locator('[data-done-group="technical"]').evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-3-expanded.png`) });
           const checks = section.locator('[data-done-group="technical"] [data-done-member-check]');
           for (let index = 0; index < 4; index += 1) await checks.nth(index).click();
-          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-title]')?.textContent?.includes("6 з 10"));
+          /* The phone moves a partial count onto the line under the name. */
+          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-line]')?.textContent === "6 з 10 · 4 прийнято");
+          let after = await read();
+          for (const receipt of after.receipts) {
+            expect(receipt.text).toMatch(/прийнято$/);
+            expect(receipt.markClipped, receipt.text).toBe(false);
+          }
+          expect(after.heads.every((head) => head.lines === 1), JSON.stringify(after.heads)).toBe(true);
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Лендінг #2691 · прийнято");
           await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-3-partial.png`) });
+          await page.screenshot({ path: path.join(out, `${scheme}-4-partial.png`) });
+
+          await section.locator('[data-done-accept-group="technical"]').click();
+          await section.locator('[data-done-group-receipt="technical"]').waitFor();
+          expect(await badgeCount()).toBe(decisions + doneCount - 12);
+          await section.locator('[data-done-group-toggle="closed"]').click();
+          after = await read();
+          for (const receipt of after.receipts) {
+            expect(receipt.text).toMatch(/прийнято$/);
+            expect(receipt.markClipped, receipt.text).toBe(false);
+          }
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Технічні виправлення · 10 · прийнято");
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-5-group-accepted.png`) });
 
           await section.locator("[data-done-accept-all]").click();
           await section.locator("[data-done-all-accepted]").waitFor();
           expect(await badgeCount()).toBe(decisions);
           await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-4-all-accepted.png`) });
+          await page.screenshot({ path: path.join(out, `${scheme}-6-all-accepted.png`) });
           expect(errors).toEqual([]);
-          readings.push({ scheme, decisions, done: doneCount - 1, check: { width: box.width, height: box.height }, ...geometry });
+          readings.push({ scheme, decisions, done: doneCount - 1, check: { width: box.width, height: box.height }, ...geometry, rows: morning.rows, groupLines: morning.lines, heads: morning.heads, receipts: after.receipts.map((receipt) => receipt.text) });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/done-section", { recursive: true });

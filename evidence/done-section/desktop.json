@@ -23,6 +23,47 @@
       "wide": 0,
       "overflow": false,
       "panelWidth": 320,
+      "rows": [
+        {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "deploy:fixture-deploy",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-publication",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "limit:codex:acct-b:session:1",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-incident",
+          "checkRight": 10,
+          "ownLine": false
+        }
+      ],
+      "groupLines": [
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
+        },
+        {
+          "text": "Прибрано порожній, аналіз моделей і ще 1",
+          "count": 3
+        }
+      ],
+      "receipts": [
+        "Лендінг #2691 · прийнято",
+        "Технічні виправлення · 10 · прийнято"
+      ],
       "afterAll": 10
     },
     {
@@ -42,6 +83,47 @@
       "wide": 0,
       "overflow": false,
       "panelWidth": 320,
+      "rows": [
+        {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "deploy:fixture-deploy",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-publication",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "limit:codex:acct-b:session:1",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-incident",
+          "checkRight": 10,
+          "ownLine": false
+        }
+      ],
+      "groupLines": [
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
+        },
+        {
+          "text": "Прибрано порожній, аналіз моделей і ще 1",
+          "count": 3
+        }
+      ],
+      "receipts": [
+        "Лендінг #2691 · прийнято",
+        "Технічні виправлення · 10 · прийнято"
+      ],
       "afterAll": 10
     }
   ]

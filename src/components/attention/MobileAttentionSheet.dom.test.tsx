@@ -422,7 +422,7 @@ test("«Готово» sits under the queue, the header counts both, and a row's
   expect(calls).toEqual([{ keys: ["pr:acme/widgets#2691"], undo: false, surface: "phone" }]);
   expect(q(host, "h2")!.textContent).toBe("Waiting for you · 4");
   const receipt = q(section, '[data-done-receipt="pr:acme/widgets#2691"]')!;
-  expect(receipt.textContent).toContain("Landing cards no longer show through #2691 · accepted");
+  expect(receipt.querySelector("[data-done-receipt-text]")!.textContent).toBe("Landing cards no longer show through #2691\u00a0· accepted");
   flushSync(() => click(q(receipt, "[data-done-undo]")));
   await new Promise((r) => setTimeout(r, 0));
   expect(calls[1]).toEqual({ keys: ["pr:acme/widgets#2691"], undo: true, surface: "phone" });

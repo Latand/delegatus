@@ -486,7 +486,10 @@ test("«Готово» follows every decision, in its own order, and the panel's
     .toEqual(["pr:acme/widgets#2691", "deploy:d1", "technical", "closed", "limit:codex:acct-b:session:1"]);
   const deploy = section.querySelector('[data-done-row="deploy:d1"]')!;
   expect(deploy.querySelector("[data-done-sentence]")!.textContent).toBe("Delegatus was updated");
-  expect(deploy.querySelector("[data-done-meta]")!.textContent).toMatch(/^deploy 1c41d361 · /);
+  expect(deploy.querySelector("[data-done-meta]")!.textContent).toMatch(/^deploy · \d/);
+  /* A row's check ends its first line: no row keeps a line for a button. */
+  expect(deploy.lastElementChild).toBe(deploy.querySelector("[data-done-accept]"));
+  expect(deploy.querySelector("[data-done-accept]")!.textContent).toBe("");
   const limit = section.querySelector('[data-done-row="limit:codex:acct-b:session:1"]')!;
   expect(limit.querySelector("[data-done-sentence]")!.textContent).toBe("Codex B limit · 5h window");
   expect(limit.querySelector("[data-done-meta]")!.textContent).toContain("3 lanes waited.");
@@ -506,7 +509,11 @@ test("«Accept» takes a row out of every count at once and leaves «… · acce
   expect(title(host)).toBe("Waiting for you · 11");
   expect(host.querySelector("[data-done-count]")!.textContent).toBe("5");
   const receipt = host.querySelector('[data-done-receipt="deploy:d1"]')!;
-  expect(receipt.textContent).toContain("Delegatus was updated · accepted");
+  expect(receipt.textContent!.replace(/\u00a0/g, " ")).toContain("Delegatus was updated · accepted");
+  /* The mark is its own run that never breaks. */
+  /* The «·» is bound to the name, so a wrapped receipt never starts a line with it. */
+  expect(receipt.querySelector("[data-done-receipt-text]")!.lastElementChild!.textContent).toBe("accepted");
+  expect(receipt.querySelector("[data-done-receipt-text]")!.textContent).toBe("Delegatus was updated\u00a0· accepted");
   /* In its place: the row it replaced was second. */
   expect(doneRows(host)).toEqual(["pr:acme/widgets#2691", "receipt:deploy:d1", "group:technical", "group:closed", "limit:codex:acct-b:session:1"]);
   await click(receipt.querySelector("[data-done-undo]")!);
@@ -520,8 +527,10 @@ test("a group accepts whole with one button, opens to its members, and a member 
   const host = await mountDone();
   const group = () => host.querySelector('[data-done-group="technical"]')!;
   expect(group().querySelector("[data-done-group-title]")!.textContent).toBe("Technical fixes · 2");
-  expect(group().querySelector("[data-done-group-line]")!.textContent).toBe("Agent messages arrive during…, Account removal checks the file…");
+  expect(group().querySelector("[data-done-group-line]")!.textContent).toBe("Agent messages arrive, account removal checks");
   await click(group().querySelector('[data-done-group-toggle="technical"]')!);
+  /* Open, the members say it themselves: the head repeats none of them. */
+  expect(group().querySelector("[data-done-group-line]")).toBeNull();
   const member = () => group().querySelector('[data-done-member="pr:acme/widgets#2698"]')!;
   expect(member().querySelector("[data-done-pr]")!.textContent).toBe("#2698");
   await click(member().querySelector("[data-done-member-check]")!);
@@ -530,11 +539,27 @@ test("a group accepts whole with one button, opens to its members, and a member 
   expect(group().querySelector("[data-done-group-line]")!.textContent).toBe("1 accepted");
   expect(member().hasAttribute("data-done-accepted")).toBe(true);
   expect(member().querySelector("[data-done-member-check]")!.getAttribute("aria-pressed")).toBe("true");
-  expect(group().querySelector('[data-done-accept-group="technical"]')!.textContent).toBe("Accept 1");
+  expect(group().querySelector('[data-done-accept-group="technical"]')!.textContent).toBe("1");
+  expect(group().querySelector('[data-done-accept-group="technical"]')!.getAttribute("aria-label")).toBe("Technical fixes: Accept 1");
   await click(group().querySelector('[data-done-accept-group="technical"]')!);
   expect(acknowledged[1]).toEqual({ keys: ["pr:acme/widgets#2699"], undo: false, surface: "desktop" });
-  expect(host.querySelector('[data-done-group-receipt="technical"]')!.textContent).toContain("Technical fixes · 2 · accepted");
+  expect(host.querySelector('[data-done-group-receipt="technical"]')!.textContent!.replace(/\u00a0/g, " ")).toContain("Technical fixes · 2 · accepted");
   expect(title(host)).toBe("Waiting for you · 10");
+});
+
+test("a collapsed group lists short topics while they fit and ends in «and N more», never a cut word", async () => {
+  doneServer = [
+    doneItem("pr:acme/widgets#1", { at: iso(100), title: "Automerge waits only for the required checks on main." }),
+    doneItem("pr:acme/widgets#2", { at: iso(110), title: "HTTP MCP keeps its identity after a migration; a cancelled client touches no other." }),
+    doneItem("pr:acme/widgets#3", { at: iso(120), title: "The merger accepts test contracts the review agreed." }),
+    doneItem("pr:acme/widgets#4", { at: iso(130), title: "Account settings are read for the project they belong to." }),
+    doneItem("pr:acme/widgets#5", { at: iso(140), title: "Backend tests run in isolated state." }),
+  ];
+  const host = await mountDone();
+  const line = host.querySelector('[data-done-group="technical"] [data-done-group-line]')!;
+  expect(line.textContent).toBe("Automerge waits, HTTP MCP keeps and 3 more");
+  expect(line.lastElementChild!.textContent).toBe("and 3 more");
+  expect(line.textContent).not.toContain("…");
 });
 
 test("«Accept all» leaves only the decisions in the count, and one receipt takes the whole batch back", async () => {

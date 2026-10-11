@@ -15,7 +15,58 @@
         "height": 44
       },
       "right": 390,
-      "overflow": false
+      "overflow": false,
+      "rows": [
+        {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "deploy:fixture-deploy",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-publication",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "limit:codex:acct-b:session:1",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-incident",
+          "checkRight": 16,
+          "ownLine": false
+        }
+      ],
+      "groupLines": [
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
+        },
+        {
+          "text": "Аналіз моделей, порядок об’єднання",
+          "count": 2
+        }
+      ],
+      "heads": [
+        {
+          "text": "Технічні виправлення · 10",
+          "lines": 1
+        },
+        {
+          "text": "Без PR · 2",
+          "lines": 1
+        }
+      ],
+      "receipts": [
+        "Лендінг #2691 · прийнято",
+        "Технічні виправлення · 10 · прийнято"
+      ]
     },
     {
       "scheme": "light",
@@ -26,7 +77,58 @@
         "height": 44
       },
       "right": 390,
-      "overflow": false
+      "overflow": false,
+      "rows": [
+        {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "deploy:fixture-deploy",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-publication",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "limit:codex:acct-b:session:1",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-incident",
+          "checkRight": 16,
+          "ownLine": false
+        }
+      ],
+      "groupLines": [
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
+        },
+        {
+          "text": "Аналіз моделей, порядок об’єднання",
+          "count": 2
+        }
+      ],
+      "heads": [
+        {
+          "text": "Технічні виправлення · 10",
+          "lines": 1
+        },
+        {
+          "text": "Без PR · 2",
+          "lines": 1
+        }
+      ],
+      "receipts": [
+        "Лендінг #2691 · прийнято",
+        "Технічні виправлення · 10 · прийнято"
+      ]
     }
   ]
 }

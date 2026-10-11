@@ -85,11 +85,63 @@ export function doneSentence(t: TFunction, item: DoneItemV1): string {
   return item.title || (item.refs.pr ? `#${item.refs.pr.number}` : "");
 }
 
-/** A short name for a receipt: the sentence, cut, with its PR. */
-function shortName(t: TFunction, item: DoneItemV1): string {
-  const sentence = doneSentence(t, item);
-  const cut = sentence.length > 48 ? `${sentence.slice(0, 47).trimEnd()}…` : sentence;
-  return item.refs.pr && !cut.includes(`#${item.refs.pr.number}`) ? `${cut} #${item.refs.pr.number}` : cut;
+/** A receipt's name: the sentence's first clause («Лендінг» of «Лендінг:
+    картки…»), cut at a word when it is still long. */
+function receiptName(sentence: string): string {
+  const clause = sentence.split(/[;:.!?]\s|[;:!?]$|\.$/)[0]!.trim() || sentence;
+  if (clause.length <= 36) return clause;
+  const room = clause.slice(0, 36);
+  const space = room.lastIndexOf(" ");
+  return `${(space > 12 ? room.slice(0, space) : room).trimEnd()}…`;
+}
+
+/** A receipt's PR, when its sentence does not already name it. */
+function receiptPr(t: TFunction, item: DoneItemV1): string {
+  return item.refs.pr && !doneSentence(t, item).includes(`#${item.refs.pr.number}`) ? `#${item.refs.pr.number}` : "";
+}
+
+/** A group's topic for one member (§4.3): the sentence's first clause, cut at
+    a word to at most three words, with no ellipsis, so a list of topics reads
+    as one line of words. */
+function topic(sentence: string): string {
+  const clause = sentence.split(/[;:.!?]\s|[;:!?]$|\.$|,\s/)[0]!.replace(/[«»"“”]/g, "").trim();
+  const words = clause.split(/\s+/).filter(Boolean);
+  let out = words[0] ?? "";
+  for (const word of words.slice(1, 3)) {
+    if (out.length + 1 + word.length > 22) break;
+    out = `${out} ${word}`;
+  }
+  out = out.replace(/[,;:.!?…-]+$/, "");
+  /* A short last word («лише», «for») leaves the topic hanging; drop it. */
+  const kept = out.split(" ");
+  return kept.length > 2 && kept.at(-1)!.length <= 4 ? kept.slice(0, -1).join(" ") : out;
+}
+
+/** After the first topic a capital starts no sentence: lower-case it, unless the
+    word is an acronym or, in Ukrainian copy, a Latin name (Claude, Codex). */
+function lowerTopic(text: string, locale: Locale): string {
+  const first = text.split(" ")[0] ?? "";
+  if (!/^\p{Lu}[\p{Ll}'’-]*$/u.test(first)) return text;
+  if (locale === "uk" && /^[A-Za-z]/.test(first)) return text;
+  return text.charAt(0).toLocaleLowerCase(locale) + text.slice(1);
+}
+
+/** The collapsed group's line: topics while they fit two short lines, then «і
+    ще N» for the rest, which is never cut. */
+const TOPIC_BUDGET = 46;
+export function groupTopics(t: TFunction, locale: Locale, members: readonly DoneItemV1[]): { topics: string; more: string | null } {
+  const topics: string[] = [];
+  let length = 0;
+  for (const member of members) {
+    const text = topic(doneSentence(t, member));
+    if (!text) continue;
+    const next = topics.length ? lowerTopic(text, locale) : text;
+    if (topics.length && length + 2 + next.length > TOPIC_BUDGET) break;
+    topics.push(next);
+    length += (topics.length > 1 ? 2 : 0) + next.length;
+  }
+  const rest = members.length - topics.length;
+  return { topics: topics.join(", "), more: rest > 0 ? t("done.group.more", { count: rest }) : null };
 }
 
 export function DoneSection({ items, current, projectNames, surface, acknowledge = acknowledgeDone }: DoneSectionProps) {
@@ -138,7 +190,7 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
       parts.push(<span key="when">{t("done.meta.merged", { time })}</span>);
     } else if (item.kind === "pipeline") parts.push(<span key="when">{t("done.meta.laneDone", { time })}</span>);
     else if (item.kind === "task") parts.push(<span key="when">{t("done.meta.taskDone", { time })}</span>);
-    else if (item.kind === "deploy") parts.push(<span key="when">{t("done.meta.deploy", { sha: (item.refs.sha ?? "").slice(0, 8), time })}</span>);
+    else if (item.kind === "deploy") parts.push(<span key="when">{t("done.meta.deploy", { time })}</span>);
     else if (item.kind === "report") parts.push(<span key="when">{t(item.look === "publication" ? "done.meta.publication" : "done.meta.incident", { time })}</span>);
     else if (item.kind === "limit" && item.refs.limit) {
       const limit = item.refs.limit;
@@ -160,26 +212,31 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
     : "shrink-0 rounded-[6px] px-2 py-0.5 text-[11px] font-semibold text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
   const acceptButton = phone
     ? "inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-[8px] border border-border px-3 text-label font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-    : "inline-flex h-7 shrink-0 items-center gap-1 rounded-[6px] border border-border px-2 text-[11px] font-semibold text-primary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+    : "inline-flex h-6 min-w-6 shrink-0 items-center justify-center gap-1 rounded-[6px] border border-border px-1 text-[11px] font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
-  const receipt = (key: string, title: string, onUndo: () => void, extra: Record<string, string> = {}) => (
+  /* A receipt: a short name that wraps rather than clips, and «прийнято»
+     whole at its end; the «·» before it stays on the name's line. */
+  const receipt = (key: string, title: string, onUndo: () => void, extra: Record<string, string> = {}, tail: string | null = "") => (
     <div key={key} className={`flex min-w-0 items-center gap-2.5 ${rowPad}`} {...extra}>
       <span className={`${tile} bg-success-soft text-success`}><Check className={tileIcon} aria-hidden /></span>
-      <span className={`min-w-0 flex-1 truncate ${phone ? "text-body" : "text-[12px]"} text-muted`}>{title}</span>
-      <button type="button" className={quiet} data-done-undo={key} aria-label={t("done.undoAria", { title })} onClick={onUndo}>{t("done.undo")}</button>
+      <span className={`min-w-0 flex-1 ${phone ? "text-body" : "text-[12px]"} leading-[1.35] text-muted [overflow-wrap:anywhere]`} data-done-receipt-text="">
+        {title}
+        {tail === null ? null : <>{tail ? ` ${tail}` : ""}{"\u00a0· "}<span className="whitespace-nowrap">{t("done.acceptedMark")}</span></>}
+      </span>
+      <button type="button" className={quiet} data-done-undo={key} aria-label={t("done.undoAria", { title: tail ? `${title} ${tail}` : title })} onClick={onUndo}>{t("done.undo")}</button>
     </div>
   );
 
-  /* «Прийняти»: a check with its word on the desktop, the frames' square check on the phone. */
+  /* «Прийняти»: the square check an expanded group's members carry, at the
+     right end of the row's first line, a finger's target on the phone. */
   const accept = (item: DoneItemV1) => (
-    <button type="button" className={acceptButton} data-done-accept={item.key} aria-label={t("done.acceptAria", { title: doneSentence(t, item) })} onClick={() => run([item])}>
+    <button type="button" className={acceptButton} data-done-accept={item.key} aria-label={t("done.acceptAria", { title: doneSentence(t, item) })} title={t("done.accept")} onClick={() => run([item])}>
       <Check className={phone ? "h-[18px] w-[18px]" : "h-3.5 w-3.5"} aria-hidden />
-      {phone ? null : <span>{t("done.accept")}</span>}
     </button>
   );
 
   const single = (item: DoneItemV1) => {
-    if (accepted(item)) return receipt(item.key, t("done.accepted", { title: shortName(t, item) }), () => run([item], true), { "data-done-receipt": item.key });
+    if (accepted(item)) return receipt(item.key, receiptName(doneSentence(t, item)), () => run([item], true), { "data-done-receipt": item.key }, receiptPr(t, item));
     const sentence = doneSentence(t, item);
     if (item.look === "visible" && item.frame) {
       return (
@@ -198,24 +255,22 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
           <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
             <span className={`line-clamp-3 ${sentenceClass}`} data-done-sentence="">{sentence}</span>
             <span className={metaClass} data-done-meta="">{meta(item)}</span>
-            {accept(item)}
           </div>
+          {accept(item)}
         </div>
       );
     }
     const look = LOOK_ICON[item.look] ?? { icon: CircleCheck, tone: "text-muted" };
     const Icon = look.icon;
-    /* The desktop column is narrow: «Прийняти» goes under the words, as on a
-       visible row; the phone's square check stands at the row's end. */
+    /* The check stands at the row's end, beside the sentence's first line. */
     return (
       <div key={item.key} className={`flex min-w-0 items-start gap-2.5 ${rowPad}`} data-done-row={item.key} data-done-look={item.look}>
         <span className={`${tile} ${look.tone}`}><Icon className={tileIcon} aria-hidden /></span>
-        <div className={`flex min-w-0 flex-1 flex-col ${phone ? "gap-0.5" : "items-start gap-1"}`}>
+        <div className={`flex min-w-0 flex-1 flex-col ${phone ? "gap-0.5" : "gap-1"}`}>
           <span className={`line-clamp-2 ${sentenceClass}`} data-done-sentence="">{sentence}</span>
           <span className={metaClass} data-done-meta="">{meta(item)}</span>
-          {phone ? null : accept(item)}
         </div>
-        {phone ? accept(item) : null}
+        {accept(item)}
       </div>
     );
   };
@@ -226,39 +281,39 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
     const waiting = members.filter((member) => !accepted(member));
     const taken = members.length - waiting.length;
     if (!waiting.length) {
-      return receipt(`group:${id}`, t("done.accepted", { title: `${name} · ${members.length}` }), () => run(members, true), { "data-done-group-receipt": id });
+      return receipt(`group:${id}`, `${name}\u00a0·\u00a0${members.length}`, () => run(members, true), { "data-done-group-receipt": id });
     }
     const Icon = GROUP_ICON[id];
     const expanded = open.has(id);
-    /* The first three sentences, each cut at a word, and how many more. */
-    const preview = waiting.slice(0, 3).map((member) => {
-      const sentence = doneSentence(t, member);
-      if (sentence.length <= 34) return sentence;
-      const room = sentence.slice(0, 33);
-      const space = room.lastIndexOf(" ");
-      return `${(space > 16 ? room.slice(0, space) : room).trimEnd()}…`;
-    }).join(", ") + (waiting.length > 3 ? ` ${t("done.group.more", { count: waiting.length - 3 })}` : "");
+    /* Collapsed: short topics and «і ще N»; expanded, the members say it
+       themselves, so the line keeps only what was accepted. The phone moves a
+       partial count onto that line, where «6 з 10» never breaks. */
+    const { topics, more } = groupTopics(t, locale, waiting);
+    const partial = taken ? t("done.group.partial", { left: waiting.length, total: members.length }) : null;
+    const countInLine = phone && partial !== null;
+    const line: ReactNode = taken
+      ? <>{countInLine ? <span className="whitespace-nowrap">{partial} · </span> : null}<span className="whitespace-nowrap">{t("done.group.acceptedCount", { count: taken })}</span></>
+      : expanded ? null : <>{topics}{more ? <>{topics ? " " : ""}<span className="whitespace-nowrap">{more}</span></> : null}</>;
     const acceptGroup = (
-      <button type="button" className={acceptButton} data-done-accept-group={id} aria-label={`${name}: ${t("done.acceptCount", { count: waiting.length })}`} onClick={() => run(waiting)}>
+      <button type="button" className={acceptButton} data-done-accept-group={id} aria-label={`${name}: ${t("done.acceptCount", { count: waiting.length })}`} title={t("done.acceptCount", { count: waiting.length })} onClick={() => run(waiting)}>
         <CheckCheck className={phone ? "h-[18px] w-[18px]" : "h-3.5 w-3.5"} aria-hidden />
-        <span className="tabular-nums">{phone ? waiting.length : t("done.acceptCount", { count: waiting.length })}</span>
+        <span className="tabular-nums">{waiting.length}</span>
       </button>
     );
     return (
       <div key={`group:${id}`} className="min-w-0" data-done-group={id} data-done-group-count={waiting.length}>
         <div className={`flex min-w-0 items-start gap-2.5 ${rowPad}`}>
           <span className={`${tile} text-info`}><Icon className={tileIcon} aria-hidden /></span>
-          <div className={`flex min-w-0 flex-1 flex-col ${phone ? "gap-0.5" : "items-start gap-1"}`}>
+          <div className={`flex min-w-0 flex-1 flex-col ${phone ? "gap-0.5" : "gap-1"}`}>
             <span className={sentenceClass} data-done-group-title="">
-              {name} · {taken ? t("done.group.partial", { left: waiting.length, total: members.length }) : members.length}
+              {name}{countInLine ? null : <span className="whitespace-nowrap"> · {partial ?? members.length}</span>}
             </span>
-            <span className={`line-clamp-2 ${metaClass}`} data-done-group-line="">{taken ? t("done.group.acceptedCount", { count: taken }) : preview}</span>
-            {phone ? null : acceptGroup}
+            {line ? <span className={metaClass} data-done-group-line="">{line}</span> : null}
           </div>
-          {phone ? acceptGroup : null}
+          {acceptGroup}
           <button
             type="button"
-            className={phone ? "inline-flex min-h-11 w-11 shrink-0 items-center justify-center rounded-[8px] text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" : "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
+            className={phone ? "-ml-1.5 inline-flex min-h-11 w-11 shrink-0 items-center justify-center rounded-[8px] text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" : "-ml-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
             aria-expanded={expanded}
             aria-label={t(expanded ? "done.group.collapse" : "done.group.expand", { group: name })}
             data-done-group-toggle={id}
@@ -341,7 +396,7 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
     <section className={phone ? "flex flex-col border-t border-border pt-1" : "mt-1 border-t border-border pt-1"} data-done-section={surface} aria-label={t("done.title")}>
       {head}
       {error ? <p className={`m-0 ${phone ? "px-4 py-1.5 text-label" : "px-2.5 py-1.5 text-[11px]"} text-danger`} role="status" data-done-error="">{error}</p> : null}
-      {heldAll ? receipt("all", t("done.allAccepted", { count: all.length }), () => run(all, true), { "data-done-all-accepted": "" }) : (
+      {heldAll ? receipt("all", t("done.allAccepted", { count: all.length }), () => run(all, true), { "data-done-all-accepted": "" }, null) : (
         <>
           {looks(["visible"]).map(single)}
           {looks(["deploy", "publication"]).map(single)}
