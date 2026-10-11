@@ -134,6 +134,67 @@ test("an unknown file appearing after preflight blocks anchored removal", () => 
   expect(fs.readFileSync(artifact, "utf8")).toBe("late state");
 });
 
+test.skipIf(process.platform !== "linux")("a classified skills link replaced by an unknown file refuses removal and preserves both targets", () => {
+  const home = path.join(sandbox, "replaced-link-home");
+  const outside = path.join(sandbox, "replaced-link-target");
+  fs.mkdirSync(home, { mode: 0o700 });
+  fs.writeFileSync(outside, "outside history", { mode: 0o600 });
+  const skills = path.join(home, "skills");
+  fs.symlinkSync(outside, skills);
+  const originalLstat = fs.lstatSync;
+  let swapped = false;
+  fs.lstatSync = ((target: fs.PathLike, options?: unknown) => {
+    const stat = originalLstat(target, options as never);
+    if (!swapped && String(target).startsWith("/proc/self/fd/") && path.basename(String(target)) === "skills") {
+      swapped = true;
+      fs.unlinkSync(skills);
+      fs.writeFileSync(skills, "replacement history", { mode: 0o600 });
+    }
+    return stat;
+  }) as typeof fs.lstatSync;
+
+  let caught: unknown;
+  try { removeHistoryFreeAccountHome("claude", "work", home); }
+  catch (error) { caught = error; }
+  finally { fs.lstatSync = originalLstat; }
+
+  expect(swapped).toBe(true);
+  expect(caught).toBeInstanceOf(AccountHistoryInventoryBlockedError);
+  const report = (caught as InstanceType<typeof AccountHistoryInventoryBlockedError>).report;
+  expect(report.error?.path ?? report.artifacts.find((artifact) => artifact.classification === "unknown")?.path).toBe("skills");
+  expect(fs.existsSync(home)).toBe(true);
+  expect(fs.readFileSync(skills, "utf8")).toBe("replacement history");
+  expect(fs.readFileSync(outside, "utf8")).toBe("outside history");
+});
+
+test.skipIf(process.platform !== "linux")("a same-type replacement of a classified credential is retained and named in the refusal", () => {
+  const home = path.join(sandbox, "replaced-credential-home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const credential = path.join(home, ".credentials.json");
+  const previous = path.join(sandbox, "previous-credential");
+  fs.writeFileSync(credential, "old state", { mode: 0o600 });
+  const originalLstat = fs.lstatSync;
+  let swapped = false;
+  fs.lstatSync = ((target: fs.PathLike, options?: unknown) => {
+    const stat = originalLstat(target, options as never);
+    if (!swapped && String(target).startsWith("/proc/self/fd/") && path.basename(String(target)) === ".credentials.json") {
+      swapped = true;
+      fs.renameSync(credential, previous);
+      fs.writeFileSync(credential, "replacement state", { mode: 0o600 });
+    }
+    return stat;
+  }) as typeof fs.lstatSync;
+  let caught: unknown;
+  try { removeHistoryFreeAccountHome("claude", "work", home); }
+  catch (error) { caught = error; }
+  finally { fs.lstatSync = originalLstat; }
+
+  expect(caught).toBeInstanceOf(AccountHistoryInventoryBlockedError);
+  expect((caught as InstanceType<typeof AccountHistoryInventoryBlockedError>).report.error?.path).toBe(".credentials.json");
+  expect(fs.readFileSync(credential, "utf8")).toBe("replacement state");
+  expect(fs.readFileSync(previous, "utf8")).toBe("old state");
+});
+
 test("an incomplete directory inventory blocks deletion and names the unreadable path", () => {
   const home = path.join(sandbox, "unreadable-inventory-home");
   const relative = "unreadable-directory";
