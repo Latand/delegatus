@@ -1202,6 +1202,7 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
     allowSubagents: current.allowSubagents || requested.allowSubagents,
     /* Clean once, clean for good: a resume never brings memory back. */
     ...(current.cleanMemory || requested.cleanMemory ? { cleanMemory: true } : {}),
+    ...(current.learnedRules ?? requested.learnedRules ? { learnedRules: current.learnedRules ?? requested.learnedRules } : {}),
     mcpServers: current.mcpServers,
     /* The plugin grant was decided at spawn from the session's origin; a
        resume replays the durable value and can never widen it (issue #687). */

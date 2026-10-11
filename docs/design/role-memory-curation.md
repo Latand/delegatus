@@ -1,6 +1,6 @@
 # Role memory curation: rules rewritten in place, merged and generalized per level
 
-Status: design. Slice A is built next in the same lane; slices C and B
+Status: slice A implementation. Slices C and B
 follow in later lanes, in that order (section 4). Written 2026-10-11 against
 `main` at `e5cd0ff3d`; every `file:line` below is from that commit. It
 extends `docs/design/role-memory.md` ("the MVP design") and rests on the
@@ -210,12 +210,12 @@ the old ones included. That decides how versions are stored (3.1).
 
 Every agent that starts reads its levels whole, so each level holds only what
 every one of its readers needs. A stage of role R in project P reads four
-scopes; slice A keeps today's three, and slice B adds the second.
+scopes; slice A implements all four matching scopes.
 
 | Level | Scope key | Read by | Holds only |
 | --- | --- | --- | --- |
 | Role on this project | `role:<P>:<R>` (today) | stages of R in P | what R does in its own kind of work and needs only in P (one repository's gates or layout as R meets them) |
-| Role on every project | `role:*:<R>` (slice B) | stages of R in any project | what R does in its own kind of work in any repository |
+| Role on every project | `role:*:<R>` (slice A) | stages of R in any project | what R does in its own kind of work in any repository |
 | Project | `project:<P>` (today) | every stage in P | what every role working in P does alike: builder, architect, critic and the rest; reviewers stay clean and read none of it |
 | Machine | `machine` (today) | every stage in any project | what every role does alike in any repository on this machine: its tools, its operating system, its environment |
 
@@ -285,7 +285,7 @@ interface RuleRevision {
 ```
 
 Scope keys stay `role:<project>:<roleId>`, `project:<project>` and
-`machine`; slice B adds `role:*:<roleId>` (3.0, section 2). The new code
+`machine`; slice A adds `role:*:<roleId>` (3.0, section 2). The new code
 reads `*` as "every project" wherever it parses a scope (`roleScopes.ts`),
 and no project key can be `*`.
 
@@ -465,7 +465,7 @@ When you report with stage_report, its answer asks whether this stage taught any
 
 `ruleLine` drops ` Why: …` (`roleConsolidate.ts:18-19`); the why stays on
 the record and in the window. Each scope lists every active rule in render
-order (3.2). Slice B adds the group `Role rules · Builder on every project`
+order (3.2). Slice A adds the group `Role rules · Builder on every project`
 (for the stage's own role) after the role group, and `readableScopes`
 (`roleStore.ts:101`) gains `role:*:<R>` between the role and project
 scopes. A stage reads exactly its own role's two scopes, its own project's
@@ -493,7 +493,7 @@ SQLite at every engine start.**
    stage or with the kill switch set. The launch profile is the durable
    record that every start of a structured host builds its options from.
 3. **Every start of the stage's engine process renders the block from
-   `role_memory`.** Five option builders start a structured Claude or Codex
+   `role_memory`.** Six option records start a structured Claude or Codex
    process, and each calls one function,
    `learnedRulesForLaunchProfile(profile)`:
    - a fresh launch and a resume: `claudeStructuredHostOptions`
@@ -507,7 +507,7 @@ SQLite at every engine start.**
    - an account migration successor:
      `src/lib/accounts/migration/provider.ts:371` (Codex) and `:505`
      (Claude).
-   A test drives each of the five with a marked profile, and a source check
+   A test drives each of the six with a marked profile, and a source check
    lists every `start` and `adopt` call of the two host classes, so a new
    start path fails the test until it carries the rules. The function reads
    only: moved project keys resolve on read, as
@@ -788,8 +788,9 @@ The existing window and the card line, with one new control.
 
 - **The Role section** keeps its role picker and shows the chosen role's
   rules in two groups under the section heading: "This project" and "Every
-  project". The chip count adds both. The second group appears once slice B
-  writes a rule there.
+  project". The chip count adds both. Slice A exposes the cross-project role
+  scope in the store; slice C groups both scopes in the window, and slice B
+  places rules there.
 - **A rule's row**, opened with the tap that shows its why today, adds to
   its meta line who wrote the current text ("rewritten by a builder, fix
   round", "merged from 3 rules", "kept by you") and an "Earlier text · n"
@@ -854,23 +855,25 @@ since it shows stage rewrites and their versions.
 ### Slice A — store, write path, render (this lane, one PR)
 
 Files: `src/lib/memory/roleTypes.ts`, `roleConsolidate.ts`, `roleStore.ts`,
-`roleRender.ts`, `roleStage.ts`; `src/lib/mcp/server.ts` (schema and
+`roleRender.ts`, `roleStage.ts`, `roleScopes.ts` (all four scope readers);
+`src/lib/mcp/server.ts` (schema and
 description of `leave_lesson`); `src/lib/mcp/bindings.ts` (passes `none`,
 `rewrite`, `lesson`); `src/app/api/role-memory/route.ts` (`revert`); for
 delivery (3.5), `src/lib/memory/roleLaunch.ts` (the marker, the read-only
 render and the old-file sweep, replacing the inline and file paths),
 `src/lib/pipelines/engine.ts` and `runtimeSwitch.ts` (marker in the launch
-profile, no reserve), the launch profile type, the five option builders in
+profile, no reserve), the launch profile type, the six option records in
 `src/lib/runtime/structuredSpawn.ts`, `startup.ts` and
 `src/lib/accounts/migration/provider.ts`, and the two hosts
 (`claudeStreamBrokerHost.ts`: an `appendSystemPrompt` option joined with
 the Telegram notice; `codexAppServerHost.ts`: the block in
-`developerInstructions` on start and resume); this document. No component
-changes.
+`developerInstructions` on start and resume); this document. Component
+drivers receive fixture maintenance for the singular lesson contract; UI
+controls remain in slice C.
 
 Failing-first tests, run by path under isolated state:
 
-- `src/lib/memory/roleStore.test.ts`: the order of leaving (oldest
+- `src/lib/memory/roleStore.test.ts` and `roleCuration.test.ts`: the order of leaving (oldest
   never-curated first, the lesson just added stays, the curated rule of
   lowest rank before a higher one, an operator-returned rule last); a
   rewrite keeps the id and place, writes a version row and moves the
@@ -896,11 +899,11 @@ Failing-first tests, run by path under isolated state:
   authority; version rows absent from `left`.
 
 Boundary tests in slice A, one per boundary the write path and the start
-can hold (in `roleStore.test.ts` and `roleLane.test.ts`, with every scope
+can hold (in `roleStore.test.ts`, `roleCuration.test.ts` and `roleLane.test.ts`, with every scope
 seeded with its own distinct rule):
 
 - **What a start reads.** A builder stage in project P starts with the rules
-  of `role:<P>:builder`, `project:<P>` and `machine`, and with none of
+  of `role:<P>:builder`, `role:*:builder`, `project:<P>` and `machine`, and with none of
   `role:<P>:visual-critic`, `role:<Q>:builder` or `project:<Q>`. A visual
   critic stage in P starts with its own role's rules and none of the
   builder's. A reviewer, a verifier and a review-gate stage start with
@@ -913,11 +916,12 @@ seeded with its own distinct rule):
   it in `project:<P>`; a rewrite of another project's rule, or of a role
   scope the stage does not read, is refused.
 - **No task.** Each identifier class is refused at write time and stores
-  nothing; the request carries the no-task line and the three level tests.
+  nothing; the request carries the no-task line and the four level tests (the curator alone widens a
+  new rule to the cross-project role level).
 
 Delivery tests in slice A (3.5):
 
-- **A large stage prompt still carries the full rules** (`roleLane.test.ts`,
+- **A large stage prompt still carries the full rules** (`roleLaunch.test.ts`,
   through the real engine and spawn port): a stage whose composed prompt is
   within a few bytes of the 32 000-byte envelope, in a project whose role,
   project and machine scopes are each near 10 000 code points. The first
@@ -935,7 +939,8 @@ Delivery tests in slice A (3.5):
   `thread/start` and `thread/resume` carry `developerInstructions` holding
   the account's own instructions, the block and the notice, in that order; a
   clean profile changes nothing.
-- **Every start path**: each of the five option builders, given a marked
+- **Every start path** (`roleDelivery.test.ts`, `startup.test.ts` and
+  `provider.test.ts`): each of the six option records, given a marked
   profile, yields the block; the source check fails on a `start` or `adopt`
   call of `ClaudeStreamBrokerHost` or `CodexAppServerHost` outside them.
 - **Failures**: an unreadable store starts the host without the block and
@@ -964,8 +969,6 @@ for due, claim, launch, observe and settle, `brief.ts`, `guard.ts`,
 `apply.ts` for the checked transaction and the pass revert);
 `src/lib/mcp/server.ts` and `bindings.ts` (`curate_rules`);
 `src/lib/monitor/seatTickController.ts` (two hooks);
-`src/lib/memory/roleScopes.ts`, `roleStore.ts` and `roleRender.ts` (the
-`role:*:<R>` level: parsing `*`, `readableScopes`, the block's heading);
 `src/lib/i18n/en.ts`, `uk.ts` (the role's name).
 
 Tests: due conditions, including the first pass over rules that never had a

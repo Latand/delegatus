@@ -1,3 +1,4 @@
+import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import fs from "node:fs";
 
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -1744,6 +1745,7 @@ export function claudeStartupHostOptions(
     spawnPolicyBaseSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath ?? null,
     allowSubagents: entry.launchProfile?.allowSubagents ?? false,
     cleanMemory: entry.launchProfile?.cleanMemory === true,
+    appendSystemPrompt: learnedRulesForLaunchProfile(entry.launchProfile),
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
     mcpStatePath: launchPaths?.mcpStatePath,
     readOnly: launchProfileEngineReadOnly(entry.launchProfile),
@@ -2101,6 +2103,7 @@ async function adoptStructuredHostsPass(
           approvalPolicy: entry.launchProfile?.permissionMode ?? undefined,
           allowSubagents: entry.launchProfile?.allowSubagents ?? false,
           cleanMemory: entry.launchProfile?.cleanMemory === true,
+          developerInstructions: learnedRulesForLaunchProfile(entry.launchProfile),
           mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
           /* Re-adoption replays the durable grant (issue #687) — a session never
