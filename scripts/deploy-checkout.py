@@ -72,8 +72,38 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
             relocation = getattr(adapter, "relocation", None)
             if relocation and relocation["stopSubmitted"]:
                 attempts = relocation["startAttempts"]
-                adapter.recover_start(attempts=START_ATTEMPTS)
-                if result is not None and relocation["startAttempts"] != attempts:
+                pending = None
+                # The detached worker owns the start until the same unit is
+                # active with no queued job. Each batch remains bounded; a
+                # refused final batch cannot discharge that obligation.
+                while True:
+                    try:
+                        adapter.recover_start(attempts=START_ATTEMPTS)
+                    except Exception as error:
+                        relocation["started"] = False
+                        relocation["outcome"] = "start-failed"
+                        diagnostic = "exit-recovery:" + type(error).__name__
+                        if diagnostic not in relocation["diagnostics"]:
+                            relocation["diagnostics"].append(diagnostic)
+                    if relocation["started"]:
+                        break
+                    pending = {"state": "pending", "ownerPid": os.getpid(), "unit": adapter.unit}
+                    # Report failure while recovery is outstanding, even if
+                    # observation raised or evidence publication itself fails.
+                    with contextlib.suppress(Exception):
+                        adapter.emit({**(result or {"serving": {}, "diagnostics": []}),
+                                      "verdict": "fail", "relocation": relocation, "recovery": pending})
+                    adapter.clock.sleep(5)
+                if pending:
+                    completed = {**pending, "state": "complete"}
+                    if result is not None:
+                        result["recovery"] = completed
+                    else:
+                        with contextlib.suppress(Exception):
+                            adapter.emit({"verdict": "fail", "target": target, "serving": {},
+                                          "diagnostics": ["exit-recovery:health-unverified"],
+                                          "relocation": relocation, "recovery": completed})
+                if result is not None and (pending or relocation["startAttempts"] != attempts):
                     # The last health sample predates this recovery operation.
                     result["verdict"] = "fail"
                     result["diagnostics"].append("exit-recovery:health-unverified")
@@ -1114,19 +1144,21 @@ class Checkout:
                         raise RuntimeError("named start pending")
                 retry(settled, self.clock, STOP_SETTLE)
                 state = self.active_state()
-                if state in ["active", "activating", "reloading"]:
+                if state == "active":
                     relocation["started"] = True
                     relocation["outcome"] = relocation["stopOutcome"]
                     return
             except Exception as error:
-                relocation["diagnostics"].append("start:" + type(error).__name__)
+                diagnostic = "start:" + type(error).__name__
+                if diagnostic not in relocation["diagnostics"]:
+                    relocation["diagnostics"].append(diagnostic)
         relocation["started"] = False
         relocation["outcome"] = "start-failed"
 
     def recover_start(self, attempts=1):
         relocation = self.relocation
         try:
-            if not self.jobs() and self.active_state() in ["active", "activating", "reloading"]:
+            if not self.jobs() and self.active_state() == "active":
                 relocation["started"] = True
                 relocation["outcome"] = relocation["stopOutcome"]
                 return
@@ -1328,10 +1360,15 @@ class Checkout:
             relocation = event.get("relocation")
             if relocation:
                 serving += " relocation=" + str(relocation.get("outcome"))
+            recovery = event.get("recovery")
+            if recovery:
+                serving += " recovery=" + recovery["state"] + " ownerPid=" + str(recovery["ownerPid"])
             with open(self.run_dir / "switch.log", "a") as stream:
                 stream.write("Verdict: " + event["verdict"] + " " + serving + "\n")
             write_json(self.run_dir.parent / ("latest-" + self.install + ".json"),
-                       {"run": self.run_dir.name, "verdict": event["verdict"], "finishedAt": event["at"]})
+                       {"run": self.run_dir.name, "verdict": event["verdict"],
+                        ("observedAt" if recovery and recovery["state"] == "pending" else "finishedAt"): event["at"],
+                        **({"recovery": recovery} if recovery else {})})
 
 
 def main():

@@ -126,11 +126,15 @@ The start prints the verdict location. Each run writes under
 - `status.json`: scheduled, running or finished status.
 - `switch.log`: publication, every health sample, protected stage outcomes,
   and a final `Verdict:` line.
-- `verdict.json`: atomic terminal result, each process's full serving SHA and
+- `verdict.json`: atomic result, each process's full serving SHA and
   serving start time, protected outcomes and diagnostic exception classes.
 
-`$LLV_STATE_DIR/deploy-verdicts/latest-<install-id>.json` identifies the completed
-run and its verdict. Logs and JSON files have private permissions. Sample JSON
+`$LLV_STATE_DIR/deploy-verdicts/latest-<install-id>.json` identifies the latest
+reported run and its verdict. While start recovery is pending, both verdict
+files report `fail` and carry `recovery.state=pending`, the worker's `ownerPid`
+and the named `unit`; the latest record carries `observedAt` until recovery
+completes, then `finishedAt`. The worker stays running and holds the installation
+lock throughout recovery. Logs and JSON files have private permissions. Sample JSON
 records `observedAt`; each process's `since` is its recorded start time (the
 launcher's kernel start time). SHA observations come from identity-checked live
 processes and their actual release HEADs; HTTP and the runtime socket must agree
@@ -215,9 +219,13 @@ and `CPUWeight=1000` and still ran in `app.slice/delegatus.service`, with no
    submitted, whatever steps 2 to 4 found. A refused or failed start is retried
    up to three times initially. If those attempts fail, each bounded health
    retry checks the unit and resubmits start while it remains inactive or
-   failed, or still has a pending job. Exit cleanup checks again and makes up
-   to three final attempts, even when observation raises. A persistent refusal
-   is reported as `start-failed`. The verdict records the final cleanup's attempts; a start
+   failed, or still has a pending job. Exit cleanup checks again, even when
+   observation raises, and retains the start obligation until the same named
+   unit is confirmed active with no pending job. It retries in batches of up
+   to three attempts, with five seconds between attempts and batches; each
+   command and job-settlement wait stays bounded. There is no final batch
+   cutoff. While starts remain refused, it reports `fail`, `start-failed` and
+   the recovery owner, and keeps trying. The verdict records all attempts; a start
    after the last health sample cannot establish a healthy switch by itself.
    SIGTERM, SIGHUP and SIGINT to the worker are held through recovery and exit
    cleanup, and are delivered afterwards.

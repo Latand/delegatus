@@ -1100,7 +1100,8 @@ class CheckoutIntegration(unittest.TestCase):
 
     def test_active_unit_with_pending_stop_still_owes_a_start(self):
         self.relocating()
-        self.start_refusals = deploy.START_ATTEMPTS
+        refusals = deploy.START_ATTEMPTS * 2 + 1
+        self.start_refusals = refusals
         execute = self.adapter.command
         pending = False
         def queued(args, cwd=None):
@@ -1118,7 +1119,7 @@ class CheckoutIntegration(unittest.TestCase):
         result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=2, timeout=0)
         self.assertTrue(self.active)
         self.assertFalse(pending)
-        self.assertEqual(self.service_commands(), ["stop"] + ["start"] * (deploy.START_ATTEMPTS + 1))
+        self.assertEqual(self.service_commands(), ["stop"] + ["start"] * (refusals + 1))
         # Cancelling a queued stop kept the old release alive; it is still
         # available, but cannot pass the replacement's health checks.
         self.assertEqual(result["verdict"], "fail")
@@ -1129,10 +1130,80 @@ class CheckoutIntegration(unittest.TestCase):
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertGreater(result["relocation"]["startAttempts"], deploy.START_ATTEMPTS * 2)
         relocation = result["relocation"]
-        self.assertEqual((relocation["started"], relocation["outcome"]), (False, "start-failed"))
+        self.assert_back_in_service(result)
+        self.assertEqual(relocation["startAttempts"], 1001)
+        self.assertEqual(relocation["outcome"], "released")
         self.assertIn("RuntimeError", result["diagnostics"])
         self.assertEqual(result["verdict"], "fail")
         self.assertFalse(result["serving"]["checks"]["service"])
+
+    def test_recovery_outlives_the_old_final_batch_with_short_and_production_bounds(self):
+        for refusals, options in [(7, {"samples": 1, "interval": 0, "timeout": 0}), (3807, {})]:
+            with self.subTest(refusals=refusals):
+                self.setUp()
+                self.relocating()
+                self.start_refusals = refusals
+                self.adapter.run_dir = self.state / "deploy-verdicts/synthetic-recovery"
+                self.adapter.run_dir.mkdir(parents=True, mode=0o700)
+                result = deploy.run_switch(self.adapter, TARGET, **options)
+                self.assert_back_in_service(result)
+                self.assertEqual(result["relocation"]["startAttempts"], refusals + 1)
+                self.assertEqual(self.service_commands().count("stop"), 1)
+                self.assertEqual(self.signals, [])
+                self.assertEqual(result["verdict"], "fail")
+                saved = json.loads((self.adapter.run_dir / "verdict.json").read_text())
+                self.assertTrue(saved["relocation"]["started"])
+                self.assertEqual(saved["recovery"]["state"], "complete")
+
+    def test_failed_verdict_names_the_recovery_owner_before_a_later_start(self):
+        self.relocating()
+        self.start_refusals = 1000
+        self.adapter.run_dir = self.state / "deploy-verdicts/synthetic-pending"
+        self.adapter.run_dir.mkdir(parents=True, mode=0o700)
+        emit = self.adapter.emit
+        pending = []
+        def report(event):
+            emit(event)
+            if event.get("recovery", {}).get("state") == "pending":
+                saved = json.loads((self.adapter.run_dir / "verdict.json").read_text())
+                latest = json.loads((self.adapter.run_dir.parent / ("latest-" + self.adapter.install + ".json")).read_text())
+                pending.append((saved, latest, self.active))
+                # Only the test releases the refusal after observing ownership.
+                self.start_refusals = 0
+        self.adapter.emit = report
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=0, timeout=0)
+        self.assertEqual(len(pending), 1)
+        saved, latest, active = pending[0]
+        self.assertFalse(active)
+        self.assertFalse(saved["relocation"]["started"])
+        self.assertEqual(saved["verdict"], "fail")
+        self.assertEqual(saved["recovery"]["ownerPid"], os.getpid())
+        self.assertEqual(saved["recovery"]["unit"], "synthetic-viewer.service")
+        self.assertNotIn("finishedAt", latest)
+        self.assertEqual(latest["recovery"], saved["recovery"])
+        self.assert_back_in_service(result)
+        self.assertEqual(result["recovery"]["state"], "complete")
+        self.assertEqual(self.service_commands().count("stop"), 1)
+        latest = json.loads((self.adapter.run_dir.parent / ("latest-" + self.adapter.install + ".json")).read_text())
+        self.assertIn("finishedAt", latest)
+        self.assertEqual(latest["recovery"]["state"], "complete")
+
+    def test_activating_without_a_job_keeps_recovery_owned_until_active(self):
+        self.relocating()
+        active_state = self.adapter.active_state
+        unsettled = 20
+        def state():
+            nonlocal unsettled
+            observed = active_state()
+            if self.active and self.old_gone and unsettled:
+                unsettled -= 1
+                return "activating"
+            return observed
+        self.adapter.active_state = state
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=0, timeout=0)
+        self.assertEqual(unsettled, 0)
+        self.assert_back_in_service(result)
+        self.assertEqual(self.service_commands().count("stop"), 1)
 
     def test_final_cleanup_recovers_and_the_verdict_records_its_attempts(self):
         self.relocating()
@@ -1173,18 +1244,20 @@ class CheckoutIntegration(unittest.TestCase):
         self.adapter.interrupted = failed
         result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=2, timeout=5)
         self.assertTrue(result["serving"]["checks"]["service"])
-        self.assertFalse(result["relocation"]["started"])
-        self.assertEqual(result["relocation"]["outcome"], "start-failed")
+        self.assert_back_in_service(result)
+        self.assertEqual(result["relocation"]["outcome"], "released")
         self.assertEqual(result["verdict"], "fail")
         self.assertIn("exit-recovery:health-unverified", result["diagnostics"])
 
     def test_an_exception_during_observation_still_retries_start_on_exit(self):
         self.relocating()
-        self.start_refusals = deploy.START_ATTEMPTS
+        self.start_refusals = 10
+        self.adapter.run_dir = self.state / "deploy-verdicts/synthetic-interrupted"
+        self.adapter.run_dir.mkdir(parents=True, mode=0o700)
         # Even an abrupt observation failure retains the recovery obligation.
         original_process = self.adapter.process
         def process(entry):
-            if self.old_gone and not self.active and self.start_refusals == 0:
+            if self.old_gone and not self.active:
                 raise KeyboardInterrupt()
             return original_process(entry)
         self.adapter.process = process
@@ -1192,6 +1265,10 @@ class CheckoutIntegration(unittest.TestCase):
             deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertTrue(self.active)
         self.assertEqual(self.service_commands()[-1], "start")
+        saved = json.loads((self.adapter.run_dir / "verdict.json").read_text())
+        self.assertEqual(saved["verdict"], "fail")
+        self.assertTrue(saved["relocation"]["started"])
+        self.assertEqual(saved["recovery"]["state"], "complete")
 
     def test_new_agent_and_child_after_preflight_are_never_signalled(self):
         for parent in [102, 103]:
