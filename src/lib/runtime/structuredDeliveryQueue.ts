@@ -1906,7 +1906,8 @@ export class StructuredDeliveryQueue {
       }
       const steerOrQueue = effect.policy === "steer-or-queue";
       const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active"
-        || (steerOrQueue && host.supportsSteer === true
+        // An explicit next-turn fence queues until idle, including after recovery.
+        || (steerOrQueue && effect.turnId !== null && host.supportsSteer === true
           && this.refusedSteerTurns.get(effect.operationId) !== health.activeTurnRef);
       const maySteer = health.status === "active" && steerRequested;
       /* A host without steer that DECLARED an interrupt fallback (Copilot over
@@ -1949,6 +1950,22 @@ export class StructuredDeliveryQueue {
       const queuesDuringTurn = host.supportsQueuedSend === true && effect.kind === "send"
         && (effect.policy === "queue" || steerOrQueue)
         && (health.status === "active" || health.status === "attention") && Boolean(health.activeTurnRef);
+      const laterOperatorReplacement = effects.slice(index + 1).some(later => {
+        const status = durableStatuses.get(later.operationId)?.status;
+        return later.kind === "send" && later.conversationId === effect.conversationId
+          && later.policy === "interrupt-active" && later.origin?.kind === "operator"
+          && (status === "queued" || status === "pending");
+      });
+      if (effect.kind === "send" && (effect.policy === "queue" || steerOrQueue)
+        && !steersIntoTurn && !queuesDuringTurn
+        && laterOperatorReplacement) {
+        /* Keep this follow-up in its original journal slot until the explicit
+           operator replacement has completed. This applies across the
+           interrupt boundary too: an idle host must not let the earlier note
+           start a turn before the replacement is written. */
+        this.noteWait(effect, "awaiting-turn");
+        continue;
+      }
       if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt && !queuesDuringTurn) {
         const interrupted = replacementIsActive && this.interruptAcknowledged.has(effect.operationId);
         const reconciled = interrupted ? await this.reconcileStalledInterrupt(effect) : "wait";
