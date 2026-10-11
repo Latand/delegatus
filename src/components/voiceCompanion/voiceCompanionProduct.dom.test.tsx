@@ -937,6 +937,9 @@ test("phone settings on Codex keep the last Codex call and its plan window in bo
       expect(document.querySelector("[data-voice-companion-key], [data-voice-companion-cap]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-last-call]")?.textContent).toBe(locale === "en" ? "Last call: 7:51 · Oct 10." : "Остання розмова: 7:51 · 10 жовтня.");
       expect(document.querySelector("[data-voice-companion-plan]")?.textContent).toContain(locale === "en" ? "Pro plan, the whole account with its agents: 5 h window 23% used" : "План Pro, увесь акаунт разом з агентами: вікно «5 год» використано на 23%");
+      /* The weekly reset is a date; in Ukrainian its month is written in full, so no abbreviation's dot doubles the sentence's. */
+      expect(document.querySelector("[data-voice-companion-plan]")?.textContent).toContain(locale === "en" ? "week window 77% used, resets " : "вікно «тиждень» використано на 77%, оновлення ");
+      expect(document.querySelector("[data-voice-companion-plan]")?.textContent).not.toContain("..");
       await unmountNow();
     }
   } finally { await act(async () => setLocale("en")); }

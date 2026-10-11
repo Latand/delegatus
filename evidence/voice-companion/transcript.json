@@ -3,7 +3,7 @@
   "variant": 2,
   "rule": "call and month sums sit at the foot of the transcript above a thin monthly-cap meter; the call's share is teal",
   "processes": {
-    "started": 5,
+    "started": 8,
     "leftAfterClose": 0
   },
   "readings": [

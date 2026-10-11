@@ -27,10 +27,11 @@ export const COMPANION_MESSAGES = {
   COMPANION_UNAVAILABLE: ["Voice Delegatus is unavailable. Try again.", "Голосовий Delegatus недоступний. Спробуйте ще раз."],
   CONTEXT_UNCONFIRMED: ["The selected project is not confirmed yet. Your microphone is paused while Delegatus retries.", "Вибраний проєкт ще не підтверджено. Мікрофон призупинено, поки Delegatus повторює запит."],
 } as const;
-/** When a plan window resets: the time within a day, the date after that. */
+/** When a plan window resets: the time within a day, the date after that. Ukrainian
+ * names the month in full, as its short form ends in a dot a sentence would double. */
 export function limitResetText(resetsAt: number, locale: Locale, now = Date.now()): string {
   return new Intl.DateTimeFormat(locale, resetsAt * 1000 - now < 86_400_000 ? { hour: "2-digit", minute: "2-digit" }
-    : { day: "numeric", month: "short" }).format(new Date(resetsAt * 1000));
+    : { day: "numeric", month: locale === "uk" ? "long" : "short" }).format(new Date(resetsAt * 1000));
 }
 export function companionErrorMessage(code: string, locale: Locale, detail: { resetsAt?: number | null; now?: number } = {}): string {
   if (code === "CODEX_LIMIT_REACHED" && typeof detail.resetsAt === "number") {

@@ -1,0 +1,164 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "variant": 2,
+  "fixture": "?scenario=voice-companion&script=delegation&transcript=1&backend=codex",
+  "rule": "a call that ran on Codex V3 shows its length on the server clock and the plan window of the account it ran on at the foot of the transcript, above a thin meter of that window whose teal share is the call's rise; the label and the hint say the window is the whole account's, its agents included",
+  "processes": {
+    "started": 8,
+    "leftAfterClose": 0
+  },
+  "readings": [
+    {
+      "viewport": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "spend": "This call 4:12 · Pro · 5 h 23%, resets ‹time› · week 77%",
+      "spendHeight": 44,
+      "lines": 1,
+      "cut": false,
+      "emphasis": {
+        "duration": {
+          "text": "4:12",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "used": {
+          "text": "23%",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        }
+      },
+      "words": "rgb(85, 85, 95)",
+      "muted": "rgb(108, 108, 121)",
+      "label": "This call: ‹time›. Pro plan, the whole account with its agents: 5 h window 23% used, resets ‹time›; week window 77% used, resets ‹time›.",
+      "hint": "The whole account's use, its agents included",
+      "footer": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "windowShare": 0.2299999815044981,
+        "riseShare": 0.020000018495501894,
+        "riseStart": 0.2099999630089962,
+        "riseColor": "color(srgb 0.0709804 0.420392 0.397333)",
+        "windowColor": "color(srgb 0.333333 0.333333 0.372549 / 0.4)"
+      },
+      "inside": true
+    },
+    {
+      "viewport": 1000,
+      "lang": "uk",
+      "scheme": "dark",
+      "spend": "Ця розмова 4:12 · Pro · 5 год 23%, оновлення ‹time› · тиждень 77%",
+      "spendHeight": 62,
+      "lines": 2,
+      "cut": false,
+      "emphasis": {
+        "duration": {
+          "text": "4:12",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "used": {
+          "text": "23%",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        }
+      },
+      "words": "rgb(162, 162, 174)",
+      "muted": "rgb(139, 139, 152)",
+      "label": "Ця розмова: ‹time›. План Pro, увесь акаунт разом з агентами: вікно «5 год» використано на 23%, оновлення ‹time›; вікно «тиждень» використано на 77%, оновлення ‹time›",
+      "hint": "Використання всього акаунта, разом з його агентами",
+      "footer": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "windowShare": 0.2299999815044981,
+        "riseShare": 0.020000018495501894,
+        "riseStart": 0.2099999630089962,
+        "riseColor": "color(srgb 0.425804 0.858039 0.80902)",
+        "windowColor": "color(srgb 0.635294 0.635294 0.682353 / 0.4)"
+      },
+      "inside": true
+    },
+    {
+      "viewport": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "spend": "Ця розмова 4:12 · Pro · 5 год 23%, оновлення ‹time› · тиждень 77%",
+      "spendHeight": 62,
+      "lines": 2,
+      "cut": false,
+      "emphasis": {
+        "duration": {
+          "text": "4:12",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        },
+        "used": {
+          "text": "23%",
+          "weight": "600",
+          "color": "rgb(232, 232, 236)"
+        }
+      },
+      "words": "rgb(162, 162, 174)",
+      "muted": "rgb(139, 139, 152)",
+      "label": "Ця розмова: ‹time›. План Pro, увесь акаунт разом з агентами: вікно «5 год» використано на 23%, оновлення ‹time›; вікно «тиждень» використано на 77%, оновлення ‹time›",
+      "hint": "Використання всього акаунта, разом з його агентами",
+      "footer": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "windowShare": 0.2299999815044981,
+        "riseShare": 0.020000018495501894,
+        "riseStart": 0.2099999630089962,
+        "riseColor": "color(srgb 0.425804 0.858039 0.80902)",
+        "windowColor": "color(srgb 0.635294 0.635294 0.682353 / 0.4)"
+      },
+      "inside": true
+    },
+    {
+      "viewport": 1000,
+      "lang": "en",
+      "scheme": "light",
+      "spend": "This call 4:12 · Pro · 5 h 23%, resets ‹time› · week 77%",
+      "spendHeight": 44,
+      "lines": 1,
+      "cut": false,
+      "emphasis": {
+        "duration": {
+          "text": "4:12",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        },
+        "used": {
+          "text": "23%",
+          "weight": "600",
+          "color": "rgb(28, 28, 34)"
+        }
+      },
+      "words": "rgb(85, 85, 95)",
+      "muted": "rgb(108, 108, 121)",
+      "label": "This call: ‹time›. Pro plan, the whole account with its agents: 5 h window 23% used, resets ‹time›; week window 77% used, resets ‹time›.",
+      "hint": "The whole account's use, its agents included",
+      "footer": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "windowShare": 0.2299999815044981,
+        "riseShare": 0.020000018495501894,
+        "riseStart": 0.2099999630089962,
+        "riseColor": "color(srgb 0.0709804 0.420392 0.397333)",
+        "windowColor": "color(srgb 0.333333 0.333333 0.372549 / 0.4)"
+      },
+      "inside": true
+    }
+  ]
+}

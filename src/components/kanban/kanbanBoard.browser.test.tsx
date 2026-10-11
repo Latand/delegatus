@@ -18,7 +18,7 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 
 import { percentile, playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { READ_TOOL_NAMES } from "@/lib/voiceCompanion/boardReads";
-import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
+import { companionErrorMessage, limitResetText } from "@/lib/voiceCompanion/errors";
 import { RISE_FRAME_SHARE, RISE_MS } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
@@ -21304,9 +21304,9 @@ describe("floating voice companion", () => {
     const writes = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice & { sessionStarts: unknown[] } }).voiceCompanion; return { settings: v.settingsWrites, keys: v.keyWrites, starts: v.sessionStarts }; });
     /* The Codex plan line as the dialog writes it, with the reset and read times the page itself formats. */
     const planLine = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
-      const loaded = Math.floor(Date.now() / 60_000) * 60;
+      const loaded = (window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded;
       const time = (seconds: number) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date(seconds * 1000));
-      const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: "short" }).format(new Date(seconds * 1000));
+      const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: lang === "uk" ? "long" : "short" }).format(new Date(seconds * 1000));
       return lang === "uk"
         ? `План Pro, увесь акаунт разом з агентами: вікно «5 год» використано на 23%, оновлення ${time(loaded + 7_200)}; вікно «тиждень» використано на 77%, оновлення ${date(loaded + 4 * 86_400)}. Станом на ${time(loaded)}.`
         : `Pro plan, the whole account with its agents: 5 h window 23% used, resets ${time(loaded + 7_200)}; week window 77% used, resets ${date(loaded + 4 * 86_400)}. As of ${time(loaded)}.`;
@@ -21487,10 +21487,10 @@ describe("floating voice companion", () => {
           await page.locator("[data-companion-talk]").click();
           await page.waitForSelector('[data-companion-notice][data-code="CODEX_LIMIT_REACHED"]', { timeout: 15_000 });
           const notice = (await page.locator('[data-companion-notice][data-code="CODEX_LIMIT_REACHED"] .vc-notice-text').innerText()).trim();
-          const resetsAt = Math.floor(Date.now() / 60_000) * 60 + 7_200;
-          const reset = await page.evaluate((lang) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date((Math.floor(Date.now() / 60_000) * 60 + 7_200) * 1000)), lang);
-          expect(notice, `codex without a key, ${lang}: the limit refusal names its reset`).toBe(companionErrorMessage("CODEX_LIMIT_REACHED", lang, { resetsAt }));
-          expect(notice).toContain(reset);
+          const resetsAt = await page.evaluate(() => (window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded + 7_200);
+          const reset = await page.evaluate(([lang, at]) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date(at * 1000)), [lang, resetsAt] as const);
+          /* The words are the shared message's; the time is the page's own, in the browser's time zone. */
+          expect(notice, `codex without a key, ${lang}: the limit refusal names its reset`).toBe(companionErrorMessage("CODEX_LIMIT_REACHED", lang, { resetsAt }).replace(limitResetText(resetsAt, lang), reset));
           expect(await page.locator('[data-companion-notice][data-code="NO_KEY"]').count(), `codex without a key, ${lang}: no key is asked for`).toBe(0);
           expect((await writes(page)).starts, `codex without a key, ${lang}: Talk reached the session route with an offer`).toEqual([{ project: expect.any(String), locale: lang, offer: true }]);
           await page.screenshot({ path: path.join(HANDOFF, `product-codex-no-key-${lang}.png`) });
@@ -21707,7 +21707,8 @@ describe("floating voice companion", () => {
           await page.screenshot({ path: path.join(out, `transcript-codex-${label}.png`) });
           await page.locator("[data-companion-spend]").screenshot({ path: path.join(out, `footer-codex-${label}.png`) });
           /* The primary window resets two hours after the fixture page loaded, in the page's own clock and language. */
-          const reset = await page.evaluate((lang) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date((Math.floor(Date.now() / 60_000) * 60 + 7_200) * 1000)), lang);
+          const reset = await page.evaluate((lang) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" })
+            .format(new Date(((window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded + 7_200) * 1000)), lang);
           expect(reading.spend, `${label}: the call's length and the plan window`).toBe(lang === "uk" ? `Ця розмова 4:12 · Pro · 5 год 23%, оновлення ${reset} · тиждень 77%` : `This call 4:12 · Pro · 5 h 23%, resets ${reset} · week 77%`);
           expect([reading.lines <= 2, reading.cut], `${label}: the figures fit in at most two lines, nothing cut`).toEqual([true, false]);
           expect(reading.spendHeight, `${label}: figures and thin meter fit the footer`).toBeLessThanOrEqual(64);

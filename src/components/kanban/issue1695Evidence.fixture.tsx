@@ -148,12 +148,13 @@ const FEED_CONTINUITY = SCENARIO === "feed-continuity";
    live adapter does from the session route, and the conversation view a tap on the character opens. Desktop only. */
 const VOICE = SCENARIO === "voice-companion";
 const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount") === "product";
-const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
+/* The plan window a fixture Codex call ran on: the primary window resets two hours after the page loaded, to the
+   minute, and the weekly one four days on, so the footer and the settings show a time and a date. The driver reads
+   `voiceCompanion.loaded` back rather than its own clock, which may have passed the next minute. */
+const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
+const voice = { loaded: VOICE_LOADED, delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
   /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
   settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
-/* The plan window a fixture Codex call ran on: the primary window resets two hours after the page loaded, to the
-   minute, and the weekly one four days on, so the footer and the settings show a time and a date. */
-const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
 const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, observedAt: VOICE_LOADED * 1000,
   primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
 const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
