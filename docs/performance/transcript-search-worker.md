@@ -116,3 +116,32 @@ projector failure, cross-bundle domain errors and a hard-killed owner.
 The existing transcript library, HTTP/MCP route and voice read-path tests run
 by individual file path under isolated state. Both production builds, the full
 type check, changed-file lint and the publication privacy gate are also checked.
+
+## Recheck after merging current main
+
+A fresh production build at f2672a9ab28f1bc2f1e9f00c228d043ee0ca72da, merging main 2fa6519f486d85c973f71a2a2ea2514b9890ccac, repeated the same
+five-sample benchmark against the seed-1429 corpus. Main's search implementation
+is unchanged since the baseline above. The raw artifact retains this run under
+recheck, including the build and main revisions and all HTTP/MCP samples.
+Every HTTP response retained 6,729 conversations and 250,000 messages, and every
+HTTP and MCP query cell retained its baseline total.
+
+| Order | Query | Search before → after | Concurrent request before → after | Loop delay before → after |
+| --- | --- | ---: | ---: | ---: |
+| newest | rare word | 6.9 → 9.4 | 5.3 → 4.6 | 6.5 → 2.9 |
+| newest | two common words | 96.0 → 84.1 | 95.6 → 4.0 | 95.6 → 4.2 |
+| newest | very common word | 296.0 → 308.3 | 300.9 → 4.7 | 299.7 → 4.6 |
+| relevance | rare word | 16.3 → 15.8 | 15.1 → 3.7 | 15.1 → 3.3 |
+| relevance | two common words | 280.1 → 287.6 | 295.4 → 4.4 | 288.6 → 4.4 |
+| relevance | very common word | 608.9 → 480.9 | 627.6 → 3.6 | 617.8 → 3.0 |
+
+These cells include both speakers. Packaged MCP common-word medians were
+317.6 ms (newest) and 475.9 ms (relevance), against 327.4 and 602.7 ms before.
+Cold startup was 76.7 ms; the idle cheap-request median was 2.7 ms. Query wall
+times include parallel lane contention; the Viewer remains responsive while
+those queries execute.
+
+The merged revision passed the isolated focused run (84 pass, zero fail, one
+existing environment-gated standalone skip), full TypeScript, changed-file
+lint, the production build and the publication privacy check. The production
+benchmark exited successfully after closing its worker and server.
