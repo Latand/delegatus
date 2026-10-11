@@ -150,6 +150,9 @@ export class RuntimeReplayGapError extends Error {
 export interface EngineHost {
   readonly nativeQueue?: NativeQueueHost;
   readonly supportsSteer?: boolean;
+  /** send() accepts input into the engine's own queue while a turn is active
+      or awaiting attention, preserving that turn until it finishes. */
+  readonly supportsQueuedSend?: boolean;
   /** How a host without steer takes a message meant for its running turn.
       `interrupt`: the delivery queue interrupts that turn and sends the
       message as the next one (Copilot's ACP has no steer). Absent keeps the
