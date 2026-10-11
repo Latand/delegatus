@@ -1,4 +1,5 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
@@ -18,9 +19,10 @@ import {
  * Every agent used to start its own `bin/mcp-server.mjs` over stdio, one Bun
  * process each. This endpoint serves the same tools, schemas, per-call policy
  * and receipts from one place. It is stateless: each POST builds a server and
- * a transport for that request alone, so nothing is held between calls and a
- * Viewer restart strands no session — the next call after the restart is
- * simply the next request. Idempotency lives where it always has, in the
+ * a transport for that request alone, with no stored sessions. Initialization
+ * returns an opaque Mcp-Session-Id that clients echo on calls and cancels; it
+ * namespaces cancellation across connections and needs no session lookup after
+ * a Viewer restart. Idempotency lives where it always has, in the
  * shared receipt store keyed by clientRequestId.
  *
  * Identity is the caller's spawn capability, presented in the
@@ -28,7 +30,8 @@ import {
  * listener rewrites when it vouches for loopback). The capability is the same
  * per-launch secret the stdio server reads from its inherited environment: the
  * registry holds only its digest, a relaunch rotates it and clears the old one,
- * and it resolves to exactly one conversation. A request whose capability is
+ * and it resolves to exactly one conversation. A migration also keeps a pending
+ * successor digest valid beside the predecessor's until commit. A request whose capability is
  * missing, malformed, unknown or rotated away is refused before any MCP
  * message is read.
  *
@@ -38,6 +41,8 @@ import {
  */
 
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const CONNECTION_HEADER = "mcp-session-id";
+const CONNECTION_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 export interface McpHttpDependencies {
   service: () => Promise<McpToolService>;
@@ -74,11 +79,13 @@ async function productionConversationForCapability(capability: string): Promise<
 const INFLIGHT_KEY = Symbol.for("llv.mcp.httpInflight");
 
 /**
- * The calls in progress over this endpoint, by caller and JSON-RPC id, so a
+ * The calls in progress over this endpoint, by caller, connection and JSON-RPC id, so a
  * client's `notifications/cancelled` can reach the call it names. Over stdio
  * the cancel and the call share one server; here each POST gets its own, and
  * the cancel always arrives on a later POST than the call. Keyed by the
- * capability too, so an agent can only ever cancel its own calls.
+ * capability too, so an agent can only ever cancel its own calls. Codex's
+ * sibling threads share a capability and reuse ids; their cancel notifications
+ * omit _meta, but carry the connection header negotiated at initialization.
  */
 function inflightCalls(): Map<string, AbortController> {
   const holder = globalThis as typeof globalThis & { [INFLIGHT_KEY]?: Map<string, AbortController> };
@@ -86,8 +93,8 @@ function inflightCalls(): Map<string, AbortController> {
   return holder[INFLIGHT_KEY];
 }
 
-function inflightKey(capability: string, requestId: unknown): string {
-  return `${capability}\u0000${JSON.stringify(requestId)}`;
+function inflightKey(capability: string, connectionId: string, requestId: unknown): string {
+  return JSON.stringify([capability, connectionId, requestId]);
 }
 
 function jsonRpcMessages(body: unknown): Record<string, unknown>[] {
@@ -156,24 +163,36 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
     return refusal(400, -32700, "Parse error: the request body is not JSON.");
   }
   const messages = jsonRpcMessages(body);
+  const connectionId = request.headers.get(CONNECTION_HEADER) ?? "";
+  if (connectionId && !CONNECTION_PATTERN.test(connectionId)) {
+    return refusal(400, -32600, "The MCP connection identifier is malformed.");
+  }
   const inflight = inflightCalls();
+  /* Reserve each id only once. This also protects clients that connected
+     before connection headers were negotiated and still share the legacy
+     namespace. Never overwrite the controller of work already admitted. */
+  const registered = new Map<string, AbortController>();
+  for (const message of messages) {
+    /* Initialization cannot be cancelled and has not negotiated a connection
+       yet. Sibling clients may initialize concurrently with the same id. */
+    if (typeof message.method !== "string" || message.method === "initialize" || message.id === undefined || message.id === null) continue;
+    const key = inflightKey(capability, connectionId, message.id);
+    if (inflight.has(key) || registered.has(key)) {
+      return refusal(409, -32600, "A request with this id is already in progress on this connection; use a distinct id.");
+    }
+    registered.set(key, new AbortController());
+  }
+  for (const [key, controller] of registered) inflight.set(key, controller);
   for (const message of messages) {
     if (message.method !== "notifications/cancelled") continue;
     const requestId = (message.params as { requestId?: unknown } | undefined)?.requestId;
-    if (requestId !== undefined) inflight.get(inflightKey(capability, requestId))?.abort(new Error("cancelled by the client"));
+    if (requestId !== undefined) inflight.get(inflightKey(capability, connectionId, requestId))?.abort(new Error("cancelled by the client"));
   }
   /* Each call in this POST can be ended by the client's later cancel, and all
      of them by the client walking away from this request. */
-  const registered = new Map<string, AbortController>();
-  for (const message of messages) {
-    if (typeof message.method !== "string" || message.id === undefined || message.id === null) continue;
-    const controller = new AbortController();
-    const key = inflightKey(capability, message.id);
-    registered.set(key, controller);
-    inflight.set(key, controller);
-  }
   const abandon = () => { for (const controller of registered.values()) controller.abort(new Error("the client closed the request")); };
   request.signal.addEventListener("abort", abandon, { once: true });
+  if (request.signal.aborted) abandon();
 
   const server = createViewerMcpServer(service);
   const transport = new WebStandardStreamableHTTPServerTransport({
@@ -182,15 +201,19 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   });
   try {
     await server.connect(transport);
-    return await transport.handleRequest(request, {
+    const response = await transport.handleRequest(request, {
       parsedBody: body,
       authInfo: {
         token: capability,
         clientId: MCP_HTTP_CLIENT_ID,
         scopes: [],
-        extra: { cancelSignal: (requestId: unknown) => inflight.get(inflightKey(capability, requestId))?.signal ?? null },
+        extra: { cancelSignal: (requestId: unknown) => registered.get(inflightKey(capability, connectionId, requestId))?.signal ?? null },
       },
     });
+    if (response.ok && messages.length === 1 && messages[0]?.method === "initialize") {
+      response.headers.set(CONNECTION_HEADER, crypto.randomUUID());
+    }
+    return response;
   } finally {
     request.signal.removeEventListener("abort", abandon);
     for (const [key, controller] of registered) {
