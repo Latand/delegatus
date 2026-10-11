@@ -531,6 +531,8 @@ The existing merge attention and retry action expose that wait. A retry with
 no PR returns to the block without calling GitHub; after a PR is attached,
 the retry resolves its number and uses the usual reviewed-head and green-check
 gates. Missing or symbolic legacy bases cannot prove that a lane is unchanged.
+An existing merge record retains its PR identity when the usual lookup loses
+it, so the task still waits for that PR to merge.
 The board-maintenance report keeps tasks with unsettled merge records out of
 its recommendations to close finished work, even when no open PR is found.
 

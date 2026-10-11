@@ -132,6 +132,19 @@ describe("§5.2: when a marked lane finishes its task", () => {
     expect(h.status()).toBe("done");
   });
 
+  test("a recorded PR keeps the task open when its lookup disappears, until the cache observes its merge", async () => {
+    const h = harness({ lanes: [lane("awaiting-merge", "completed", {
+      finishesTaskIds: [TASK], baseRef: "a".repeat(40), merge: { ...merged(), state: "blocked", by: null },
+    })], setting: true, pr: false });
+    await h.sweep();
+    expect(h.status()).toBe("assigned");
+    expect(h.moves).toHaveLength(0);
+    h.ports.cachedState = () => "merged";
+    await h.sweep();
+    expect(h.status()).toBe("done");
+    expect(h.moves).toHaveLength(1);
+  });
+
   test("setting on, a PR: completed is not enough; the merge moves it, by the runner or by anyone", async () => {
     const byRunner = harness({ lanes: [lane("marked", "completed", { finishesTaskIds: [TASK] })], setting: true, pr: true, cached: "open" });
     await byRunner.sweep();

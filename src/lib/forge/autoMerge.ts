@@ -648,7 +648,8 @@ export function laneFinishedForTasks(pipeline: Pipeline, ports: Pick<AutoMergePo
   if (pipeline.state !== "completed") return false;
   if (!ports.setting(pipeline.project).enabled) return true;
   if (pipeline.merge?.state === "merged") return true;
-  const pr = ports.pullRequestOf(pipeline);
+  const pr = ports.pullRequestOf(pipeline)
+    ?? (pipeline.merge?.prNumber ? { repository: pipeline.merge.repository, number: pipeline.merge.prNumber } : null);
   if (!pr) return laneHasNoCommits(pipeline);
   return ports.cachedState(pr.repository, pr.number) === "merged";
 }
