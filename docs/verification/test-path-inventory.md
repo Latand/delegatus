@@ -2255,7 +2255,7 @@ The existing test file retains the cooperative and SIGTERM-ignoring cases and
 adds an inherited-pipe case: the recorded parent is absent at every completed
 close and at probe return, while its recorded descendant is still alive. The
 fixture stops that descendant by its recorded PID. A separate fault injection
-refuses only the owned child's SIGKILL; the two-second deadline is reported in
+refuses only the owned child's termination signals; the two-second deadline is reported in
 the probe evidence without an unhandled rejection, and the fixture then stops
 its child. Both cases preserve the eight-second total cleanup bound.
 
@@ -2265,3 +2265,11 @@ Types through the shared gate, changed-file lint, whitespace and the
 fingerprint-aware local privacy check with commit inspection pass. Pinned Bun
 1.4.0 runtime-host succession passes, with **27/27** responses on each endpoint
 over 15 seconds while 13 clients per endpoint abandon their replies.
+
+The pre-fix source export fails both new cases after **6.55 seconds** and
+**6.53 seconds**, respectively, with the SIGKILL-deadline rejection escaping
+the SDK's first close. Its owned runner also reports interrupted fixture
+cleanup and ends the remaining owned child. The fixed full-file run reports
+no unhandled rejection or surviving child. The fault injection refuses both
+SIGTERM and SIGKILL because Windows terminates a child on SIGTERM even when
+it has installed a handler.

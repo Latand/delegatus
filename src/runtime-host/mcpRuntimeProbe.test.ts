@@ -236,7 +236,10 @@ for (const scenario of ["termination", "inherited pipes", "cleanup deadline"] as
     });
     const killChild = ChildProcess.prototype.kill;
     const killed = spyOn(ChildProcess.prototype, "kill").mockImplementation(function (this: ChildProcess, signal) {
-      if (scenario === "cleanup deadline" && this.pid === processId && signal === "SIGKILL") return false;
+      // Windows terminates on SIGTERM even with a handler installed. Refuse
+      // both termination attempts to exercise the deadline on every platform.
+      if (scenario === "cleanup deadline" && this.pid === processId
+        && (signal === "SIGTERM" || signal === "SIGKILL")) return false;
       return killChild.call(this, signal);
     });
     try {
