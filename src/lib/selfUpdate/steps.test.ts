@@ -67,11 +67,16 @@ async function flushPromises() {
 }
 
 describe("child exit while command output is draining", () => {
+  // A missing PID can still have a normal exit event queued. The deadline
+  // gives that event one I/O turn and one polling interval; absent a status,
+  // the bounded wait expires as a timeout. A reported end without an exit
+  // code proves interruption. Fake timers must advance the wait after I/O.
   test.each(["lost", "alive", "recovered"])("a %s child with no exit notification times out after a bounded wait", async (presence) => {
     const child = Object.assign(new EventEmitter(), {
       pid: process.pid, stdout: new PassThrough(), stderr: new PassThrough(),
     });
     let alive = true;
+    let aborts = 0;
     const spawn = spyOn(childProcess, "spawn").mockImplementation((() => child) as unknown as typeof childProcess.spawn);
     const sameProcess = spyOn(pid, "sameProcess").mockImplementation(() => alive);
     // The fake child must have a recorded identity on every supported platform.
@@ -81,7 +86,7 @@ describe("child exit while command output is draining", () => {
       run: (_command, options) => real.run(["fixture"], { ...options, cwd: logDir, env: { TMPDIR: logDir } }),
       childAlive: real.childAlive,
       // The spawned child is a fixture; never signal the test process.
-      abort: () => {},
+      abort: () => { aborts += 1; },
     }, { fetch: 100 }, 10);
     jest.useFakeTimers();
     try {
@@ -109,6 +114,7 @@ describe("child exit while command output is draining", () => {
         jest.advanceTimersByTime(9);
         await flushPromises();
         expect(runner.state.steps[0]?.state).toBe("running");
+        expect(aborts).toBe(0);
         jest.advanceTimersByTime(1);
       }
       await run;
@@ -117,18 +123,52 @@ describe("child exit while command output is draining", () => {
         failure: { kind: "timeout", minutes: 100 / 60_000 },
       });
       expect(runner.state.steps.slice(1).every((step) => step.state === "pending")).toBe(true);
+      expect(aborts).toBe(1);
       // A late status cannot overwrite the failure already reported.
       child.stdout.end(); child.stderr.end(); child.emit("close", 0, null);
       await new Promise<void>((resolve) => setImmediate(resolve));
       await flushPromises();
       expect(runner.state.state).toBe("failed");
       expect(runner.state.steps[0]?.failure?.kind).toBe("timeout");
+      jest.advanceTimersByTime(100);
+      await flushPromises();
+      expect(aborts).toBe(1);
     } finally {
       child.stdout.end(); child.stderr.end(); child.emit("close", 0, null);
       await new Promise<void>((resolve) => setImmediate(resolve));
       jest.useRealTimers(); spawn.mockRestore(); sameProcess.mockRestore(); identity.mockRestore();
     }
   });
+
+  test("a lost child with no notification settles with real deadline timers", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: process.pid, stdout: new PassThrough(), stderr: new PassThrough(),
+    });
+    let aborts = 0;
+    const spawn = spyOn(childProcess, "spawn").mockImplementation((() => child) as unknown as typeof childProcess.spawn);
+    const sameProcess = spyOn(pid, "sameProcess").mockReturnValue(false);
+    const identity = spyOn(pid, "readStartIdentity").mockReturnValue("fixture-start");
+    const real = realPorts(() => {});
+    const { runner, logDir } = harness({}, {
+      run: (_command, options) => real.run(["fixture"], { ...options, cwd: logDir, env: { TMPDIR: logDir } }),
+      childAlive: real.childAlive,
+      // The fake child's PID belongs to the test process; never signal it.
+      abort: () => { aborts += 1; },
+    }, { fetch: 100 }, 10);
+    try {
+      // The real deadline alone must settle this run.
+      await runner.start(TARGET);
+      expect(runner.state.steps[0]).toMatchObject({
+        state: "failed", exitCode: null, failure: { kind: "timeout", minutes: 100 / 60_000 },
+      });
+      expect(runner.state.steps.slice(1).every((step) => step.state === "pending")).toBe(true);
+      expect(aborts).toBe(1);
+    } finally {
+      child.stdout.end(); child.stderr.end(); child.emit("close", 0, null);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      spawn.mockRestore(); sameProcess.mockRestore(); identity.mockRestore();
+    }
+  }, 1_000);
 
   test.each([15, 25, 35, 85].flatMap((eventAt) => [0, 23].map((code) => [code, eventAt])))("exit %i delivered at %i ms keeps its exit status", async (code, eventAt) => {
     const child = Object.assign(new EventEmitter(), {

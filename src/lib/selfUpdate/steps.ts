@@ -196,12 +196,13 @@ export class UpdateRunner {
               // Give queued I/O a turn before bounding an unreported exit.
               // Timer callbacks alone cannot establish completion or loss.
               if (this.ports.childAlive?.() === null) {
+                // A lost child supplies no I/O to wake an unreferenced turn.
+                // Keep this turn scheduled so its bounded grace can start.
                 exitTurn = setImmediate(() => {
                   exitTurn = null;
                   timer = setTimeout(expire, this.config.livenessPollMs ?? 1_000);
                   timer.unref?.();
                 });
-                exitTurn.unref?.();
               } else expire();
             }, limit);
             timer.unref?.();
