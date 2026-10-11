@@ -7,6 +7,9 @@ import type { StaticFindingClass } from "@/lib/privacy/staticDetectors";
 
 /** Each scope's injected text stays within this many characters (code points). */
 export const ROLE_MEMORY_BOUND = 10_000;
+export const CURATION_NEW_LESSONS = 10;
+export const CURATION_INTERVAL_MS = 6 * 60 * 60_000;
+export const CURATION_CLAIM_COOLDOWN_MS = 30 * 60_000;
 export const RULE_MAX_CHARS = 300;
 export const WHY_MAX_CHARS = 160;
 /** A rule shorter than this names nothing a later agent can act on. */
@@ -27,7 +30,8 @@ export function lessonTextLength(value: string): number {
 export type ScopeKind = "role" | "project" | "machine";
 
 export type RuleState = "active" | "merged" | "archived";
-export type RuleLeftReason = "duplicate" | "budget" | "deleted" | "rewritten";
+export type CuratorReason = "task-specific" | "stale" | "in-code" | "in-instructions" | "no-reader" | "contradicted" | "duplicate";
+export type RuleLeftReason = CuratorReason | "budget" | "deleted" | "rewritten" | "undone";
 
 export interface RuleRevision {
   by: "agent" | "curator" | "operator";
@@ -63,7 +67,7 @@ export interface RoleMemoryRule {
   rule: string;
   why: string;
   state: RuleState;
-  /** Why a rule left the injected text: it repeated an active rule word for word, the bound, or the operator removed it. */
+  /** Why a rule left the injected text, including the curator's disposition. */
   reason?: RuleLeftReason;
   mergedInto?: string;
   hints: StaticFindingClass[];
@@ -75,19 +79,34 @@ export interface RoleMemoryRule {
   revisedBy?: RuleRevision;
   curatedAt?: string;
   keptByOperatorAt?: string;
+  note?: string;
+  where?: string;
+  against?: string;
+  mergedFrom?: string[];
+  movedFrom?: string;
+  splitFrom?: string;
 }
 
 export interface ScopeHistoryEntry {
   revision: number;
   at: string;
   /** Who changed the scope: a stage agent's lesson, the operator in the rules
-      window, or the join of a scope stored under a project key that moved. */
-  by: "agent" | "operator" | "succession";
+      window, a curator, or the join of a scope stored under a project key that moved. */
+  by: "agent" | "operator" | "succession" | "curator";
+  pass?: string;
+  counts?: CuratorPassView["counts"];
+  before?: string[];
+  prior?: { id: string; version: string | null; fields: Omit<RoleMemoryRule, "rule" | "why" | "hints"> }[];
+  created?: string[];
+  revertedAt?: string;
+  undoSkipped?: string[];
   added: string[];
   merged: { from: string; into: string }[];
   archived: string[];
   restored?: string[];
   rewritten?: { id: string; version: string }[];
+  moved?: { id: string; from: string; to: string }[];
+  split?: { id: string; parts: string[] }[];
 }
 
 export interface RoleMemoryScopeRow {
@@ -97,6 +116,7 @@ export interface RoleMemoryScopeRow {
   /** Active ids in order of leaving: never-curated, then curated low to high. */
   active: string[];
   history: ScopeHistoryEntry[];
+  curatedAt?: string;
 }
 
 /** One stage attempt that was asked for a lesson, and what it left. */
@@ -142,6 +162,14 @@ export interface RuleView {
   createdAt: string;
   changedAt: string;
   revisedBy?: RuleRevisionView;
+  curatedAt?: string;
+  keptByOperatorAt?: string;
+  note?: string;
+  where?: string;
+  against?: string;
+  mergedFrom?: string[];
+  movedFrom?: string;
+  splitFrom?: string;
   versions?: { id: string; rule: string; why: string; hints: StaticFindingClass[]; createdAt: string; revisedBy?: RuleRevisionView }[];
 }
 
@@ -163,6 +191,7 @@ export interface RoleMemoryProjectView {
   /** False only while the installation's kill switch (`LLV_ROLE_MEMORY=off`) is set. */
   enabled: boolean;
   scopes: ScopeView[];
+  curation?: { lastAt: string | null; nextAt: string | null; newLessons: number; passes: CuratorPassView[] };
 }
 
 export interface StageLessonView {
@@ -170,5 +199,17 @@ export interface StageLessonView {
   stageId: string;
   attempt: number;
   rules: { id: string; rule: string; scope: ScopeKind; roleId: string | null }[];
+  rewrote?: string;
   none: string | null;
+}
+
+export interface CuratorPassView {
+  id: string;
+  state: "claimed" | "launching" | "running" | "succeeded" | "failed";
+  claimedAt: string;
+  endedAt: string | null;
+  failure: string | null;
+  counts: { calls: number; changed: number; rewritten: number; merged: number; moved: number; split: number; archived: number; restored: number };
+  revertedAt?: string;
+  skipped?: string[];
 }

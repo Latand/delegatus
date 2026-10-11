@@ -9,13 +9,14 @@ import { initializeStateCollections, SqliteStateCollection, stateCollectionsInit
 
 import { appendRule, lessonPattern, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
+import { curationView } from "./curation/store";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import { renderLearnedRules } from "./roleRender";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
   type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type RuleView, type ScopeView, type StageLessonView,
-  type RewriteInput, type RuleRevision, type RuleRevisionView,
+  type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry,
 } from "./roleTypes";
 
 /* One collection in state.sqlite, so role memory inherits the state store's
@@ -34,6 +35,11 @@ import {
 
 const COLLECTION = "role_memory";
 const HISTORY_LIMIT = 500;
+/** Pass rollback records cannot age out while the window still offers Undo. */
+function keepHistory(entries: ScopeHistoryEntry[]): ScopeHistoryEntry[] {
+  const recent = new Set(entries.slice(-HISTORY_LIMIT));
+  return entries.filter(entry => !!entry.pass || recent.has(entry));
+}
 
 const requestKey = (pipelineId: string, stageId: string, attempt: number) => `q:${pipelineId}:${stageId}:${attempt}`;
 function key(row: RoleMemoryRow): string {
@@ -52,7 +58,7 @@ function decode(value: unknown): RoleMemoryRow | null {
 }
 const seed = { collection: COLLECTION, schemaVersion: 1, migrationId: "role-memory-v1", key, loadRecords: (): RoleMemoryRow[] => [] };
 const cache = new Map<string, SqliteStateCollection<RoleMemoryRow>>();
-function collection(create = false): SqliteStateCollection<RoleMemoryRow> | null {
+export function roleMemoryCollection(create = false): SqliteStateCollection<RoleMemoryRow> | null {
   const file = statePath("state.sqlite");
   const held = cache.get(file);
   if (held) return held;
@@ -63,14 +69,14 @@ function collection(create = false): SqliteStateCollection<RoleMemoryRow> | null
   return opened;
 }
 function rows(): RoleMemoryRow[] {
-  return collection()?.snapshot() ?? [];
+  return roleMemoryCollection()?.snapshot() ?? [];
 }
 function rule(id: string): RoleMemoryRule | null {
-  const row = collection()?.get(`r:${id}`);
+  const row = roleMemoryCollection()?.get(`r:${id}`);
   return row?.kind === "rule" ? row : null;
 }
 function scopeRow(scope: string): RoleMemoryScopeRow | null {
-  const row = collection()?.get(`s:${scope}`);
+  const row = roleMemoryCollection()?.get(`s:${scope}`);
   return row?.kind === "scope" ? row : null;
 }
 
@@ -112,8 +118,8 @@ export class RoleMemoryRefusal extends Error {
     into the project's current key, in one transaction: the active rules of
     both in the order they were written, a word-for-word repeat merged into
     the earlier rule, with the same curation order and bound as every writer. Both histories stay, with one entry that records the join. */
-function joinMovedScopes(now = new Date().toISOString()): void {
-  const held = collection();
+export function joinMovedScopes(now = new Date().toISOString()): void {
+  const held = roleMemoryCollection();
   if (!held) return;
   const resolve = scopeResolver();
   const moved = held.snapshot().flatMap((row) => row.kind === "scope" && resolve(row.scope) !== row.scope ? [row.scope] : []);
@@ -148,14 +154,14 @@ function joinMovedScopes(now = new Date().toISOString()): void {
       const archived = retained.archived;
       const revision = Math.max(current.revision, source.revision) + 1;
       tx.put({ ...current, revision, active: retained.active.map((rule) => rule.id),
-        history: [...source.history, ...current.history, { revision, at: now, by: "succession" as const, added: source.active, merged, archived }].slice(-HISTORY_LIMIT) });
+        history: keepHistory([...source.history, ...current.history, { revision, at: now, by: "succession" as const, added: source.active, merged, archived }]) });
       tx.delete(`s:${from}`);
     }
   });
 }
 
 /** A rule id no stored rule holds: drawn again on a collision, never overwriting a lesson. */
-function newRuleId(tx: { get(key: string): RoleMemoryRow | null }): string {
+export function newRuleId(tx: { get(key: string): RoleMemoryRow | null }): string {
   for (let draw = 0; draw < 16; draw += 1) {
     const id = `r_${crypto.randomBytes(8).toString("hex")}`;
     if (!tx.get(`r:${id}`)) return id;
@@ -183,13 +189,13 @@ export function learnedRulesBlock(project: string, roleId: string | null, maxByt
 }
 
 export function lessonRequest(pipelineId: string, stageId: string, attempt: number): LessonRequestRow | null {
-  const row = collection()?.get(requestKey(pipelineId, stageId, attempt));
+  const row = roleMemoryCollection()?.get(requestKey(pipelineId, stageId, attempt));
   return row?.kind === "request" ? row : null;
 }
 
 /** Records that this attempt was asked for a lesson; false when it already was. */
 export function recordLessonRequest(input: Omit<LessonRequestRow, "kind" | "ruleIds" | "none">): boolean {
-  return collection(true)!.boundedPatch(2, (tx) => {
+  return roleMemoryCollection(true)!.boundedPatch(2, (tx) => {
     if (tx.get(requestKey(input.pipelineId, input.stageId, input.attempt))) return false;
     tx.put({ kind: "request", ...input, project: canonicalProject(input.project), ruleIds: [], none: null });
     return true;
@@ -214,7 +220,7 @@ export interface LeftLesson {
 
 type RuleTransaction = { get(key: string): RoleMemoryRow | null; put(row: RoleMemoryRow): void };
 
-function versionedRule(tx: RuleTransaction, current: RoleMemoryRule, text: Pick<RoleMemoryRule, "rule" | "why" | "hints">, revisedBy: RuleRevision): { updated: RoleMemoryRule; version: string } {
+export function versionedRule(tx: RuleTransaction, current: RoleMemoryRule, text: Pick<RoleMemoryRule, "rule" | "why" | "hints">, revisedBy: RuleRevision): { updated: RoleMemoryRule; version: string } {
   const version = newRuleId(tx);
   const prior: RoleMemoryRule = { ...current, id: version, state: "archived", reason: "rewritten", versionOf: current.id, changedAt: revisedBy.at };
   delete prior.versions;
@@ -239,7 +245,7 @@ export function leaveLessons(input: {
   if (project === "*" || Number(input.lessons.length > 0) + Number(input.rewrite !== undefined) + Number(input.none !== null) !== 1
     || input.lessons.length > MAX_LESSONS_PER_ATTEMPT) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite or one lesson for a concrete project");
   joinMovedScopes(now);
-  const result = collection(true)!.boundedPatch(4096, (tx) => {
+  const result = roleMemoryCollection(true)!.boundedPatch(4096, (tx) => {
     const request = tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt));
     if (request?.kind !== "request") throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "this stage attempt was not asked for a lesson");
     if (request.none !== null || request.rewrote || request.ruleIds.length) throw new RoleMemoryRefusal("LESSON_LIMIT", "this stage attempt already answered its lesson request");
@@ -258,7 +264,7 @@ export function leaveLessons(input: {
       const retained = retainRules(active, now, new Set([target.id]));
       for (const changed of retained.changed) tx.put(changed);
       const revision = held.revision + 1;
-      tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: [...held.history, { revision, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }].slice(-HISTORY_LIMIT) });
+      tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }]) });
       tx.put({ ...request, rewrote: target.id });
       return { left: [{ action: "rewrite" as const, id: updated.id, version, scope, state: updated.state, scopeChars: scopeChars(retained.active), archived: retained.archived, hints: updated.hints }], none: null };
     }
@@ -279,7 +285,7 @@ export function leaveLessons(input: {
       const revision = current.revision + 1;
       tx.put({
         ...current, revision, active: outcome.active.map((entry) => entry.id),
-        history: [...current.history, { revision, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }].slice(-HISTORY_LIMIT),
+        history: keepHistory([...current.history, { revision, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }]),
       });
       const stored = outcome.changed.find((entry) => entry.id === incoming.id)!;
       left.push({ action: "lesson", id: incoming.id, scope, state: stored.state, ...(stored.mergedInto ? { mergedInto: stored.mergedInto } : {}), scopeChars: scopeChars(outcome.active), archived: outcome.archived, hints });
@@ -297,7 +303,7 @@ export function leaveLessons(input: {
 /** The operator removes one rule from the injected list; it stays a record, archived as "deleted", and its scope's history says so. */
 export function deleteRule(ruleId: string, now = new Date().toISOString()): RoleMemoryRule {
   joinMovedScopes(now);
-  return collection(true)!.boundedPatch(8, (tx) => {
+  return roleMemoryCollection(true)!.boundedPatch(8, (tx) => {
     const rule = tx.get(`r:${ruleId}`);
     if (rule?.kind !== "rule") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "no such rule");
     if (rule.versionOf) throw new RoleMemoryRefusal("RULE_IS_VERSION", "an earlier text is a version; revert it on its original rule");
@@ -308,7 +314,7 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
     const deleted: RoleMemoryRule = { ...rule, state: "archived", reason: "deleted", changedAt: now };
     tx.put(deleted);
     tx.put({ ...held, revision, active: held.active.filter((id) => id !== ruleId),
-      history: [...held.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }].slice(-HISTORY_LIMIT) });
+      history: keepHistory([...held.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }]) });
     return deleted;
   });
 }
@@ -316,7 +322,7 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
 /** Undo, and the way back for any rule that left: it returns to the end of its scope, which then keeps its bound as an append does. */
 export function restoreRule(ruleId: string, now = new Date().toISOString()): RoleMemoryRule {
   joinMovedScopes(now);
-  return collection(true)!.boundedPatch(4096, (tx) => {
+  return roleMemoryCollection(true)!.boundedPatch(4096, (tx) => {
     const rule = tx.get(`r:${ruleId}`);
     if (rule?.kind !== "rule") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "no such rule");
     if (rule.versionOf) throw new RoleMemoryRefusal("RULE_IS_VERSION", "an earlier text is a version; revert it on its original rule");
@@ -327,6 +333,8 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
     const restored: RoleMemoryRule = { ...rule, scope, state: "active", changedAt: now, keptByOperatorAt: now };
     delete restored.reason;
     delete restored.mergedInto;
+    delete restored.against;
+    delete restored.where;
     const next = [...current.active.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; }), restored];
     tx.put(restored);
     const retained = retainRules(next, now, new Set([ruleId]));
@@ -334,7 +342,7 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
     const archived = retained.archived;
     const revision = current.revision + 1;
     tx.put({ ...current, revision, active: retained.active.map((entry) => entry.id),
-      history: [...current.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }].slice(-HISTORY_LIMIT) });
+      history: keepHistory([...current.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }]) });
     return restored;
   });
 }
@@ -342,7 +350,7 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
 /** Restore an earlier text on its original rule and retain the text it replaces. */
 export function revertRule(versionId: string, now = new Date().toISOString()): RoleMemoryRule {
   joinMovedScopes(now);
-  const result = collection(true)!.boundedPatch(4096, tx => {
+  const result = roleMemoryCollection(true)!.boundedPatch(4096, tx => {
     const version = tx.get(`r:${versionId}`);
     const current = version?.kind === "rule" && version.versionOf ? tx.get(`r:${version.versionOf}`) : null;
     if (version?.kind !== "rule" || !version.versionOf || current?.kind !== "rule" || !current.versions?.includes(version.id)) {
@@ -356,7 +364,7 @@ export function revertRule(versionId: string, now = new Date().toISOString()): R
     const retained = retainRules(active, now, new Set([current.id]));
     for (const changed of retained.changed) tx.put(changed);
     const revision = held.revision + 1;
-    tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: [...held.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }].slice(-HISTORY_LIMIT) });
+    tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }]) });
     return updated;
   });
   try { refreshLessonKnownValues(); } catch { /* egress fails closed */ }
@@ -377,6 +385,10 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
     roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.stageId,
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
     ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),
+    ...(row.curatedAt ? { curatedAt: row.curatedAt } : {}),
+    ...(row.keptByOperatorAt ? { keptByOperatorAt: row.keptByOperatorAt } : {}),
+    ...(row.note ? { note: row.note } : {}), ...(row.where ? { where: row.where } : {}), ...(row.against ? { against: row.against } : {}),
+    ...(row.mergedFrom ? { mergedFrom: row.mergedFrom } : {}), ...(row.movedFrom ? { movedFrom: row.movedFrom } : {}), ...(row.splitFrom ? { splitFrom: row.splitFrom } : {}),
     ...(row.versions?.length ? { versions: row.versions.flatMap(id => {
       const prior = byId.get(id);
       return prior ? [{ id: prior.id, rule: prior.rule, why: prior.why, hints: prior.hints, createdAt: prior.createdAt, ...(prior.revisedBy ? { revisedBy: revisionView(prior.revisedBy) } : {}) }] : [];
@@ -405,7 +417,7 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
       active: active.map((row) => view(row, now, rulesById)), left: left.map((row) => view(row, now, rulesById)),
     };
   });
-  return { project: canonical, enabled: roleMemoryEnabled(), scopes };
+  return { project: canonical, enabled: roleMemoryEnabled(), scopes, curation: curationView(canonical, now) };
 }
 
 /** What each stage attempt of a project left, for the line under its report on the card. */
@@ -418,8 +430,8 @@ export function stageLessons(project: string): StageLessonView[] {
   return all.flatMap((row) => row.kind === "request" && projectOf(row.project) === canonical ? [row] : [])
     .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 400)
     .map((row) => ({
-      pipelineId: row.pipelineId, stageId: row.stageId, attempt: row.attempt, none: row.none,
-      rules: row.ruleIds.flatMap((id) => {
+      pipelineId: row.pipelineId, stageId: row.stageId, attempt: row.attempt, none: row.none, ...(row.rewrote ? { rewrote: row.rewrote } : {}),
+      rules: (row.rewrote ? [row.rewrote] : row.ruleIds).flatMap((id) => {
         const found = rulesById.get(id);
         return found ? [{ id, rule: found.rule, scope: scopeKind(found.scope), roleId: scopeRole(found.scope) }] : [];
       }),
@@ -446,7 +458,7 @@ const UNREADABLE = "role memory could not be read, so its learned rules cannot b
 /** The stored rows, or a refusal that quotes nothing a row holds. */
 function readableRows(): { rows: RoleMemoryRow[]; signature: string } {
   try {
-    const held = collection();
+    const held = roleMemoryCollection();
     return held ? { signature: held.signature(), rows: held.snapshot() as RoleMemoryRow[] } : { signature: "", rows: [] };
   } catch {
     throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
