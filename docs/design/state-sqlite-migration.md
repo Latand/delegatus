@@ -90,6 +90,9 @@ Sizes and last-write times come from the production directory at about 19:30 loc
 | `project-catalog.json` (7 MB), `files-scan-snapshot.json`, `files-response-cache*.json`, `files-response-results/` (123 MB), `limits-cache.json`, `resources-observation.json`, `host-retirement-report.json`, `reaper-report.json`, `task-inbox-scan.json`, `bg-commands.json`, `compact-chains.json`, `codex-lineage.json` | **Rebuildable caches.** Each is derived from transcripts, the filesystem, a live poll or the last run, and losing it costs one rescan. | slice 10: one durable write helper (temp, fsync, rename, directory fsync). An unparseable cache is discarded and rebuilt. `codex-lineage.json`, `bg-commands.json` and `compact-chains.json` are written **in place** or without fsync today. |
 | `view-presence.json`, `flow-pipeline-controller-heartbeat.json` | Cross-process heartbeats with a 2-minute retention. They are rebuilt within one heartbeat interval. | slice 10 helper |
 
+The retired heuristic task scanner's `task-inbox-scan.json` remains on disk
+unread. Scanner removal performs no task or scan-state migration or deletion.
+
 ### 2.3 DELETE (dead)
 
 | Store | Evidence | When |

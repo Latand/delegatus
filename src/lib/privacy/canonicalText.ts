@@ -21,8 +21,26 @@ function decodePercentEncoding(text: string): string {
   });
 }
 
-function decodeHtmlEntities(text: string): string {
-  return decodeHTMLStrict(text);
+function decodeHtmlEntities(text: string, preserveLiteralUnderscores = false): string {
+  if (!preserveLiteralUnderscores) return decodeHTMLStrict(text);
+  let decoded = "";
+  let cursor = 0;
+  // The compact detector normalizes compatibility glyphs to underscores;
+  // preserve their literal Markdown role while doing so in this token view.
+  for (const match of text.matchAll(/&[^&;\s]*;|[\uFE33\uFE34\uFE4D-\uFE4F\uFF3F]/gu)) {
+    decoded += text.slice(cursor, match.index);
+    let literal = decodeHTMLStrict(match[0]);
+    // Entity references produce literal text, including inside emphasis.
+    if (literal.normalize("NFKC") === "_") {
+      literal = "_";
+      let backslashes = 0;
+      for (let index = decoded.length - 1; decoded[index] === "\\"; index -= 1) backslashes += 1;
+      if (backslashes % 2 === 0) decoded += "\\";
+    }
+    decoded += literal;
+    cursor = match.index + match[0].length;
+  }
+  return decoded + text.slice(cursor);
 }
 
 function decodeCommonMarkEscapes(text: string): string {
@@ -74,6 +92,7 @@ export function decodeSensitiveText(
   preserveDefaultIgnorables: boolean,
   offsets?: number[],
   jsonEscapes = false,
+  preserveCommonMarkEscapes = false,
 ): { error: boolean; text: string } {
   const strip = preserveDefaultIgnorables ? (value: string): string => value
     : (value: string): string => decodeWithOffsets(value, removeDefaultIgnorables, /\p{Default_Ignorable_Code_Point}/gu, offsets);
@@ -86,9 +105,10 @@ export function decodeSensitiveText(
             jsonEscapes ? decodeWithOffsets(decoded, decodeJsonStringEscapes, /\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt])/g, offsets) : decoded,
             decodePercentEncoding, /(?:%[0-9a-f]{2})+/gi, offsets,
           ),
-          decodeHtmlEntities, /&[^&;\s]*;/g, offsets,
+          (value) => decodeHtmlEntities(value, preserveCommonMarkEscapes), /&[^&;\s]*;/g, offsets,
         ),
-        decodeCommonMarkEscapes, /\\[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, offsets,
+        preserveCommonMarkEscapes ? (value) => value : decodeCommonMarkEscapes,
+        /\\[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, offsets,
       ),
     );
     if (next === decoded) return { error: false, text: decoded };
@@ -97,6 +117,7 @@ export function decodeSensitiveText(
   return { error: true, text: decoded };
 }
 
-export function canonicalSensitiveText(text: string, jsonEscapes = false): { error: boolean; text: string } {
-  return decodeSensitiveText(text, false, undefined, jsonEscapes);
+/** Token emphasis pairing retains escapes and underscores from literal text. */
+export function canonicalSensitiveText(text: string, jsonEscapes = false, preserveCommonMarkEscapes = false): { error: boolean; text: string } {
+  return decodeSensitiveText(text, false, undefined, jsonEscapes, preserveCommonMarkEscapes);
 }

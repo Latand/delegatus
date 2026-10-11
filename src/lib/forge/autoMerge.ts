@@ -21,11 +21,11 @@ import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
  *
  * A completed lane of a project that turned the setting on, whose reviews
  * passed (§4.2), is queued here and merged through GitHub with `gh`, one lane
- * at a time per repository, once its PR's checks have arrived, settled and are
- * green (§4.3). Scheduled beside the forge sweep from the controller cycle and,
- * like it, run outside every pipeline lease: the `gh` calls happen with no
- * lock held, and each result is written under the pipeline lock against the
- * record read again inside it.
+ * at a time per repository, once its PR's required checks have arrived, settled
+ * and are green, with no reported failure (§4.3). Scheduled beside the forge
+ * sweep from the controller cycle and, like it, run outside every pipeline
+ * lease: the `gh` calls happen with no lock held, and each result is written
+ * under the pipeline lock against the record read again inside it.
  *
  * Nothing here resolves a conflict, pushes, posts a comment or adds a trailer.
  * What cannot be settled by waiting blocks with one plain sentence and goes to
@@ -346,21 +346,24 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
     return merge.updates.length >= MERGE_MAX_UPDATES * (merge.attempts + 1) ? { kind: "block", reason: MERGE_REASONS.mainMoving } : { kind: "update" };
   }
   const present = new Set(names);
-  const missing = [...new Set([...required, ...merge.seenChecks])].filter((name) => !present.has(name));
+  const requiredNames = new Set(required);
+  // Only required contexts hold the merge while checks register or run.
+  const missing = [...new Set([...required, ...merge.seenChecks])].filter((name) => requiredNames.has(name) && !present.has(name));
   const grew = previous !== null && names.some((name) => !previous.includes(name));
-  const pending = view.checks.some((check) => check.verdict !== "green");
+  const pending = view.checks.some((check) => requiredNames.has(check.name) && check.verdict !== "green");
   const settled = names.length > 0 && missing.length === 0 && age >= MERGE_SETTLE_MS && previous !== null && !grew && !pending;
   if (!settled) {
-    if (names.length === 0 && age >= MERGE_SETTLE_MS) return { kind: "block", reason: MERGE_REASONS.noChecks };
+    if (names.length === 0 && missing.length === 0 && age >= MERGE_SETTLE_MS) return { kind: "block", reason: MERGE_REASONS.noChecks };
     if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
     return { kind: "wait", state: "waiting-checks", reason: missing.length ? `waiting for ${missing.join(", ")}` : null };
   }
-  if ((view.mergeStateStatus === "CLEAN" || view.mergeStateStatus === "HAS_HOOKS") && view.mergeable === "MERGEABLE") return { kind: "merge" };
+  // UNSTABLE is mergeable once required contexts pass and reported failures are ruled out above.
+  if ((view.mergeStateStatus === "CLEAN" || view.mergeStateStatus === "HAS_HOOKS" || view.mergeStateStatus === "UNSTABLE") && view.mergeable === "MERGEABLE") return { kind: "merge" };
   if (view.mergeStateStatus === "BLOCKED") {
     const review = view.reviewDecision === "REVIEW_REQUIRED" || view.reviewDecision === "CHANGES_REQUESTED";
     return { kind: "block", reason: review ? MERGE_REASONS.reviewRequired : MERGE_REASONS.protection };
   }
-  /* UNKNOWN, a null or UNKNOWN `mergeable`, UNSTABLE: GitHub is still
+  /* UNKNOWN, a null or UNKNOWN `mergeable`: GitHub is still
      computing; read again, inside the same bound. */
   if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
   return { kind: "wait", state: "checking", reason: null };
