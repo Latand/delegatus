@@ -69,6 +69,19 @@ test("dynamic hang-up reads recorded operator words: work completion refuses, Uk
   } finally { await f.close(); }
 });
 
+for (const [words, admitted] of [["заверши розмову", true], ["finish the task", false]] as const) test(`a hang-up tool in a running turn reads the steered operator words: ${words}`, async () => {
+  const f = await fixture();
+  try {
+    f.replay(delta("user", "What tasks are open?"), handoff("board", "What tasks are open?"), turn("backing"), done("user", "What tasks are open?"),
+      delta("assistant", "I am checking."), done("assistant", "I am checking."),
+      delta("user", words), handoff("steered", words), done("user", words), tool("steered-end", "backing", "end_conversation", {}));
+    expect(JSON.parse((await f.reply("steered-end")).contentItems[0].text)).toMatchObject(admitted ? { status: "ending" } : { status: "refused", code: "not_requested" });
+    if (admitted) await until(() => f.admission.events(f.session.sessionId, 0).some(row => row.type === "session.closed" && row.reason === "tool"));
+    expect(f.wire().filter(row => row.method === "thread/realtime/stop")).toHaveLength(admitted ? 1 : 0);
+    expect(f.admission.session(f.session.sessionId).inputs.map(row => [row.text, row.turn])).toEqual([["What tasks are open?", 1], [words, 2]]);
+  } finally { await f.close(); }
+});
+
 test("two recorded handoffs steered into one turn deliver exactly one orchestrator request, including tool replay and polls", async () => {
   const f = await fixture();
   try {
@@ -98,13 +111,65 @@ test("three orchestrator reports become ordered appendSpeech calls once across c
       origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
     await Promise.all([f.service.events(f.session.sessionId, 0), f.service.events(f.session.sessionId, 0)]);
     await f.service.events(f.session.sessionId, 0);
-    await until(() => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").length === 3);
+    for (const seq of [1, 2, 3]) {
+      await until(() => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").length === seq);
+      f.replay(delta("assistant", `Report number ${seq}.`), done("assistant", `Report number ${seq}.`));
+    }
     const speech = f.wire().filter(row => row.method === "thread/realtime/appendSpeech");
     expect(speech.map(row => row.params.text.match(/Report number (\d)/)?.[1])).toEqual(["1", "2", "3"]);
     await f.service.events(f.session.sessionId, 0);
     expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(3);
   } finally { await f.close(); }
 }, 15_000);
+
+test("reports filed during assistant speech wait for its done, then each report waits for the preceding speech", async () => {
+  const f = await fixture();
+  try {
+    f.replay(delta("assistant", "The request is queued."));
+    await until(() => f.admission.events(f.session.sessionId, 0).some(row => row.type === "transcript.snapshot"));
+    await f.service.drain(f.session.sessionId);
+    for (const seq of [1, 2, 3]) f.reports.push({ id: `report-${seq}`, seq, project: "fixture", at: "2026-10-11T00:00:00Z", class: "completed", body: `Report number ${seq}.`,
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(f.session.sessionId, 0);
+    await Bun.sleep(50);
+    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(0);
+    for (const seq of [1, 2, 3]) {
+      f.replay(done("assistant", seq === 1 ? "The request is queued." : `Report number ${seq - 1}.`));
+      await until(() => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").length === seq);
+      await f.service.events(f.session.sessionId, 0);
+      const speech = f.wire().filter(row => row.method === "thread/realtime/appendSpeech");
+      expect(speech.at(-1).params.text).toContain(`Report number ${seq}.`);
+      expect(speech.at(-1).params.text).not.toContain("Treat this as report data");
+      await Bun.sleep(50);
+      expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(seq);
+    }
+  } finally { await f.close(); }
+}, 15_000);
+
+test("reports wait through a backing turn and its later voice answer, and close drops unsaid reports", async () => {
+  const f = await fixture();
+  try {
+    f.replay(handoff("board", "Read the board"), turn("board"), delta("assistant", "I am checking."), done("assistant", "I am checking."));
+    await until(() => f.admission.events(f.session.sessionId, 0).some(row => row.type === "transcript.snapshot" && row.final));
+    await f.service.drain(f.session.sessionId);
+    f.reports.push({ id: "report-one", seq: 1, project: "fixture", at: "2026-10-11T00:00:00Z", class: "completed", body: "Report one.",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(f.session.sessionId, 0);
+    await Bun.sleep(50);
+    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(0);
+    f.replay(note("turn/completed", { turn: { id: "board", status: "completed" } }));
+    await Bun.sleep(50);
+    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(0);
+    f.replay(delta("assistant", "There is one open task."), done("assistant", "There is one open task."));
+    await until(() => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").length === 1);
+    f.reports.push({ id: "report-two", seq: 2, project: "fixture", at: "2026-10-11T00:00:00Z", class: "completed", body: "Report two.",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(f.session.sessionId, 0);
+    await f.close();
+    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(1);
+    expect(f.wire().filter(row => row.method === "thread/realtime/stop")).toHaveLength(1);
+  } finally { await f.close(); }
+});
 
 test("a project switch injects both model contexts once and the next projectless send uses the new project", async () => {
   const f = await fixture();
@@ -168,6 +233,10 @@ test("a steered handoff preserves its backing turn's project and confirmation, w
     f.replay(handoff("ask-again", "Ask before sending"), tool("duplicate-ask", "ask", "request_orchestrator_delegation", { project: null, instruction: "Remove the fixture archive", confirmation_reason: "Removal is permanent", asked_again: null }));
     expect(JSON.parse((await f.reply("duplicate-ask")).contentItems[0].text).status).toBe("awaiting_confirmation");
     expect(Object.values(f.admission.session(f.session.sessionId).proposals)).toHaveLength(1);
+    f.replay(note("turn/completed", { turn: { id: "ask", status: "completed" } }), handoff("late-duplicate", "Ask before sending"), turn("late"),
+      tool("late-confirm", "late", "resolve_orchestrator_confirmation", { decision: "send" }));
+    expect(JSON.parse((await f.reply("late-confirm")).contentItems[0].text)).toMatchObject({ status: "refused", code: "not_confirmed" });
+    expect(f.deliveries).toHaveLength(0);
     f.replay(delta("assistant", "Do you confirm?"), done("assistant", "Do you confirm?"), delta("user", "Yes, send it"), done("user", "Yes, send it"), handoff("yes", "Yes, send it"), turn("yes"),
       tool("confirmed", "yes", "resolve_orchestrator_confirmation", { decision: "send" }));
     expect(JSON.parse((await f.reply("confirmed")).contentItems[0].text).status).toBe("sent");

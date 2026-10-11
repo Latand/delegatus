@@ -21,10 +21,18 @@ existing admission gate and the call's read ledger.
 3. **Hang-up admission.** Dynamic `end_conversation` refuses “finish the task”
    and admits “заверши розмову”. The admitted call sends one stop RPC and
    closes with reason `tool`. The recorded operator inputs carry turns 1 and
-   2; admission reads those inputs through the existing gate.
+   2; admission reads those inputs through the existing gate. A second handoff
+   steered into a running backing turn updates its hang-up intent. Replays in
+   the recorded handoff → turn/started → user done order admit the Ukrainian
+   request and refuse work completion. Its project, send source turn and
+   waiting confirmation remain frozen; a late duplicate cannot confirm itself.
 4. **Reports.** Three reports supplied out of order produce three
    `appendSpeech` RPCs in sequence order, once each across concurrent polls.
-   Speech and context RPCs share one ordered writer for the call.
+   Reports wait through backing work and its spoken answer. Each next report
+   waits for the preceding assistant output part to finish. Closing the call
+   drops unsaid speech. Report text contains operator-facing wording; its
+   no-action authority rule stays in the voice persona. Speech and context
+   RPCs share one ordered writer for the call.
 5. **Project context.** Switching projects produces one developer message via
    `thread/inject_items` and one developer `thread/realtime/appendText` with
    the same text. A following projectless request reaches the new project.
@@ -36,7 +44,9 @@ existing admission gate and the call's read ledger.
    and transcript. The installed Codex schema checks the actual context and
    tool-result builders, including the image variant and unsupported-field
    negative controls. The live app-server accepted an image reply and
-   completed its backing turn.
+   completed its backing turn. The canary frame was a 1×1 PNG, and the
+   spoken response said the image could not be retrieved. This proves wire
+   delivery as `inputImage`; useful visual interpretation remains unproven.
 7. **Live canary.** A copied managed ChatGPT sign-in ran in an isolated home,
    configuration, state and temporary root on Codex 0.162.1 and Bun 1.4.0.
    Locally synthesized clips drove WebRTC. The real companion admission and
@@ -44,27 +54,42 @@ existing admission gate and the call's read ledger.
    a stand-in route. One ordinary request and one request confirmed by voice
    were delivered; voice hang-up ended the call with reason `tool`.
 
-The initial canary delivered two unique requests, with zero duplicates, four
-handoffs, one spoken confirmation, one admitted hang-up and one stop RPC.
-An extended canary repeated those results and also accepted one image reply,
-one project injection and one realtime context append, over 68.06 seconds.
-A further run refused an unknown project selector supplied by the model and
-delivered nothing; its owned processes exited. The final run registers named
-fixture projects and uses the production project resolver. Its results:
+The original canary sent three report speech RPCs while the voice answered
+its confirmation, but no report text appeared in its assistant output. Those
+RPC acknowledgements proved context receipt only. A separate live probe with
+operator-facing wording heard an idle report and a report appended during its
+speech together, then heard another idle report. The repair therefore paces
+reports through output completion rather than relying on RPC receipt.
 
-| Measurement | Final canary |
+The repaired managed-account canary filed all three reports during assistant
+speech, after the confirmed send. The assistant completed its send answer,
+then its output transcript contained these three separate reports, once each
+and in order:
+
+- “Report from the orchestrator: the board review is complete.”
+- “Another report: the tests passed.”
+- “And a third report: the release is ready.”
+
+Both stdio assistant done transcripts and WebRTC data-channel output carried
+these results, with received audio recorded privately. The first report RPC
+followed completion of the send answer; each subsequent report RPC followed
+completion of the preceding report speech.
+
+| Measurement | Repaired canary |
 | --- | ---: |
 | Ordinary inbox sends | 1 |
 | Sends after voice confirmation | 1 |
 | Duplicate / unexpected sends | 0 / 0 |
-| Handoffs | 5 |
+| Handoffs | 4 |
 | Successful voice confirmations | 1 |
 | Admitted voice hang-ups / stop RPCs | 1 / 1 |
 | Closed reason | `tool` |
 | Report speech RPCs, in order | 3: 1, 2, 3 |
+| Reports in assistant output, counts / order | 1 each / 1, 2, 3 |
+| Reports filed during assistant speech | 3 |
 | Project injections / realtime text appends | 1 / 1 |
 | Image tool replies | 1 |
-| Call duration | 71.37 s |
+| Call duration | 95.81 s |
 | New Codex session files / surviving helpers | 0 / 0 |
 
 Raw wire, audio, authentication material and PID ledgers stay outside this
@@ -73,14 +98,15 @@ leased helper PIDs. The successful initial, extended and final calls each
 created zero Codex session files and left zero surviving helpers. Every
 attempted call's Viewer stand-in and both leased helper PIDs were recorded
 privately; cleanup reported zero survivors for the refused-selector run too.
+The repaired canary and the separate speech probe each recorded their own
+Viewer stand-in and leased helper PIDs and left zero surviving helpers.
 
-The failing-first checks exposed ignored transcripts, premature hang-up,
-unregistered send tools, missing speech/context RPCs, a dropped image,
-unmasked short credential fragments, retargeted steered calls and merged
-parts sharing a receipt timestamp. The focused files cover 90 passing tests:
-`codexConversation.test.ts` (7), `codexTranscript.test.ts` (2),
-`codexProvider.test.ts` (13), `codexVoiceSchema.test.ts` (1),
-`liveTranscript.test.ts` (6) and `liveSession.test.ts` (61).
+The failing-first checks reproduced the steered hang-up refusal and three
+report appends during unfinished assistant speech. The focused files cover
+94 passing tests: `codexConversation.test.ts` (11),
+`codexTranscript.test.ts` (2), `codexProvider.test.ts` (13),
+`codexVoiceSchema.test.ts` (1), `liveTranscript.test.ts` (6) and
+`liveSession.test.ts` (61).
 
 Checks use explicit test paths through `scripts/gate-slot.sh`, with `HOME`,
 XDG directories, `TMPDIR` and `LLV_STATE_DIR` under a private temporary root,

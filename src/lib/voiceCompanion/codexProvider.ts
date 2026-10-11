@@ -73,6 +73,8 @@ interface Call {
   stopping?: Promise<void>; reaped: Promise<void>; sdpReceived?: boolean; failed?: boolean;
   transcriptAdapter: CodexVoiceTranscript;
   writing: Promise<void>;
+  speech: string[]; speaking: boolean; awaitingSpeech: boolean;
+  backingTurns: Set<string>; awaitingBackingSpeech: boolean;
 }
 
 /** Companion-owned stdio protocol. No conversation host, writer or composer
@@ -111,7 +113,7 @@ export class CodexLiveProvider implements LiveProvider {
       const started = jsonObject(await client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt)));
       const id = jsonObject(started?.thread)?.id;
       if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new CodexVoiceError("CODEX_UNSUPPORTED");
-      call = { client, account, cwd, id, events: [], createdAt: this.now(), reaped, transcriptAdapter: new CodexVoiceTranscript(), writing: Promise.resolve() };
+      call = { client, account, cwd, id, events: [], createdAt: this.now(), reaped, transcriptAdapter: new CodexVoiceTranscript(), writing: Promise.resolve(), speech: [], speaking: false, awaitingSpeech: false, backingTurns: new Set(), awaitingBackingSpeech: false };
       this.calls.set(id, call);
       const active = call;
       client.onRequest(async request => {
@@ -174,13 +176,26 @@ export class CodexLiveProvider implements LiveProvider {
   private notification(call: Call, notification: AppServerNotification) {
     const params = jsonObject(notification.params)!;
     if (notification.method.startsWith("thread/realtime/transcript/")) {
+      if (params.role === "assistant") {
+        if (notification.method.endsWith("/delta")) call.speaking = true;
+        else if (notification.method.endsWith("/done")) {
+          call.speaking = false;
+          call.awaitingSpeech = false;
+          if (!call.backingTurns.size) call.awaitingBackingSpeech = false;
+        }
+      }
       for (const event of call.transcriptAdapter.notification(notification.method, params, this.now() - call.createdAt)) this.emit(call, event);
+      this.flushSpeech(call);
     } else if (notification.method === "thread/realtime/itemAdded") {
       const item = jsonObject(params.item);
       if (item?.type === "handoff_request" && typeof item.handoff_id === "string") this.emit(call, { type: "session.delegation.created", offset_ms: this.now() - call.createdAt, delegation: { id: item.handoff_id, target: "client" } });
     } else if (notification.method === "turn/started") {
       const turn = jsonObject(params.turn);
-      if (typeof turn?.id === "string") this.emit(call, { type: "codex.turn.started", turnId: turn.id });
+      if (typeof turn?.id === "string") {
+        call.backingTurns.add(turn.id);
+        call.awaitingBackingSpeech = true;
+        this.emit(call, { type: "codex.turn.started", turnId: turn.id });
+      }
     } else if (notification.method === "thread/tokenUsage/updated") {
       const usage = jsonObject(params.tokenUsage); const total = jsonObject(usage?.total);
       if (total) this.emit(call, { type: "codex.tokenUsage", tokens: Object.fromEntries(Object.entries(total).filter(([, value]) => Number.isSafeInteger(value) && (value as number) >= 0)) });
@@ -189,8 +204,17 @@ export class CodexLiveProvider implements LiveProvider {
         this.emit(call, { type: notification.method.endsWith("error") ? "error" : "session.closed" });
         void this.hangup(call.id, "").catch(() => call.lost?.());
       }
-    } else if (notification.method === "turn/completed" && jsonObject(params.turn)?.status === "failed") {
-      void call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text: "The board could not be read just now." }).catch(() => call.lost?.());
+    } else if (notification.method === "turn/completed") {
+      const turn = jsonObject(params.turn);
+      if (typeof turn?.id === "string") {
+        call.backingTurns.delete(turn.id);
+        this.emit(call, { type: "codex.turn.completed", turnId: turn.id });
+      }
+      if (turn?.status !== "completed") {
+        call.awaitingBackingSpeech = false;
+        if (turn?.status === "failed") this.queueSpeech(call, "The board could not be read just now.");
+        else this.flushSpeech(call);
+      }
     }
   }
   private limits(call: Call, value: unknown): { resetsAt: number | null } | null {
@@ -216,15 +240,11 @@ export class CodexLiveProvider implements LiveProvider {
       if (command.type === "session.close") void this.hangup(id, "").then(() => event({ type: "session.closed" }), lost);
       else if (["session.commentary.append", "session.instructions.append"].includes(command.type) && typeof command.content === "string") {
         const text = command.content;
-        // The same call orders speech and context even when polls overlap.
-        // Failed writes close the call through its lost path.
-        call.writing = call.writing.then(async () => {
+        if (command.type === "session.commentary.append") this.queueSpeech(call, text);
+        else call.writing = call.writing.then(async () => {
           if (call.stopping || call.failed) return;
-          if (command.type === "session.commentary.append") await call.client.request("thread/realtime/appendSpeech", { threadId: id, text });
-          else {
-            await call.client.request("thread/inject_items", codexVoiceContext(id, text));
-            if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendText", codexVoiceText(id, text));
-          }
+          await call.client.request("thread/inject_items", codexVoiceContext(id, text));
+          if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendText", codexVoiceText(id, text));
         }).catch(() => { call.failed = true; call.lost?.(); });
       }
     }, dispose: () => {
@@ -232,6 +252,22 @@ export class CodexLiveProvider implements LiveProvider {
       // Session recovery retains the open flag until hangup confirms reaping.
       void this.hangup(id, "").catch(() => {});
     } };
+  }
+  private queueSpeech(call: Call, text: string): void {
+    call.speech.push(text);
+    this.flushSpeech(call);
+  }
+  /** Standalone speech can be lost while a backing answer is being voiced.
+   * An RPC acknowledgement confirms context receipt only. Wait for assistant
+   * output completion before sending the next report, including across polls. */
+  private flushSpeech(call: Call): void {
+    if (call.stopping || call.failed || call.speaking || call.awaitingSpeech || call.backingTurns.size || call.awaitingBackingSpeech) return;
+    const text = call.speech.shift();
+    if (text === undefined) return;
+    call.awaitingSpeech = true;
+    call.writing = call.writing.then(async () => {
+      if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text });
+    }).catch(() => { call.failed = true; call.lost?.(); });
   }
   async hangup(id: string, _key: string): Promise<void> {
     void _key;
