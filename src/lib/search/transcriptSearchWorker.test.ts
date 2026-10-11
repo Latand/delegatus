@@ -59,7 +59,7 @@ async function seed(): Promise<void> {
 
 test("worker preserves every page, order, scope, copies and redaction before excerpts", async () => {
   await seed();
-  const lane = worker();
+  const lane = worker({ timeoutMs: 5000 });
   for (const order of ["newest", "relevance"] as const) {
     for (const speaker of [undefined, "user", "assistant"] as const) {
       for (const project of [undefined, "north", "unknown"]) {
@@ -80,9 +80,12 @@ test("worker preserves every page, order, scope, copies and redaction before exc
     expect(actual).toEqual(searchTranscripts(options));
     expect(JSON.stringify(actual)).not.toContain("secret-value");
   }
-  await expect(lane.search({ query: "cobalt", cursor: "invalid" })).rejects.toHaveProperty("name", "InvalidTranscriptSearchCursorError");
+  // Await IPC before matching: Bun's nested promise-matcher wait can strand
+  // replies after an IO continuation (https://github.com/oven-sh/bun/issues/37189).
+  const invalidCursor = await lane.search({ query: "cobalt", cursor: "invalid" }).catch((error: unknown) => error);
+  expect(invalidCursor).toBeInstanceOf(InvalidTranscriptSearchCursorError);
   expect((await lane.search({ query: "cobalt" })).total).toBeGreaterThan(0);
-}, 20_000); // Windows startup and the redaction round trips exceed Bun's default five seconds.
+}, 20_000);
 
 function stub(body: string): { executable: string; workerPath: string } {
   const workerPath = path.join(root, "stub.mjs");
