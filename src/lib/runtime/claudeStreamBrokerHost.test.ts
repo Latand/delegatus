@@ -1378,6 +1378,140 @@ describe("ClaudeStreamBrokerHost", () => {
     }
   });
 
+  test.each([
+    { policy: "queue", status: "active" },
+    { policy: "steer-or-queue", status: "active" },
+    { policy: "queue", status: "attention" },
+    { policy: "steer-or-queue", status: "attention" },
+  ] as const)("durable $policy delivery during $status is confirmed by Claude's dequeue echo after its turn starts", async ({ policy, status }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-dequeue-echo-"));
+    const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: directory,
+      eventStore: new MemoryEventStore(),
+      deliveryLedger: ledger,
+      requestTimeoutMs: 40,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    const echo = (text: string, uuid: string) => child.emitJson({
+      type: "user", isReplay: true, session_id: host.identity.sessionId, uuid,
+      message: { role: "user", content: [{ type: "text", text }] },
+    });
+    const userFrames = () => child.inputs.filter(input => input.type === "user");
+    const waitFor = async (done: () => boolean) => {
+      for (let attempt = 0; attempt < 200 && !done(); attempt += 1) await Bun.sleep(5);
+      expect(done()).toBe(true);
+    };
+    const command = {
+      kind: "send" as const, operationId: "dequeued-follow-up", idempotencyKey: "dequeued-follow-up",
+      conversationId: "conversation-dequeue", text: "follow-up", policy,
+    };
+    const queue = new StructuredDeliveryQueue({
+      effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      hostClaim: async () => "fixture-owner",
+      transition: async (id, nextStatus, details, guard) => { journal.transitionOperation(id, nextStatus, details, guard); },
+    }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+    try {
+      const running = host.send({ id: "running-turn", text: "work" });
+      echo("work", "user-running");
+      await running;
+      if (status === "attention") {
+        child.emitJson({ type: "control_request", request_id: "permission-running", request: {
+          subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" },
+        } });
+        await Bun.sleep(0);
+      }
+      journal.append({ scope: `session:${command.conversationId}`, kind: "session-status", payload: {
+        conversationId: command.conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId },
+        hostKind: "claude-broker", host: "hosted", turn: "running", activeTurnId: "running-turn",
+        capabilities: { steer: false, structuredAttention: true },
+      } });
+      journal.executeOperation(command);
+      await queue.drain();
+      expect(userFrames()).toHaveLength(2);
+
+      if (status === "attention") {
+        // The queued input must not hold the answer its predecessor waits on.
+        journal.append({ scope: `session:${command.conversationId}`, kind: "attention", payload: {
+          id: "permission-running", conversationId: command.conversationId, kind: "permission", state: "open",
+          unowned: false, createdAt: new Date().toISOString(), request: { subtype: "can_use_tool" }, turnId: "running-turn",
+        } });
+        journal.executeOperation({
+          kind: "answer", operationId: "answer-running", idempotencyKey: "answer-running",
+          conversationId: command.conversationId, attentionId: "permission-running", resolution: { behavior: "allow" },
+        });
+        await queue.drain();
+        await waitFor(() => child.inputs.some(input => input.type === "control_response"));
+        child.emitJson({ type: "control_response", response: { subtype: "success", request_id: "permission-running" } });
+        await waitFor(() => journal.operationResult("answer-running")?.receipt.status === "answered");
+      }
+
+      // The predecessor outlives the confirmation budget counted from the write.
+      await Bun.sleep(120);
+      expect(journal.executeOperation(command).replayed).toBe(true);
+      await queue.drain();
+      expect(journal.operationResult(command.operationId)?.receipt.status).toBe("delivering");
+      expect(userFrames()).toHaveLength(2);
+
+      // Claude echoes the queued input when its own turn takes it.
+      child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
+      expect((await host.health()).activeTurnRef).toBe(command.operationId);
+      echo("follow-up", "user-follow-up");
+      await waitFor(() => journal.operationResult(command.operationId)?.receipt.status === "delivered");
+      expect(journal.operationResult(command.operationId)?.receipt).toMatchObject({
+        status: "delivered", turnId: command.operationId,
+      });
+      expect(ledger.load(host.identity.sessionId).filter(state => state.entry.id === command.operationId))
+        .toEqual([expect.objectContaining({ disposition: "queued-next-turn", delivered: true })]);
+      await queue.drain();
+      expect(journal.executeOperation(command).replayed).toBe(true);
+      await queue.drain();
+      expect(userFrames()).toHaveLength(2);
+    } finally {
+      await host.release();
+      journal.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a queued input's confirmation budget starts with its own turn", async () => {
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      deliveryLedger: ledger,
+      requestTimeoutMs: 40,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    const sessionId = host.identity.sessionId;
+    try {
+      const running = host.send({ id: "running", text: "work" });
+      child.emitJson({ type: "user", isReplay: true, session_id: sessionId, uuid: "user-work", message: { role: "user", content: [{ type: "text", text: "work" }] } });
+      await running;
+      let settled: string | null = null;
+      const queued = host.send({ id: "queued", text: "next" });
+      queued.then(() => { settled = "delivered"; }, () => { settled = "timed-out"; });
+      await Bun.sleep(120);
+      expect(settled).toBeNull();
+      child.emitJson({ type: "result", subtype: "success", session_id: sessionId });
+      expect((await host.health()).activeTurnRef).toBe("queued");
+      await expect(queued).rejects.toThrow("delivery confirmation timed out");
+      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
+      await expect(host.send({ id: "queued", text: "next" })).rejects.toThrow("delivery confirmation timed out");
+      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
+    } finally {
+      await host.release();
+    }
+  });
+
   test("queues ordinary active-turn sends and resumes the same durable session", async () => {
     const ledger = new RecordingDeliveryLedger();
     const eventStore = new MemoryEventStore();

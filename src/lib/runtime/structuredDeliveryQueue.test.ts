@@ -2827,6 +2827,30 @@ for (const policy of ["queue", "steer-or-queue"]) test(`${policy} queues in engi
   expect([...f.states.values()].map(receipt => receipt.status)).toEqual(["delivered", "delivered"]);
 });
 
+test("a queued send awaiting its turn frees the lane and holds later messages behind it", async () => {
+  const f = steerQueueFixture(["queue", "queue"]);
+  Object.assign(f.target, { supportsSteer: false, supportsQueuedSend: true });
+  const confirmations = new Map<string, (receipt: { outcome: "queued-next-turn"; turnId: string }) => void>();
+  f.target.send = entry => {
+    f.writes.push(`queue:${entry.id}`);
+    return new Promise(resolve => confirmations.set(entry.id, resolve));
+  };
+  await f.queue.drain();
+  await f.queue.drain();
+  expect(f.writes).toEqual(["queue:m0"]);
+  expect(f.states.get("m0")!.status).toBe("delivering");
+  expect(f.states.get("m1")!.status).toBe("queued");
+  confirmations.get("m0")!({ outcome: "queued-next-turn", turnId: "m0" });
+  for (let attempt = 0; attempt < 50 && f.states.get("m0")!.status !== "delivered"; attempt += 1) await Bun.sleep(1);
+  expect(f.states.get("m0")!.status).toBe("delivered");
+  await f.queue.drain();
+  expect(f.writes).toEqual(["queue:m0", "queue:m1"]);
+  confirmations.get("m1")!({ outcome: "queued-next-turn", turnId: "m1" });
+  for (let attempt = 0; attempt < 50 && f.states.get("m1")!.status !== "delivered"; attempt += 1) await Bun.sleep(1);
+  expect([...f.states.values()].map(receipt => receipt.status)).toEqual(["delivered", "delivered"]);
+  expect(f.interrupts).toEqual([]);
+});
+
 test("a refused steer waits on the same turn across passes", async () => {
   const f = steerQueueFixture();
   f.target.steer = async entry => { f.writes.push(`steer:${entry.id}`); throw new StructuredSendRefusedError("cannot steer a compact turn"); };
