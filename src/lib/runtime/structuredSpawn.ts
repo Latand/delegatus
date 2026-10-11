@@ -1,4 +1,5 @@
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
+import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
@@ -2209,6 +2210,7 @@ export async function spawnStructuredConversation(
   };
   try {
     input = admittedStructuredLaunchInput(input);
+    assertSpawnMemoryAvailable();
     const assertResumeSurvivorsRetired = () => {
       if (!resumeKey) return;
       const entry = input.registry.readOnlySnapshot().entries[sessionKeyId(resumeKey)];

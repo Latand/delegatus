@@ -323,6 +323,7 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
     ancestryAnswers: (result: ExecResult) => { ancestry = result; },
     branchRefAnswers: (result: ExecResult) => { branchRef = result; },
     stageLeaves: (...files: string[]) => { dirty = files; },
+    headMovesTo: (sha: string) => { head = sha; },
     spawnCount: () => spawns,
   };
 }
@@ -503,6 +504,165 @@ test("a second refusal after the repair parks with the hook's output", async () 
   expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
   expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
   /* The stage was asked exactly once. */
+  expect(h.requests).toHaveLength(1);
+});
+
+/** Interrupt a real store write before final settlement, leaving the intent
+    checkpoints that a replacement Viewer would read. */
+async function interruptStageSettlement(h: ReturnType<typeof harness>, state: "needs_decision" | "passed" | "refusal-checkpoint") {
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const prototype = SqliteStateCollection.prototype as InstanceType<typeof SqliteStateCollection<Pipeline>>;
+  const original = prototype.mutate;
+  prototype.mutate = function<R>(
+    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => void) => Promise<R> | R,
+    ...args: [Parameters<typeof original>[1]?, boolean?, number?, ((heldMs: number) => void)?]
+  ): Promise<R> {
+    return original.call(this, (records, persist) => operation(records, (changed) => {
+      if (changed?.some((record) => {
+        const attempt = record.runs?.[0]?.attempts?.[0];
+        return state === "refusal-checkpoint"
+          ? attempt?.state === "committing" && attempt.commitRepair?.outcome?.status === "rejected"
+          : attempt?.state === state;
+      })) {
+        throw new Error("simulated crash before final stage settlement");
+      }
+      persist(changed);
+    }), ...args) as Promise<R>;
+  };
+  try {
+    await expect(tickPipelines([], h.ports)).rejects.toThrow("simulated crash before final stage settlement");
+  } finally { prototype.mutate = original; }
+}
+
+test.each(["read-only", "read-write"] as const)("a second %s hook refusal survives a crash before final settlement without a third commit", async (access) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+
+  const second = `pre-commit: staged whitespace — ${OUTPUT}:22: trailing whitespace.`;
+  h.advance(TICK_MS);
+  h.hookAnswers(refusal(second));
+  h.endTurn("Fixed line 15.");
+  await interruptStageSettlement(h, "needs_decision");
+
+  // A newly healthy hook must not erase the refusal on replay.
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  for (let tick = 0; tick < 3; tick += 1) await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toStartWith(`committing the passed stage: ${second}`);
+  expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
+  expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(2);
+  expect(h.requests).toHaveLength(1);
+});
+
+test.each(["read-only", "read-write"] as const)("an interrupted %s refusal checkpoint cannot reuse the one commit retry", async (access) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(TICK_MS);
+  h.hookAnswers(refusal("pre-commit: second refusal"));
+  h.endTurn("Fixed line 15.");
+  await interruptStageSettlement(h, "refusal-checkpoint");
+
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  for (let tick = 0; tick < 3; tick += 1) await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(2);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain(WHITESPACE_REFUSAL);
+  expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  expect(h.requests).toHaveLength(1);
+});
+
+test.each([
+  ["read-only", BASE_SHA],
+  ["read-write", BASE_SHA],
+  ["read-write", STAGE_HEAD],
+] as const)("a clean %s checkout at unchanged retry head %s cannot hide an interrupted refusal checkpoint", async (access, head) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(TICK_MS);
+  h.headMovesTo(head);
+  h.hookAnswers(refusal("pre-commit: second refusal"));
+  h.endTurn("Fixed line 15.");
+  await interruptStageSettlement(h, "refusal-checkpoint");
+
+  h.stageLeaves();
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  for (let tick = 0; tick < 3; tick += 1) await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain("one commit retry was already started");
+  expect(parked.stateDetail).toContain(WHITESPACE_REFUSAL);
+  expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(2);
+  expect(h.requests).toHaveLength(1);
+});
+
+test.each(["read-only", "read-write"] as const)("a successful %s repair commit recovers after interrupted settlement without another commit", async (access) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(TICK_MS);
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.endTurn("Removed the trailing whitespace.");
+  await interruptStageSettlement(h, "passed");
+
+  h.advance(TICK_MS);
+  for (let tick = 0; tick < 3; tick += 1) await tickPipelines([], h.ports);
+  expect(study().state).toBe("passed");
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("verify");
+  expect(loadPipelines()[0]!.lastPassedCommit).toBe(STAGE_HEAD);
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(2);
+  expect(h.requests).toHaveLength(1);
+});
+
+test.each(["read-only", "read-write"] as const)("a crash entering the %s repair commit leaves its retry consumed before execution", async (access) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(TICK_MS);
+  h.endTurn("Removed the trailing whitespace.");
+  const execute = h.ports.exec;
+  h.ports.exec = (command, args, ...rest) => {
+    if (command === "git" && args[0] === "commit") throw new Error("simulated crash entering the retry");
+    return execute(command, args, ...rest);
+  };
+  try {
+    await expect(tickPipelines([], h.ports)).rejects.toThrow("simulated crash entering the retry");
+  } finally { h.ports.exec = execute; }
+
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  for (let tick = 0; tick < 3; tick += 1) await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain("one commit retry was already started");
+  expect(parked.stateDetail).toContain(WHITESPACE_REFUSAL);
+  expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  // The interrupted invocation never reached the executor, and cannot be retried.
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
   expect(h.requests).toHaveLength(1);
 });
 

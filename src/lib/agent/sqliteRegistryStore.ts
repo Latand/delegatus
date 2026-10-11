@@ -55,8 +55,8 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "state" | "status" | "key.sessionId";
-const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId" };
+type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId";
+const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId" };
 const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
 const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
 
