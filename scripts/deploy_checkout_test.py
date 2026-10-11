@@ -508,7 +508,8 @@ class CheckoutIntegration(unittest.TestCase):
         self.recovery_overrides = {}
         # The service's kernel cgroup, under the slice its unit configures.
         self.cgroup = self.root / "cgroup"
-        self.slice_group = "/user.slice/synthetic.slice"
+        self.slice = "delegatus.slice"
+        self.slice_group = "/user.slice/delegatus.slice"
         self.service_group = self.slice_group + "/synthetic-viewer.service"
         self.parents = {}
         self.pgroups = {}
@@ -531,7 +532,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.never_released = False
         self.start_refusals = 0
         self.stop_refused = False
-        self.weight = None
+        self.weight = "1000"
         self.weight_effective = True
         self.signals = []
         fixture = self
@@ -663,10 +664,10 @@ class CheckoutIntegration(unittest.TestCase):
                 return "MainPID=" + str(self.main_pid) + "\nControlGroup=" + self.service_group
             if "ControlGroup" in args:
                 if args[3].endswith(".slice"):
-                    return "ControlGroup=" + self.slice_group
+                    return "ControlGroup=" + ("/user.slice/delegatus.slice" if args[3] == "delegatus.slice" else self.slice_group)
                 held = self.active or self.surviving or self.never_released
                 weight = "\nCPUWeight=" + (self.weight or "[not set]")
-                return "Slice=synthetic.slice\nControlGroup=" + (self.service_group if held else "") + weight
+                return "Slice=" + self.slice + "\nControlGroup=" + (self.service_group if held else "") + weight
             return "KillMode=process\n" + state if "KillMode" in args else state
         if args[:4] == ["systemctl", "--user", "--no-block", "stop"]:
             if self.stop_refused:
@@ -959,7 +960,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertTrue(result["serving"]["checks"]["http"])
         self.assertFalse(result["serving"]["checks"]["placement"])
         self.assertEqual(result["verdict"], "fail")
-        self.assertEqual(result["serving"]["placement"]["expected"], "/user.slice/synthetic.slice/synthetic-viewer.service")
+        self.assertEqual(result["serving"]["placement"]["expected"], "/user.slice/delegatus.slice/synthetic-viewer.service")
         self.assertEqual(result["serving"]["placement"]["actual"], "/user.slice/app.slice/synthetic-viewer.service")
 
     def test_a_serving_process_outside_the_service_cgroup_fails_placement(self):
@@ -1284,11 +1285,72 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual(result["serving"]["placement"]["effectiveWeight"], None)
         self.assertEqual(result["verdict"], "fail")
 
+    def test_missing_invalid_or_lower_configured_cpu_weight_fails_after_start(self):
+        for weight in [None, "", "invalid", "[not set]", "100"]:
+            with self.subTest(weight=weight):
+                self.setUp()
+                self.relocating(weight=weight)
+                result = deploy.run_switch(self.adapter, TARGET, samples=1, timeout=5)
+                self.assert_back_in_service(result)
+                self.assertFalse(result["serving"]["checks"]["placement"])
+                self.assertEqual(result["verdict"], "fail")
+
+    def test_absent_cpu_weight_property_fails_with_or_without_kernel_weight(self):
+        for effective in [False, True]:
+            with self.subTest(effective=effective):
+                self.setUp()
+                self.relocating()
+                self.weight_effective = effective
+                execute = self.adapter.command
+                def without_weight(args, cwd=None):
+                    return "\n".join(line for line in execute(args, cwd).splitlines()
+                                     if not line.startswith("CPUWeight="))
+                self.adapter.command = without_weight
+                result = deploy.run_switch(self.adapter, TARGET, samples=1, timeout=5)
+                self.assert_back_in_service(result)
+                self.assertFalse(result["serving"]["checks"]["placement"])
+                self.assertEqual(result["serving"]["placement"]["effectiveWeight"], "1000" if effective else None)
+                self.assertEqual(result["verdict"], "fail")
+
+    def test_configured_app_slice_and_matching_actual_path_fail_after_start(self):
+        self.relocating()
+        self.slice = "app.slice"
+        self.slice_group = "/user.slice/app.slice"
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, timeout=5)
+        self.assert_back_in_service(result)
+        self.assertFalse(result["serving"]["checks"]["placement"])
+        self.assertEqual(result["verdict"], "fail")
+
+    def test_wrong_invalid_or_unreadable_kernel_cpu_weight_fails_after_start(self):
+        for weight in ["100", "invalid", "", None]:
+            with self.subTest(weight=weight):
+                self.setUp()
+                self.relocating()
+                execute = self.execute
+                def wrong_weight(args, cwd=None):
+                    output = execute(args, cwd)
+                    if args[:4] == ["systemctl", "--user", "--no-block", "start"]:
+                        path = self.cgroup / self.service_group.lstrip("/") / "cpu.weight"
+                        if weight is None:
+                            path.unlink()
+                            path.mkdir()
+                        else:
+                            path.write_text(weight + "\n")
+                    return output
+                self.adapter.command = wrong_weight
+                result = deploy.run_switch(self.adapter, TARGET, samples=1, timeout=5)
+                self.assert_back_in_service(result)
+                self.assertFalse(result["serving"]["checks"]["placement"])
+                self.assertEqual(result["verdict"], "fail")
+
     def test_correct_placement_passes(self):
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
         self.assertTrue(result["serving"]["checks"]["placement"])
         self.assertEqual(result["serving"]["placement"]["actual"], result["serving"]["placement"]["expected"])
+        self.assertEqual(result["serving"]["placement"]["slice"], "delegatus.slice")
+        self.assertEqual(result["serving"]["placement"]["weight"], "1000")
+        self.assertEqual(result["serving"]["placement"]["effectiveWeight"], "1000")
 
     def test_the_baseline_may_serve_from_the_old_cgroup_before_its_restart(self):
         self.service_group = "/user.slice/app.slice/synthetic-viewer.service"

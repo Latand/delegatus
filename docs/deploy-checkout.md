@@ -166,16 +166,18 @@ bounded recovery reads. A terminal host-loss error without a live replacement
 records lost work. A stage's ordinary completed verdict also counts as completed
 work when its host exits.
 
-Every serving sample also checks placement: the unit's `ControlGroup` must be
-its configured `Slice`'s own `ControlGroup` followed by the unit name, and the
-launcher, Viewer and runtime host must run inside it. A missing value fails the
+Every serving sample also checks placement: the unit must configure
+`Slice=delegatus.slice`, its `ControlGroup` must be that slice's own
+`ControlGroup` followed by the unit name, and the launcher, Viewer and runtime
+host must run inside it. A missing value fails the
 check. The sample records the expected and actual cgroup, and when they differ,
 the members that neither the serving generation nor an agent accounts for; the
-`Verdict:` line repeats the mismatch. When the unit configures `CPUWeight`,
-the kernel's `cpu.weight` in the actual cgroup must read that value: systemd
+`Verdict:` line repeats the mismatch. Both the configured `CPUWeight` and
+the kernel's `cpu.weight` in the actual cgroup must read `1000`: systemd
 accepts the setting even where the parent slice never enabled the cpu
-controller. The sample records both as `weight` and `effectiveWeight`. The
-baseline is exempt in preflight, because reaching the configured slice is what
+controller. Missing, invalid or unreadable weights fail the check. The sample
+records both as `weight` and `effectiveWeight`. The baseline is exempt in
+preflight, because reaching the required slice is what
 the switch does.
 
 A plain restart cannot move the service into another slice. systemd keeps a

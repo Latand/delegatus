@@ -19,6 +19,10 @@ import urllib.request
 import uuid
 
 
+CPU_SLICE = "delegatus.slice"
+CPU_WEIGHT = "1000"
+
+
 class Clock:
     now = staticmethod(time.monotonic)
     sleep = staticmethod(time.sleep)
@@ -779,20 +783,18 @@ class Checkout:
         return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
 
     def placement(self):
-        """The slice the unit configures and the cgroup it actually runs in.
+        """Observed configuration and cgroup, against the required CPU slice.
         A missing value is unreadable, never a match."""
         unit = systemd_properties(self.command(["systemctl", "--user", "show", self.unit,
                                                 "-p", "Slice", "-p", "ControlGroup", "-p", "CPUWeight"]))
         configured, actual = unit.get("Slice"), unit.get("ControlGroup")
         if not configured or not actual:
             raise RuntimeError("service placement unreadable")
-        parent = systemd_properties(self.command(["systemctl", "--user", "show", configured, "-p", "ControlGroup"])).get("ControlGroup")
-        if not parent:
+        parent = systemd_properties(self.command(["systemctl", "--user", "show", CPU_SLICE, "-p", "ControlGroup"])).get("ControlGroup")
+        if not parent or not parent.endswith("/" + CPU_SLICE):
             raise RuntimeError("slice placement unreadable")
-        # "[not set]" leaves the kernel default; only a configured weight is owed.
-        weight = unit.get("CPUWeight", "")
         return {"slice": configured, "expected": parent.rstrip("/") + "/" + self.unit, "actual": actual,
-                "weight": weight if re.fullmatch(r"[0-9]+", weight) else None}
+                "weight": unit.get("CPUWeight")}
 
     def members(self, group):
         """Every PID in the cgroup subtree. A subtree that cannot be read whole
@@ -1286,22 +1288,21 @@ class Checkout:
         def placement():
             observed = self.placement()
             result["placement"] = observed
-            if observed["actual"] != observed["expected"]:
+            if observed["slice"] != CPU_SLICE or observed["actual"] != observed["expected"]:
                 with contextlib.suppress(Exception):
                     observed["leftovers"] = self.leftovers(observed["actual"])
-                raise RuntimeError("service runs outside its configured slice")
+                raise RuntimeError("required CPU slice not in effect")
             for key in ["launcher", "web", "runtimeHost"]:
                 if not within(kernel_cgroup(self.process_read(record[key]["pid"], "cgroup")), observed["actual"]):
                     raise RuntimeError("serving process outside the service cgroup")
-            if observed["weight"] is not None:
-                # The unit accepts CPUWeight= even where its parent never enabled
-                # the cpu controller; only the kernel file says it is in effect.
-                try:
-                    observed["effectiveWeight"] = (self.cgroup_root / observed["actual"].lstrip("/") / "cpu.weight").read_text().strip()
-                except OSError:
-                    observed["effectiveWeight"] = None
-                if observed["effectiveWeight"] != observed["weight"]:
-                    raise RuntimeError("configured CPU weight not in effect")
+            # The unit accepts CPUWeight= even where its parent never enabled
+            # the cpu controller; only the kernel file says it is in effect.
+            try:
+                observed["effectiveWeight"] = (self.cgroup_root / observed["actual"].lstrip("/") / "cpu.weight").read_text().strip()
+            except OSError:
+                observed["effectiveWeight"] = None
+            if observed["weight"] != CPU_WEIGHT or observed["effectiveWeight"] != CPU_WEIGHT:
+                raise RuntimeError("required CPU weight not in effect")
         check("placement", placement)
         return result
 
@@ -1321,8 +1322,9 @@ class Checkout:
             placement = event["serving"].get("placement")
             if placement and event["serving"].get("checks", {}).get("placement") is False:
                 serving += " placement=FAILED expected=" + placement["expected"] + " actual=" + placement["actual"]
-                if placement.get("weight") is not None:
-                    serving += " cpu.weight=" + str(placement.get("effectiveWeight")) + "/" + placement["weight"]
+                serving += " Slice=" + placement["slice"] + "/" + CPU_SLICE
+                serving += " cpu.weight=" + str(placement.get("effectiveWeight")) + "/" + CPU_WEIGHT
+                serving += " CPUWeight=" + str(placement.get("weight"))
             relocation = event.get("relocation")
             if relocation:
                 serving += " relocation=" + str(relocation.get("outcome"))
