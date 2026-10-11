@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { hardenedRedact } from "@/lib/view/compactText";
-import type { CompanionCommand, CompanionEvent, Locale, Payload } from "./contract";
+import type { CompanionCommand, CompanionEvent, CompanionPlan, Locale, Payload } from "./contract";
 import { CompanionStorage, type StoredSession } from "./storage";
 import { CompanionAdmission } from "./admission";
 import { CompanionBoardReads, READ_TOOL_NAMES, VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
@@ -18,6 +18,8 @@ function processAlive(pid: number): boolean {
 }
 interface ActiveSession {
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
+  /** The provider this call runs on, chosen at its start; a Codex call has no key, cap or charge. */
+  provider: LiveProvider; codex: boolean;
   key: string; secrets: string[];
   queue: unknown[]; processing?: Promise<void>; seen: Set<string>;
   /** Delegations Live named; each runs once. */
@@ -36,11 +38,18 @@ interface ActiveSession {
   hangup?(): Promise<void>;
   hangingUp?: Promise<void>;
   codexTurn?: { project: string | null; sourceTurn?: number; confirmationProposalId: string | null };
+  /** The paying account's plan ran out: the call says so once and ends with reason limit. */
+  limitReached?: boolean;
 }
 interface Options {
   key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean;
-  /** Old API calls keep their original hangup path while Codex is selected. */
-  apiProvider?: Pick<LiveProvider, "hangup">;
+  /** The API provider beside a Codex one: new calls when the settings choose
+   * the API, and the hangup of API calls already open. */
+  apiProvider?: Pick<LiveProvider, "hangup"> | LiveProvider;
+  /** The Codex provider beside an API one, for calls the settings put on Codex. */
+  codexProvider?: LiveProvider;
+  /** How long the voice has to say that the plan ran out before the call stops. */
+  limitGraceMs?: number;
 }
 export interface MintedCompanionSession { sessionId: string; providerId: string; sdp: string }
 /** `session.commentary.append` takes at most 500 tokens. A token holds at
@@ -77,6 +86,19 @@ function echoes(text: string, secrets: readonly string[]): boolean {
     || Array.from({ length: Math.max(0, secret.length - 15) }, (_, at) => secret.slice(at, at + 16)).some(piece => piece.length === 16 && joined.includes(piece))));
 }
 
+const planWindow = (value: unknown) => {
+  const row = jsonObject(value);
+  return row && typeof row.usedPercent === "number" && row.usedPercent >= 0 && row.usedPercent <= 100
+    && (row.resetsAt === null || Number.isSafeInteger(row.resetsAt)) && (row.windowMinutes === null || Number.isSafeInteger(row.windowMinutes))
+    ? { usedPercent: row.usedPercent, resetsAt: row.resetsAt as number | null, windowMinutes: row.windowMinutes as number | null } : null;
+};
+/** The provider's merged plan, rebuilt field by field before it is stored. */
+function companionPlan(value: unknown): CompanionPlan | null {
+  const plan = jsonObject(value);
+  if (!plan || typeof plan.observedAt !== "number" || typeof plan.limitReached !== "boolean" || (plan.type !== null && typeof plan.type !== "string")) return null;
+  return { type: plan.type as string | null, primary: planWindow(plan.primary), secondary: planWindow(plan.secondary), limitReached: plan.limitReached, observedAt: plan.observedAt };
+}
+
 /** Owns only companion sessions it minted. Provider events arrive on a trusted
  * sideband; browser commands cannot submit transcripts, tools or usage.
  *
@@ -94,6 +116,14 @@ export class CompanionLiveSessions {
   constructor(readonly storage: CompanionStorage, readonly admission: CompanionAdmission, private readonly reads: CompanionBoardReads,
     private readonly provider: LiveProvider, private readonly options: Options = {}) { this.now = options.now ?? Date.now; }
 
+  /** The provider a new call runs on: the one the settings choose when this
+   * service holds it, else the one it was built with. */
+  private providerFor(choice: "api" | "codex"): LiveProvider {
+    const api = this.options.apiProvider;
+    const chosen = choice === "codex" ? (this.provider.backend === "codex" ? this.provider : this.options.codexProvider)
+      : this.provider.backend !== "codex" ? this.provider : api && "create" in api ? api : undefined;
+    return chosen ?? this.provider;
+  }
   async start(input: { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"] }): Promise<MintedCompanionSession> {
     const requestId = input.requestId ?? randomUUID();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) throw new Error("INVALID_REQUEST");
@@ -129,7 +159,8 @@ export class CompanionLiveSessions {
         Object.assign(document.sessions[id], { mintRequestId: requestId, mintDigest: digest, owner: { pid: process.pid, instance: this.instance } });
       });
     } catch (error) { this.admission.retire(id); throw error; }
-    const codex = this.provider.backend === "codex";
+    const provider = this.providerFor(settings.backend);
+    const codex = provider.backend === "codex";
     try { if (!codex) this.storage.reserve(id, VOICE_SESSION_RESERVE_USD, SESSION_START_ROOM_USD); }
     catch (error) { this.admission.retire(id); throw error; }
     let key: string;
@@ -137,7 +168,7 @@ export class CompanionLiveSessions {
     catch (error) { this.storage.settle(id, 0); this.admission.retire(id); throw error; }
     this.admission.protect(key);
     const secrets = codex ? [] : [...new Set([key.trim(), ...this.storage.credentials()])].filter(Boolean);
-    const active: ActiveSession = { id, providerId: "", transcript: new LiveTranscript(secrets), key, secrets, queue: [], seen: new Set(),
+    const active: ActiveSession = { id, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000 };
     this.active.set(id, active);
@@ -147,7 +178,7 @@ export class CompanionLiveSessions {
     let refused = false;
     let hungUpUnnamed = false;
     try {
-      const minted = await this.provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project).catch(error => {
+      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project).catch(error => {
         refused = codex || error instanceof Error && error.message === "PROVIDER_REFUSED";
         throw error;
       });
@@ -156,18 +187,18 @@ export class CompanionLiveSessions {
       // minted session is hung up instead.
       if (echoes(minted.id, secrets) || hardenedRedact(minted.id) !== minted.id) {
         // The id cannot be stored for a later retry: unless a hangup is confirmed the mint stays uncertain.
-        for (let attempt = 0; attempt < 3; attempt += 1) { try { await this.provider.hangup(minted.id, key); hungUpUnnamed = true; break; } catch { /* asked again */ } }
+        for (let attempt = 0; attempt < 3; attempt += 1) { try { await provider.hangup(minted.id, key); hungUpUnnamed = true; break; } catch { /* asked again */ } }
         throw new Error("PROVIDER_ERROR");
       }
       active.providerId = minted.id;
-      active.hangup = () => this.provider.hangup(minted.id, key);
+      active.hangup = () => provider.hangup(minted.id, key);
       this.storage.change(document => { Object.assign(document.sessions[id], { providerId: minted.id, remoteOpen: true }); delete document.sessions[id].mintUncertain; });
       if (echoes(minted.sdp, secrets) || active.ended) throw new Error("PROVIDER_ERROR");
       this.storage.change(document => { document.sessions[id].answerSdp = minted.sdp; });
       if (!codex) this.storage.observe(id, 15 * LIVE_USD_PER_SECOND);
-      active.connection = await this.provider.attach(minted.id, key, event => this.enqueue(active, event), () => this.lost(active), async (name, args, callId, turnId) => {
+      active.connection = await provider.attach(minted.id, key, event => this.enqueue(active, event), () => this.lost(active), async (name, args, callId, turnId) => {
         await active.processing;
-        if (active.ended || active.closePromise) throw new Error("SESSION_CLOSED");
+        if (active.ended || active.closePromise || active.limitReached) throw new Error("SESSION_CLOSED");
         const context = active.codexTurn;
         const result = await this.tool(active, { name, call_id: callId, arguments: JSON.stringify(args) }, turnId, context?.sourceTurn, context?.confirmationProposalId, context?.project);
         // Let the RPC owner's microtask write the tool result before hanging up.
@@ -176,6 +207,8 @@ export class CompanionLiveSessions {
       });
       if (active.ended) { active.connection.dispose(); throw new Error("PROVIDER_ERROR"); }
       if (active.closePromise) { active.connection.send({ type: "session.close", event_id: randomUUID() }); await active.closePromise; throw new Error("PROVIDER_ERROR"); }
+      // The call clock starts with the voice, on this server's clock.
+      if (codex) this.storage.change(document => { document.sessions[id].usage!.startedAt = this.now(); });
       this.admission.emit(id, { type: "session.ready", mode: "official-realtime" });
       if (this.options.timers !== false) {
         const watchdog = setInterval(() => { try {
@@ -192,7 +225,7 @@ export class CompanionLiveSessions {
     } catch (error) {
       if (active.providerId && (codex || !active.ended)) {
         try {
-          await this.provider.hangup(active.providerId, key); active.hungUp = true;
+          await provider.hangup(active.providerId, key); active.hungUp = true;
           // The close timeout may already have finished the local session.
           if (codex) this.storage.change(document => { document.sessions[id].remoteOpen = false; });
         }
@@ -268,11 +301,25 @@ export class CompanionLiveSessions {
       this.transcript(active, active.transcript.boundary(event.offset_ms));
       this.admission.record(active.id, { id: `delegation-${delegation.id}`, kind: "delegation", atMs: event.offset_ms,
         data: { delegationId: delegation.id, sourceTurn: turn } });
-      if (this.provider.backend === "codex") {
+      if (active.codex) {
         const stored = this.admission.session(active.id);
         active.codexTurn = { project: stored.currentProject === undefined ? stored.project : stored.currentProject, sourceTurn: turn, confirmationProposalId: this.admission.awaiting(active.id)?.proposalId ?? null };
       } else this.delegate(active, delegation.id, turn);
-    } else if (event.type === "codex.tokenUsage" && this.provider.backend === "codex") {
+    } else if (event.type === "codex.plan" && active.codex) {
+      const plan = companionPlan(event.plan);
+      if (plan) this.storage.change(document => {
+        const usage = document.sessions[active.id].usage!;
+        usage.plan = plan;
+        if (usage.planStart === undefined && plan.primary) usage.planStart = plan.primary.usedPercent;
+      });
+    } else if (event.type === "codex.limitReached" && active.codex) {
+      if (!active.limitReached) {
+        active.limitReached = true;
+        active.reason = "limit";
+        // The provider has asked the voice to say so; the call stops once it could have.
+        active.timers.push(setTimeout(() => { void this.close(active.id, "limit"); }, this.options.limitGraceMs ?? 6_000));
+      }
+    } else if (event.type === "codex.tokenUsage" && active.codex) {
       const tokens = jsonObject(event.tokens);
       if (tokens) this.storage.change(document => { document.sessions[active.id].usage!.codexTokens = tokens as Record<string, number>; });
     } else if (event.type === "session.usage.updated" || event.type === "session.closed") {
@@ -288,6 +335,8 @@ export class CompanionLiveSessions {
       }
       else this.renewVoice(active);
     } else if (event.type === "error") {
+      // A call the plan limit is ending fails as that limit, which its closure says.
+      if (active.limitReached) { void this.close(active.id, "limit"); return; }
       // Upstream messages can contain private configuration. Expose a code only.
       this.admission.emit(active.id, { type: "error", code: "PROVIDER_ERROR", recoverable: true });
       void this.close(active.id, "error");
@@ -317,7 +366,7 @@ export class CompanionLiveSessions {
         catch { this.capReached(active, delegationId); return; }
         this.storage.change(document => { document.sessions[active.id].usage!.responses[responseKey] = { usd: null, complete: false }; });
         let result: Record<string, unknown> | null;
-        try { result = jsonObject(await this.provider.respond(active.key, backendRequest(input), active.abort.signal)); }
+        try { result = jsonObject(await active.provider.respond(active.key, backendRequest(input), active.abort.signal)); }
         catch { result = null; }
         // A request with no answer may still have been billed: its reservation stays held.
         const usd = backendUsageUsd(result?.usage);
@@ -541,8 +590,9 @@ export class CompanionLiveSessions {
         // any call this provider still owns; a previous Viewer's lease ended
         // its call, so the provider's idempotent hangup has nothing to do.
         let confirmed = true;
-        if (session.providerId && this.provider.backend === "codex") {
-          try { await this.provider.hangup(session.providerId, ""); }
+        const provider = this.provider.backend === "codex" ? this.provider : this.options.codexProvider;
+        if (session.providerId && provider) {
+          try { await provider.hangup(session.providerId, ""); }
           catch { confirmed = false; }
         }
         this.storage.change(document => {
@@ -652,13 +702,13 @@ export class CompanionLiveSessions {
     })();
   }
   private observeCost(active: ActiveSession): void {
-    if (this.provider.backend === "codex") return;
+    if (active.codex) return;
     const usage = this.admission.session(active.id).usage!;
     this.storage.observe(active.id, Math.max(15, usage.seconds) * LIVE_USD_PER_SECOND
       + Object.values(usage.responses).reduce((sum, row) => sum + (row.usd ?? 0), 0));
   }
   private renewVoice(active: ActiveSession): void {
-    if (this.provider.backend === "codex") return;
+    if (active.codex) return;
     if (active.ended || active.closePromise) return;
     const seconds = Math.max(this.admission.session(active.id).usage!.seconds, (this.now() - active.createdAt) / 1_000);
     while (seconds >= active.voiceAllowanceSeconds - 20) {
@@ -674,10 +724,14 @@ export class CompanionLiveSessions {
       if (active.providerClosed || active.hungUp) this.storage.change(document => { if (document.sessions[active.id]) document.sessions[active.id].remoteOpen = false; });
       if (this.admission.session(active.id).closed) return;
       this.transcript(active, active.transcript.finish());
+      if (active.codex) this.storage.change(document => {
+        const usage = document.sessions[active.id].usage!;
+        if (usage.startedAt !== undefined) usage.seconds = Math.max(0, (this.now() - usage.startedAt) / 1_000);
+      });
       const usage = this.admission.session(active.id).usage!;
       const complete = finalized && Object.values(usage.responses).every(row => row.complete);
       const usd = Math.max(15, usage.seconds) * LIVE_USD_PER_SECOND + Object.values(usage.responses).reduce((sum, row) => sum + (row.usd ?? 0), 0);
-      if (this.provider.backend !== "codex") this.storage.settle(active.id, complete ? usd : null);
+      if (!active.codex) this.storage.settle(active.id, complete ? usd : null);
       this.admission.emit(active.id, { type: "session.closed", reason: active.reason ?? (finalized ? "operator" : "transport"), incomplete: !complete });
       this.admission.retire(active.id);
     } finally {

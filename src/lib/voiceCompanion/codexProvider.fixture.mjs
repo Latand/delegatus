@@ -45,6 +45,15 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
         const answer = { method: "thread/realtime/sdp", params: { threadId, sdp: "v=0\r\nanswer\r\n" } };
         if (mode === "sdp-error") process.stdout.write(`${JSON.stringify(answer)}\n${JSON.stringify({ method: "thread/realtime/error", params: { threadId, message: "connection failed" } })}\n`);
         else send(answer);
+        // Notifications a test drops as notify-<n>.json reach the call in name order, each once.
+        const relay = setInterval(() => {
+          if (!fs.existsSync(root) || process.stdin.readableEnded) { clearInterval(relay); return; }
+          for (const name of fs.readdirSync(root).filter(name => /^notify-\d+\.json$/.test(name)).sort()) {
+            const file = `${root}/${name}`;
+            send(JSON.parse(fs.readFileSync(file, "utf8")));
+            fs.renameSync(file, `${file}.sent`);
+          }
+        }, 10);
         if (mode === "hangup-timeout-closed" || mode === "hangup-timeout-overflow") {
           const trigger = setInterval(() => {
             if (!fs.existsSync(`${root}/notify-close`)) return;

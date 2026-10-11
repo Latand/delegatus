@@ -12,12 +12,19 @@ import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts
 import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
 import { mapAppServerRateLimits } from "@/lib/limits";
 import { CodexAppServerClient, codexAccountBinary, type AppServerNotification, type AppServerRateLimits, type CodexAppServerChild } from "@/lib/accounts/codexAppServer";
-import type { Locale } from "./contract";
+import type { CompanionPlan, Locale, PlanWindow } from "./contract";
 import { jsonObject, type LiveConnection, type LiveProvider, type LiveToolHandler } from "./provider";
 import { BACKEND_INSTRUCTIONS, LIVE_BACKEND_MODEL, liveInstructions } from "./sessionConfig";
 import { COMPANION_TOOL_REGISTRY } from "./tools";
 
 type VoiceAccount = { id: string; kind: "managed" | "legacy"; home: string; authPresent: boolean };
+/** The voices a V3 WebRTC call accepts on `codex-cli 0.162.1`: `thread/realtime/listVoices`
+ * names them as its v1 list, and a V3 start validates against the same set. */
+export const CODEX_V3_VOICES = ["juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol", "cove"] as const;
+export type CodexVoice = typeof CODEX_V3_VOICES[number];
+/** The operator's pick (2026-10-11) from greetings recorded in each V3 voice. Named
+ * on every start, so a change of Codex's own default leaves it as it is. */
+export const CODEX_VOICE: CodexVoice = "cove";
 export interface CodexVoiceOptions {
   accounts?(): readonly VoiceAccount[];
   observations?(): readonly DurableQuotaObservation[];
@@ -27,6 +34,8 @@ export interface CodexVoiceOptions {
   startTimeoutMs?: number;
   /** Canary compares this with Codex's default startup prompt before selection. */
   compactPrompt?: boolean;
+  /** The voice of the call; the operator's pick unless a canary records another. */
+  voice?: CodexVoice;
   recordObservation?(observation: QuotaObservation): void;
 }
 export class CodexVoiceError extends Error {
@@ -53,15 +62,22 @@ export function codexVoiceThread(cwd: string, compactPrompt = true) {
     dynamicTools: COMPANION_TOOL_REGISTRY.filter(tool => tool.class !== "delegation").map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })),
     developerInstructions: instructions, ...(compactPrompt ? { environments: [], baseInstructions: instructions } : {}) };
 }
-export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string) {
+export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string, voice: CodexVoice = CODEX_VOICE) {
   return { threadId, version: "v3", model: "gpt-live-1-codex", outputModality: "audio", transport: { type: "webrtc", sdp: sdp.replace(/\r?\n/g, "\r\n") },
-    clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName) };
+    clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName), voice };
 }
 interface Call {
-  client: CodexAppServerClient; account: VoiceAccount; cwd: string; id: string; createdAt: number;
+  client: CodexAppServerClient; account: VoiceAccount; cwd: string; id: string; createdAt: number; locale: Locale;
   events: unknown[]; event?(value: unknown): void; lost?(): void; tool?: LiveToolHandler;
   stopping?: Promise<void>; reaped: Promise<void>; sdpReceived?: boolean; failed?: boolean;
+  /** The plan as merged from every reading of this call: a rolling update never clears what it leaves out. */
+  plan: CompanionPlan | null; limitReached?: boolean;
 }
+/** Said once when the account's plan runs out mid-call, before the call stops. */
+export const LIMIT_SPEECH: Record<Locale, string> = {
+  en: "The Codex plan limit is reached, so I have to end the call now.",
+  uk: "Ліміт плану Codex вичерпано, тож мушу завершити розмову.",
+};
 
 /** Companion-owned stdio protocol. No conversation host, writer or composer
  * transcript code participates in a voice call. */
@@ -96,12 +112,16 @@ export class CodexLiveProvider implements LiveProvider {
             stdout: child.stdout!, stderr: child.stderr!, on: child.on.bind(child), kill: () => { endLeasedHelper(child); return true; } };
         } });
       if ((await client.readAccount()).account?.type !== "chatgpt") throw new CodexVoiceError("CODEX_AUTH_REQUIRED");
-      const started = jsonObject(await client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt)));
+      // The window the call starts from is read beside the thread, so it costs the start no time.
+      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt)).then(jsonObject),
+        client.request("account/rateLimits/read").then(jsonObject, () => null)]);
       const id = jsonObject(started?.thread)?.id;
       if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new CodexVoiceError("CODEX_UNSUPPORTED");
-      call = { client, account, cwd, id, events: [], createdAt: this.now(), reaped };
+      call = { client, account, cwd, id, locale, events: [], createdAt: this.now(), reaped, plan: null };
       this.calls.set(id, call);
       const active = call;
+      const opening = this.limits(active, reading?.rateLimits);
+      if (opening) throw new CodexVoiceError("CODEX_LIMIT_REACHED", opening.resetsAt);
       client.onRequest(async request => {
         const params = jsonObject(request.params);
         if (request.method !== "item/tool/call" || params?.threadId !== id || typeof params.tool !== "string" || typeof params.callId !== "string" || typeof params.turnId !== "string"
@@ -119,7 +139,15 @@ export class CodexLiveProvider implements LiveProvider {
       const timer = setTimeout(() => rejectSdp(new CodexVoiceError("CODEX_UNSUPPORTED")), this.options.startTimeoutMs ?? 20_000);
       client.onNotification(notification => {
         const params = jsonObject(notification.params);
-        if (notification.method === "account/rateLimits/updated") { this.limits(active, params?.rateLimits); return; }
+        if (notification.method === "account/rateLimits/updated") {
+          const limit = this.limits(active, params?.rateLimits);
+          if (!limit || active.limitReached || active.stopping || active.failed) return;
+          if (!active.sdpReceived) { rejectSdp(new CodexVoiceError("CODEX_LIMIT_REACHED", limit.resetsAt)); return; }
+          active.limitReached = true;
+          void active.client.request("thread/realtime/appendSpeech", { threadId: id, text: LIMIT_SPEECH[locale] }).catch(() => {});
+          this.emit(active, { type: "codex.limitReached", resetsAt: limit.resetsAt });
+          return;
+        }
         if (params?.threadId !== id) return;
         if (notification.method === "thread/realtime/sdp" && typeof params.sdp === "string" && params.sdp.length > 0 && params.sdp.length <= 96_000) {
           active.sdpReceived = true;
@@ -135,7 +163,7 @@ export class CodexLiveProvider implements LiveProvider {
         }
       });
       try {
-        await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName));
+        await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName, this.options.voice));
         const answerSdp = await answer;
         if (active.failed || active.stopping) throw new CodexVoiceError("PROVIDER_ERROR");
         return { id, sdp: answerSdp };
@@ -176,20 +204,30 @@ export class CodexLiveProvider implements LiveProvider {
       void call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text: "The board could not be read just now." }).catch(() => call.lost?.());
     }
   }
+  /** Merges one rate-limit reading into the call's plan, records it for the
+   * account, and says whether the plan has reached its limit. */
   private limits(call: Call, value: unknown): { resetsAt: number | null } | null {
     const source = jsonObject(value); if (!source) return null;
-    const window = (value: unknown): AppServerRateLimits["primary"] => {
+    const window = (value: unknown): PlanWindow | null => {
       const row = jsonObject(value);
       return row && typeof row.usedPercent === "number" && Number.isFinite(row.usedPercent) && row.usedPercent >= 0 && row.usedPercent <= 100
         ? { usedPercent: row.usedPercent, resetsAt: typeof row.resetsAt === "number" && Number.isSafeInteger(row.resetsAt) ? row.resetsAt : null,
-          windowDurationMins: typeof row.windowDurationMins === "number" ? row.windowDurationMins : null } : null;
+          windowMinutes: typeof row.windowDurationMins === "number" && Number.isSafeInteger(row.windowDurationMins) && row.windowDurationMins > 0 ? row.windowDurationMins : null } : null;
     };
-    const rateLimits = { primary: window(source.primary), secondary: window(source.secondary), planType: typeof source.planType === "string" ? source.planType : null };
+    // Only the plan type leaves this reading; the account's other details never do.
+    const type = typeof source.planType === "string" && /^[a-z][a-z0-9_]{0,31}$/i.test(source.planType) ? source.planType : null;
+    const primary = window(source.primary) ?? call.plan?.primary ?? null;
+    const secondary = window(source.secondary) ?? call.plan?.secondary ?? null;
+    const exhausted = [primary, secondary].filter((row): row is PlanWindow => !!row && row.usedPercent >= 100);
+    const reached = exhausted.length > 0 || (typeof source.rateLimitReachedType === "string" && source.rateLimitReachedType.length > 0);
+    call.plan = { type: type ?? call.plan?.type ?? null, primary, secondary, limitReached: reached, observedAt: this.now() };
+    const rateLimits: AppServerRateLimits = { primary: primary && { usedPercent: primary.usedPercent, resetsAt: primary.resetsAt, windowDurationMins: primary.windowMinutes },
+      secondary: secondary && { usedPercent: secondary.usedPercent, resetsAt: secondary.resetsAt, windowDurationMins: secondary.windowMinutes }, planType: call.plan.type };
     const observation: QuotaObservation = { engine: "codex", accountId: call.account.id, authenticated: true, authCheckedAt: this.now(), observedAt: this.now(),
       limits: mapAppServerRateLimits(rateLimits, Math.floor(this.now() / 1000)), provenance: { source: "live", reason: null, staleSince: null } };
     if (this.options.recordObservation) this.options.recordObservation(observation); else recordLiveObservation(observation, "managed");
-    const exhausted = [rateLimits.primary, rateLimits.secondary].filter(row => row && row.usedPercent >= 100);
-    return exhausted.length || source.rateLimitReachedType ? { resetsAt: exhausted.every(row => row!.resetsAt !== null) && exhausted.length ? Math.max(...exhausted.map(row => row!.resetsAt!)) : null } : null;
+    this.emit(call, { type: "codex.plan", plan: call.plan });
+    return reached ? { resetsAt: exhausted.length && exhausted.every(row => row.resetsAt !== null) ? Math.max(...exhausted.map(row => row.resetsAt!)) : null } : null;
   }
   async attach(id: string, _key: string, event: (value: unknown) => void, lost: () => void, tool?: LiveToolHandler): Promise<LiveConnection> {
     const call = this.calls.get(id); if (!call || call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");

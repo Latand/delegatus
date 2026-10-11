@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
-import { codexVoiceStart, codexVoiceThread } from "./codexProvider";
+import { CODEX_V3_VOICES, CODEX_VOICE, codexVoiceStart, codexVoiceThread } from "./codexProvider";
 
 type Schema = boolean | { $ref?: string; oneOf?: Schema[]; anyOf?: Schema[]; allOf?: Schema[]; properties?: Record<string, Schema>; required?: string[]; items?: Schema; enum?: unknown[]; type?: string | string[]; definitions?: Record<string, Schema> };
 /** Unknown properties are rejected even where serde's schema allows them:
@@ -54,3 +54,44 @@ test.if(Bun.which(codexBinary) !== null)("the installed Codex experimental schem
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }, 15000);
+
+/** The installed Codex names the voices a V3 call accepts only in the refusal of
+ * one it does not: `listVoices` answers v1 and v2 lists, and V3 validates
+ * against its own set. No account is needed: the refusal comes before the
+ * backend is asked. */
+test.if(Bun.which(codexBinary) !== null)("the installed Codex accepts exactly the listed V3 voices, the operator's pick among them", async () => {
+  expect(CODEX_V3_VOICES).toContain(CODEX_VOICE);
+  expect(codexVoiceStart("fixture", "en", "v=0\n").voice).toBe(CODEX_VOICE);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "voice-list-"));
+  const child = Bun.spawn([codexBinary, "-c", "cli_auth_credentials_store=file", "-c", "mcp_servers={}", "-c", "analytics.enabled=false", "--enable", "realtime_conversation", "app-server"],
+    { cwd: directory, stdin: "pipe", stdout: "pipe", stderr: "ignore", env: { PATH: process.env.PATH, HOME: directory, CODEX_HOME: directory, TMPDIR: directory } });
+  try {
+    type Line = { id?: number; method?: string; params?: { message?: string }; result?: { voices?: { v1: string[] }; thread?: { id: string } } };
+    const received: Line[] = [];
+    void (async () => {
+      const reader = child.stdout.getReader(); const decoder = new TextDecoder(); let buffer = "";
+      for (let read = await reader.read(); !read.done; read = await reader.read()) {
+        buffer += decoder.decode(read.value, { stream: true });
+        for (let at = buffer.indexOf("\n"); at >= 0; at = buffer.indexOf("\n")) { received.push(JSON.parse(buffer.slice(0, at))); buffer = buffer.slice(at + 1); }
+      }
+    })();
+    const line = async (match: (row: Line) => boolean) => {
+      for (const deadline = Date.now() + 15_000; Date.now() < deadline; await Bun.sleep(10)) { const found = received.find(match); if (found) return found; }
+      throw new Error("no answer from the app-server");
+    };
+    let next = 0;
+    const request = (method: string, params: unknown) => {
+      const id = ++next; child.stdin.write(`${JSON.stringify({ id, method, params })}\n`); child.stdin.flush();
+      return line(row => row.id === id);
+    };
+    await request("initialize", { clientInfo: { name: "agent-log-viewer", version: "0.11.7" }, capabilities: { experimentalApi: true } });
+    child.stdin.write(`${JSON.stringify({ method: "initialized" })}\n`);
+    const listed = await request("thread/realtime/listVoices", {});
+    expect([...listed.result!.voices!.v1].sort()).toEqual([...CODEX_V3_VOICES].sort());
+    const thread = await request("thread/start", { cwd: directory, ephemeral: true, approvalPolicy: "never", sandbox: "read-only" });
+    await request("thread/realtime/start", { threadId: thread.result!.thread!.id, version: "v3", outputModality: "audio", transport: { type: "webrtc", sdp: "v=0\r\n" }, voice: "alloy", prompt: "fixture" });
+    const refusal = String((await line(row => row.method === "thread/realtime/error")).params?.message);
+    const accepted = refusal.match(/supported voices: (.*)$/)?.[1]?.split(", ") ?? [];
+    expect(accepted.sort()).toEqual([...CODEX_V3_VOICES].sort());
+  } finally { child.kill(); await child.exited; fs.rmSync(directory, { recursive: true, force: true }); }
+}, 30000);

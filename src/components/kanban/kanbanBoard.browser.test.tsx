@@ -19605,10 +19605,10 @@ describe("floating voice companion", () => {
      test process, and the crash handlers Chromium detaches are found by a mark in the environment they inherited
      (the browser itself rewrites its own environment block, so the mark alone misses it). `close` waits for
      every recorded identity to exit and uses the shared bounded cleanup for any that did not. */
-  const launchOwned = async () => {
+  const launchOwned = async (args: string[] = []) => {
     const mark = `voice-companion-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     process.env.LLV_VOICE_COMPANION_BROWSER = mark;
-    const browser = await chromium.launch(LAUNCH);
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), ...args] });
     const all = fs.existsSync("/proc") ? fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name)).map(Number).filter((pid) => pid !== process.pid) : [];
     const parentOf = (pid: number) => { try { const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8"); return Number(stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[1]); } catch { return -1; } };
     const marked = all.filter((pid) => { try { return fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(`LLV_VOICE_COMPANION_BROWSER=${mark}`); } catch { return false; } });
@@ -21292,15 +21292,25 @@ describe("floating voice companion", () => {
 
   /* The shell's own mount and the settings rows that turn it on. The fixture mounts nothing: the Viewer does, once
      the settings routes (answered here from memory) say the companion is enabled. The key typed is a made-up
-     string; nothing on this page reaches a provider. */
-  browserTest("off by default; the settings rows turn the companion on in the shell, take a key without echoing it, keep the cap, and offer no demo", async () => {
+     string; nothing on this page reaches a provider. The rows offer one choice of how the voice talks: the API
+     with its key (the default) or Codex V3 on a managed account's plan (operator decision, 2026-10-11). */
+  browserTest("off by default; the settings rows turn the companion on in the shell, choose the API or Codex V3, take a key without echoing it and keep the cap only for the API, and offer no demo", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
-    const { browser, close } = await launchOwned();
+    const { browser, close } = await launchOwned(["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]);
     const cases: unknown[] = [];
     let processes = { started: 0, leftAfterClose: 0 };
     const KEY = "fixture-voice-key-0000";
-    const writes = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice }).voiceCompanion; return { settings: v.settingsWrites, keys: v.keyWrites }; });
+    const writes = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice & { sessionStarts: unknown[] } }).voiceCompanion; return { settings: v.settingsWrites, keys: v.keyWrites, starts: v.sessionStarts }; });
+    /* The Codex plan line as the dialog writes it, with the reset and read times the page itself formats. */
+    const planLine = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
+      const loaded = Math.floor(Date.now() / 60_000) * 60;
+      const time = (seconds: number) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date(seconds * 1000));
+      const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: "short" }).format(new Date(seconds * 1000));
+      return lang === "uk"
+        ? `План Pro, увесь акаунт разом з агентами: вікно «5 год» використано на 23%, оновлення ${time(loaded + 7_200)}; вікно «тиждень» використано на 77%, оновлення ${date(loaded + 4 * 86_400)}. Станом на ${time(loaded)}.`
+        : `Pro plan, the whole account with its agents: 5 h window 23% used, resets ${time(loaded + 7_200)}; week window 77% used, resets ${date(loaded + 4 * 86_400)}. As of ${time(loaded)}.`;
+    }, lang);
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
       if (page.viewportSize()?.width === 390) {
@@ -21360,13 +21370,13 @@ describe("floating voice companion", () => {
           expect(lastCall, `${label}: the last call is in settings`).toContain("$0.40 · 7:51");
           expect(lastCall, `${label}: localized last call`).toContain(lang === "uk" ? "Остання розмова:" : "Last call:");
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
-          /* On is the real voice: the dialog offers no backend, no demo, and no word of one. */
+          /* On is a real voice and never a demo: one two-option choice, the API chosen by default, its key and cap under it. */
           const choices = await section.evaluate((node) => ({
-            backendControls: node.querySelectorAll("[data-voice-companion-backend], [data-backend], [role='radio'], [role='radiogroup']").length,
+            choice: [...node.querySelectorAll<HTMLInputElement>("[role='radiogroup'][data-voice-companion-backend] input[type='radio']")].map((radio) => [radio.value, radio.checked, radio.closest("label")?.textContent ?? ""]),
             controls: node.querySelectorAll("input, button, select").length,
             demoWords: /demo|демо/iu.test(node.textContent ?? ""),
           }));
-          expect(choices, `${label}: the switch, the key and the cap, and no backend choice`).toEqual({ backendControls: 0, controls: 4, demoWords: false });
+          expect(choices, `${label}: the switch, the choice with the API chosen, the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 6, demoWords: false });
           const dialog = await page.evaluate(() => {
             const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
@@ -21375,13 +21385,36 @@ describe("floating voice companion", () => {
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
+          const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
+          /* Codex V3 chosen: the key and the cap close, nothing asks for a key, and the last Codex call shows with the
+             plan window of the account it ran on, which is the whole account's use. */
+          await section.locator("[data-voice-backend='codex'] input[type='radio']").click();
+          await section.locator("[data-voice-companion-codex]").waitFor({ timeout: 10_000 });
+          expect((await writes(page)).settings.at(-1), `${label}: the choice was written`).toEqual({ backend: "codex" });
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap]").count(), `${label}: no key and no cap on Codex`).toBe(0);
+          const codexLastCall = await section.locator("[data-voice-companion-codex] [data-voice-companion-last-call]").innerText();
+          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7:51 · 10 жовтня." : "Last call: 7:51 · Oct 10.");
+          const codexPlan = await section.locator("[data-voice-companion-plan]").innerText();
+          expect(codexPlan, `${label}: the plan window`).toBe(await planLine(page, lang));
+          const codexRows = await section.evaluate((node) => ({
+            controls: node.querySelectorAll("input, button, select").length,
+            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.querySelector("[data-voice-companion-codex]")?.textContent ?? ""),
+          }));
+          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 3, keyWords: false });
+          const codexDialog = await page.evaluate(() => {
+            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
+            const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
+            return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
+          });
+          expect([codexDialog.insideViewport, codexDialog.overflowsDialog, codexDialog.cut], `${label}: the Codex rows fit the dialog`).toEqual([true, false, []]);
+          await page.screenshot({ path: path.join(HANDOFF, `settings-codex-${label}.png`) });
           if (viewport.width === 390) {
             expect(await page.locator("[data-voice-companion-settings]").isVisible(), `${label}: phone settings stay mounted`).toBe(true);
             expect(await page.locator("[data-voice-companion]").count(), `${label}: the phone has the settings surface`).toBe(0);
             expect(pageErrors, label).toEqual([]);
-            const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
             expect(await section.locator("[data-companion-spend-meter]").count(), `${label}: the published phone fallback retains its two settings rows`).toBe(0);
-            cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, dialog, monthSpend, lastCall, phoneSettingsMounted: true, openedThrough: "header menu Settings → Voice Delegatus" });
+            cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, dialog, monthSpend, lastCall, codex: { lastCall: codexLastCall, rows: codexRows, dialog: codexDialog }, phoneSettingsMounted: true, openedThrough: "header menu Settings → Voice Delegatus" });
             continue;
           }
           await page.keyboard.press("Escape");
@@ -21399,7 +21432,8 @@ describe("floating voice companion", () => {
           await page.locator("[data-voice-companion-enable]").click();
           await page.waitForSelector("[data-voice-companion]", { state: "detached", timeout: 10_000 });
           expect(pageErrors, label).toEqual([]);
-          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, choices, mountedBeforeEnable: 0, settingsWrites: (await writes(page)).settings, keyWrites: 1, keyEchoed: false, keyFieldAfterSave: afterKey.value, keyStatus: afterKey.status, dialog, shellMount: { block: placed.block, lane: placed.lane, overlapArea: placed.overlapArea, textUnderCharacter: placed.textUnderCharacter } });
+          expect((await writes(page)).starts, `${label}: mounting started no call`).toEqual([]);
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, choices, mountedBeforeEnable: 0, settingsWrites: (await writes(page)).settings, keyWrites: 1, keyEchoed: false, keyFieldAfterSave: afterKey.value, keyStatus: afterKey.status, dialog, codex: { lastCall: codexLastCall, rows: codexRows, dialog: codexDialog }, shellMount: { block: placed.block, lane: placed.lane, overlapArea: placed.overlapArea, textUnderCharacter: placed.textUnderCharacter } });
         } finally { await context.close(); }
       }
       /* The real backend with no key refuses in words before any microphone prompt, and points at the settings;
@@ -21436,11 +21470,39 @@ describe("floating voice companion", () => {
           cases.push({ lang, environmentKey: "said to take precedence; the field and Save are disabled" });
         } finally { await env.context.close(); }
       }
+      /* Codex V3 chosen and no key anywhere: Talk opens the microphone and asks the session route to start, with no
+         key refusal before it. The fixture's route answers as the Viewer does when every managed account is at its
+         plan limit, and the notice names when the first one resets. */
+      for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&mount=product&backend=codex", { viewport: VIEWPORT, scheme: lang === "en" ? "dark" : "light", lang, motion: "reduce", product: true });
+        try {
+          await context.grantPermissions(["microphone"]);
+          await openSettings(page);
+          await page.locator("[data-voice-companion-enable]").click();
+          await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
+          expect(await page.locator("[data-voice-companion-key]").count(), `codex without a key, ${lang}: no key field`).toBe(0);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
+          await page.waitForTimeout(700);
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForSelector('[data-companion-notice][data-code="CODEX_LIMIT_REACHED"]', { timeout: 15_000 });
+          const notice = (await page.locator('[data-companion-notice][data-code="CODEX_LIMIT_REACHED"] .vc-notice-text').innerText()).trim();
+          const resetsAt = Math.floor(Date.now() / 60_000) * 60 + 7_200;
+          const reset = await page.evaluate((lang) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date((Math.floor(Date.now() / 60_000) * 60 + 7_200) * 1000)), lang);
+          expect(notice, `codex without a key, ${lang}: the limit refusal names its reset`).toBe(companionErrorMessage("CODEX_LIMIT_REACHED", lang, { resetsAt }));
+          expect(notice).toContain(reset);
+          expect(await page.locator('[data-companion-notice][data-code="NO_KEY"]').count(), `codex without a key, ${lang}: no key is asked for`).toBe(0);
+          expect((await writes(page)).starts, `codex without a key, ${lang}: Talk reached the session route with an offer`).toEqual([{ project: expect.any(String), locale: lang, offer: true }]);
+          await page.screenshot({ path: path.join(HANDOFF, `product-codex-no-key-${lang}.png`) });
+          expect(pageErrors).toEqual([]);
+          cases.push({ lang, codexWithoutKey: "Talk started with no key; the start reached the session route and its plan-limit refusal names the reset", notice: notice.replace(reset, "‹time›") });
+        } finally { await context.close(); }
+      }
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
     record("settings.json", {
       driver: DRIVER, fixture: "?scenario=voice-companion&mount=product",
-      rule: "nothing is mounted until the switch in the settings dialog, reached from the header menu's Settings page, is on; the key is typed masked, sent once, cleared, and never present in the page afterwards; a key from the environment takes precedence and closes the field; the cap is kept with the month's usage beside it; on is the real voice, with no backend to choose and no demo, and the shell mounts it",
+      rule: "nothing is mounted until the switch in the settings dialog, reached from the header menu's Settings page, is on; on, one choice says how the voice talks, the API with its key (the default) or Codex V3 on a managed account's plan; for the API the key is typed masked, sent once, cleared, and never present in the page afterwards, a key from the environment takes precedence and closes the field, and the cap is kept with the month's usage beside it; for Codex nothing asks for or mentions a key, the last Codex call shows with the plan window of the account it ran on, and Talk with no key asks the session route to start; on is a real voice and never a demo, and the shell mounts it",
       note: "the settings routes are answered by the fixture from memory and the key is a made-up string; no provider, microphone or orchestrator is reached",
       cases,
     });
@@ -21590,6 +21652,91 @@ describe("floating voice companion", () => {
       record("transcript.json", { driver: DRIVER, variant: 2, rule: "call and month sums sit at the foot of the transcript above a thin monthly-cap meter; the call's share is teal", processes, readings });
     }
   }, 1_800_000);
+
+  /* A call that ran on Codex V3 (docs/design/voice-codex-subscription.md, Spend and limit display): the same footer,
+     variant 2's two figures above a thin meter, with the call's length on the server clock and the plan window of
+     the account it ran on. The meter is that window's use, its teal share the call's rise; the label and the hint
+     say the window is the whole account's. Images go to `<hand-off>/transcript-codex`, never into the tree. */
+  browserTest("a Codex call's transcript footer: the call's length and the account's plan window above its meter, 1440 and 1000, en and uk, light and dark", async () => {
+    const out = path.join(HANDOFF, "transcript-codex");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const readings: unknown[] = [];
+    try {
+      for (const [viewport, lang, scheme] of [[VIEWPORT, "en", "light"], [NARROW, "uk", "dark"], [VIEWPORT, "uk", "dark"], [NARROW, "en", "light"]] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&script=delegation&transcript=1&backend=codex", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 60_000, polling: 100 });
+          await page.waitForTimeout(400);
+          await page.locator("[data-voice-companion] [data-grip]").focus();
+          await page.keyboard.press("Enter");
+          await page.waitForSelector("[data-companion-transcript-view] [data-companion-spend]", { timeout: 5_000 });
+          await page.waitForTimeout(250);
+          const reading = await page.evaluate(() => {
+            const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+            const box = view.getBoundingClientRect();
+            const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+            const spend = view.querySelector<HTMLElement>("[data-companion-spend]")!;
+            const spendBox = spend.getBoundingClientRect();
+            const amounts = spend.querySelector<HTMLElement>("[data-spend-amounts]")!;
+            const meter = spend.querySelector<HTMLElement>("[data-companion-spend-meter]")!;
+            const meterBox = meter.getBoundingClientRect();
+            const windowFill = meter.querySelector<HTMLElement>("[data-window-fill]")!;
+            const riseFill = meter.querySelector<HTMLElement>("[data-rise-fill]")!;
+            return {
+              spend: [...amounts.children].map(node => (node as HTMLElement).innerText).join(" · "),
+              spendHeight: spendBox.height,
+              lines: Math.round(amounts.getBoundingClientRect().height / parseFloat(getComputedStyle(amounts).lineHeight)),
+              cut: [...spend.querySelectorAll<HTMLElement>("span")].some((node) => node.getBoundingClientRect().right > spendBox.right + 0.5),
+              emphasis: Object.fromEntries([...spend.querySelectorAll<HTMLElement>("[data-spend-amounts] [data-spend-value]")].map(node => [node.dataset.spendValue, { text: node.innerText, weight: getComputedStyle(node).fontWeight, color: getComputedStyle(node).color }])),
+              words: getComputedStyle(spend).color,
+              muted: getComputedStyle(spend.querySelector<HTMLElement>(".vc-tr-spend-muted")!).color,
+              label: spend.getAttribute("aria-label") ?? "", hint: spend.querySelector<HTMLElement>("[data-spend-plan]")?.title ?? "",
+              footer: { belowBody: spendBox.top >= body.getBoundingClientRect().bottom - 1, atFoot: Math.abs(spendBox.bottom - box.bottom) <= 2,
+                meterHeight: meterBox.height, meterAfterAmounts: meterBox.top >= amounts.getBoundingClientRect().bottom,
+                inside: meterBox.left >= spendBox.left && meterBox.right <= spendBox.right && meterBox.bottom <= spendBox.bottom,
+                windowShare: windowFill.getBoundingClientRect().width / meterBox.width, riseShare: riseFill.getBoundingClientRect().width / meterBox.width,
+                riseStart: (riseFill.getBoundingClientRect().left - meterBox.left) / meterBox.width,
+                riseColor: getComputedStyle(riseFill).backgroundColor, windowColor: getComputedStyle(windowFill).backgroundColor },
+              inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `transcript-codex-${label}.png`) });
+          await page.locator("[data-companion-spend]").screenshot({ path: path.join(out, `footer-codex-${label}.png`) });
+          /* The primary window resets two hours after the fixture page loaded, in the page's own clock and language. */
+          const reset = await page.evaluate((lang) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date((Math.floor(Date.now() / 60_000) * 60 + 7_200) * 1000)), lang);
+          expect(reading.spend, `${label}: the call's length and the plan window`).toBe(lang === "uk" ? `Ця розмова 4:12 · Pro · 5 год 23%, оновлення ${reset} · тиждень 77%` : `This call 4:12 · Pro · 5 h 23%, resets ${reset} · week 77%`);
+          expect([reading.lines <= 2, reading.cut], `${label}: the figures fit in at most two lines, nothing cut`).toEqual([true, false]);
+          expect(reading.spendHeight, `${label}: figures and thin meter fit the footer`).toBeLessThanOrEqual(64);
+          expect(reading.label, `${label}: the label names the whole account`).toContain(lang === "uk" ? "увесь акаунт разом з агентами" : "the whole account with its agents");
+          expect(reading.hint, `${label}: the hint names the whole account`).toBe(lang === "uk" ? "Використання всього акаунта, разом з його агентами" : "The whole account's use, its agents included");
+          /* Variant 2's emphasis: the two figures bold; the second window muted apart from the figures and the words. */
+          const emphasis = reading.emphasis as Record<string, { text: string; weight: string; color: string }>;
+          expect(Object.fromEntries(Object.entries(emphasis).map(([role, value]) => [role, [value.text, Number(value.weight) >= 600]])), `${label}: the figures bold`).toEqual({ duration: ["4:12", true], used: ["23%", true] });
+          expect([reading.muted === emphasis.used!.color, reading.muted === reading.words, emphasis.duration!.color === emphasis.used!.color], `${label}: the second window muted`).toEqual([false, false, true]);
+          expect({ belowBody: reading.footer.belowBody, atFoot: reading.footer.atFoot, meterAfterAmounts: reading.footer.meterAfterAmounts, inside: reading.footer.inside }, `${label}: variant 2 geometry`).toEqual({ belowBody: true, atFoot: true, meterAfterAmounts: true, inside: true });
+          expect(reading.footer.meterHeight, `${label}: a thin meter`).toBe(3);
+          /* The meter is the window's 23%; its teal share is the call's rise, from 21% to 23%. */
+          expect(reading.footer.windowShare).toBeCloseTo(0.23, 3);
+          expect(reading.footer.riseShare).toBeCloseTo(0.02, 3);
+          expect(reading.footer.riseStart).toBeCloseTo(0.21, 3);
+          expect(reading.footer.riseColor).not.toBe(reading.footer.windowColor);
+          expect(reading.inside, `${label}: the view stays in the viewport`).toBe(true);
+          expect(pageErrors, label).toEqual([]);
+          readings.push({ viewport: viewport.width, lang, scheme, ...reading, spend: reading.spend.replace(reset, "‹time›"), label: reading.label.replace(/\d\d?[:.]\d\d(\s?[AP]M)?|\d{1,2} \S+\.|[A-Z][a-z]{2} \d{1,2}/gu, "‹time›") });
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+      server.stop();
+      const processes = await close();
+      expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
+      record("transcript-codex.json", { driver: DRIVER, variant: 2, fixture: "?scenario=voice-companion&script=delegation&transcript=1&backend=codex", rule: "a call that ran on Codex V3 shows its length on the server clock and the plan window of the account it ran on at the foot of the transcript, above a thin meter of that window whose teal share is the call's rise; the label and the hint say the window is the whole account's, its agents included", processes, readings });
+    }
+  }, 900_000);
 
   browserTest("every scripted scenario runs on the event contract, recorded, with frame times while bubbles rise and arrive together", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });

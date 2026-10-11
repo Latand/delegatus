@@ -79,7 +79,12 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       ...(body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(typeof result?.code === "string" && /^[A-Z_]{1,40}$/.test(result.code) ? result.code : "COMPANION_UNAVAILABLE");
+    if (!response.ok) {
+      const failure = new Error(typeof result?.code === "string" && /^[A-Z_]{1,40}$/.test(result.code) ? result.code : "COMPANION_UNAVAILABLE");
+      /* A refused plan limit names when it resets. */
+      if (Number.isSafeInteger(result?.resetsAt) && result.resetsAt > 0) Object.assign(failure, { resetsAt: result.resetsAt as number });
+      throw failure;
+    }
     return result;
   }
   start(options: { locale: Locale; project: string }): Promise<void> {
@@ -126,8 +131,9 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       // error even when no server session was minted (microphone/key/cap).
       if (!this.sessionId) this.emit({ type: "session.ready", mode: this.mode });
       const code = error instanceof Error && /^[A-Z_]{1,40}$/.test(error.message) ? error.message : "PROVIDER_ERROR";
+      const resetsAt = (error as { resetsAt?: unknown }).resetsAt;
       await this.close();
-      this.emit({ type: "error", code, recoverable: false });
+      this.emit({ type: "error", code, recoverable: false, ...(typeof resetsAt === "number" ? { resetsAt } : {}) });
       throw error;
     }
   }
