@@ -213,7 +213,11 @@ excluding locations/source frames embedded in React diagnostics. New files have
 an empty baseline; deleted files are ignored. The output names introduced sites
 and counts existing base errors. Warnings do not block; tool/config failures do.
 Privacy and TypeScript still check absolutely. Base linting runs only for the
-selected files, in the same gate slot as head linting.
+selected files. Pre-commit lint runs directly so a CPU-pressure admission wait
+cannot stall a small stage-output commit. Pre-push lint, types and tests retain
+the heavy-work gate. Controller stage commits allow fifteen minutes for hooks;
+a controller deadline keeps the passed attempt in committing and retries with
+backoff, without asking the stage to repair files or parking the lane.
 Tests run by explicit file path under
 an isolated home, config, state and temp root. Git repository variables exported
 to hooks are removed from child checks so fixture repositories remain isolated.
