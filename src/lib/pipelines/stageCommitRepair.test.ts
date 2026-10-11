@@ -101,16 +101,21 @@ function writeOutput(repo: string, relative: string, content: string) {
   fs.writeFileSync(path.join(repo, relative), content);
 }
 
-test.each(["installed", "fixed-on-retry"] as const)("settlement finds the %s parent toolchain for a read-only TypeScript output in a worktree without node_modules", async (toolchain) => {
+test.each([
+  ["installed", "node_modules"], ["fixed-on-retry", "node_modules"],
+  ["interrupted", "node_modules"], ["recovered", "node_modules"],
+  ["installed", "node_modules/"], ["fixed-on-retry", "node_modules/"],
+  ["interrupted", "node_modules/"], ["recovered", "node_modules/"],
+] as const)("settlement finds the %s parent toolchain with %s ignored for a read-only TypeScript output", async (toolchain, ignore) => {
   const box = hookedRepo();
   try {
-    fs.writeFileSync(path.join(box.repo, ".gitignore"), "node_modules\n");
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), `${ignore}\n`);
     fs.mkdirSync(path.join(box.repo, "scripts"));
     fs.writeFileSync(path.join(box.repo, "scripts/lint.ts"), 'import { ESLint } from "eslint";\nconst results = await new ESLint().lintFiles(["evidence/draft/output.ts"]);\nif (results.some(result => result.errorCount)) process.exit(1);\n');
     fs.copyFileSync(path.resolve("eslint.config.mjs"), path.join(box.repo, "eslint.config.mjs"));
     box.run("add", ".");
     box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "toolchain configuration");
-    if (toolchain === "installed") fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
+    if (toolchain !== "fixed-on-retry") fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
     const worktree = path.join(box.root, "lane");
     box.run("worktree", "add", "-b", "lane", worktree);
     box.subject.worktreeDir = worktree;
@@ -125,9 +130,21 @@ test.each(["installed", "fixed-on-retry"] as const)("settlement finds the %s par
       expect(fs.readFileSync(path.join(worktree, "evidence/draft/output.ts"), "utf8")).toBe("export const value = 1;\n");
       fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
     }
-    const committed = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(committed.ok).toBe(true);
+    const receipt = path.join(box.root, "stage-commit.json");
+    if (toolchain === "recovered") {
+      expect((await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit, receipt)).ok).toBe(true);
+    }
+    if (toolchain === "interrupted" || toolchain === "recovered") {
+      // The state left by a controller exit during the hook, or after Git
+      // committed but before the controller released its borrowed toolchain.
+      fs.symlinkSync(path.resolve(box.repo, "node_modules"), path.join(worktree, "node_modules"), "dir");
+      if (toolchain === "interrupted") await box.exec("git", ["add", "evidence/draft/output.ts"], worktree);
+    }
+    const committed = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit, receipt);
+    expect(committed).toMatchObject({ ok: true });
     expect(fs.existsSync(path.join(worktree, "node_modules"))).toBe(false);
+    expect(() => fs.lstatSync(path.join(worktree, "node_modules"))).toThrow();
+    expect(fs.readlinkSync(path.join(box.repo, "node_modules"))).toBe(path.resolve("node_modules"));
     const head = await box.exec("git", ["show", "--format=", "--name-only", "HEAD"], worktree);
     expect(head.stdout.trim()).toBe("evidence/draft/output.ts");
     expect(fs.readFileSync(path.join(box.repo, ".git/hook-checks"), "utf8")).toBe("checked\n");
@@ -135,10 +152,10 @@ test.each(["installed", "fixed-on-retry"] as const)("settlement finds the %s par
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["local", "dangling", "unignored", "directory-ignore"] as const)("settlement preserves %s dependency paths and commits only declared outputs", async (mode) => {
+test.each(["local", "unrelated", "dangling", "dangling-parent", "unignored"] as const)("settlement preserves %s dependency paths and commits only declared outputs", async (mode) => {
   const box = hookedRepo();
   try {
-    fs.writeFileSync(path.join(box.repo, ".gitignore"), mode === "unignored" ? "" : mode === "directory-ignore" ? "node_modules/\n" : "node_modules\n");
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), mode === "unignored" ? "" : "node_modules\n");
     box.run("add", ".gitignore");
     box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "dependency ignore");
     fs.mkdirSync(path.join(box.repo, "node_modules"));
@@ -150,12 +167,19 @@ test.each(["local", "dangling", "unignored", "directory-ignore"] as const)("sett
     if (mode === "local") {
       fs.mkdirSync(local);
       fs.writeFileSync(path.join(local, "owned.txt"), "local install\n");
-    } else if (mode === "dangling") fs.symlinkSync("missing-install", local, "dir");
+    } else if (mode === "unrelated") fs.symlinkSync(path.resolve("node_modules"), local, "dir");
+    else if (mode === "dangling") fs.symlinkSync("missing-install", local, "dir");
+    else if (mode === "dangling-parent") {
+      fs.rmdirSync(path.join(box.repo, "node_modules"));
+      fs.symlinkSync(path.resolve(box.repo, "node_modules"), local, "dir");
+    }
     writeOutput(worktree, "evidence/draft/output.ts", "export const value = 1;\n");
     expect((await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit)).ok).toBe(true);
     expect((await box.exec("git", ["show", "--format=", "--name-only", "HEAD"], worktree)).stdout.trim()).toBe("evidence/draft/output.ts");
     if (mode === "local") expect(fs.readFileSync(path.join(local, "owned.txt"), "utf8")).toBe("local install\n");
+    else if (mode === "unrelated") expect(fs.readlinkSync(local)).toBe(path.resolve("node_modules"));
     else if (mode === "dangling") expect(fs.readlinkSync(local)).toBe("missing-install");
+    else if (mode === "dangling-parent") expect(fs.readlinkSync(local)).toBe(path.resolve(box.repo, "node_modules"));
     else expect(fs.existsSync(local)).toBe(false);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
@@ -470,6 +494,13 @@ test("a stage without automatic repair retries its refused commit with the same 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
   expect(study().commitRepair).toBeUndefined();
+  h.ports.conversationAgentActive = async () => true;
+  expect(await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).toMatchObject({
+    status: 409, error: expect.stringContaining("stage conversation may still be running"),
+  });
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(h.calls.filter(call => call.startsWith("git commit"))).toHaveLength(1);
+  h.ports.conversationAgentActive = async () => false;
   h.hookAnswers({ code: 0, stdout: "", stderr: "" });
   expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
   await tickPipelines([], h.ports);

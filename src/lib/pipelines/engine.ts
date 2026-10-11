@@ -4139,7 +4139,8 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
     if (ports.conversationDeliveryOutstanding?.(attempt.conversationId) === true || active === true
       || durable?.turn === "busy" || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0
       || (attempt.commitRepair?.sendUncertain && !finished) || (boundary && active !== false && !finished)) {
-      return { error: "the commit repair turn may still be running or queued; wait for it to finish before retrying settlement", status: 409 };
+      const pending = attempt.commitRepair ? "commit repair turn" : "stage conversation";
+      return { error: `the ${pending} may still be running or queued; wait for it to finish before retrying settlement`, status: 409 };
     }
   }
   if (attempt.commitRepair) {
