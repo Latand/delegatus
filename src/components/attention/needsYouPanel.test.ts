@@ -1,6 +1,7 @@
 import { translate } from "@/lib/i18n/core";
 import { reasonLine } from "./decision";
 import { needsYouRowText } from "./needsYouPanel";
+import { conversationOperatorAsk } from "./operatorAsk";
 import { expect, test } from "bun:test";
 
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -158,9 +159,14 @@ test("the read and desktop row share their title and localized line in both lang
       const text = needsYouRowText(t, entry);
       if (entry.kind === "conversation") {
         expect(text.title).toBe(entry.item.reason.report?.body ?? entry.item.file.title);
-        expect(text.line).toBe(reasonLine(t, entry.item.reason));
+        /* The card's short label stays; the row's line is the sentence on
+           what to do (docs/design/attention-auto-resolve.md). */
+        expect(text.label).toBe(reasonLine(t, entry.item.reason));
+        expect(text.line).toBe(conversationOperatorAsk(t, entry.item.reason, entry.item.file).sentence);
       }
     }
-    expect(needsYouRowText(t, { kind: "prototype", id: "prototype:r", notice: { title: "Layout" } as never })).toEqual({ title: "Layout", line: t("proto.notice.open") });
+    expect(needsYouRowText(t, { kind: "prototype", id: "prototype:r", notice: { title: "Layout" } as never })).toEqual({
+      title: "Layout", line: t("needs.ask.prototype"), label: t("proto.notice.open"), question: null, options: [], recommended: null,
+    });
   }
 });

@@ -10756,7 +10756,16 @@ function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, ac
 /** Decision authority follows a project's designated seat across rotations.
     Read one server-side seat snapshot for both lineage and current authority;
     caller-supplied roles confer no authority. Revocation is project-scoped. */
-function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null): actor is PauseResumeActor {
+/**
+ * Who answers what a parked lane waits on: the operator, the conversation
+ * that created it, and its project's current designated seat. The seat answers
+ * every lane of its project, because «Waiting for you» routes a worker's or an
+ * operator's lane to it first (docs/design/attention-auto-resolve.md), except
+ * the one wait the operator kept for themselves: accepting the unreviewed head
+ * of a lane they created by hand (`review`). Moving a running stage
+ * (`control`) is no wait anyone is routed, and stays with a seat-created lane.
+ */
+function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null, kind: "decision" | "review" | "control"): actor is PauseResumeActor {
   if (!actor) return false;
   if (actor.kind === "operator") return true;
   if (!actor.conversationId) return false;
@@ -10775,16 +10784,17 @@ function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor |
   const revokedInProject = file.revocations.some((entry) =>
     entry.project === project && entry.conversationId === actor.conversationId && entry.seatEpoch >= actorEpoch);
   if (actor.conversationId === creator) return !creatorIsSeat || !revokedInProject;
-  if (revokedInProject || !creatorIsSeat) return false;
-  return activeSeat?.conversationId === actor.conversationId;
+  if (revokedInProject || activeSeat?.conversationId !== actor.conversationId) return false;
+  if (creatorIsSeat) return true;
+  return kind === "decision" || (kind === "review" && Boolean(creator));
 }
 
 /** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
 export function decisionAnswerActorRefusal(
   pipeline: Pipeline, actor: PauseResumeActor | null, clientRequestId: unknown,
 ): PipelinePatchResult | null {
-  if (!mayAnswerPipelineDecision(pipeline, actor)) {
-    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can answer this decision", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor, "decision")) {
+    return { error: "only the pipeline creator conversation, the project's current designated seat, or a direct user action can answer this decision", status: 403 };
   }
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
   if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
@@ -10861,8 +10871,8 @@ function resolveDecision(
 /** Who may continue a needs_review lane (#1938): the creator, its project's
     current seat, or the operator. Also checked before MCP receipt access. */
 export function continueReviewActorRefusal(pipeline: Pipeline, actor: PauseResumeActor | null): PipelinePatchResult | null {
-  if (!mayAnswerPipelineDecision(pipeline, actor)) {
-    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can continue this review", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor, "review")) {
+    return { error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can continue this review", status: 403 };
   }
   return null;
 }
@@ -10905,7 +10915,7 @@ function acceptHead(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
 ): PipelinePatchResult {
   const refusal = continueReviewActorRefusal(pipeline, actor);
-  if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can accept this head" };
+  if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can accept this head" };
   if (!actor) return { error: "accept-head needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
     || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
@@ -11897,7 +11907,7 @@ export async function patchPipeline(
       const live = currentAttempt(pipeline, target.id);
       if (req.applyNow !== undefined && typeof req.applyNow !== "boolean") return { error: "applyNow must be boolean", status: 400 };
       if (req.applyNow) {
-        if (!mayAnswerPipelineDecision(pipeline, actor)) return { error: "only the operator or project seat may move a running stage", status: 403 };
+        if (!mayAnswerPipelineDecision(pipeline, actor, "control")) return { error: "only the operator or project seat may move a running stage", status: 403 };
         /* The choice was made on one attempt and one conversation. A retry
            since then runs another agent, which this request must never cut;
            a switch still open keeps answering the conversation it started on. */
@@ -12560,6 +12570,7 @@ export async function reportStageCompletion(
       actor,
       verdict: normalized.verdict,
       summary: normalized.summary,
+      ...(normalized.decision ? { decision: normalized.decision } : {}),
       provenance,
       provenanceFence: stageProvenanceFence(pipeline),
       calls: (prior?.calls ?? 0) + 1,

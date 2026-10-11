@@ -1,3 +1,5 @@
+import { parseOperatorQuestion, type OperatorQuestion } from "@/lib/attention/routeTypes";
+
 import { MAX_STAGE_FINDING_CHARS, MAX_STAGE_REPORT_FINDINGS, MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
 import { STAGE_FINDING_SEVERITIES, type StageFinding, type StageFindingSeverity, type StageVerdict, type StageVerdictStatus } from "./types";
 
@@ -334,11 +336,14 @@ export type StageCompletionInput = {
   summary?: unknown;
   blocked?: unknown;
   blockedReason?: unknown;
+  /** needs_decision only: the question, its options, the recommendation and
+      what the answer does next, as the operator will read them. */
+  decision?: unknown;
 };
 
 export type StageCompletionRefusal = { error: string; code: StageCompletionRefusalCode };
 export type StageCompletionRefusalCode = "STAGE_REPORT_INVALID" | "STAGE_REPORT_CONTRADICTORY";
-export type NormalizedStageCompletion = { verdict: StageVerdict; summary: string | null };
+export type NormalizedStageCompletion = { verdict: StageVerdict; summary: string | null; decision?: OperatorQuestion };
 
 const STAGE_VERDICT_STATUSES: readonly StageVerdictStatus[] = ["pass", "fail", "needs_decision"];
 
@@ -390,5 +395,9 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
   });
   if (!verdict) return refusal("the reported verdict is invalid: blocked must be boolean; blocked:true requires fail and a non-empty blockedReason of at most " + MAX_STAGE_REPORT_SUMMARY_CHARS + " characters; blockedReason requires blocked:true");
   const summary = typeof input.summary === "string" ? input.summary.trim().slice(0, MAX_STAGE_REPORT_SUMMARY_CHARS) : "";
-  return { verdict, summary: summary || null };
+  if (input.decision === undefined || input.decision === null) return { verdict, summary: summary || null };
+  if (status !== "needs_decision") return refusal("decision is only for verdict needs_decision", "STAGE_REPORT_CONTRADICTORY");
+  const decision = parseOperatorQuestion(input.decision, "decision");
+  if (typeof decision === "string") return refusal(decision);
+  return { verdict, summary: summary || null, decision };
 }

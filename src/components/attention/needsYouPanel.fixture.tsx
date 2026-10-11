@@ -11,6 +11,12 @@
  *   &placement=overlay    the panel floating over the board
  *   &seat=beside          the orchestrator seat open beside the board
  *   &overview=1           the Overview instead of the delegatus board
+ *   &scenario=auto-resolve  docs/design/attention-auto-resolve.md: three asks
+ *                         from seats since handed on, a deployer's question its
+ *                         seat answers, a worker's question the seat escalated,
+ *                         and a stage's own decision in a project with no seat
+ *   &state=before         that scenario as it stood before Delegatus cleared
+ *                         and routed it (after, by default)
  */
 import { createRoot } from "react-dom/client";
 
@@ -20,6 +26,9 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { DismissalSubjectRequest } from "@/lib/attention/dismissalTypes";
+import { attentionSystemClears } from "@/lib/attention/reconcile";
+import { conversationRouteKey, type AttentionEscalationMark } from "@/lib/attention/routeTypes";
+import { stampAttentionRoutes } from "@/lib/attention/routing";
 import type { ReportLogEntry, ReportLogPage } from "@/lib/bridge/reportLog";
 import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -238,6 +247,95 @@ seatFile.bridgeAsk = SEAT_ASKS.at(-1)!;
 /* The operator last looked at the log before the two newest entries. */
 try { localStorage.setItem(`llvReportLogSeen:${D}`, "1202"); } catch { /* private mode */ }
 
+const seats: Record<string, string> = { [D]: seatDelegatus, [S]: seatShop };
+
+/* ── ?scenario=auto-resolve (docs/design/attention-auto-resolve.md) ───────
+   The 11:18Z panel's shape over the same board: asks from seats since handed
+   on, a deployer's question its seat can answer, a question the seat
+   escalated, and a stage's decision in a project with no seat. «After» runs
+   the server's own pure rules over it: the clears Delegatus writes and the
+   routes `/api/files` stamps. */
+const AUTO = params.get("scenario") === "auto-resolve";
+const AUTO_AFTER = params.get("state") !== "before";
+const say = (uk: string, en: string) => (LANG === "en" ? en : uk);
+const AUTO_IDS: Record<string, string> = {};
+if (AUTO) {
+  const asked = (path: string, id: string, gist: string, ago: number) => {
+    const entry = files.find((file) => file.path === path)!;
+    entry.lastTurn = { startedAt: (now - ago - 300) * 1_000, endedAt: (now - ago) * 1_000 } as FileEntry["lastTurn"];
+    entry.lastAssistantMessageAt = (now - ago) * 1_000;
+    entry.operatorAsk = { id, messageAt: (now - ago) * 1_000, gist };
+    return entry;
+  };
+  /* Three seats this project had before its current one: each ended on a
+     question to the operator, and each was handed on since. */
+  const retired = [
+    say("Чи переносити нічні звіти на 08:00?", "Move the nightly reports to 08:00?"),
+    say("Закривати старі лейни після злиття автоматично?", "Close old lanes automatically after a merge?"),
+    say("Залишити старий вебхук до понеділка?", "Keep the old webhook until Monday?"),
+  ].map((gist, index) => {
+    const path = conversation(D, say(`Оркестратор, попередній ${index + 1}`, `Orchestrator, previous ${index + 1}`), { ...role("orchestrator"), proc: "done", mtime: now - (6 + index) * 3_600 });
+    const entry = asked(path, `ask:retired-${index + 1}`, gist, (6 + index) * 3_600);
+    task(D, `t-old-seat-${index + 1}`, "assigned", say(`Оркестратор delegatus (попередній ${index + 1})`, `delegatus orchestrator (previous ${index + 1})`), { assignments: [assign(path)], icon: "compass" });
+    return entry.conversationId!;
+  });
+  AUTO_IDS.retired = retired.join(",");
+  /* A deployer the seat spawned asks the operator what its seat can decide. */
+  const deployer = conversation(D, say("Викатка релізу 1.9", "Roll out release 1.9"), {
+    durableLineage: { kind: "spawn", role: "deployer", depth: 1, parentConversationId: idOf(seatDelegatus), reviewsConversationId: null, memberships: [] },
+  });
+  AUTO_IDS.deployer = asked(deployer, "ask:deployer-rollout", say("Викочувати 1.9 зараз, поки черга порожня, чи чекати вечора?", "Roll 1.9 out now while the queue is empty, or wait for the evening?"), 12 * MIN).operatorAsk!.id;
+  task(D, "t-rollout", "assigned", say("Викатка релізу 1.9", "Roll out release 1.9"), { assignments: [assign(deployer)], icon: "rocket" });
+  /* shop-web: a builder's question its seat could not decide and escalated. */
+  const builder = conversation(S, say("Оплата частинами", "Pay in instalments"), {
+    durableLineage: { kind: "spawn", role: "builder", depth: 1, parentConversationId: idOf(seatShop), reviewsConversationId: null, memberships: [] },
+  });
+  AUTO_IDS.escalated = asked(builder, "ask:builder-instalments", say("Яким провайдером розстрочки користуватися?", "Which instalment provider should I use?"), 40 * MIN).operatorAsk!.id;
+  task(S, "t-instalments", "assigned", say("Оплата частинами", "Pay in instalments"), { assignments: [assign(builder)], icon: "credit-card" });
+  /* tg-bot has no seat: a diagnose stage reported its own question. */
+  const diagnose = lane(B, "lane-diagnose", say("Чекають на вас: що знімати автоматично", "Waiting for you: what clears on its own"), ["t-diagnose"], "needs_decision", [
+    { id: "diagnose", state: "needs_decision", ago: 25 * MIN, role: "researcher" },
+  ], { stateDetail: "stage verdict: needs_decision" });
+  const attempt = diagnose.runs[0]!.attempts[0]!;
+  attempt.verdict = { status: "needs_decision" };
+  attempt.report = {
+    seq: 1, at: iso(25 * MIN), actor: { kind: "agent", conversationId: attempt.conversationId, role: "researcher" }, verdict: { status: "needs_decision" },
+    summary: say("Питання й варіанти в рішенні.", "The question and its options are in the decision."),
+    decision: {
+      question: say("Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?", "Clear rows the server proved settled on their own, or only mark them?"),
+      options: [say("Знімати автоматично, з Undo", "Clear them, with Undo"), say("Лише позначати", "Only mark them")],
+      recommended: 0,
+      effect: null,
+    },
+    provenance: { state: "complete", head: null, branch: "lane/diagnose", uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
+  } as unknown as typeof attempt.report;
+  task(B, "t-diagnose", "assigned", say("Чекають на вас: що знімати автоматично", "Waiting for you: what clears on its own"), { icon: "search" });
+
+  if (AUTO_AFTER) {
+    /* What the reconciliation proves and writes, on the board's own clock. */
+    const retiredSeats = new Set(retired);
+    for (const clear of attentionSystemClears(files, now, { canonicalConversationId: (id) => id, retiredSeats, operatorWroteAt: new Map(), pipeline: (id) => pipelines.find((row) => row.id === id) ?? null })) {
+      const entry = files.find((file) => file.path === clear.path)!;
+      entry.attentionDismissal = { at: iso(2 * MIN), by: { kind: "system", rule: clear.rule }, reasonId: clear.reasonId };
+    }
+    /* What `/api/files` stamps: each project's seat and the one escalation. */
+    const escalation: AttentionEscalationMark = {
+      key: conversationRouteKey(AUTO_IDS.escalated), at: iso(5 * MIN), seat: idOf(seatShop),
+      question: say("Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?", "Pick the instalment provider: the partner bank, or the service that connects faster?"),
+      options: [say("Банк-партнер", "The partner bank"), say("Швидший сервіс", "The faster service")], recommended: 0,
+      effect: say("білдер підключить обраного провайдера й відкриє PR", "the builder wires in that provider and opens a pull request"),
+    };
+    const seatIds = new Set([...Object.values(seats).map(idOf), ...retired]);
+    stampAttentionRoutes(files, pipelines, now, {
+      seatFor: (project) => (seats[project] ? idOf(seats[project]!) : null),
+      canonicalProject: (project) => project,
+      isSeatConversation: (id) => seatIds.has(id),
+      escalation: (key) => (key === escalation.key ? escalation : null),
+    });
+  }
+}
+(window as unknown as { __needsYouAutoResolve?: Record<string, string> }).__needsYouAutoResolve = AUTO_IDS;
+
 /* The dismissal route, recorded the way the server records it: a
    conversation's reason on its entry, a lane's instant on the lane, a
    question's resolution in the report log, which takes it off its seat. */
@@ -282,7 +380,6 @@ let board = {
   prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: "scheme", desktopBoard: "kanban", taskPanelOpen: false },
 } as unknown as BoardProjectStateV1;
 
-const seats: Record<string, string> = { [D]: seatDelegatus, [S]: seatShop };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

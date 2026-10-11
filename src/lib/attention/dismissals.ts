@@ -14,6 +14,7 @@ import type { FileEntry } from "@/lib/types";
 
 import {
   isDismissedBy,
+  type AttentionSystemRule,
   type ConversationReasonKind,
   type DismissalOutcome,
   type DismissalSubject,
@@ -21,6 +22,7 @@ import {
   type DismissalTarget,
   type DismissedBy,
 } from "./dismissalTypes";
+import { parseEscalation, type AttentionEscalationMark } from "./routeTypes";
 
 /**
  * Needs-you dismissals (docs/design/needs-attention.md §5): one service behind
@@ -55,9 +57,10 @@ export const DISMISSAL_RETENTION_MS = 30 * 24 * 3_600_000;
 export const DISMISSAL_CAPACITY = 2_000;
 
 export interface AttentionDismissalV1 {
-  /** The durable conversation id, a legacy transcript path, or a prototype
-      round key prefixed with `prototype:`. */
-  kind?: "conversation" | "prototype";
+  /** The durable conversation id, a legacy transcript path, a prototype
+      round key prefixed with `prototype:`, or a seat's escalation of one
+      routed wait prefixed with `escalation:` (docs/design/attention-auto-resolve.md). */
+  kind?: "conversation" | "prototype" | "escalation";
   taskId?: string;
   note?: string;
   subject: string;
@@ -73,6 +76,13 @@ export interface AttentionDismissalV1 {
   reasonId: string | null;
   /** The MCP operation that wrote it, so a replay answers the first result. */
   operationKey?: string;
+  /** Only on a record Delegatus wrote (`by.kind === "system"`) that the
+      operator then brought back: the record stays, covers nothing, and keeps
+      the same rule from clearing the same reason again. */
+  restoredAt?: string;
+  restoredBy?: DismissedBy;
+  /** Only on an `escalation` record: what the seat asks the operator. */
+  escalation?: AttentionEscalationMark;
 }
 
 export interface AttentionDismissalsFileV1 {
@@ -93,12 +103,27 @@ function emptyFile(now: Date): AttentionDismissalsFileV1 {
 const REASON_KINDS: ReadonlySet<string> = new Set(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask"]);
 const nullableString = (value: unknown): value is string | null => value === null || typeof value === "string";
 
+/** A stored escalation, checked as strictly as the tool checks a new one. */
+function parseEscalationMark(value: unknown): AttentionEscalationMark | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const body = parseEscalation(raw);
+  if (typeof body === "string" || typeof raw.key !== "string" || !raw.key || typeof raw.at !== "string") return null;
+  return { key: raw.key, at: raw.at, seat: typeof raw.seat === "string" ? raw.seat : null, ...body };
+}
+
 function parseRecord(value: unknown): AttentionDismissalV1 | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   if (typeof record.subject !== "string" || !record.subject) return null;
   if (typeof record.at !== "string" || !Number.isFinite(Date.parse(record.at))) return null;
   if (!isDismissedBy(record.by)) return null;
+  if (record.kind === "escalation") {
+    const escalation = parseEscalationMark(record.escalation);
+    if (!escalation) return null;
+    return { kind: "escalation", subject: record.subject, conversationId: null, path: null, at: record.at, by: record.by, reason: null, reasonId: null, escalation,
+      ...(typeof record.operationKey === "string" && record.operationKey ? { operationKey: record.operationKey } : {}) };
+  }
   return {
     ...(record.kind === "prototype" ? { kind: "prototype" as const, taskId: typeof record.taskId === "string" ? record.taskId : undefined } : {}),
     ...(typeof record.note === "string" ? { note: record.note } : {}),
@@ -110,6 +135,8 @@ function parseRecord(value: unknown): AttentionDismissalV1 | null {
     reason: typeof record.reason === "string" && REASON_KINDS.has(record.reason) ? record.reason as ConversationReasonKind : null,
     reasonId: typeof record.reasonId === "string" && record.reasonId ? record.reasonId : null,
     ...(typeof record.operationKey === "string" && record.operationKey ? { operationKey: record.operationKey } : {}),
+    ...(typeof record.restoredAt === "string" && Number.isFinite(Date.parse(record.restoredAt)) && isDismissedBy(record.restoredBy)
+      ? { restoredAt: record.restoredAt, restoredBy: record.restoredBy } : {}),
   };
 }
 
@@ -197,6 +224,9 @@ export function readAttentionDismissals(filePath = attentionDismissalsFile(), no
 export function attentionDismissalIndex(file: AttentionDismissalsFileV1 = readAttentionDismissals()): Map<string, AttentionDismissalV1> {
   const index = new Map<string, AttentionDismissalV1>();
   for (const record of file.records) {
+    /* An escalation names a wait, not a conversation, and a restored record
+       covers nothing. */
+    if (record.kind === "escalation" || record.restoredAt) continue;
     if (record.conversationId) index.set(record.conversationId, record);
     if (record.path) index.set(record.path, record);
     index.set(record.subject, record);
@@ -478,8 +508,12 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
         const answer: DismissalSubject = { kind: "conversation", conversationId: entry.subject };
         const held = next.find((record) => record.subject === entry.subject) ?? null;
         if (undo) {
-          if (!held) { clear.push(answer); continue; }
-          next = next.filter((record) => record.subject !== entry.subject);
+          if (!held || held.restoredAt) { clear.push(answer); continue; }
+          /* What Delegatus cleared on its own evidence stays on record as
+             restored, so the same rule cannot clear the same reason again. */
+          next = held.by.kind === "system"
+            ? next.map((record) => (record === held ? { ...held, restoredAt: at, restoredBy: by } : record))
+            : next.filter((record) => record.subject !== entry.subject);
           changed = true;
           done.push(answer);
           continue;
@@ -564,6 +598,103 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
     throw new DismissalError("NOTHING_TO_DISMISS", "the target names nothing that can need the operator");
   }
   return { dismissed, alreadyClear, changed, at, by, undo, ...(options.reason !== undefined ? { reason: note ?? "" } : {}) };
+}
+
+/**
+ * One reason Delegatus clears on its own evidence
+ * (docs/design/attention-auto-resolve.md, «Implementation plan for
+ * acceptance 2»): the conversation, the exact reason, or every reason raised
+ * up to now when the conversation can raise no newer one (a retired seat that
+ * ended), and the rule that proved it.
+ */
+export interface SystemAttentionClear {
+  conversationId: string | null;
+  path: string | null;
+  reasonId: string | null;
+  reason: ConversationReasonKind;
+  /** Epoch seconds the reason began to need someone. */
+  raisedAt: number;
+  rule: AttentionSystemRule;
+}
+
+/** Whether the conversation's record already settles this clear: it covers
+    the reason, or the operator brought back what an earlier clear hid. A
+    reason raised after the restore can be cleared again on new evidence. */
+function systemClearSettled(held: AttentionDismissalV1, clear: SystemAttentionClear): boolean {
+  if (held.kind === "prototype" || held.kind === "escalation") return false;
+  if (held.restoredAt) {
+    if (held.reasonId && held.reasonId === clear.reasonId) return true;
+    return clear.raisedAt <= Date.parse(held.restoredAt) / 1000;
+  }
+  if (held.reasonId) return held.reasonId === clear.reasonId;
+  return clear.raisedAt <= Date.parse(held.at) / 1000;
+}
+
+/**
+ * Write Delegatus's own clears, attributed `{ kind: "system", rule }`, through
+ * the same record a card's dismissal writes, so every surface reads them, the
+ * card says who cleared it and why, and Undo brings it back. A clear the
+ * record already settles writes nothing, so a repeated pass is a no-op.
+ * Answers the clears it wrote.
+ */
+export function systemClearAttention(clears: readonly SystemAttentionClear[], now = new Date()): SystemAttentionClear[] {
+  if (!clears.length) return [];
+  const at = now.toISOString();
+  return mutate((records) => {
+    let next = records;
+    const written: SystemAttentionClear[] = [];
+    for (const clear of clears) {
+      const subject = clear.conversationId ?? clear.path;
+      if (!subject || written.some((done) => (done.conversationId ?? done.path) === subject)) continue;
+      const held = next.find((record) => record.subject === subject);
+      if (held && systemClearSettled(held, clear)) continue;
+      const record: AttentionDismissalV1 = {
+        subject,
+        conversationId: clear.conversationId,
+        path: clear.path,
+        at,
+        by: { kind: "system", rule: clear.rule },
+        reason: clear.reason,
+        reasonId: clear.reasonId,
+      };
+      next = [...next.filter((existing) => existing.subject !== subject), record];
+      written.push(clear);
+    }
+    return { ...(written.length ? { records: next } : {}), result: written };
+  }, now);
+}
+
+const escalationSubject = (key: string) => `escalation:${key}`;
+
+/** Every standing escalation by the wait it names, for `/api/files`. */
+export function attentionEscalationIndex(file: AttentionDismissalsFileV1 = readAttentionDismissals()): Map<string, AttentionEscalationMark> {
+  const index = new Map<string, AttentionEscalationMark>();
+  for (const record of file.records) if (record.kind === "escalation" && record.escalation) index.set(record.escalation.key, record.escalation);
+  return index;
+}
+
+/**
+ * A seat hands one routed wait to the operator, with the question it cannot
+ * answer, the choices and what the answer does next; `undo` takes it back. The
+ * wait itself is untouched: the routed row comes back to the operator's list
+ * carrying these words, and answering it answers the original control.
+ */
+export function writeAttentionEscalation(
+  escalation: Omit<AttentionEscalationMark, "at">,
+  by: DismissedBy,
+  options: { undo?: boolean; operationKey?: string; now?: Date } = {},
+): { changed: boolean; escalation: AttentionEscalationMark | null } {
+  const now = options.now ?? new Date();
+  const subject = escalationSubject(escalation.key);
+  return mutate<{ changed: boolean; escalation: AttentionEscalationMark | null }>((records) => {
+    const held = records.find((record) => record.subject === subject && record.kind === "escalation");
+    if (options.undo) return held ? { records: records.filter((record) => record !== held), result: { changed: true, escalation: null } } : { result: { changed: false, escalation: null } };
+    if (held && options.operationKey && held.operationKey === options.operationKey) return { result: { changed: false, escalation: held.escalation ?? null } };
+    const mark: AttentionEscalationMark = { ...escalation, at: now.toISOString() };
+    const record: AttentionDismissalV1 = { kind: "escalation", subject, conversationId: null, path: null, at: mark.at, by, reason: null, reasonId: null, escalation: mark,
+      ...(options.operationKey ? { operationKey: options.operationKey } : {}) };
+    return { records: [...records.filter((existing) => existing.subject !== subject), record], result: { changed: true, escalation: mark } };
+  }, now);
 }
 
 /** Production ports, loaded on first use so this module stays free of the

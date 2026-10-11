@@ -4,6 +4,7 @@ import { needsYouSections } from "@/components/attention/needsYouPanel";
 import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
+import { translate } from "@/lib/i18n/core";
 import { needsYouEntries, needsYouAnswer, needsYouEvidence, type NeedsYouEvidencePorts } from "./needsYouRead";
 
 const now = Date.parse("2026-10-09T00:00:00Z") / 1000;
@@ -50,7 +51,8 @@ test("role-bearing rows retain localized lane labels and the conversation's ques
       const answer = needsYouAnswer(body, null, now, "project-a", { ...ports(), tasks: [], pipelines: [pipeline] }, { locale });
       expect(answer.count).toBe(2);
       expect(answer.rows.find(row => row.kind === "lane-decision")!.line).toContain(labels[locale].toLocaleLowerCase());
-      expect(answer.rows.find(row => row.kind === "question")!.line).toBe("Choose");
+      /* The question in the agent's words, and one sentence on what to do. */
+      expect(answer.rows.find(row => row.kind === "question")).toMatchObject({ question: "Choose", line: translate(locale, "needs.ask.question") });
     }
   }
 });
@@ -153,4 +155,44 @@ test("the report's bounded read finds stale rows beyond the first panel page", (
   expect(report.rows[0]).toMatchObject({ id: "q-59", stale: true });
   expect(report.count).toBe(60);
   expect(report.staleCount).toBe(1);
+});
+
+test("waits routed to the seat leave the operator's count and are counted for the seat", () => {
+  const body = fixture();
+  const ask = body.files.find(f => f.name === "ask")!;
+  ask.attentionRoute = { key: "reason:operator-ask", owner: "seat", seat: "conversation_seat" };
+  const decisionLane = body.pipelines[0]!;
+  decisionLane.attentionRoute = { key: "lane:decision:lane-decision:none", owner: "seat", seat: "conversation_seat" };
+  const answer = needsYouAnswer(body, decision, now, "project-a", ports(body));
+  expect(answer.rows.some(r => r.kind === "ask")).toBe(false);
+  expect(answer.rows.some(r => r.kind === "lane-decision")).toBe(false);
+  expect(answer.routedToSeat).toBe(2);
+  expect(answer.count).toBe(needsYouAnswer(fixture(), decision, now, "project-a", ports()).count - 2);
+  /* A stamp drawn for another wait covers nothing. */
+  ask.attentionRoute = { key: "reason:an-older-ask", owner: "seat", seat: "conversation_seat" };
+  expect(needsYouAnswer(body, decision, now, "project-a", ports(body)).rows.some(r => r.kind === "ask")).toBe(true);
+});
+
+test("a seat's escalation brings its words back to the operator's row", () => {
+  const body = fixture();
+  const ask = body.files.find(f => f.name === "ask")!;
+  ask.attentionEscalation = { key: "reason:operator-ask", at, question: "Ship the hotfix tonight or wait for the release?", options: ["Tonight", "With the release"], recommended: 1, effect: "the deployer starts the rollout you choose", seat: "conversation_seat" };
+  const row = needsYouAnswer(body, decision, now, "project-a", ports(body)).rows.find(r => r.kind === "ask")!;
+  expect(row).toMatchObject({ question: "Ship the hotfix tonight or wait for the release?", options: ["Tonight", "With the release"], recommended: 1,
+    line: "Choose an answer to the orchestrator's question; next: the deployer starts the rollout you choose" });
+});
+
+test("a reason Delegatus cleared is in the cleared list with its rule, and a restored one is not", () => {
+  const body = fixture();
+  const ask = body.files.find(f => f.name === "ask")!;
+  const by = { kind: "system", rule: "operator-replied" } as const;
+  ask.attentionDismissal = { at, by, reasonId: "operator-ask" };
+  const record = { subject: ask.conversationId!, conversationId: ask.conversationId!, path: ask.path, at, by, reason: "ask" as const, reasonId: "operator-ask" };
+  const answer = needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [record] });
+  expect(answer.rows.some(r => r.kind === "ask")).toBe(false);
+  expect(answer.cleared.find(r => r.kind === "ask")).toMatchObject({ cleared: { by }, undo: { kind: "conversation", reasonId: "operator-ask" } });
+  delete ask.attentionDismissal;
+  const restored = needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [{ ...record, restoredAt: at, restoredBy: { kind: "operator" } }] });
+  expect(restored.rows.some(r => r.kind === "ask")).toBe(true);
+  expect(restored.cleared.some(r => r.kind === "ask")).toBe(false);
 });

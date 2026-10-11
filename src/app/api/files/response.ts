@@ -12,6 +12,7 @@ import { listFilesWithProjectCatalog, pinnedPathsFor } from "@/lib/scanner";
 import { ctxFor } from "@/lib/scanner/context";
 import { overlayOperatorAsks } from "@/lib/asks/overlay";
 import { overlayAttentionDismissals } from "@/lib/attention/dismissals";
+import { overlayAttentionRoutes, productionRoutingSources } from "@/lib/attention/routeOverlay";
 import { overlayBridgeAsks } from "@/lib/bridge/asks";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { bridgeAsksForSeats } from "@/lib/bridge/service";
@@ -864,6 +865,13 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      classifier recorded for each conversation. */
   overlayOperatorAsks(projected.files);
   markTiming("files-operator-asks");
+  /* Who answers each wait (docs/design/attention-auto-resolve.md): a worker's
+     ask, a parked lane and a stopped merge go to the project's designated seat
+     first, and the operator's list keeps what is theirs. Read after every
+     source above, so the stamp names the reason the board will draw. */
+  overlayAttentionRoutes(projected.files, pipelines, Date.now() / 1000,
+    productionRoutingSources(seatIdentityResolver(conversationLookup.canonicalConversationId)));
+  markTiming("files-attention-routes");
   const visibleProjects = [
     ...projected.files.map((file) => file.project),
     ...effectiveProjectCatalog.map((entry) => entry.project),

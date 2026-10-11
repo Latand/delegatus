@@ -1,4 +1,5 @@
 import type { ConversationReasonKind, DismissedBy, LaneReasonKind } from "@/lib/attention/dismissalTypes";
+import { laneRouteNow } from "@/lib/attention/routeTypes";
 import { pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -47,10 +48,11 @@ export interface ClearedNeed {
     place a lane could be cleared from then. */
 const LEGACY_DISMISSAL: DismissedBy = { kind: "operator" };
 
-/** A conversation's reason, flagged or cleared, or null when it has none. */
+/** A conversation's reason, flagged or cleared, or null when it has none or
+    its project's seat answers it first (docs/design/attention-auto-resolve.md). */
 export function conversationNeed(file: FileEntry, now: number): { need: NeedReason; cleared: ClearedNeed | null } | null {
   const reason = attentionReason(file, now);
-  if (!reason) return null;
+  if (!reason || reason.route) return null;
   const need: NeedReason = { subject: "conversation", kind: reason.kind, key: reason.id, file, reason, since: reason.raisedAt };
   if (!reason.dismissal) return { need, cleared: null };
   const at = Date.parse(reason.dismissal.at);
@@ -74,6 +76,8 @@ function laneSince(pipeline: Pipeline): number {
 
 /** A lane's reason, flagged or cleared, or null when it asks nothing. */
 export function laneNeed(pipeline: Pipeline): { need: NeedReason; cleared: ClearedNeed | null } | null {
+  /* Its project's seat answers it first, or an automatic retry owns it. */
+  if (laneRouteNow(pipeline)) return null;
   const merge = laneMergeNeed(pipeline);
   if (merge) return merge;
   if (!pipelineNeedsYou(pipeline)) return null;

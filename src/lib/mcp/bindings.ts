@@ -55,8 +55,9 @@ import {
   resolveDirectedAttentionView,
 } from "@/lib/attention/service";
 import { readAttentionFile } from "@/lib/attention/store";
-import { DismissalError, dismissAttention as dismissAttentionService, parseDismissalTarget, type DismissalPorts } from "@/lib/attention/dismissals";
+import { DismissalError, dismissAttention as dismissAttentionService, parseDismissalTarget, writeAttentionEscalation, type DismissalPorts } from "@/lib/attention/dismissals";
 import type { DismissalTarget, DismissedBy } from "@/lib/attention/dismissalTypes";
+import { conversationRouteKey, laneNeedKind, laneRouteKey, parseEscalation } from "@/lib/attention/routeTypes";
 import {
   CONVERSATION_PATH_EXAMPLE,
   describeFocusTargetRejection,
@@ -6712,7 +6713,63 @@ async function dismissThroughService(
   }
 }
 
+/**
+ * A seat hands one wait routed to it to the operator
+ * (docs/design/attention-auto-resolve.md): the question it cannot answer,
+ * the choices and what the answer does next, keyed by the exact wait so a
+ * newer ask or a lane that moved is not covered. The gate is the dismissal's,
+ * in the same two phases, and a refused caller writes nothing. The wait itself
+ * is untouched: the operator answers it where it asked.
+ */
+async function escalateThroughService(
+  target: DismissalTarget,
+  escalate: unknown,
+  undo: boolean,
+  operationKey: string,
+  dependencies: ViewerMcpDomainDependencies,
+): Promise<McpToolPayload> {
+  const authority = dependencies.attentionAuthority();
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const admission = permitAttentionDismissal(authority, seats, null);
+  if (!admission.allowed) throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
+  const question = undo ? null : parseEscalation(escalate);
+  if (typeof question === "string") throw new McpToolRefusal(question, { code: "INVALID_ESCALATION" });
+  let key: string;
+  let focus: FocusTarget;
+  if (target.kind === "conversation") {
+    if (!target.reasonId) throw new McpToolRefusal("escalate names the reason it hands on: pass target.reasonId from the read", { code: "INVALID_TARGET" });
+    key = conversationRouteKey(target.reasonId);
+    focus = focusTargetFromArgs({ kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}) }, dependencies);
+  } else if (target.kind === "pipeline") {
+    const pipeline = dependencies.readPipelineRecord ? dependencies.readPipelineRecord(target.pipelineId) : dependencies.getPipelines().pipelines.find(row => row.id === target.pipelineId);
+    if (!pipeline) throw new McpToolRefusal(`no pipeline ${target.pipelineId}`, { code: "PIPELINE_NOT_FOUND" });
+    const kind = laneNeedKind(pipeline);
+    if (!kind) throw new McpToolRefusal("the lane waits on nothing to escalate", { code: "NOTHING_TO_ESCALATE" });
+    key = laneRouteKey(pipeline, kind);
+    focus = focusTargetFromArgs(target, dependencies);
+  } else {
+    throw new McpToolRefusal("escalate takes a conversation target with its reasonId, or a pipeline target", { code: "INVALID_TARGET" });
+  }
+  const project = canonicalOrchestratorProject(await focusTargetProject(focus, "", dependencies));
+  const verdict = permitAttentionDismissal(authority, seats, project);
+  if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
+  const attribution = attributionOf(dependencies);
+  const by: DismissedBy = {
+    kind: attribution.kind,
+    conversationId: attribution.conversationId,
+    role: attribution.role,
+    ...(attribution.via ? { via: { deputy: attribution.via.deputy } } : {}),
+  };
+  const written = writeAttentionEscalation(
+    { key, seat: attribution.conversationId, ...(question ?? { question: "", options: [], recommended: null, effect: null }) },
+    by,
+    { undo, operationKey },
+  );
+  return { escalated: undo ? null : written.escalation, key, changed: written.changed, undo, by };
+}
+
 async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, control: ViewerControlDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
+  if (args.target === undefined && args.escalate !== undefined) throw new McpToolRefusal("escalate needs the target it hands to the operator", { code: "INVALID_TARGET" });
   if (args.target === undefined) {
     if (args.undo !== undefined || args.reason !== undefined) throw new McpToolRefusal("undo and reason require a target", { code: "INVALID_TARGET" });
     const authority = dependencies.attentionAuthority();
@@ -6736,6 +6793,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code });
     throw error;
   }
+  if (args.escalate !== undefined) return escalateThroughService(target, args.escalate, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies);
   const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies, args.reason as string | undefined);
   return {
     dismissed: outcome.dismissed,

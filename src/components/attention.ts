@@ -1,6 +1,7 @@
 import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
 import { permissionHeadline } from "@/lib/runtime/permissionRequests";
 import type { AttentionDismissalMark, ConversationReasonKind } from "@/lib/attention/dismissalTypes";
+import { conversationRouteKey, type AttentionEscalationMark, type AttentionRouteMark } from "@/lib/attention/routeTypes";
 import type { OperatorAskMark } from "@/lib/asks/types";
 import type { BridgeAsk, FileEntry } from "@/lib/types";
 import { DELIVERY_UNCERTAIN_MS, DELIVERY_WAIT_HELD_MS } from "@/components/runtime/deliveryWait";
@@ -215,6 +216,13 @@ export interface ConversationReason {
   /** An orchestrator's decision request: the report it is, by seq, and its
       first line. Dismissing it resolves that report in the report log. */
   report?: { seq: number; body: string | null };
+  /** Who answers it when it is not the operator (docs/design/attention-auto-resolve.md):
+      the project's seat, stamped by `/api/files` for this reason's id. A
+      routed reason is no needs-you item, like a dismissed one. */
+  route?: AttentionRouteMark | null;
+  /** The seat's escalation of this reason to the operator: the question it
+      asks them, its options and what the answer does next. */
+  escalation?: AttentionEscalationMark | null;
 }
 
 /**
@@ -250,7 +258,19 @@ export function dismissalCovers(reason: Pick<ConversationReason, "id" | "raisedA
 export function attentionReason(file: FileEntry, now: number = Date.now() / 1000): ConversationReason | null {
   const reason = undismissedReason(file, now);
   if (!reason) return null;
-  return { ...reason, dismissal: dismissalCovers(reason, file.attentionDismissal) ? file.attentionDismissal! : null };
+  const key = conversationRouteKey(reason.id);
+  return {
+    ...reason,
+    dismissal: dismissalCovers(reason, file.attentionDismissal) ? file.attentionDismissal! : null,
+    route: file.attentionRoute?.key === key ? file.attentionRoute : null,
+    escalation: file.attentionEscalation?.key === key ? file.attentionEscalation : null,
+  };
+}
+
+/** Whether the operator owes this reason an answer now: neither dismissed
+    nor answered first by someone else. */
+export function reasonAsksOperator(reason: Pick<ConversationReason, "dismissal" | "route">): boolean {
+  return !reason.dismissal && !reason.route;
 }
 
 /** One open ask as a reason. `openBridgeAskList` already refused an
@@ -370,7 +390,7 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
  */
 export function attentionId(file: FileEntry, now: number = Date.now() / 1000): string | null {
   const reason = attentionReason(file, now);
-  return reason && !reason.dismissal ? reason.id : null;
+  return reason && reasonAsksOperator(reason) ? reason.id : null;
 }
 
 /**
@@ -398,7 +418,7 @@ export function buildAttentionQueue(
       continue;
     }
     const reason = attentionReason(file, now);
-    if (!reason || reason.dismissal) continue;
+    if (!reason || !reasonAsksOperator(reason)) continue;
     items.push({ id: reason.id, file, project: projectKey(file), tier: "blocked", since: reason.since, reason });
   }
   return items.sort(

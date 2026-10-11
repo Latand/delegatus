@@ -9,6 +9,7 @@ import { attentionEntryProject, type MobileAttentionEntry } from "./attentionQue
 import { cleanTitle } from "../utils";
 import { reasonLine, needLabel } from "./decision";
 import { laneNeed, laneStageId } from "./needReason";
+import { conversationOperatorAsk, laneOperatorAsk, type OperatorAsk } from "./operatorAsk";
 
 /*
  * The needs-you panel's pure half (docs/design/needs-you-options.md, option B):
@@ -153,11 +154,34 @@ export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { pat
   return focus.path !== null && entry.item.file.path === focus.path;
 }
 
-/** The desktop panel's words, also returned by the project read. */
-export function needsYouRowText(t: TFunction, entry: MobileAttentionEntry): { title: string; line: string } {
-  if (entry.kind === "prototype") return { title: entry.notice.title, line: t("proto.notice.open") };
-  if (entry.kind === "update") return { title: t("selfUpdate.auto.decision.title"), line: t("selfUpdate.auto.decision.body") };
+/** What a row asks of the operator (docs/design/attention-auto-resolve.md):
+    the question in its author's words, the choices, and one plain sentence
+    saying what to choose or do and what happens next. */
+export function needsYouEntryAsk(t: TFunction, entry: MobileAttentionEntry): OperatorAsk {
+  if (entry.kind === "prototype") {
+    return { question: null, options: [], recommended: null, sentence: t(entry.notice.asks === "questions" ? "needs.ask.prototypeQuestions" : "needs.ask.prototype") };
+  }
+  if (entry.kind === "update") return { question: null, options: [], recommended: null, sentence: t("selfUpdate.auto.decision.body") };
   return entry.kind === "conversation"
-    ? { title: entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90), line: reasonLine(t, entry.item.reason) }
-    : { title: entry.row.task, line: needsYouLaneLine(t, entry.row.pipeline) };
+    ? conversationOperatorAsk(t, entry.item.reason, entry.item.file)
+    : laneOperatorAsk(t, entry.row.pipeline);
+}
+
+export interface NeedsYouRowText extends Omit<OperatorAsk, "sentence"> {
+  title: string;
+  /** The row's one sentence: what to choose or do, and what happens next. */
+  line: string;
+  /** The wait in the cards' short words, for a surface with one line to spare. */
+  label: string;
+}
+
+/** The words of one row, on the desktop panel, the phone sheet and the
+    project read alike. */
+export function needsYouRowText(t: TFunction, entry: MobileAttentionEntry): NeedsYouRowText {
+  const { sentence, ...ask } = needsYouEntryAsk(t, entry);
+  if (entry.kind === "prototype") return { title: entry.notice.title, line: sentence, label: t("proto.notice.open"), ...ask };
+  if (entry.kind === "update") return { title: t("selfUpdate.auto.decision.title"), line: sentence, label: t("selfUpdate.auto.decision.title"), ...ask };
+  return entry.kind === "conversation"
+    ? { title: entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90), line: sentence, label: reasonLine(t, entry.item.reason), ...ask }
+    : { title: entry.row.task, line: sentence, label: needsYouLaneLine(t, entry.row.pipeline), ...ask };
 }
