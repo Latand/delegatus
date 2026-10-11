@@ -17,6 +17,27 @@ continues to pass during repair admission. Only that baseline step uses
 step timeout bounds a stalled baseline, while the candidate keeps its separate
 130-second shell timeout and remains the last step.
 
+Privacy fixtures are released by the final serial test, after every concurrent
+CLI check has returned. Cleanup has its own 30-second timeout inside the unchanged
+suite deadline. Deleting hundreds of Git fixtures previously ran in an `afterAll`
+hook with Bun's five-second default, producing an unnamed hook timeout under
+slow storage despite passing detector assertions. Cleanup errors still fail the
+suite and now name the cleanup test.
+
+Run privacy self-tests with the workflow's pinned Bun 1.3.3: the source-bound
+placeholder generator requires that runtime. Use
+`bash scripts/gate-slot.sh bun test scripts/privacy-publication-gate.test.ts`
+with isolated home, configuration, state and temporary directories.
+
+The cleanup regression was checked with Bun 1.3.3, a filesystem worker and a
+preload adding 10 ms before each recursive deletion of a privacy fixture root
+(597 roots). The original hook failed after 6.73 seconds with all 641 detector
+tests passing. Ten runs of the final serial cleanup each passed 642 tests with
+zero hook timeouts and the same 131,163 assertions. Cleanup took
+6.52–6.71 seconds; complete suite times were 83.61–100.17 seconds.
+Each run used an explicit test path through the gate slot and a fresh isolated
+home, configuration, state and temporary directory.
+
 The scan covers committed, staged, unstaged, and untracked changes
 relative to the exact base SHA.
 Diagnostics expose finding classes and counts. Matched values, OCR text,
