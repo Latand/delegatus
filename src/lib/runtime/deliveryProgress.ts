@@ -7,6 +7,18 @@ import { statePath } from "@/lib/configDir";
 
 import { isDeliveryWaitReason, type DeliveryWaitReason } from "./deliveryWaitReason";
 
+/** Access failures leave the file's existence unknown and must reach the
+    caller's read-failure handling instead of authorizing a replacement. */
+function progressFileExists(filename: string): boolean {
+  try {
+    fs.statSync(filename);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 /**
  * What each accepted message is waiting on, kept where the delivery queue can
  * always write it: `<state>/delivery-progress.sqlite`.
@@ -30,6 +42,12 @@ import { isDeliveryWaitReason, type DeliveryWaitReason } from "./deliveryWaitRea
  */
 
 export type DeliveryProgressTerminalState = "delivered" | "failed" | "uncertain";
+
+export interface DeliveryPhase {
+  phase: DeliveryWaitReason | DeliveryProgressTerminalState | "ingress" | "engine-echo";
+  reason: string | null;
+  at: string;
+}
 
 export interface DeliveryProgressRecord {
   operationId: string;
@@ -62,6 +80,14 @@ export interface DeliveryProgressRecord {
   executorId: string | null;
   terminal: { state: DeliveryProgressTerminalState; at: string; reason: string | null } | null;
   updatedAt: string;
+  /** Absent on records written before phase history was introduced. */
+  phaseHistory?: DeliveryPhase[];
+  /** Leading entries dropped by the per-send bound. */
+  phaseHistoryDropped?: number;
+  /** First server handler entry, before validation and the request ledger. */
+  ingressAt?: string | null;
+  /** First live engine user echo; replayed history supplies no arrival time. */
+  engineEchoAt?: string | null;
 }
 
 export interface DeliveryProgressNote {
@@ -84,6 +110,7 @@ export interface DeliveryProgressNote {
 
 /** The queue's view of the store; tests pass their own. */
 export interface DeliveryProgressSink {
+  timing?(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void;
   note(operationId: string, conversationId: string, note: DeliveryProgressNote): void;
   stalled(operationId: string): void;
   deadline(operationId: string, deadlineAt: string | null, policy: DeliveryProgressRecord["deadlinePolicy"]): void;
@@ -93,6 +120,8 @@ export interface DeliveryProgressSink {
 }
 
 export const DELIVERY_PROGRESS_TERMINAL_RETENTION_MS = 14 * 24 * 60 * 60_000;
+export const DELIVERY_PROGRESS_MIN_RETENTION_MS = 7 * 24 * 60 * 60_000;
+export const DELIVERY_PHASE_HISTORY_LIMIT = 128;
 const TERMINAL_ROW_LIMIT = 5_000;
 const OPEN_ROW_LIMIT = 5_000;
 const FLUSH_DELAY_MS = 20;
@@ -116,6 +145,12 @@ function boundedDetail(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, DETAIL_LIMIT) : null;
+}
+
+function withPhase(current: Pick<DeliveryProgressRecord, "phaseHistory" | "phaseHistoryDropped"> | null, phase: DeliveryPhase): Pick<DeliveryProgressRecord, "phaseHistory" | "phaseHistoryDropped"> {
+  const history = [...current?.phaseHistory ?? [], phase].sort((left, right) => left.at.localeCompare(right.at));
+  const dropped = Math.max(0, history.length - DELIVERY_PHASE_HISTORY_LIMIT);
+  return { phaseHistory: history.slice(dropped), phaseHistoryDropped: (current?.phaseHistoryDropped ?? 0) + dropped };
 }
 
 function parseRecord(json: string): DeliveryProgressRecord | null {
@@ -173,9 +208,9 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   ) {}
 
   note(operationId: string, conversationId: string, note: DeliveryProgressNote): void {
-    this.load();
+    const current = this.record(operationId);
+    if (current === undefined) return;
     const at = new Date(this.now()).toISOString();
-    const current = this.records.get(operationId);
     const since = note.sinceMs !== undefined ? new Date(Math.min(note.sinceMs, this.now())).toISOString() : at;
     /* A detail belongs to the reason it was written with. */
     const detail = note.detail !== undefined ? boundedDetail(note.detail)
@@ -185,6 +220,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       : note.nextWakeMs === null ? null : new Date(this.now() + Math.max(0, note.nextWakeMs)).toISOString();
     if (!current) {
       this.put({
+        ...withPhase(null, { phase: note.waitReason, reason: detail, at: since }),
         operationId,
         conversationId,
         originalKey: note.originalKey ?? null,
@@ -220,6 +256,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const advanced = reasonChanged || note.attempted === true || note.progressed === true;
     this.put({
       ...current,
+      ...(advanced || detail !== current.detail ? withPhase(current, { phase: note.waitReason, reason: detail, at: since }) : {}),
       conversationId,
       originalKey: note.originalKey ?? current.originalKey,
       kind: note.kind ?? current.kind,
@@ -245,8 +282,8 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
    * evidence. Creates the record when there is none.
    */
   rearm(operationId: string, conversationId: string, note: DeliveryProgressNote): void {
-    this.load();
-    const current = this.records.get(operationId);
+    const current = this.record(operationId);
+    if (current === undefined) return;
     if (!current) {
       this.note(operationId, conversationId, { ...note, attempted: true });
       return;
@@ -254,6 +291,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const at = new Date(this.now()).toISOString();
     this.put({
       ...current,
+      ...withPhase(current, { phase: note.waitReason, reason: boundedDetail(note.detail), at }),
       conversationId,
       originalKey: note.originalKey ?? current.originalKey,
       kind: note.kind ?? current.kind,
@@ -272,23 +310,20 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   stalled(operationId: string): void {
-    this.load();
-    const current = this.records.get(operationId);
+    const current = this.record(operationId);
     if (!current || current.terminal || current.stalledSince) return;
     const at = new Date(this.now()).toISOString();
     this.put({ ...current, stalledSince: at, updatedAt: at });
   }
 
   deadline(operationId: string, deadlineAt: string | null, policy: DeliveryProgressRecord["deadlinePolicy"]): void {
-    this.load();
-    const current = this.records.get(operationId);
+    const current = this.record(operationId);
     if (!current || current.terminal || (current.deadlineAt === deadlineAt && current.deadlinePolicy === policy)) return;
     this.put({ ...current, deadlineAt, deadlinePolicy: policy, updatedAt: new Date(this.now()).toISOString() });
   }
 
   settle(operationId: string, state: DeliveryProgressTerminalState, reason: string | null): void {
-    this.load();
-    const current = this.records.get(operationId);
+    const current = this.record(operationId);
     /* An ending stands, with one exception: a message recorded as possibly
        delivered that later evidence shows arrived. A discard and a proven loss
        end `failed` and are never promoted. */
@@ -300,13 +335,53 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       stalledSince: null,
       lastProgressAt: at,
       terminal: { state, at, reason: boundedDetail(reason) },
+      ...withPhase(current, { phase: state, reason: boundedDetail(reason), at }),
       updatedAt: at,
     });
   }
 
+  /** Add observation times without advancing delivery, rearming it or changing
+      the executor's current phase. Retries and event replay write each once. */
+  timing(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void {
+    let current = this.record(operationId);
+    if (!current) return;
+    for (const field of ["ingressAt", "engineEchoAt"] as const) {
+      const value = times[field];
+      if (current[field] || !value || !Number.isFinite(Date.parse(value))) continue;
+      const at = new Date(value).toISOString();
+      current = { ...current, [field]: at,
+        ...withPhase(current, { phase: field === "ingressAt" ? "ingress" : "engine-echo", reason: null, at }) };
+      this.put(current);
+    }
+  }
+
   get(operationId: string): DeliveryProgressRecord | null {
+    return this.record(operationId) ?? null;
+  }
+
+  /** A cold record still owns its fields and history. Null proves absence;
+      undefined means unreadable, so an update must leave the saved row alone. */
+  private record(operationId: string): DeliveryProgressRecord | null | undefined {
     this.load();
-    return this.records.get(operationId) ?? null;
+    const current = this.records.get(operationId);
+    if (current) return current;
+    if (!this.loaded) return undefined;
+    if (this.filename === null) return null;
+    try {
+      if (!progressFileExists(this.filename)) return null;
+      const row = this.connection().query<{ record_json: string }, [string]>(
+        "SELECT record_json FROM delivery_progress WHERE operation_id = ?",
+      ).get(operationId);
+      if (!row) return null;
+      const record = parseRecord(row.record_json);
+      if (!record) return undefined;
+      this.records.set(operationId, record);
+      this.trimMemory();
+      return record;
+    } catch (error) {
+      console.error("[delivery progress] read failed", { error: error instanceof Error ? error.message : String(error) });
+      return undefined;
+    }
   }
 
   /** Whether the store holds a record of the operation, in memory or only on
@@ -317,8 +392,8 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     if (this.records.has(operationId)) return "present";
     if (this.filename === null) return "absent";
     if (!this.loaded) return "unknown";
-    if (!fs.existsSync(this.filename)) return "absent";
     try {
+      if (!progressFileExists(this.filename)) return "absent";
       return this.connection().query<{ found: number }, [string]>("SELECT 1 AS found FROM delivery_progress WHERE operation_id = ?").get(operationId) !== null
         ? "present" : "absent";
     } catch {
@@ -397,7 +472,34 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   /** Records that ended `uncertain`: the ones a later acknowledgement can still correct. */
   uncertain(): DeliveryProgressRecord[] {
     this.load();
-    return [...this.records.values()].filter((record) => record.terminal?.state === "uncertain");
+    const uncertain = new Map<string, DeliveryProgressRecord>();
+    /* Retention can outgrow the completion cache. An evicted ending still
+       needs the sweep that can carry its late acknowledgement into history. */
+    if (this.filename !== null) {
+      try {
+        if (progressFileExists(this.filename)) {
+          const rows = this.connection().query<{ record_json: string }, [number]>(`
+            SELECT record_json FROM delivery_progress
+            WHERE terminal = 1 AND updated_at >= ?
+              AND CASE WHEN json_valid(record_json)
+                THEN json_extract(record_json, '$.terminal.state') END = 'uncertain'
+          `).all(this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS);
+          for (const row of rows) {
+            const record = parseRecord(row.record_json);
+            if (record) uncertain.set(record.operationId, record);
+          }
+        }
+      } catch (error) {
+        console.error("[delivery progress] read failed", { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    /* The owner can have confirmed or rearmed a saved uncertain row since
+       its last flush. Those pending transitions win over the file. */
+    for (const record of this.records.values()) {
+      if (record.terminal?.state === "uncertain") uncertain.set(record.operationId, record);
+      else uncertain.delete(record.operationId);
+    }
+    return [...uncertain.values()];
   }
 
   forConversation(conversationIds: readonly string[]): DeliveryProgressRecord[] {
@@ -523,11 +625,11 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const cutoff = this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS;
     db.query("DELETE FROM delivery_progress WHERE terminal = 1 AND updated_at < ?").run(cutoff);
     db.query(`
-      DELETE FROM delivery_progress WHERE terminal = 1 AND operation_id IN (
+      DELETE FROM delivery_progress WHERE terminal = 1 AND updated_at < ? AND operation_id IN (
         SELECT operation_id FROM delivery_progress WHERE terminal = 1
         ORDER BY updated_at DESC LIMIT -1 OFFSET ?
       )
-    `).run(TERMINAL_ROW_LIMIT);
+    `).run(this.now() - DELIVERY_PROGRESS_MIN_RETENTION_MS, TERMINAL_ROW_LIMIT);
     /* An open record nobody has touched past the retention belongs to an
        operation that left through a path that never said so. */
     db.query("DELETE FROM delivery_progress WHERE terminal = 0 AND updated_at < ?").run(cutoff);
@@ -543,17 +645,25 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     /* A read that failed is tried again, at most once per retry interval:
        the store counts as loaded only once a read succeeded. */
     if (this.now() < this.loadRetryAt) return;
-    if (this.filename === null || !fs.existsSync(this.filename)) { this.loaded = true; return; }
+    if (this.filename === null) { this.loaded = true; return; }
     try {
+      if (!progressFileExists(this.filename)) { this.loaded = true; return; }
+      /* Retained completions can outgrow the cache. Every open send must still
+         be loaded; cold completed sends are read by operation id on demand. */
       const rows = this.connection().query<{ record_json: string }, [number, number]>(`
-        SELECT record_json FROM delivery_progress
-        WHERE terminal = 0 OR updated_at >= ?
-        ORDER BY updated_at DESC LIMIT ?
+        SELECT record_json FROM delivery_progress WHERE terminal = 0
+        UNION ALL
+        SELECT record_json FROM (
+          SELECT record_json FROM delivery_progress
+          WHERE terminal = 1 AND updated_at >= ?
+          ORDER BY updated_at DESC LIMIT ?
+        )
       `).all(this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, TERMINAL_ROW_LIMIT + OPEN_ROW_LIMIT);
       for (const row of rows) {
         const record = parseRecord(row.record_json);
         if (record && !this.records.has(record.operationId)) this.records.set(record.operationId, record);
       }
+      this.trimMemory();
       /* A file written by an earlier build has no meta table: no checkpoint. */
       try {
         const stored = this.connection().query<{ value: string }, [string]>("SELECT value FROM delivery_progress_meta WHERE key = ?").get(CHECKED_THROUGH);
@@ -595,6 +705,14 @@ export function deliveryProgressStore(): DeliveryProgressStore {
 export function ownedDeliveryProgressStore(): DeliveryProgressStore | null {
   const owned = processStore.__llvDeliveryProgressStore;
   return owned && processStore.__llvDeliveryProgressPath === deliveryProgressPath() ? owned : null;
+}
+
+/** Observations are optional for ports that do not own the progress store. */
+export function recordDeliveryIngress(operationId: string | undefined, ingressAt: string,
+  progress?: Pick<DeliveryProgressSink, "timing"> | null): void {
+  if (!operationId) return;
+  try { (progress === undefined ? ownedDeliveryProgressStore() : progress)?.timing?.(operationId, { ingressAt }); }
+  catch { /* Observation never changes a delivery's outcome. */ }
 }
 
 /** Tests only. */

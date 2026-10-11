@@ -1068,10 +1068,11 @@ describe("ClaudeStreamBrokerHost", () => {
   test("confirms delivery from an exact direct user echo without a replay marker", async () => {
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);
+    const eventStore = new MemoryEventStore();
     const host = await ClaudeStreamBrokerHost.start({
       cwd: "/repo",
       deliveryLedger: ledger,
-      eventStore: new MemoryEventStore(),
+      eventStore,
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
       spawnProcess: fakeSpawn(child, {}),
     });
@@ -1081,8 +1082,14 @@ describe("ClaudeStreamBrokerHost", () => {
     child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "wrong-role", message: { role: "tool", content: [{ type: "text", text: "match me" }] } });
     await Bun.sleep(0);
     expect(settled).toBeFalse();
+    const beforeEcho = Date.now();
     child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "ordinary", message: { role: "user", content: [{ type: "text", text: "match me" }] } });
     expect(await sent).toEqual({ outcome: "turn-started", turnId: "replay-only" });
+    const echo = eventStore.load(host.identity.sessionId).findLast(event => event.kind === "item") as { deliveryEcho?: { operationId: string; at: string } };
+    expect(echo.deliveryEcho?.operationId).toBe("replay-only");
+    expect(echo.deliveryEcho?.at).toBeString();
+    expect(Date.parse(echo.deliveryEcho!.at)).toBeGreaterThanOrEqual(beforeEcho);
+    expect(Date.parse(echo.deliveryEcho!.at)).toBeLessThanOrEqual(Date.now());
     await host.release();
   });
 

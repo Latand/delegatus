@@ -4,13 +4,364 @@ import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress } from "./deliveryProgress";
+import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
 
 /* Private temporary files only. */
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-progress-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const noTimer = (() => 0 as unknown as ReturnType<typeof setTimeout>);
+
+/* A busy week's retained completions, newer than the records under test. */
+function addRecentCompletions(filename: string, now: number): void {
+  const seed = new DeliveryProgressStore(null, () => now, noTimer);
+  seed.note("completion-seed", "busy-conversation", { waitReason: "dispatching" });
+  seed.settle("completion-seed", "delivered", null);
+  const record = seed.get("completion-seed")!;
+  const db = new Database(filename);
+  try {
+    const insert = db.query("INSERT INTO delivery_progress VALUES (?, ?, ?, ?, ?, ?)");
+    db.transaction(() => {
+      for (let i = 0; i < 10_001; i++) {
+        const operationId = `recent-completion-${i}`;
+        insert.run(operationId, record.conversationId, null, 1, now,
+          JSON.stringify({ ...record, operationId }));
+      }
+    })();
+  } finally {
+    db.close();
+    seed.close();
+  }
+}
+
+test("recent completions cannot hide an open send after prune and restart or replace its history", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "busy-restart.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("open-send", "conversation", {
+    waitReason: "queued", originalKey: "open-key", kind: "steer", admittedAt: new Date(now).toISOString(),
+    executorId: "original-executor", nextWakeMs: 5_000,
+  });
+  store.timing("open-send", { ingressAt: new Date(now - 100).toISOString() });
+  now += 100;
+  store.note("open-send", "conversation", { waitReason: "checking", detail: "reading journal", attempted: true });
+  store.deadline("open-send", new Date(now + 60_000).toISOString(), "settlement-window");
+  store.stalled("open-send");
+  const before = structuredClone(store.get("open-send"))!;
+  expect(store.flush()).toBe(true);
+  now += 1_000;
+  addRecentCompletions(filename, now);
+  now += 10 * 60_000;
+  store.checkpoint(now);
+  expect(store.flush()).toBe(true);
+  store.close();
+
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  try {
+    expect(reopened.open().map((record) => record.operationId)).toContain("open-send");
+    expect(reopened.get("open-send")).toEqual(before);
+    const at = new Date(now).toISOString();
+    reopened.note("open-send", "conversation", { waitReason: "dispatching", attempted: true });
+    const expected: DeliveryProgressRecord = { ...before, waitReason: "dispatching", detail: null, attempt: before.attempt + 1,
+      phaseSince: at, lastProgressAt: at, stalledSince: null, updatedAt: at,
+      phaseHistory: [...before.phaseHistory!, { phase: "dispatching", reason: null, at }] };
+    expect(reopened.get("open-send")).toEqual(expected);
+    expect(reopened.get("open-send")!.phaseHistory!.length).toBeLessThanOrEqual(DELIVERY_PHASE_HISTORY_LIMIT);
+    expect(reopened.flush()).toBe(true);
+    expect(readDeliveryProgress(["open-send"], filename).get("open-send")).toEqual(expected);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("updates hydrate retained sends outside the startup cache and preserve their fields and phases", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "cold-history.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  const operations = ["note", "rearm", "settle", "timing", "get"] as const;
+  for (const operation of operations) {
+    store.note(operation, "conversation", { waitReason: "queued", originalKey: `${operation}-key`,
+      admittedAt: new Date(now).toISOString(), executorId: "original-executor" });
+    store.note(operation, "conversation", { waitReason: "dispatching", attempted: true });
+    store.settle(operation, "uncertain", "lost acknowledgement");
+  }
+  const before = new Map(operations.map((operation) => [operation, structuredClone(store.get(operation))!]));
+  store.close();
+  now += 1_000;
+  addRecentCompletions(filename, now);
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  try {
+    expect(reopened.open()).toEqual([]); // Load the startup cache before each cold access.
+    reopened.note("note", "conversation", { waitReason: "checking" });
+    reopened.rearm("rearm", "conversation", { waitReason: "checking" });
+    reopened.settle("settle", "delivered", null);
+    reopened.timing("timing", { engineEchoAt: new Date(now).toISOString() });
+    expect(reopened.get("get")).toEqual(before.get("get")!);
+    expect(reopened.flush()).toBe(true);
+    const records = readDeliveryProgress(operations, filename);
+    expect(records.get("note")).toEqual(before.get("note")!);
+    for (const operation of ["rearm", "settle", "timing"] as const) {
+      const record = records.get(operation)!;
+      expect(record).toMatchObject({ originalKey: `${operation}-key`, admittedAt: before.get(operation)!.admittedAt });
+      expect(record.phaseHistory?.slice(0, 3)).toEqual(before.get(operation)!.phaseHistory!);
+      expect(record.phaseHistory).toHaveLength(4);
+    }
+    expect(records.get("rearm")).toMatchObject({ terminal: null, attempt: 2, executorId: null });
+    expect(records.get("settle")).toMatchObject({ terminal: { state: "delivered" }, attempt: 1 });
+    expect(records.get("timing")).toMatchObject({ terminal: before.get("timing")!.terminal, attempt: 1,
+      engineEchoAt: new Date(now).toISOString() });
+  } finally {
+    reopened.close();
+  }
+});
+
+test("uncertain enumeration includes cold rows and respects unflushed transitions", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "cold-uncertain.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  const ids = ["still-uncertain", "confirmed", "rearmed", "newly-uncertain"];
+  for (const id of ids) {
+    store.note(id, "conversation", { waitReason: "dispatching" });
+    if (id !== "newly-uncertain") store.settle(id, "uncertain", "lost acknowledgement");
+  }
+  store.close();
+  now += 1_000;
+  addRecentCompletions(filename, now);
+  // An unrelated malformed completion must not hide valid cold uncertain rows.
+  const corrupt = new Database(filename);
+  try {
+    corrupt.query("INSERT INTO delivery_progress VALUES (?, ?, ?, ?, ?, ?)")
+      .run("malformed-completion", "conversation", null, 1, now, "{");
+  } finally { corrupt.close(); }
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  try {
+    expect(reopened.uncertain().map((record) => record.operationId).sort())
+      .toEqual(["confirmed", "rearmed", "still-uncertain"]);
+    reopened.settle("confirmed", "delivered", null);
+    reopened.rearm("rearmed", "conversation", { waitReason: "checking" });
+    reopened.settle("newly-uncertain", "uncertain", "lost acknowledgement");
+    // The saved uncertain rows must not undo dirty delivery/rearm transitions.
+    expect(reopened.uncertain().map((record) => record.operationId).sort())
+      .toEqual(["newly-uncertain", "still-uncertain"]);
+    expect(reopened.flush()).toBe(true);
+    expect(reopened.uncertain().map((record) => record.operationId).sort())
+      .toEqual(["newly-uncertain", "still-uncertain"]);
+  } finally { reopened.close(); }
+});
+
+test("an unreadable cold row is left intact until an update can hydrate it", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "unreadable-cold-history.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("cold-send", "conversation", { waitReason: "queued", originalKey: "cold-key" });
+  store.settle("cold-send", "uncertain", "lost acknowledgement");
+  const before = structuredClone(store.get("cold-send"))!;
+  store.close();
+  now += 1_000;
+  addRecentCompletions(filename, now);
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  const internals = reopened as unknown as { connection: () => unknown };
+  const connection = internals.connection;
+  try {
+    expect(reopened.open()).toEqual([]);
+    internals.connection = () => { throw new Error("unable to open database file"); };
+    reopened.note("cold-send", "conversation", { waitReason: "checking" });
+    reopened.rearm("cold-send", "conversation", { waitReason: "checking" });
+    expect(reopened.flush()).toBe(true); // Neither update queued a replacement row.
+    internals.connection = connection;
+    expect(reopened.get("cold-send")).toEqual(before);
+    reopened.rearm("cold-send", "conversation", { waitReason: "checking" });
+    expect(reopened.flush()).toBe(true);
+    const record = readDeliveryProgress(["cold-send"], filename).get("cold-send")!;
+    expect(record).toMatchObject({ terminal: null, originalKey: "cold-key", attempt: 1 });
+    expect(record.phaseHistory?.slice(0, 2)).toEqual(before.phaseHistory!);
+    expect(record.phaseHistory).toHaveLength(3);
+  } finally {
+    internals.connection = connection;
+    reopened.close();
+  }
+});
+
+test("an inaccessible directory preserves saved history until the store can read it again", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const directory = path.join(root, "inaccessible-history");
+  const filename = path.join(directory, "progress.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("blocked-send", "conversation", { waitReason: "queued", originalKey: "saved-key" });
+  store.note("blocked-send", "conversation", { waitReason: "checking", attempted: true });
+  const before = structuredClone(store.get("blocked-send"))!;
+  store.close();
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  try {
+    fs.chmodSync(directory, 0o000);
+    reopened.note("blocked-send", "conversation", { waitReason: "dispatching", attempted: true });
+    expect(reopened.presence("blocked-send")).toBe("unknown");
+    expect(reopened.flush()).toBe(true); // No replacement is queued while the saved record is unreadable.
+    fs.chmodSync(directory, 0o700);
+    now += 1_000;
+    reopened.note("blocked-send", "conversation", { waitReason: "dispatching", attempted: true });
+    expect(reopened.flush()).toBe(true);
+    const record = readDeliveryProgress(["blocked-send"], filename).get("blocked-send")!;
+    expect(record.originalKey).toBe(before.originalKey);
+    expect(record.phaseHistory?.slice(0, 2)).toEqual(before.phaseHistory!);
+    expect(record.phaseHistory).toHaveLength(3);
+    expect(record.attempt).toBe(2);
+  } finally {
+    fs.chmodSync(directory, 0o700);
+    reopened.close();
+  }
+});
+
+test("phase history survives a restart, including changes within checking and the ending", () => {
+  let now = Date.parse("2026-10-11T00:00:00.000Z");
+  const filename = path.join(root, "phase-history.sqlite");
+  let store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("history-send", "history-conversation", { waitReason: "queued" });
+  now += 100;
+  store.note("history-send", "history-conversation", { waitReason: "checking", detail: "reading journal" });
+  now += 200;
+  store.note("history-send", "history-conversation", { waitReason: "checking", detail: "claiming writer" });
+  now += 300;
+  store.note("history-send", "history-conversation", { waitReason: "dispatching", attempted: true });
+  now += 400;
+  store.settle("history-send", "delivered", null);
+  store.close();
+  store = new DeliveryProgressStore(filename, () => now, noTimer);
+  expect(store.get("history-send")).toMatchObject({
+    waitReason: "dispatching", attempt: 1, terminal: { state: "delivered" },
+    phaseHistory: [
+      { phase: "queued", reason: null, at: "2026-10-11T00:00:00.000Z" },
+      { phase: "checking", reason: "reading journal", at: "2026-10-11T00:00:00.100Z" },
+      { phase: "checking", reason: "claiming writer", at: "2026-10-11T00:00:00.300Z" },
+      { phase: "dispatching", reason: null, at: "2026-10-11T00:00:00.600Z" },
+      { phase: "delivered", reason: null, at: "2026-10-11T00:00:01.000Z" },
+    ],
+  });
+  store.close();
+  expect(readDeliveryProgress(["history-send"], filename).get("history-send")).toMatchObject({ phaseHistory: expect.any(Array) });
+});
+
+test("a late checking detail keeps its supplied start time without advancing delivery clocks", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "late-detail.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("late-detail-send", "conversation", { waitReason: "checking", detail: "reading journal" });
+  const before = structuredClone(store.get("late-detail-send"))!;
+  now += 1_000;
+  store.note("late-detail-send", "conversation", {
+    waitReason: "checking", detail: "claiming writer", sinceMs: Date.parse("2026-10-11T00:00:00.200Z"),
+  });
+  store.close();
+  const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+  expect(reopened.get("late-detail-send")).toMatchObject({
+    phaseSince: before.phaseSince, lastProgressAt: before.lastProgressAt, attempt: before.attempt,
+    phaseHistory: [
+      { phase: "checking", reason: "reading journal", at: "2026-10-11T00:00:00.000Z" },
+      { phase: "checking", reason: "claiming writer", at: "2026-10-11T00:00:00.200Z" },
+    ],
+  });
+  reopened.close();
+});
+
+test("history and writes stay bounded through polling, retries and late confirmation", () => {
+  let now = Date.parse("2026-10-11T00:00:00.000Z");
+  const filename = path.join(root, "bounded-history.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("bounded-send", "conversation", { waitReason: "queued" });
+  store.flush();
+  const before = fs.readFileSync(`${filename}-wal`);
+  for (let i = 0; i < 1_000; i++) store.note("bounded-send", "conversation", { waitReason: "queued" });
+  store.flush();
+  expect(fs.readFileSync(`${filename}-wal`)).toEqual(before);
+  expect(store.get("bounded-send")?.phaseHistory).toHaveLength(1);
+  for (let i = 0; i < DELIVERY_PHASE_HISTORY_LIMIT + 10; i++) {
+    now += 1;
+    store.note("bounded-send", "conversation", { waitReason: i % 2 ? "checking" : "dispatching", detail: "x".repeat(1_000) });
+  }
+  expect(store.get("bounded-send")?.phaseHistory).toHaveLength(DELIVERY_PHASE_HISTORY_LIMIT);
+  expect(store.get("bounded-send")?.phaseHistoryDropped).toBe(11);
+  expect(store.get("bounded-send")?.phaseHistory?.every((phase) => (phase.reason?.length ?? 0) <= 240)).toBe(true);
+  now += 1;
+  store.settle("bounded-send", "uncertain", "lost acknowledgement");
+  now += 1;
+  store.rearm("bounded-send", "conversation", { waitReason: "checking" });
+  now += 1;
+  store.settle("bounded-send", "uncertain", "checking echo");
+  now += 1;
+  store.settle("bounded-send", "delivered", null);
+  expect(store.get("bounded-send")?.phaseHistory?.slice(-4).map((phase) => phase.phase)).toEqual(["uncertain", "checking", "uncertain", "delivered"]);
+  store.close();
+});
+
+test("a busy week retains every send's history for seven days despite the terminal row cap", () => {
+  const startedAt = Date.parse("2026-10-01T00:00:00.000Z");
+  let now = startedAt;
+  const filename = path.join(root, "busy-week.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  for (let i = 0; i < 5_001; i++) {
+    now += 1;
+    store.note(`week-send-${i}`, "conversation", { waitReason: "dispatching" });
+    store.settle(`week-send-${i}`, "delivered", null);
+  }
+  store.flush();
+  const day = 24 * 60 * 60_000;
+  now = startedAt + 7 * day - 1;
+  store.note("retention-tick", "conversation", { waitReason: "queued" });
+  store.flush();
+  expect(readDeliveryProgress(["week-send-0"], filename).get("week-send-0")?.phaseHistory).toHaveLength(2);
+  now = startedAt + 8 * day;
+  store.note("retention-tick", "conversation", { waitReason: "checking" });
+  store.flush();
+  expect(readDeliveryProgress(["week-send-0"], filename).size).toBe(0);
+  store.close();
+});
+
+test("arrival observations survive restart and replay without advancing or reopening a settled send", () => {
+  let now = Date.parse("2026-10-11T00:00:01Z");
+  const filename = path.join(root, "arrival-times.sqlite");
+  let store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("arrival-send", "conversation", { waitReason: "dispatching", attempted: true });
+  now += 1_000;
+  store.settle("arrival-send", "delivered", null);
+  const settled = structuredClone(store.get("arrival-send"));
+  store.timing("arrival-send", { ingressAt: "2026-10-11T00:00:00Z", engineEchoAt: "2026-10-11T00:00:01.500Z" });
+  store.close();
+  store = new DeliveryProgressStore(filename, () => now, noTimer);
+  expect(store.get("arrival-send")).toMatchObject({
+    ingressAt: "2026-10-11T00:00:00.000Z", engineEchoAt: "2026-10-11T00:00:01.500Z",
+    phaseHistory: [
+      { phase: "ingress", reason: null, at: "2026-10-11T00:00:00.000Z" },
+      { phase: "dispatching", reason: null, at: "2026-10-11T00:00:01.000Z" },
+      { phase: "engine-echo", reason: null, at: "2026-10-11T00:00:01.500Z" },
+      { phase: "delivered", reason: null, at: "2026-10-11T00:00:02.000Z" },
+    ],
+    waitReason: settled!.waitReason, phaseSince: settled!.phaseSince, updatedAt: settled!.updatedAt,
+    lastProgressAt: settled!.lastProgressAt, terminal: settled!.terminal, attempt: settled!.attempt,
+  });
+  const original = structuredClone(store.get("arrival-send"));
+  store.timing("arrival-send", { ingressAt: "2026-10-11T00:01:00Z", engineEchoAt: "2026-10-11T00:01:01Z" });
+  expect(store.get("arrival-send")).toEqual(original);
+  store.timing("absent-send", { engineEchoAt: "invalid" });
+  expect(store.get("absent-send")).toBeNull();
+  store.close();
+});
+
+test("an older record keeps working and gains only phases actually observed after the upgrade", () => {
+  let now = Date.parse("2026-10-11T00:00:00Z");
+  const filename = path.join(root, "legacy-history.sqlite");
+  let store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("legacy-send", "conversation", { waitReason: "awaiting-turn" });
+  store.close();
+  const db = new Database(filename);
+  db.exec("UPDATE delivery_progress SET record_json = json_remove(record_json, '$.phaseHistory', '$.phaseHistoryDropped')");
+  db.close();
+  now += 1_000;
+  store = new DeliveryProgressStore(filename, () => now, noTimer);
+  expect(store.get("legacy-send")?.waitReason).toBe("awaiting-turn");
+  store.note("legacy-send", "conversation", { waitReason: "dispatching", attempted: true });
+  expect(store.get("legacy-send")?.phaseHistory).toEqual([{ phase: "dispatching", reason: null, at: "2026-10-11T00:00:01.000Z" }]);
+  store.close();
+});
 
 test("a new rearm clears the ended executor, including after the progress store restarts", () => {
   const filename = path.join(root, "rearm-executor.sqlite");
