@@ -1,6 +1,7 @@
 import { attentionReason } from "@/components/attention";
 import type { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type { Pipeline, PipelineAttemptState } from "@/lib/pipelines/types";
+import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
 import type { SystemAttentionClear } from "./dismissals";
@@ -51,8 +52,14 @@ function ended(file: FileEntry): boolean {
   return file.proc !== "running" && file.activity !== "live" && file.lastTurn?.endedAt !== null;
 }
 
-/** The stage attempt this conversation ran last, if its lane names one. */
-function stageAttemptSettled(file: FileEntry, facts: ReconcileFacts): boolean {
+/** Whether the stage attempt this conversation ran last has settled since
+    the reason was raised: the reason belongs to that attempt or an earlier
+    one. A reason raised after the attempt settled (the conversation was
+    resumed and asked again) is newer than the settlement, and nothing proves
+    it obsolete; nor does a reason whose time is not known, or an attempt
+    whose settlement time is not recorded. */
+function stageAttemptSettledSince(file: FileEntry, reason: { raisedAt: number; clocked: boolean }, facts: ReconcileFacts): boolean {
+  if (!reason.clocked) return false;
   const id = file.conversationId ? facts.canonicalConversationId(file.conversationId) : null;
   for (const membership of file.durableLineage?.memberships ?? []) {
     if (membership.kind !== "pipeline" || !membership.stageId) continue;
@@ -61,7 +68,8 @@ function stageAttemptSettled(file: FileEntry, facts: ReconcileFacts): boolean {
     const attempt = lane.runs.find((run) => run.stageId === membership.stageId)?.attempts
       .findLast((candidate) => (id && candidate.conversationId && facts.canonicalConversationId(candidate.conversationId) === id) || candidate.agentPath === file.path);
     if (!attempt) continue;
-    return SETTLED_ATTEMPTS.has(attempt.state);
+    const settledAt = attempt.completedAt ? Date.parse(attempt.completedAt) : Number.NaN;
+    return SETTLED_ATTEMPTS.has(attempt.state) && Number.isFinite(settledAt) && reason.raisedAt * 1000 <= settledAt;
   }
   return false;
 }
@@ -76,7 +84,8 @@ export function attentionSystemClears(files: readonly FileEntry[], now: number, 
     if (!reason || reason.dismissal) continue;
     const conversationId = file.conversationId ?? null;
     const canonical = conversationId ? facts.canonicalConversationId(conversationId) : null;
-    const base = { conversationId, path: file.path, reason: reason.kind, raisedAt: reason.raisedAt };
+    const base = { conversationId, path: file.path, reason: reason.kind, raisedAt: reason.raisedAt,
+      title: reason.report?.body?.split("\n", 1)[0] || cleanTitle(file.title ?? "", 90), project: file.project };
     /* The seat was handed on and its conversation ended: nothing it asked can
        be answered there, and it can ask nothing newer, so the clear covers
        every reason it raised. */
@@ -98,7 +107,7 @@ export function attentionSystemClears(files: readonly FileEntry[], now: number, 
     }
     /* The stage attempt that asked has settled: its lane carries whatever is
        left to decide, under its own reason. */
-    if (STAGE_KINDS.has(reason.kind) && stageAttemptSettled(file, facts)) {
+    if (STAGE_KINDS.has(reason.kind) && stageAttemptSettledSince(file, reason, facts)) {
       clears.push({ ...base, reasonId: reason.id, rule: "stage-settled" });
     }
   }

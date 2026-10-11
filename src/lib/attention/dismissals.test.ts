@@ -429,17 +429,18 @@ test("a task dismissal covers its waiting prototype, keeps its reason, and undo 
    its own evidence proves settled, through the same record a card writes. */
 test("a system clear is recorded with its rule, is a no-op when repeated, and Undo keeps it restored against the same rule", async () => {
   const h = harness();
-  const clear: SystemAttentionClear = { conversationId: "conversation_a", path: "/t/a.jsonl", reasonId: "ask-1", reason: "ask", raisedAt: Date.parse("2026-09-24T09:00:00.000Z") / 1000, rule: "operator-replied" };
+  const clear: SystemAttentionClear = { conversationId: "conversation_a", path: "/t/a.jsonl", reasonId: "ask-1", reason: "ask", raisedAt: Date.parse("2026-09-24T09:00:00.000Z") / 1000, rule: "operator-replied", title: "Roll out the release", project: "viewer" };
+  const snapshot = { reason: "ask" as const, raisedAt: clear.raisedAt, title: "Roll out the release", project: "viewer" };
   const at = new Date("2026-09-24T10:00:00.000Z");
   expect(systemClearAttention([clear], at)).toEqual([clear]);
   expect(readAttentionDismissals().records).toEqual([
-    { subject: "conversation_a", conversationId: "conversation_a", path: "/t/a.jsonl", at: at.toISOString(), by: { kind: "system", rule: "operator-replied" }, reason: "ask", reasonId: "ask-1" },
+    { subject: "conversation_a", conversationId: "conversation_a", path: "/t/a.jsonl", at: at.toISOString(), by: { kind: "system", rule: "operator-replied" }, reason: "ask", reasonId: "ask-1", cleared: snapshot },
   ]);
   /* The next pass sees the record already covering it. */
   expect(systemClearAttention([clear], new Date("2026-09-24T10:01:00.000Z"))).toEqual([]);
   const files = [{ path: "/t/a.jsonl", conversationId: "conversation_a" } as FileEntry];
   overlayAttentionDismissals(files);
-  expect(files[0]!.attentionDismissal).toEqual({ at: at.toISOString(), by: { kind: "system", rule: "operator-replied" }, reasonId: "ask-1" });
+  expect(files[0]!.attentionDismissal).toEqual({ at: at.toISOString(), by: { kind: "system", rule: "operator-replied" }, reasonId: "ask-1", cleared: snapshot });
 
   /* The operator brings it back: the record stays, covers nothing, and the
      same rule on the same reason cannot clear it again. */
@@ -462,7 +463,7 @@ test("a system clear is recorded with its rule, is a no-op when repeated, and Un
 
 test("a retired seat's clear covers every reason it raised up to then, and leaves an operator's covering record alone", () => {
   const raisedAt = Date.parse("2026-09-24T09:00:00.000Z") / 1000;
-  const retired: SystemAttentionClear = { conversationId: "conversation_seat", path: "/t/seat.jsonl", reasonId: null, reason: "decision", raisedAt, rule: "retired-seat" };
+  const retired: SystemAttentionClear = { conversationId: "conversation_seat", path: "/t/seat.jsonl", reasonId: null, reason: "decision", raisedAt, rule: "retired-seat", title: "Pick a release day", project: "viewer" };
   expect(systemClearAttention([retired], new Date("2026-09-24T10:00:00.000Z"))).toHaveLength(1);
   expect(readAttentionDismissals().records[0]).toMatchObject({ reasonId: null, by: { kind: "system", rule: "retired-seat" } });
   /* An earlier reason of the same conversation is already covered. */

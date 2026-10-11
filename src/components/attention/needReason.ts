@@ -52,11 +52,41 @@ const LEGACY_DISMISSAL: DismissedBy = { kind: "operator" };
     its project's seat answers it first (docs/design/attention-auto-resolve.md). */
 export function conversationNeed(file: FileEntry, now: number): { need: NeedReason; cleared: ClearedNeed | null } | null {
   const reason = attentionReason(file, now);
-  if (!reason || reason.route) return null;
+  if (!reason) return systemClearedNeed(file, now);
+  if (reason.route) return null;
   const need: NeedReason = { subject: "conversation", kind: reason.kind, key: reason.id, file, reason, since: reason.raisedAt };
   if (!reason.dismissal) return { need, cleared: null };
   const at = Date.parse(reason.dismissal.at);
   return { need, cleared: { need, at: at / 1000, by: reason.dismissal.by } };
+}
+
+/** How long a card keeps a reason Delegatus cleared after its source went
+    quiet: long enough to see who cleared it and to undo it, short enough
+    that answered asks do not stay on every card for the record's lifetime.
+    The cleared list of «Waiting for you» keeps it for the record's lifetime. */
+export const SYSTEM_CLEAR_CARD_SECONDS = 24 * 3600;
+
+/** A reason Delegatus cleared whose source no longer raises it, from the
+    snapshot its record kept, so the card still says who cleared what and
+    offers Undo. */
+function systemClearedNeed(file: FileEntry, now: number): { need: NeedReason; cleared: ClearedNeed } | null {
+  const mark = file.attentionDismissal;
+  if (!mark?.cleared || mark.by.kind !== "system") return null;
+  const at = Date.parse(mark.at) / 1000;
+  if (!Number.isFinite(at) || now - at > SYSTEM_CLEAR_CARD_SECONDS) return null;
+  const snapshot = mark.cleared;
+  const reason: ConversationReason = {
+    kind: snapshot.reason,
+    id: mark.reasonId ?? `${file.path}:cleared:${mark.at}`,
+    since: snapshot.raisedAt,
+    raisedAt: snapshot.raisedAt,
+    clocked: true,
+    header: null,
+    dismissal: mark,
+    route: null,
+  };
+  const need: NeedReason = { subject: "conversation", kind: reason.kind, key: reason.id, file, reason, since: reason.raisedAt };
+  return { need, cleared: { need, at, by: mark.by } };
 }
 
 /** The stage a parked lane stands on: its cursor, or the review stage a

@@ -19,13 +19,13 @@ import { conversationRouteKey, laneNeedKind, laneRouteKey, type AttentionEscalat
  */
 
 /** A worker's reasons its project seat can act on with tools it already has:
-    a prose ask (send_message reaches the asking conversation), a memory kill
-    (resume it or close it), and a tool permission the automatic answer could
-    not settle (conversation_action permission). A native question or plan
-    waits on a control only the conversation's own surface answers, so it
-    stays the operator's; a delivery, a launch and an orchestrator's report are
-    the operator's by what they are. */
-export const SEAT_CONVERSATION_KINDS: ReadonlySet<ConversationReasonKind> = new Set(["ask", "memory", "permission"]);
+    a prose ask (send_message reaches the asking conversation), a native
+    question or plan (conversation_action answer chooses an option on that
+    exact request), a memory kill (resume it or close it), and a tool
+    permission the automatic answer could not settle (conversation_action
+    permission). A delivery, a launch and an orchestrator's report are the
+    operator's by what they are. */
+export const SEAT_CONVERSATION_KINDS: ReadonlySet<ConversationReasonKind> = new Set(["ask", "question", "plan", "memory", "permission"]);
 
 /** A conversation the product launched for an agent: a pipeline stage, a
     review round, or a delegated child. The registry's delegation record, as
@@ -88,15 +88,21 @@ export type AttentionRoute = AttentionRouteMark | null;
 
 const OPERATOR: AttentionRoute = null;
 
-/** A wait a seat answers, or the decision form's while the round the seat
-    escalated it to waits. A form the operator settled hands the wait back to
-    the seat, which received the answer and carries it to the asker. */
+/** The decision form's route while the round the seat escalated this wait to
+    still waits on the operator, or null. It holds whether or not the seat can
+    be woken now: the form's row is already the operator's one row for it. */
+function formRoute(key: string, inputs: AttentionRoutingInputs): AttentionRoute {
+  const escalation = inputs.escalation(key);
+  if (!escalation || !inputs.formWaiting(escalation.reviewId)) return null;
+  return { key, owner: "form", ...(escalation.seat ? { seat: escalation.seat } : {}), form: { taskId: escalation.taskId, reviewId: escalation.reviewId } };
+}
+
+/** A wait the seat answers. One its escalation handed back (the operator
+    decided the round, dismissed it, or a newer round replaced it) names that
+    round, so the seat is woken once more for the wait it holds again. */
 function seatRoute(key: string, seat: string, inputs: AttentionRoutingInputs): AttentionRoute {
   const escalation = inputs.escalation(key);
-  if (escalation && inputs.formWaiting(escalation.reviewId)) {
-    return { key, owner: "form", ...(escalation.seat ? { seat: escalation.seat } : {}), form: { taskId: escalation.taskId, reviewId: escalation.reviewId } };
-  }
-  return { key, owner: "seat", seat };
+  return { key, owner: "seat", seat, ...(escalation ? { returnedFrom: escalation.reviewId } : {}) };
 }
 
 /** Who answers one conversation's current reason; null for the operator. */
@@ -104,9 +110,12 @@ export function conversationRoute(file: FileEntry, now: number, inputs: Attentio
   const reason = attentionReason({ ...file, attentionRoute: undefined }, now);
   if (!reason || reason.report || !SEAT_CONVERSATION_KINDS.has(reason.kind) || !delegatedConversation(file)) return OPERATOR;
   if (file.conversationId && inputs.isSeatConversation(file.conversationId)) return OPERATOR;
+  const key = conversationRouteKey(reason.id);
+  const form = formRoute(key, inputs);
+  if (form) return form;
   const seat = inputs.seatFor(inputs.canonicalProject(file.project));
   if (!seat || seat === file.conversationId) return OPERATOR;
-  return seatRoute(conversationRouteKey(reason.id), seat, inputs);
+  return seatRoute(key, seat, inputs);
 }
 
 /** Who answers what one lane waits on; null for the operator. */
@@ -115,8 +124,11 @@ export function laneRoute(pipeline: Pipeline, inputs: AttentionRoutingInputs): A
   if (!kind) return OPERATOR;
   const key = laneRouteKey(pipeline, kind);
   if (kind === "lane-decision" && laneAwaitsAutomaticRetry(pipeline)) return { key, owner: "system" };
+  if (laneReservedForOperator(pipeline, kind)) return OPERATOR;
+  const form = formRoute(key, inputs);
+  if (form) return form;
   const seat = inputs.seatFor(inputs.canonicalProject(pipeline.project));
-  if (!seat || laneReservedForOperator(pipeline, kind)) return OPERATOR;
+  if (!seat) return OPERATOR;
   return seatRoute(key, seat, inputs);
 }
 

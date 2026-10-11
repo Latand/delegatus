@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { seatTickWakeMessage } from "./report";
+import type { AttentionEscalationMark } from "@/lib/attention/routeTypes";
+import { stampAttentionRoutes, type AttentionRoutingInputs } from "@/lib/attention/routing";
+import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
+import type { FileEntry } from "@/lib/types";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
 import { observeDiskPressureReport } from "@/lib/state/diskPressure";
@@ -2060,6 +2064,44 @@ describe("waits routed to the seat", () => {
     expect(reasonsOf(newer.verdict)).toEqual(["worker-ask"]);
     const successor = seatTickDecision(input({ now: NOW + 5 * MINUTE, seat: seat({ conversationId: "conversation_successor", seatEpoch: 8 }), workerAsks: [ask], state: landed }));
     expect(reasonsOf(successor.verdict)).toEqual(["worker-ask"]);
+  });
+
+  test("a wait its form hands back wakes the seat once more, after dismissal and after replacement, and unchanged polls stay quiet", () => {
+    const at = new Date(NOW - 10 * MINUTE).toISOString();
+    const worker = {
+      root: "claude-projects", name: "deployer", path: "/t/deployer.jsonl", project: PROJECT, title: "deploy the release", kind: "session", engine: "claude", fmt: "claude",
+      parent: null, mtime: NOW / 1000 - 600, size: 1, activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null,
+      conversationId: "conversation_deployer",
+      durableLineage: { kind: "spawn", role: "deployer", depth: 1, parentConversationId: "conversation_seat", reviewsConversationId: null, memberships: [] },
+      operatorAsk: { id: "ask-1", messageAt: NOW - 10 * MINUTE, gist: "Roll out now?", state: "open" },
+    } as unknown as FileEntry;
+    const routes = (escalation: AttentionEscalationMark | null, waiting: string[]): AttentionRoutingInputs => ({
+      seatFor: () => "conversation_seat", canonicalProject: (project) => project, isSeatConversation: (id) => id === "conversation_seat",
+      escalation: (key) => (escalation?.key === key ? escalation : null), formWaiting: (reviewId) => waiting.includes(reviewId),
+    });
+    const agenda = (escalation: AttentionEscalationMark | null, waiting: string[]) => {
+      stampAttentionRoutes([worker], [], NOW / 1000, routes(escalation, waiting));
+      return seatAgendaAsks({ files: [worker], pipelines: [] }, NOW / 1000, PROJECT);
+    };
+    const deliver = (state: ReturnType<typeof stateWith>, asks: ReturnType<typeof agenda>, now: number, fingerprint: string) => {
+      const decision = seatTickDecision(input({ now, workerAsks: asks, state }));
+      expect(reasonsOf(decision.verdict)).toEqual(["worker-ask"]);
+      return seatTickWakeCommit(decision.state, plan(decision.verdict, fingerprint, 0), now);
+    };
+    const quiet = (state: ReturnType<typeof stateWith>, asks: ReturnType<typeof agenda>, now: number) => expect(reasonsOf(seatTickDecision(input({ now, workerAsks: asks, state })).verdict)).toEqual([]);
+
+    /* Delivered once; then escalated to round-a, so it leaves the agenda. */
+    let state = deliver(stateWith({ lastWakeAt }), agenda(null, []), NOW, "fp-1");
+    const roundA: AttentionEscalationMark = { key: "reason:ask-1", at, seat: "conversation_seat", taskId: "task-form", reviewId: "round-a" };
+    expect(agenda(roundA, ["round-a"])).toEqual([]);
+    /* The operator dismissed round-a: the same unresolved wait returns, and the seat is told once. */
+    state = deliver(state, agenda(roundA, []), NOW + 5 * MINUTE, "fp-2");
+    quiet(state, agenda(roundA, []), NOW + 10 * MINUTE);
+    /* The seat asked again in round-b, which a newer round then replaced: once more, once. */
+    const roundB = { ...roundA, reviewId: "round-b" };
+    expect(agenda(roundB, ["round-b"])).toEqual([]);
+    state = deliver(state, agenda(roundB, ["round-c"]), NOW + 15 * MINUTE, "fp-3");
+    quiet(state, agenda(roundB, ["round-c"]), NOW + 20 * MINUTE);
   });
 
   test("a tick switched off wakes nobody, and routing hands the ask back to the operator for it", () => {

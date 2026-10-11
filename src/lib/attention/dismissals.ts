@@ -21,6 +21,7 @@ import {
   type DismissalSubjectRequest,
   type DismissalTarget,
   type DismissedBy,
+  type SystemClearSnapshot,
 } from "./dismissalTypes";
 import { parseEscalationMark, type AttentionEscalationMark } from "./routeTypes";
 
@@ -84,6 +85,10 @@ export interface AttentionDismissalV1 {
   /** Only on an `escalation` record: the wait and the decision round the
       seat asked the operator in. It holds no question of its own. */
   escalation?: AttentionEscalationMark;
+  /** Only on a record Delegatus wrote: what it cleared, so the cleared list
+      and the card keep the reason and its Undo once the source stops
+      raising it. */
+  cleared?: SystemClearSnapshot;
 }
 
 export interface AttentionDismissalsFileV1 {
@@ -129,7 +134,20 @@ function parseRecord(value: unknown): AttentionDismissalV1 | null {
     ...(typeof record.operationKey === "string" && record.operationKey ? { operationKey: record.operationKey } : {}),
     ...(typeof record.restoredAt === "string" && Number.isFinite(Date.parse(record.restoredAt)) && isDismissedBy(record.restoredBy)
       ? { restoredAt: record.restoredAt, restoredBy: record.restoredBy } : {}),
+    ...(record.by.kind === "system" && parseClearSnapshot(record.cleared) ? { cleared: parseClearSnapshot(record.cleared)! } : {}),
   };
+}
+
+const SNAPSHOT_TEXT_MAX = 200;
+
+/** A stored automatic-clear snapshot, checked; anything malformed reads as none. */
+function parseClearSnapshot(value: unknown): SystemClearSnapshot | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.reason !== "string" || !REASON_KINDS.has(raw.reason)) return null;
+  if (typeof raw.raisedAt !== "number" || !Number.isFinite(raw.raisedAt)) return null;
+  if (typeof raw.title !== "string" || typeof raw.project !== "string" || !raw.project) return null;
+  return { reason: raw.reason as ConversationReasonKind, raisedAt: raw.raisedAt, title: raw.title.slice(0, SNAPSHOT_TEXT_MAX), project: raw.project.slice(0, SNAPSHOT_TEXT_MAX) };
 }
 
 /** Anything unreadable reads as no dismissal, which costs a card that flags
@@ -244,7 +262,7 @@ export function overlayAttentionDismissals(files: readonly FileEntry[], read: ()
     const record = file.supersededBy || file.migratedTo
       ? undefined
       : (file.conversationId ? index.get(file.conversationId) : undefined) ?? index.get(file.path);
-    if (record && record.kind !== "prototype") file.attentionDismissal = { at: record.at, by: record.by, reasonId: record.reasonId };
+    if (record && record.kind !== "prototype") file.attentionDismissal = { at: record.at, by: record.by, reasonId: record.reasonId, ...(record.cleared ? { cleared: record.cleared } : {}) };
     else if (file.attentionDismissal) delete file.attentionDismissal;
   }
 }
@@ -607,6 +625,10 @@ export interface SystemAttentionClear {
   /** Epoch seconds the reason began to need someone. */
   raisedAt: number;
   rule: AttentionSystemRule;
+  /** The row's title and the conversation's project when it was cleared,
+      kept on the record for the cleared list. */
+  title: string;
+  project: string;
 }
 
 /** Whether the conversation's record already settles this clear: it covers
@@ -648,6 +670,7 @@ export function systemClearAttention(clears: readonly SystemAttentionClear[], no
         by: { kind: "system", rule: clear.rule },
         reason: clear.reason,
         reasonId: clear.reasonId,
+        cleared: { reason: clear.reason, raisedAt: clear.raisedAt, title: clear.title.slice(0, SNAPSHOT_TEXT_MAX), project: clear.project.slice(0, SNAPSHOT_TEXT_MAX) },
       };
       next = [...next.filter((existing) => existing.subject !== subject), record];
       written.push(clear);

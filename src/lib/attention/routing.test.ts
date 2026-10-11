@@ -66,14 +66,35 @@ test("with no seat to wake, the same ask stays the operator's", () => {
   expect(attentionId(worker, now)).toBe("ask-1");
 });
 
-test("a seat's own ask, a direct operator session and a native question stay the operator's", () => {
+test("a seat's own ask and a direct operator session stay the operator's", () => {
   const seat = file("seat", { conversationId: "conversation_old_seat", durableLineage: { ...delegated, depth: 0 }, operatorAsk: ask("ask-seat") });
   const direct = file("direct", { operatorAsk: ask("ask-direct") });
   const rootLineage = file("root", { durableLineage: { ...delegated, depth: 0 }, operatorAsk: ask("ask-root") });
-  const question = file("question", { durableLineage: delegated, pendingQuestion: { kind: "question", toolUseId: "toolu_q", askedAt: at, questions: [] } as unknown as FileEntry["pendingQuestion"] });
-  stampAttentionRoutes([seat, direct, rootLineage, question], [], now, inputs());
-  for (const entry of [seat, direct, rootLineage, question]) expect(entry.attentionRoute).toBeUndefined();
-  expect(buildAttentionQueue([seat, direct, rootLineage, question], now).map((item) => item.id).sort()).toEqual(["ask-direct", "ask-root", "ask-seat", "toolu_q"]);
+  const directQuestion = file("direct-question", { pendingQuestion: { kind: "question", toolUseId: "toolu_direct", askedAt: at, questions: [] } as unknown as FileEntry["pendingQuestion"] });
+  stampAttentionRoutes([seat, direct, rootLineage, directQuestion], [], now, inputs());
+  for (const entry of [seat, direct, rootLineage, directQuestion]) expect(entry.attentionRoute).toBeUndefined();
+  expect(buildAttentionQueue([seat, direct, rootLineage, directQuestion], now).map((item) => item.id).sort()).toEqual(["ask-direct", "ask-root", "ask-seat", "toolu_direct"]);
+});
+
+test("a worker's native question or plan wakes the seat with its options and the answer path to that exact request; with no seat it is the operator's", () => {
+  const pendingQuestion = { kind: "question", toolUseId: "toolu_q", askedAt: at, questions: [{ question: "Retry on the bigger runner?", header: "Runner", multiSelect: false,
+    options: [{ label: "Retry", description: "", recommended: true }, { label: "Close the lane", description: "", recommended: false }] }] } as unknown as FileEntry["pendingQuestion"];
+  const question = file("question", { durableLineage: delegated, pendingQuestion });
+  const plan = file("plan", { durableLineage: delegated, pendingQuestion: { kind: "plan", toolUseId: "toolu_p", askedAt: at, plan: "Rebuild the index first" } as unknown as FileEntry["pendingQuestion"] });
+  stampAttentionRoutes([question, plan], [], now, inputs());
+  expect(question.attentionRoute).toEqual({ key: "reason:toolu_q", owner: "seat", seat: "conversation_seat" });
+  expect(plan.attentionRoute).toEqual({ key: "reason:toolu_p", owner: "seat", seat: "conversation_seat" });
+  expect(buildNeedsYouQueue([question, plan], [], now, [])).toEqual([]);
+  expect(attentionId(question, now)).toBeNull();
+  const agenda = seatAgendaAsks({ files: [question, plan], pipelines: [] }, now, "project-a");
+  expect(agenda.map((entry) => entry.key)).toEqual(["reason:toolu_q", "reason:toolu_p"]);
+  expect(agenda[0]!.label).toContain("«Retry on the bigger runner?» 1) Retry (recommended) 2) Close the lane");
+  expect(agenda[0]!.label).toContain('conversation_action answer, requestId "toolu_q"');
+  expect(agenda[1]!.label).toContain('requestId "toolu_p" and approve true or false');
+
+  stampAttentionRoutes([question, plan], [], now, inputs({ seat: null }));
+  expect(question.attentionRoute).toBeUndefined();
+  expect(buildAttentionQueue([question, plan], now).map((item) => item.id).sort()).toEqual(["toolu_p", "toolu_q"]);
 });
 
 test("a stage's memory kill and permission request are the seat's", () => {
@@ -108,14 +129,42 @@ test("an escalated wait is the decision form's while the round waits: the form's
      is the seat's again, to carry it to the asker. */
   const answered = [formTask("round-1", true)];
   stampAttentionRoutes([worker], [], now, inputs({ escalations: [escalation], waiting: waitingRoundIds(answered) }));
-  expect(worker.attentionRoute).toEqual({ key: "reason:ask-1", owner: "seat", seat: "conversation_seat" });
+  expect(worker.attentionRoute).toEqual({ key: "reason:ask-1", owner: "seat", seat: "conversation_seat", returnedFrom: "round-1" });
   expect(buildNeedsYouQueue([worker], [], now, [], null, answered)).toEqual([]);
-  expect(seatAgendaAsks({ files: [worker], pipelines: [] }, now, "project-a").map((entry) => entry.key)).toEqual(["reason:ask-1"]);
+  expect(seatAgendaAsks({ files: [worker], pipelines: [] }, now, "project-a").map((entry) => entry.key)).toEqual(["reason:ask-1@returned:round-1"]);
 
   /* A newer ask is routed afresh, to the seat. */
   worker.operatorAsk = ask("ask-2");
   stampAttentionRoutes([worker], [], now, inputs({ escalations: [escalation], waiting: waitingRoundIds(tasks) }));
   expect(worker.attentionRoute).toEqual({ key: "reason:ask-2", owner: "seat", seat: "conversation_seat" });
+});
+
+test("a wait already escalated stays one form row when its seat goes away; one never escalated falls back to the operator", () => {
+  const escalation: AttentionEscalationMark = { key: "reason:ask-1", at, seat: "conversation_seat", taskId: "task-form", reviewId: "round-a" };
+  const laneEscalation: AttentionEscalationMark = { key: "lane:parked:lane-decision:none", at, seat: "conversation_seat", taskId: "task-form", reviewId: "round-a" };
+  const worker = file("deployer", { durableLineage: delegated, operatorAsk: ask("ask-1") });
+  const other = file("other", { durableLineage: delegated, operatorAsk: ask("ask-2") });
+  const parked = lane("parked", "needs_decision");
+  const tasks = [formTask("round-a")];
+  for (const seat of ["conversation_seat", null]) {
+    stampAttentionRoutes([worker, other], [parked], now, inputs({ seat, escalations: [escalation, laneEscalation], waiting: waitingRoundIds(tasks) }));
+    expect(worker.attentionRoute?.owner).toBe("form");
+    expect(parked.attentionRoute?.owner).toBe("form");
+    expect(buildNeedsYouQueue([worker], [parked], now, [], null, tasks).map((entry) => entry.id)).toEqual(["prototype:round-a"]);
+  }
+  /* With the seat gone, the wait nobody escalated is the operator's. */
+  expect(other.attentionRoute).toBeUndefined();
+  expect(attentionId(other, now)).toBe("ask-2");
+});
+
+test("a wait handed back by its form carries the round it came back from, so the seat's agenda offers it afresh", () => {
+  const escalation: AttentionEscalationMark = { key: "reason:ask-1", at, seat: "conversation_seat", taskId: "task-form", reviewId: "round-a" };
+  const worker = file("deployer", { durableLineage: delegated, operatorAsk: ask("ask-1") });
+  stampAttentionRoutes([worker], [], now, inputs({ escalations: [escalation], waiting: new Set() }));
+  expect(worker.attentionRoute).toEqual({ key: "reason:ask-1", owner: "seat", seat: "conversation_seat", returnedFrom: "round-a" });
+  const [returned] = seatAgendaAsks({ files: [worker], pipelines: [] }, now, "project-a");
+  expect(returned!.key).toBe("reason:ask-1@returned:round-a");
+  expect(returned!.label).toStartWith("[back from decision round round-a");
 });
 
 test("a lane escalated to a form leaves the operator's lane rows while the round waits", () => {

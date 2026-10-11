@@ -25,6 +25,16 @@ const clip = (text: string, max: number) => {
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 };
 
+/** A native question in its author's words, with its numbered options. */
+function nativeQuestion(file: FileEntry): string {
+  const questions = file.pendingQuestion?.questions ?? [];
+  if (!questions.length) return "see the conversation";
+  return questions.map((question, index) => {
+    const options = question.options.map((option, n) => `${n + 1}) ${option.label}${option.recommended ? " (recommended)" : ""}`).join(" ");
+    return `${questions.length > 1 ? `${index + 1}. ` : ""}«${clip(question.question, 200)}»${options ? ` ${options}` : ""}${question.multiSelect ? " (several)" : ""}`;
+  }).join("; ");
+}
+
 function conversationLine(file: FileEntry, reason: NonNullable<ReturnType<typeof attentionReason>>): string {
   const who = file.durableLineage?.role?.trim() || "agent";
   const title = clip(cleanTitle(file.title ?? "", 90) || who, 90);
@@ -35,6 +45,10 @@ function conversationLine(file: FileEntry, reason: NonNullable<ReturnType<typeof
       return `${title} — ${who} was killed out of memory${reason.header ? ` (${clip(reason.header, 80)})` : ""}; resume it or close its work with conversation_action; ${escalate}`;
     case "permission":
       return `${title} — ${who} waits on a tool permission request${reason.header ? `: ${clip(reason.header, QUESTION_MAX)}` : ""}; answer it with conversation_action permission; ${escalate}`;
+    case "question":
+      return `${title} — ${who} asks you in its own question control: ${nativeQuestion(file)}; answer it with conversation_action answer, requestId "${reason.id}" and answers (the option numbers per question, from 1); ${escalate}`;
+    case "plan":
+      return `${title} — ${who} waits on approval of its plan${file.pendingQuestion?.plan ? `: «${clip(file.pendingQuestion.plan, QUESTION_MAX)}»` : ""}; approve or reject it with conversation_action answer, requestId "${reason.id}" and approve true or false; ${escalate}`;
     default:
       return `${title} — ${who} asks: «${clip(reason.header || "see its last message", QUESTION_MAX)}»; reply with send_message to ${id}, which reaches that conversation; ${escalate}`;
   }
@@ -62,6 +76,19 @@ function laneLine(pipeline: Pipeline): string {
   }
 }
 
+/** The wait's agenda key: its route key, and the round it came back from
+    when its escalation handed it back, so the seat is woken once for it. */
+function agendaKey(route: { key: string; returnedFrom?: string }): string {
+  return route.returnedFrom ? `${route.key}@returned:${route.returnedFrom}` : route.key;
+}
+
+/** Said first on a wait that came back from a decision round. */
+function returnedNote(route: { returnedFrom?: string }): string {
+  return route.returnedFrom
+    ? `[back from decision round ${route.returnedFrom}: read it with read_prototype_review; carry the operator's answer here, or answer or ask again if it was dismissed or replaced] `
+    : "";
+}
+
 /** Every wait the projection routed to this canonical project's seat, oldest
     conversation first, then the lanes. */
 export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[] }, now: number, project: string): SeatTickWorkerAskInput[] {
@@ -71,14 +98,14 @@ export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: r
     if (canonicalOrchestratorProject(file.project) !== canonical) continue;
     const reason = attentionReason(file, now);
     if (!reason || reason.dismissal || reason.route?.owner !== "seat") continue;
-    asks.push({ key: reason.route.key, id: file.conversationId ?? file.path, label: clip(conversationLine(file, reason), LABEL_MAX), since: reason.since });
+    asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), since: reason.since });
   }
   asks.sort((a, b) => a.since - b.since);
   const lanes = body.pipelines
     .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === canonical)
     .flatMap((pipeline) => {
       const route = laneRouteNow(pipeline);
-      return route?.owner === "seat" ? [{ key: route.key, id: pipeline.id, label: clip(laneLine(pipeline), LABEL_MAX) }] : [];
+      return route?.owner === "seat" ? [{ key: agendaKey(route), id: pipeline.id, label: clip(returnedNote(route) + laneLine(pipeline), LABEL_MAX) }] : [];
     });
   return [...asks.map((ask) => ({ key: ask.key, id: ask.id, label: ask.label })), ...lanes];
 }

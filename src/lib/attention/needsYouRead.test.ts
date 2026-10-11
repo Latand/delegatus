@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { buildNeedsYouQueue } from "@/components/attention/attentionQueue";
 import { needsYouSections } from "@/components/attention/needsYouPanel";
+import { conversationNeed, SYSTEM_CLEAR_CARD_SECONDS } from "@/components/attention/needReason";
 import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -197,4 +198,37 @@ test("a reason Delegatus cleared is in the cleared list with its rule, and a res
   const restored = needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [{ ...record, restoredAt: at, restoredBy: { kind: "operator" } }] });
   expect(restored.rows.some(r => r.kind === "ask")).toBe(true);
   expect(restored.cleared.some(r => r.kind === "ask")).toBe(false);
+});
+
+/* Acceptance 2: an automatic clear usually follows its source going quiet
+   (an answered ask is no longer raised). The record keeps what it hid, so
+   the cleared list and the card still name the reason, who cleared it and
+   Undo after the source stops raising it, and after a reload. */
+test("a reason Delegatus cleared stays in the cleared list and on the card with Undo after its source stops raising it", () => {
+  const body = fixture();
+  const ask = body.files.find(f => f.name === "ask")!;
+  const by = { kind: "system", rule: "operator-replied" } as const;
+  const cleared = { reason: "ask" as const, raisedAt: now - 100, title: "ask", project: "project-a" };
+  const record = { subject: ask.conversationId!, conversationId: ask.conversationId!, path: ask.path, at, by, reason: "ask" as const, reasonId: "operator-ask", cleared };
+  /* The next projection: no ask any more, the record still on the file. */
+  delete ask.operatorAsk;
+  ask.attentionDismissal = { at, by, reasonId: "operator-ask", cleared };
+  const answer = needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [record] });
+  expect(answer.cleared.filter(r => r.kind === "ask")).toEqual([
+    { id: "operator-ask", kind: "ask", title: "ask", taskId: null, cleared: { at, by, note: null }, undo: { kind: "conversation", conversationId: ask.conversationId } },
+  ]);
+  const card = conversationNeed(ask, now);
+  expect(card?.cleared).toMatchObject({ by, need: { kind: "ask", key: "operator-ask" } });
+  expect(conversationNeed(ask, now + SYSTEM_CLEAR_CARD_SECONDS + 200)).toBeNull();
+
+  /* The conversation fell out of the projection altogether: the list keeps it by its own project. */
+  const gone = { ...body, files: body.files.filter(f => f !== ask) };
+  expect(needsYouAnswer(gone, decision, now, "project-a", { ...ports(gone), dismissals: [record] }).cleared.some(r => r.id === "operator-ask")).toBe(true);
+  expect(needsYouAnswer(gone, decision, now, "project-b", { ...ports(gone), dismissals: [record] }).cleared.some(r => r.id === "operator-ask")).toBe(false);
+
+  /* Brought back by the operator: it is no longer cleared anywhere. */
+  delete ask.attentionDismissal;
+  const restored = { ...record, restoredAt: at, restoredBy: { kind: "operator" } as const };
+  expect(needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [restored] }).cleared.some(r => r.id === "operator-ask")).toBe(false);
+  expect(conversationNeed(ask, now)).toBeNull();
 });

@@ -56,6 +56,8 @@ function structuredConversation(
     parentConversationId?: `conversation_${string}`;
     registry?: AgentRegistry;
     pendingPermissions?: PendingPermissionRequest[];
+    /** Open native questions or plans, by the host's request id. */
+    pendingQuestions?: string[];
     pipeline?: boolean;
   } = {},
 ): { registry: AgentRegistry; path: string; conversationId: string } {
@@ -89,7 +91,7 @@ function structuredConversation(
       protocolVersion: "fake-v1",
       writerClaimEpoch: 1,
       activeTurnRef: "turn-live",
-      pendingAttention: (options.pendingPermissions ?? []).map((request) => request.id),
+      pendingAttention: [...(options.pendingPermissions ?? []).map((request) => request.id), ...(options.pendingQuestions ?? [])],
       ...(options.pendingPermissions ? { pendingPermissions: options.pendingPermissions } : {}),
       activeFlags: [],
     },
@@ -170,6 +172,35 @@ test("conversation_action permission on a structured host with nothing pending s
     { registry: fixture.registry, client: null, enabled: () => true },
   );
   expect(result).toEqual({ status: 409, body: { error: "no tool permission request is pending on this conversation" } });
+});
+
+/* docs/design/attention-auto-resolve.md, acceptance 3: a worker's native
+   question waits on its project's seat first, and the seat's answer reaches
+   that exact request through the same durable answer the question card sends. */
+test("conversation_action answer resolves the host's one open question, never a permission beside it, and refuses when it cannot tell which", async () => {
+  const fixture = structuredConversation({ engine: "claude", pendingPermissions: [SAFETY_REQUEST], pendingQuestions: ["question-open"] });
+  const commands: RuntimeOperationCommand[] = [];
+  const client = {
+    command: async (command: RuntimeOperationCommand) => {
+      commands.push(command);
+      return { operationId: command.operationId!, receipt: { operationId: command.operationId!, status: "answered", conversationId: fixture.conversationId }, replayed: false };
+    },
+  } as unknown as RuntimeHostClient;
+  const resolution = { behavior: "allow", updatedInput: { answers: { "Roll out now?": "Tomorrow" } } };
+  const answered = await dispatchStructuredControl(
+    { path: fixture.path, conversationId: "", action: "answer", operationId: "op-answer", resolution },
+    { registry: fixture.registry, client, enabled: () => true, kick: () => {} },
+  );
+  expect(answered).toMatchObject({ status: 200, body: { ok: true, structured: true, target: fixture.conversationId, operationId: "op-answer" } });
+  expect(commands).toEqual([{ kind: "answer", operationId: "op-answer", idempotencyKey: "op-answer", conversationId: fixture.conversationId, attentionId: "question-open", resolution }]);
+
+  const none = structuredConversation({ engine: "claude", pendingPermissions: [SAFETY_REQUEST] });
+  expect(await dispatchStructuredControl({ path: none.path, conversationId: "", action: "answer", resolution }, { registry: none.registry, client, enabled: () => true, kick: () => {} }))
+    .toMatchObject({ status: 409 });
+  const two = structuredConversation({ engine: "claude", pendingQuestions: ["question-a", "question-b"] });
+  expect(await dispatchStructuredControl({ path: two.path, conversationId: "", action: "answer", resolution }, { registry: two.registry, client, enabled: () => true, kick: () => {} }))
+    .toMatchObject({ status: 409 });
+  expect(commands).toHaveLength(1);
 });
 
 test("structured compact enters the durable command channel for the owned codex thread", async () => {

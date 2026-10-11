@@ -427,3 +427,25 @@ test("the seat escalates a routed wait to a waiting decision round; a worker, an
   expect(withdrawn).toMatchObject({ ok: true, changed: true });
   expect(readAttentionDismissals().records).toEqual([]);
 });
+
+/* A dismissed round is off the operator's board, so it is no form to hand a
+   wait to: the escalation is refused as the board reads it, with nothing
+   written, and the same round once restored can take it. */
+test("escalation refuses a round the operator dismissed, and takes it again once restored", async () => {
+  const state = world();
+  const round = { id: "round-a", title: "round-a", createdAt: "2026-09-24T09:40:00.000Z", variants: [],
+    questions: [{ id: "q1", text: "Retry the build on the bigger runner, or close the lane?", options: [{ label: "Retry", recommended: true }, { label: "Close" }] }] };
+  const task = { ...TASK, prototypeReviews: [round] } as unknown as BoardTask;
+  const as = serviceAs(MANAGER, state, undefined, { loadTasks: () => [task], dismissalPorts: { ...ports(state), task: (id: string) => id === task.id ? task : null } });
+  const target = { kind: "prototype", taskId: task.id, reviewId: "round-a" };
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "p-clear", target })).toMatchObject({ ok: true, dismissed: [target] });
+  const { withPrototypeReviewSummaries } = await import("@/lib/prototypeReview/read");
+  expect(withPrototypeReviewSummaries([task])[0]!.prototypeReview).toMatchObject({ waitingReviewId: "round-a", waitingDismissal: { by: { kind: "manager" } } });
+
+  const refused = await as.callTool("dismiss_attention", { clientRequestId: "e-dismissed", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-a" } }) as Answer;
+  expect(refused).toMatchObject({ ok: false, details: { code: "ROUND_NOT_WAITING" } });
+  expect(readAttentionDismissals().records.filter((record) => record.kind === "escalation")).toEqual([]);
+
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "p-undo", target, undo: true })).toMatchObject({ ok: true });
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "e-restored", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-a" } })).toMatchObject({ ok: true, changed: true });
+});

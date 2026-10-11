@@ -69,6 +69,10 @@ export interface StructuredControlRequest {
   decision?: string;
   /** `permission` only: the request to answer; the oldest pending one when absent. */
   requestId?: string;
+  /** `answer` only: the resolution of the conversation's one pending native
+      question or plan, built from the exact request the caller read
+      (`nativeAnswerResolution`). */
+  resolution?: unknown;
   /** Who is making this request, for attributing an out-of-pool account choice.
       Absent means the operator: an agent is the only caller that can name
       itself here, exactly as `requireOperatorAuthority` reads a request. */
@@ -196,6 +200,57 @@ async function answerPermissionRequest(
   }
 }
 
+/**
+ * Answers a structured host's pending native question or plan
+ * (docs/design/attention-auto-resolve.md, acceptance 3), as the same durable
+ * `answer` operation the conversation's own question card submits. The host
+ * lists every open request; the ones that are not permission requests are its
+ * questions and plans, and the answer goes only to a conversation holding
+ * exactly one, so it cannot land on a request the caller never read.
+ */
+async function answerNativeRequest(
+  request: StructuredControlRequest,
+  conversationId: `conversation_${string}`,
+  host: StructuredHostColumns,
+  dependencies: { client?: RuntimeHostClient | null; operationId?: () => string; kick?: () => void },
+): Promise<StructuredControlResult> {
+  if (request.resolution === undefined) return { status: 400, body: { error: "answer needs a resolution" } };
+  const permissions = new Set((host.pendingPermissions ?? []).map((candidate) => candidate.id));
+  const open = (host.pendingAttention ?? []).filter((id) => !permissions.has(id));
+  if (open.length !== 1) {
+    return {
+      status: 409,
+      body: {
+        error: open.length
+          ? "this conversation holds more than one open question; answer it in the conversation"
+          : "no question or plan is pending on this conversation's host; it was answered or its turn ended",
+      },
+    };
+  }
+  const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
+  if (!client) {
+    return { status: 503, body: { error: "structured runtime host is unavailable", code: RUNTIME_HOST_UNAVAILABLE_CODE } };
+  }
+  const operationId = request.operationId ?? (dependencies.operationId ?? newOperationId)();
+  try {
+    const result = await client.command({
+      kind: "answer",
+      operationId,
+      idempotencyKey: operationId,
+      conversationId,
+      attentionId: open[0]!,
+      resolution: request.resolution,
+    });
+    (dependencies.kick ?? kickStructuredDeliveryQueue)();
+    return {
+      status: result.receipt.status === "delivered" || result.receipt.status === "answered" ? 200 : 202,
+      body: { ok: true, structured: true, target: conversationId, operationId, receipt: result.receipt },
+    };
+  } catch (error) {
+    return { status: 503, body: { error: error instanceof Error ? error.message : String(error) } };
+  }
+}
+
 export async function dispatchStructuredControl(
   request: StructuredControlRequest,
   dependencies: {
@@ -247,6 +302,9 @@ export async function dispatchStructuredControl(
 
   if (request.action === "permission") {
     return await answerPermissionRequest(request, conversation.id, entry.structuredHost!, dependencies);
+  }
+  if (request.action === "answer") {
+    return await answerNativeRequest(request, conversation.id, entry.structuredHost!, dependencies);
   }
 
   if (!STRUCTURED_CONTROL_ACTIONS.has(request.action)) {

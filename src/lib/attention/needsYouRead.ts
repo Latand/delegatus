@@ -152,7 +152,7 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
     pipelines: body.pipelines.map(p => ({ ...p, dismissedAt: null, dismissedBy: undefined })),
     tasks: body.tasks.map(t => ({ ...t, prototypeReview: t.prototypeReview ? { ...t.prototypeReview, waitingDismissal: undefined } : undefined })) };
   const visible = new Set(needsYouEntries(body, decision, now, project).map(e => e.id));
-  return needsYouEntries(raw, decision, now, project).flatMap(entry => {
+  const live = needsYouEntries(raw, decision, now, project).flatMap((entry): ClearedRow[] => {
     if (visible.has(entry.id) || entry.kind === "update") return [];
     const row = rowOf(entry, ports, options);
     let undo = row.target;
@@ -178,7 +178,36 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
     } else mark = ports.dismissals.find(d => d.kind !== "prototype" && d.kind !== "escalation" && !d.restoredAt && (d.conversationId && d.conversationId === entry.item.file.conversationId || d.path === entry.item.file.path));
     if (!mark || !undo) return [];
     return [{ id: row.id, kind: row.kind, title: row.title, taskId: row.taskId, cleared: { at: mark.at, by: mark.by, note: mark.note ?? null }, undo }];
-  }).sort((a,b) => b.cleared.at.localeCompare(a.cleared.at)).slice(0,20);
+  });
+  return [...live, ...systemClearedRows(body, project, ports, live)].sort((a,b) => b.cleared.at.localeCompare(a.cleared.at)).slice(0,20);
+}
+
+/**
+ * What Delegatus cleared, from its own records rather than from a reason that
+ * still asks (docs/design/attention-auto-resolve.md, acceptance 2). Clearing
+ * usually follows the source going quiet (an answered ask is no longer
+ * raised), so the record carries what it hid: the reason, its title and its
+ * project, and Undo names the conversation's record. One the operator brought
+ * back is no longer cleared.
+ */
+function systemClearedRows(body: NeedsYouBody, project: string, ports: NeedsYouEvidencePorts, live: readonly ClearedRow[]): ClearedRow[] {
+  const key = canonicalOrchestratorProject(project);
+  const canonical = ports.canonicalConversationId ?? ((id: string) => id);
+  const shown = new Set(live.flatMap(row => row.undo.kind === "conversation" ? [row.undo.conversationId ? canonical(row.undo.conversationId) : row.undo.path] : []));
+  const rows: ClearedRow[] = [];
+  for (const record of ports.dismissals) {
+    if (record.by.kind !== "system" || record.restoredAt || !record.cleared || record.kind === "prototype" || record.kind === "escalation") continue;
+    if (canonicalOrchestratorProject(record.cleared.project) !== key) continue;
+    const subject = record.conversationId ? canonical(record.conversationId) : record.path;
+    if (!subject || shown.has(subject)) continue;
+    shown.add(subject);
+    const file = body.files.find(f => record.conversationId && f.conversationId && canonical(f.conversationId) === subject || f.path === record.path);
+    const undo: DismissalTarget = record.conversationId ? { kind: "conversation", conversationId: record.conversationId } : { kind: "conversation", path: record.path! };
+    const task = ports.tasks.find(t => t.assignments.some(a => !!a.conversationId && !!record.conversationId && canonical(a.conversationId) === subject || !!file && a.path === file.path));
+    rows.push({ id: record.reasonId ?? `${record.subject}:cleared:${record.at}`, kind: record.cleared.reason, title: clip(record.cleared.title || (file ? file.title : subject), 90),
+      taskId: task?.id ?? null, cleared: { at: record.at, by: record.by, note: null }, undo });
+  }
+  return rows;
 }
 
 /** How many waits in a project its seat answers first. */

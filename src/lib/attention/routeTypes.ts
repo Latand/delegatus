@@ -33,6 +33,10 @@ export interface AttentionRouteMark {
   seat?: string;
   /** The round a `form` reason waits on. */
   form?: AttentionFormRef;
+  /** Only on a `seat` reason the seat escalated: the round it escalated to,
+      which no longer waits (decided, dismissed or replaced), so the wait came
+      back to the seat. The seat's wake offers the returned wait once more. */
+  returnedFrom?: string;
 }
 
 /** One prototype-review round: a decision form the operator answers. */

@@ -58,7 +58,8 @@ import { readAttentionFile } from "@/lib/attention/store";
 import { DismissalError, dismissAttention as dismissAttentionService, parseDismissalTarget, writeAttentionEscalation, type DismissalPorts } from "@/lib/attention/dismissals";
 import type { DismissalTarget, DismissedBy } from "@/lib/attention/dismissalTypes";
 import { conversationRouteKey, laneNeedKind, laneRouteKey, parseEscalation } from "@/lib/attention/routeTypes";
-import { prototypeReviewSummary } from "@/lib/prototypeReview/model";
+import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
+import { withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
 import {
   CONVERSATION_PATH_EXAMPLE,
   describeFocusTargetRejection,
@@ -6101,6 +6102,15 @@ async function conversationAction(
     label: args.label,
     question: args.question,
     ...(action === "permission" ? { decision: text(args.decision), requestId: text(args.requestId) } : {}),
+    ...(action === "answer" ? {
+      requestId: text(args.requestId),
+      answer: {
+        ...(args.answers !== undefined ? { answers: args.answers } : {}),
+        ...(args.text !== undefined ? { text: args.text } : {}),
+        ...(args.approve !== undefined ? { approve: args.approve } : {}),
+        ...(args.message !== undefined ? { message: args.message } : {}),
+      },
+    } : {}),
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchUncertainError) {
       throw new McpDispatchUncertainError(error.message, { operationId });
@@ -6765,7 +6775,11 @@ async function escalateThroughService(
     if (!task || canonicalOrchestratorProject(task.project) !== project) {
       throw new McpToolRefusal(`no decision round ${round.reviewId} in this project: ask with publish_prototype_review first and pass the reviewId it answers`, { code: "ROUND_NOT_FOUND" });
     }
-    if (prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.reviewId) {
+    /* Waiting as the operator's board draws it: the task's newest round,
+       undecided and not dismissed. A dismissed round is invisible, and a
+       wait escalated to it would leave the seat for a form nobody sees. */
+    const summary = withPrototypeReviewSummaries([task])[0]?.prototypeReview;
+    if (!prototypeWaitsOnOperator(summary) || summary?.waitingReviewId !== round.reviewId) {
       throw new McpToolRefusal(`decision round ${round.reviewId} no longer waits: read it with read_prototype_review and carry its answer to the asker`, { code: "ROUND_NOT_WAITING" });
     }
     taskId = task.id;

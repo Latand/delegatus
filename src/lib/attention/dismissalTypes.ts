@@ -57,6 +57,20 @@ export interface AttentionDismissalMark {
       before a new signal arrived cannot clear it. A mark without one (an
       agent's call) covers what started at or before `at`. */
   reasonId?: string | null;
+  /** Only on a mark Delegatus wrote (`by.kind === "system"`): what it
+      cleared, so the card keeps the reason and its Undo after the source
+      stops raising it (docs/design/attention-auto-resolve.md). */
+  cleared?: SystemClearSnapshot;
+}
+
+/** What an automatic clear hid, kept on its record: the reason's kind, when
+    it began to ask, and the title the row drew for it. */
+export interface SystemClearSnapshot {
+  reason: ConversationReasonKind;
+  /** Epoch seconds. */
+  raisedAt: number;
+  title: string;
+  project: string;
 }
 
 /** One subject a dismissal touched. A `report` is an orchestrator's
