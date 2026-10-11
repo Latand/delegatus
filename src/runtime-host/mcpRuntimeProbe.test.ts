@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -168,6 +168,12 @@ test("a missing published runtime is refused within the configured probe timeout
   const control = candidateControl();
   environment[VIEWER_CONTROL_URL_ENV] = control.url.origin;
 
+  let processId: number | null = null;
+  const startTransport = McpProbeStdioTransport.prototype.start;
+  const started = spyOn(McpProbeStdioTransport.prototype, "start").mockImplementation(async function (this: McpProbeStdioTransport) {
+    await startTransport.call(this);
+    processId = this.pid;
+  });
   try {
     const startedAt = performance.now();
     const evidence = await probeMcpRuntime({
@@ -184,7 +190,10 @@ test("a missing published runtime is refused within the configured probe timeout
       calls: { deploymentStatus: false, boardSnapshot: false }, tools: [] });
     expect(evidence.detail).toContain("timed out");
     expect(performance.now() - startedAt).toBeLessThan(5_000);
+    expect(processId).not.toBeNull();
+    expect(() => process.kill(processId!, 0)).toThrow();
   } finally {
+    started.mockRestore();
     control.stop(true);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     journal.close();

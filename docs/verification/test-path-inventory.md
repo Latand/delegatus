@@ -2186,3 +2186,41 @@ touched/Linux comparisons with zero new failures. Its runtime checks pass the
 Viewer build, all 24 compiled server modules and HTTP 200 from `/`, host
 succession and disconnected-client rehearsal, induced failure controls, both
 native Codex engine versions and their shared contracts.
+
+### Main refresh and probe cleanup regression
+
+The refresh onto main `2fa6519f486d85c973f71a2a2ea2514b9890ccac` retains
+the health-policy fixtures added by #2710: ordinary callers keep the documented
+reads, a valid inherited health admission is limited to its two reads, and a
+caller-selected socket receives no admission request. The missing-release case
+now exercises `probeMcpRuntime` itself, including its configured initialization
+deadline and the recorded child's exit before the probe returns.
+
+An isolated main source export without the initialization-timeout change
+fails this case at its unchanged **20-second** test deadline. With the timeout
+alone, the new exit assertion still fails: the probe returns while its launcher
+is alive, and the owned runner reports a child surviving teardown. The SDK
+starts closing after initialization failure without awaiting it; a second
+transport close previously returned before that cleanup finished. Concurrent
+close calls now share the pending cleanup promise. The focused regression
+passes in **552 ms**, with the recorded child absent at return.
+
+The refreshed runtime-host rehearsal under Bun 1.4.0 passes: succession
+completes, and both endpoints answer **27/27** requests over 15 seconds while
+13 clients per endpoint abandon their replies.
+
+After rebuilding the MCP bundle, all six affected behavioral paths listed
+above pass again: **40 pass, 0 fail**. The refreshed keyed-admission measurement
+is **2400** row payloads (1160 held deliveries, 970 operation owners,
+165 conversations and 105 entries), with admission p95 **89.4 ms**, populated
+keyed-read p95 **6.7 ms** and small keyed-read p95 **1.2 ms**. Both original
+HTTP limits remain unchanged and pass. The full MCP probe file passes **12/0**,
+including the child-exit assertion, with the timeout case taking **543 ms**.
+
+The refreshed historical confirmations also pass by isolated path:
+`src/lib/mcp/bindings.test.ts` **105/0**,
+`src/app/api/board/route.test.ts` **66/0**, and
+`src/lib/accounts/migration/coordinator.test.ts` **123/0**.
+
+The refreshed `bunx tsc --noEmit` through `scripts/gate-slot.sh` passes with
+the gate's default heap, and `git diff --check` passes.

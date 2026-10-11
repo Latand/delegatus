@@ -32,6 +32,7 @@ export interface McpProbeStdioParameters {
  */
 export class McpProbeStdioTransport implements Transport {
   private child?: ChildProcess;
+  private closing?: Promise<void>;
   private closeHealthAdmission?: () => void;
   private readonly readBuffer = new ReadBuffer();
   private readonly stderrStream = new PassThrough();
@@ -108,7 +109,13 @@ export class McpProbeStdioTransport implements Transport {
     });
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    // Initialization failure starts closing in the SDK without awaiting it.
+    // The probe's final close must await that same child cleanup.
+    return this.closing ??= this.closeChild().finally(() => { this.closing = undefined; });
+  }
+
+  private async closeChild(): Promise<void> {
     const child = this.child;
     if (child) {
       this.child = undefined;
