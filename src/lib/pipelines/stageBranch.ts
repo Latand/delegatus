@@ -2,7 +2,7 @@ import type { ExecPort } from "@/lib/workflows/provision";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import path from "node:path";
 
-import { commitPipelineStage, reconcilePipelineStageHead, type PipelineGitResult, type ProvisionExecPort } from "./git";
+import { commitPipelineStage, reconcilePipelineStageHead, type PipelineGitResult, type ProvisionExecPort, type StageCommitControl } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const pipelineTerminal = (pipeline: Pipeline) => pipeline.state === "completed" || pipeline.state === "closed";
@@ -63,6 +63,7 @@ export async function commitAndAdoptStageBranch(
   recordAdoption: (intent: NonNullable<PipelineStageAttempt["branchAdoption"]>) => void | Promise<void>,
   protection: StageBranchProtection | null | undefined,
   receiptFile?: string,
+  control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
   const ownership = stageBranchOwnershipFence(pipelines(), pipeline.id);
   const execute = exec;
@@ -115,10 +116,10 @@ export async function commitAndAdoptStageBranch(
     ? other.branch === name || other.delivery.target.branch === `refs/heads/${name}`
     : other.branch === name && !pipelineTerminal(other));
   if (ownedByOther(source)) return refused("another pipeline owns the stage branch");
-  if (!adoption && source === pipeline.branch) return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile));
+  if (!adoption && source === pipeline.branch) return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile, control));
   if (!adoption && source === deliveryBranch) {
     if (!pipeline.delivery?.active || pipeline.delivery.publish !== "enabled" || pipeline.delivery.ownerId !== pipeline.id) return refused("the delivery branch claim was released");
-    return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile));
+    return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile, control));
   }
   if (!source) return refused("the stage left a detached head");
   if (adoption && checkedOut !== source && checkedOut !== adoption.target) return refused("the checkout moved away from its recorded adoption");
@@ -152,7 +153,7 @@ export async function commitAndAdoptStageBranch(
   // never receive even an automatic stage commit.
   const changes = adoption ? (await exec("git", ["status", "--porcelain"], cwd)) : null;
   if (changes && (changes.code !== 0 || changes.stdout.trim())) return refused("the recorded adoption worktree is no longer clean");
-  let committed = adoption ? { ok: true as const, sha: adoption.adoptedHead ?? adoption.head } : (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile));
+  let committed = adoption ? { ok: true as const, sha: adoption.adoptedHead ?? adoption.head } : (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile, control));
   if (!committed.ok) return committed;
   const stillOnSource = (await exec("git", ["branch", "--show-current"], cwd));
   const retained = (await exec("git", ["merge-base", "--is-ancestor", sha, committed.sha], cwd));
