@@ -12,6 +12,7 @@ import { claim, sandbox, input, PROJECT, NOW } from "./testFixture";
 import { maintenanceRuns, readMaintenanceProject, readMaintenanceRun, recordMaintenanceChange } from "./store";
 import type { TaskWorkEvidence } from "./evidence";
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
+import { setMergeOnReview } from "@/lib/projects/settings";
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 const tasks = () => loadTasks(statePath("tasks.json"));
@@ -52,6 +53,15 @@ test("a recovered claim waits while wakes are off without dispatching or losing 
   h.sources.settings = originalSettings;
   await h.controller.reconcile(PROJECT);
   expect(h.bodies[0].clientAttemptId).toBe(run.runId);
+});
+for (const enabled of [true, false]) test(`launch brief reads this project's mergeOnReview setting: ${enabled}`, async () => {
+  const h = harness();
+  expect(setMergeOnReview(PROJECT, enabled, "fixture", new Date(NOW).toISOString())).not.toBeNull();
+  // An unrelated project's setting must not govern this run.
+  expect(setMergeOnReview("other-project", !enabled, "fixture", new Date(NOW).toISOString())).not.toBeNull();
+  await h.controller.launchIfDue(input());
+  expect(String(h.bodies[0].prompt)).toContain(`Project mergeOnReview: ${enabled ? "on" : "off"}`);
+  expect(String(h.bodies[0].prompt)).toContain("Never reopen an existing Done task only because deployment is pending or unread");
 });
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());
