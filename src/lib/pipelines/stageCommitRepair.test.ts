@@ -127,6 +127,7 @@ test.each(["installed", "fixed-on-retry"] as const)("settlement finds the %s par
     }
     const committed = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
     expect(committed.ok).toBe(true);
+    expect(fs.existsSync(path.join(worktree, "node_modules"))).toBe(false);
     const head = await box.exec("git", ["show", "--format=", "--name-only", "HEAD"], worktree);
     expect(head.stdout.trim()).toBe("evidence/draft/output.ts");
     expect(fs.readFileSync(path.join(box.repo, ".git/hook-checks"), "utf8")).toBe("checked\n");

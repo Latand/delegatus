@@ -614,9 +614,10 @@ async function recoverStageCommit(
 
 /** Settlement runs after the agent's turn, including read-only turns which
     never installed dependencies. Share the parent checkout's installed tools
-    only through an absent, ignored node_modules; preserve any local install
-    or existing link, including a dangling one. */
-async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<void> {
+    for the commit through an absent, ignored node_modules. Remove our link
+    afterward so a later install cannot write into the parent checkout.
+    Preserve any local install or existing link, including a dangling one. */
+async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
   const local = path.join(pipeline.worktreeDir, "node_modules");
   try { fs.lstatSync(local); return; }
@@ -627,8 +628,17 @@ async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promis
   const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules"], pipeline.worktreeDir);
   if (ignored.code === 1) return;
   if (ignored.code !== 0) throw new Error(`checking ignored settlement dependencies: ${(ignored.stderr || ignored.stdout).trim()}`);
-  try { fs.symlinkSync(path.resolve(parent), local, "dir"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  const target = path.resolve(parent);
+  try { fs.symlinkSync(target, local, "dir"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return; throw error; }
+  const created = fs.lstatSync(local);
+  return () => {
+    try {
+      const current = fs.lstatSync(local);
+      if (current.isSymbolicLink() && current.dev === created.dev && current.ino === created.ino
+        && fs.readlinkSync(local) === target) fs.unlinkSync(local);
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  };
 }
 
 export async function commitPipelineStage(
@@ -641,10 +651,6 @@ export async function commitPipelineStage(
   receiptFile?: string,
   control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
-  try { await prepareStageToolchain(pipeline, exec); }
-  catch (error) {
-    return { ok: false, error: `committing the passed stage: preparing repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
-  }
   const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const initialHead = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
@@ -707,9 +713,17 @@ export async function commitPipelineStage(
     receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: tree.stdout.trim(), paths: changedOutputPaths };
     writeJsonDurably(receiptFile, receipt);
   }
-  await control?.beforeCommit(sha);
-  const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
-    ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
+  let releaseTools: (() => void) | undefined;
+  try { releaseTools = await prepareStageToolchain(pipeline, exec); }
+  catch (error) {
+    return { ok: false, error: `committing the passed stage: preparing repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
+  }
+  let commit: ExecResult;
+  try {
+    await control?.beforeCommit(sha);
+    commit = await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
+      ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv());
+  } finally { releaseTools?.(); }
   if (commit.code !== 0) {
     return { ...failure("committing the passed stage", commit),
       commitRefusal: await stageCommitRefusal(allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
