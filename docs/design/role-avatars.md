@@ -455,8 +455,11 @@ The agent with no role (the `neutral` frame role: a conversation started by
 hand, a card from an agent that names none) is no longer the engine circle or
 the plain mark: Delegatus in black sunglasses and a tuxedo. The lenses are
 filled dark (`#262B35`) inside the same 3.6 ink frames, without pupils; the
-cream belly gives way to a black jacket whose lapels open into a white shirt
-front, with a black bow tie at its top. The hair is the trimmed hair the other
+cream belly gives way to a charcoal jacket (`#5A6479`, about 2.9:1 against the
+dark page) outlined in ink along its shoulders and lapels, which open into a
+white shirt front with a black bow tie at its top. The first build used a
+jacket of the ink colour itself and its body vanished on the dark theme; the
+lighter charcoal keeps a whole silhouette on both. The hair is the trimmed hair the other
 full-hair costumes use, so the drawing stays inside x 3–61, y 2–62 like every
 costume (`roleCostumes.test.ts` measures each drawing's ink box with `sharp`).
 

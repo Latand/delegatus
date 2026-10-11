@@ -33,6 +33,9 @@ describe("role costumes", () => {
     expect(agent).not.toContain('<circle cx="22" cy="31"');
     /* The cream belly gives way to the jacket, the white shirt front and the bow tie. */
     expect(agent).not.toContain('cx="32" cy="54" rx="15" ry="11"');
+    /* The jacket is a charcoal lighter than the ink, outlined in ink, so on the dark theme its body keeps an edge. */
+    expect(agent).toContain('fill="#5A6479" d="M4 43.5C');
+    expect(agent).toContain('fill="none" stroke="#231B1C" stroke-width="2.6" stroke-linejoin="round" d="M4 43.5C');
     expect(agent).toContain('fill="#FFFFFF" d="M23.5 45.4H40.5L32 61Z"');
     expect(agent).toContain('M25.2 44.2 31 47.2 25.2 50.4Z');
     /* Every costumed role keeps the clear glasses (the reviewer's loupe replaces its right lens). */
