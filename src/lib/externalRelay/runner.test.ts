@@ -1612,10 +1612,10 @@ for (const status of ["ok", "error"] as const) test(`E3 owner admitted ${status}
 test("X4 six owner runs extend the existing X2 capture format", async () => {
   const capture: { name: string; x1: unknown; calls: unknown[]; completion: unknown }[] = [];
   const grid = "00000000-0000-0000-0000-000000000000";
-  const page = "p".repeat(43);
+  const page = "public-next-page";
   const plans: Record<string, string> = {
     reads: `if(round===1||round===3)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{grid_id:'${grid}',cursor:'public-query-cursor',limit:2})]};
-      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{},'${page}')]};return reply;`,
+      if(round===2){const page=JSON.parse(results.at(-1).output);return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{grid_id:'${grid}',cursor:page.next_cursor,limit:2})]};}return reply;`,
     writes: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}}),call('owner_list_grids',{})]};
       if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid B'}})]};
       if(round===3)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'${grid}',body:{owned:[101]}})]};
@@ -1650,12 +1650,14 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
           let result: Partial<ToolCallResult> = { tool, calls_remaining: 16 - admitted.size, replayed };
           let sample = "owner_ok";
           if (name === "reads") {
-            result = { ...result, effect: "read", output: "[101,102]" };
-            if ("tool" in body && attempt === 1) { sample = "owner_pending"; result = { ...result, status: "pending", output: "", retry_after_s: 1 }; }
-            else if ("tool" in body) { sample = "owner_cursor_replayed"; result = { ...result, truncated: true, cursor: page }; }
-            else sample = "owner_last_page";
+            const last = "arguments" in body && body.arguments?.cursor === page;
+            const item = { chat_id: last ? 102 : 101, name: last ? "Chat B" : "Chat A", username: null,
+              avatar_url: null, total_participants: 2, synced_section_count: 0 };
+            result = { ...result, effect: "read", output: JSON.stringify({ items: [item], next_cursor: last ? null : page }) };
+            if (!last && attempt === 1) { sample = "owner_pending"; result = { ...result, status: "pending", output: "", retry_after_s: 1 }; }
+            else sample = last ? "owner_last_page" : "owner_first_page";
           } else if (name === "inner_404") {
-            result = { ...result, effect: "read", ...(tool === "owner_get_grid" ? { status: "error", output: '{"http_status":404,"message":"Grid not found"}' } : {}) };
+            result = { ...result, effect: "read", ...(tool === "owner_get_grid" ? { status: "error", output: '{"http_status":404,"message":"Grid not found"}' } : { output: '{"items":[]}' }) };
             sample = tool === "owner_get_grid" ? "owner_inner_404" : "owner_ok";
           } else if (name === "confirmation") {
             sample = "owner_confirmation_pending";
@@ -1666,6 +1668,8 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
             const name = (body.arguments!.body as { name: string }).name;
             result.output = JSON.stringify({ grid_id: name === "Grid A" ? grid : "00000000-0000-0000-0000-000000000001", kind: "settings", name });
           }
+          else if (tool === "owner_list_grids") result.output = '{"items":[]}';
+          else if (tool === "owner_activate_clone") result.output = JSON.stringify({ bot_id: 42, status: "active", webhook_url: "https://hooks.example/clone" });
           const response = ownerResponse(body, result);
           entry.attempts.push({ request: body, x1_sample: sample, response: response.body });
           return response;
@@ -1675,8 +1679,12 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
       } else expect(run.completion?.outcome).toBe(name === "retry_ceiling" ? "declined" : "answered");
       if (name === "reads") {
         expect(run.calls).toHaveLength(3); expect(run.calls[1]).toEqual(run.calls[0]);
-        expect(run.calls[2]).toEqual(callBody(run.request, { cursor: page }));
+        expect(run.calls[2]).toEqual(callBody(run.request, { tool: "owner_list_grid_chats", arguments: { grid_id: grid, cursor: page, limit: 2 } }));
         expect(projectionsOf(run, 3)).toHaveLength(2); // cached repetition grows no prompt
+        const outputs = calls.map((call) => (call.attempts.at(-1)!.response as ToolCallResult).output);
+        expect(projectionsOf(run, 3).map((result: { output: string }) => result.output)).toEqual(outputs);
+        expect(outputs.map((output) => JSON.parse(output).next_cursor)).toEqual([page, null]);
+        expect(projectionsOf(run, 3).every((result: { truncated: boolean; next_cursor?: string }) => !result.truncated && result.next_cursor === undefined)).toBe(true);
       }
       if (name === "writes") {
         expect(run.calls.map((call) => "tool" in call && call.tool)).toEqual([
@@ -1685,6 +1693,7 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(run.rounds[1].prompt).toContain("further distinct owner writes requested");
         expect(projectionsOf(run, 3).at(-1).output).toBe("");
         expect(run.rounds[4].prompt).toContain("11 calls are left.");
+        expect(projectionsOf(run, 4).at(-1).output).toBe((calls.at(-1)!.attempts.at(-1)!.response as ToolCallResult).output);
       }
       if (name === "retry_ceiling") {
         expect(run.calls).toHaveLength(4); expect(new Set(run.calls.map((call) => JSON.stringify(call))).size).toBe(1);
