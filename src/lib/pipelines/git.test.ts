@@ -2442,12 +2442,13 @@ test.each([{ machine: false, ancestor: false }, { machine: true, ancestor: false
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["home", "credential"] as const)("stage reconciliation refuses restored commit message %s findings", async (kind) => {
+test.each(["home", "mac-home", "credential"] as const)("stage reconciliation refuses restored commit message %s findings", async (kind) => {
   const box = await isolatedIdentityRepo();
   try {
     const subject = pipeline(); subject.worktreeDir = box.repo; subject.branch = "main";
     const base = await box.run("rev-parse", "HEAD");
-    const message = kind === "home" ? ["/", "home/", "fixture-person/", "work"].join("")
+    const message = kind === "home" || kind === "mac-home"
+      ? ["/", kind === "home" ? "home/" : "Users/", "fixture-person/", "work"].join("")
       : String.fromCharCode(115, 107, 45) + "syntheticcredentialfixture";
     fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
     await box.run("add", "source.ts");

@@ -1110,8 +1110,9 @@ export async function mapReplayPatchLocation(
 function publicationTextSafe(text: string): string | null {
   const decoded = canonicalSensitiveText(text, true);
   if (decoded.error) return null;
-  const normalized = decoded.text.normalize("NFKC").toLocaleLowerCase("en-US");
-  const findings = staticSensitiveClasses(normalized);
+  const view = decoded.text.normalize("NFKC");
+  const normalized = view.toLocaleLowerCase("en-US");
+  const findings = staticSensitiveClasses(view);
   if (findings.has("credential") || findings.has("home_path")) return null;
   const compact = compactSensitiveText(normalized);
   for (const fingerprint of publicationFingerprints.fingerprints) {
