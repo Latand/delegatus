@@ -543,7 +543,7 @@ test("a group accepts whole with one button, opens to its members, and a member 
   expect(group().querySelector('[data-done-accept-group="technical"]')!.getAttribute("aria-label")).toBe("Technical fixes: Accept 1");
   await click(group().querySelector('[data-done-accept-group="technical"]')!);
   expect(acknowledged[1]).toEqual({ keys: ["pr:acme/widgets#2699"], undo: false, surface: "desktop" });
-  expect(host.querySelector('[data-done-group-receipt="technical"]')!.textContent!.replace(/\u00a0/g, " ")).toContain("Technical fixes · 2 · accepted");
+  expect(host.querySelector('[data-done-group-receipt="technical"]')!.textContent!.replace(/\u00a0/g, " ")).toContain("Technical fixes: 2 accepted");
   expect(title(host)).toBe("Waiting for you · 10");
 });
 
@@ -560,6 +560,18 @@ test("a collapsed group lists short topics while they fit and ends in «and N mo
   expect(line.textContent).toBe("Automerge waits, HTTP MCP keeps and 3 more");
   expect(line.lastElementChild!.textContent).toBe("and 3 more");
   expect(line.textContent).not.toContain("…");
+});
+
+test("a Ukrainian topic never ends on an adjective without its noun", async () => {
+  const { groupTopics } = await import("./DoneSection");
+  const uk = ((key, params) => translate("uk", key, params)) as Parameters<typeof groupTopics>[0];
+  const { topics, more } = groupTopics(uk, "uk", [
+    doneItem("task:one", { kind: "task", look: "closed", title: "Прибрано порожній лоток прихованих" }),
+    doneItem("pr:acme/widgets#2", { title: "Мерджер приймає тестові контракти, які погодило рев’ю." }),
+    doneItem("pr:acme/widgets#3", { title: "Аналіз моделей для голосового режиму" }),
+  ]);
+  expect(topics).toBe("Прибрано порожній лоток, мерджер приймає");
+  expect(more).toBe("і ще 1");
 });
 
 test("«Accept all» leaves only the decisions in the count, and one receipt takes the whole batch back", async () => {

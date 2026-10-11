@@ -113,8 +113,15 @@ function topic(sentence: string): string {
   }
   out = out.replace(/[,;:.!?…-]+$/, "");
   /* A short last word («лише», «for») leaves the topic hanging; drop it. */
-  const kept = out.split(" ");
-  return kept.length > 2 && kept.at(-1)!.length <= 4 ? kept.slice(0, -1).join(" ") : out;
+  let kept = out.split(" ");
+  if (kept.length > 2 && kept.at(-1)!.length <= 4) kept = kept.slice(0, -1);
+  /* So does an adjective without its noun («Прибрано порожній»): take the noun
+     when it still fits, otherwise drop the adjective. */
+  if (kept.length > 1 && /(?:ий|ій|ові|ого|их)$/u.test(kept.at(-1)!)) {
+    const noun = words[kept.length]?.replace(/[,;:.!?…-]+$/, "");
+    kept = noun && kept.join(" ").length + 1 + noun.length <= 26 ? [...kept, noun] : kept.slice(0, -1);
+  }
+  return kept.join(" ");
 }
 
 /** After the first topic a capital starts no sentence: lower-case it, unless the
@@ -215,13 +222,16 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
     : "inline-flex h-6 min-w-6 shrink-0 items-center justify-center gap-1 rounded-[6px] border border-border px-1 text-[11px] font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
   /* A receipt: a short name that wraps rather than clips, and «прийнято»
-     whole at its end; the «·» before it stays on the name's line. */
-  const receipt = (key: string, title: string, onUndo: () => void, extra: Record<string, string> = {}, tail: string | null = "") => (
+     whole at its end; the «·» before it stays on the name's line. A group
+     says «Технічні виправлення: 10 прийнято», so a wrap falls after the colon. */
+  const receipt = (key: string, title: string, onUndo: () => void, extra: Record<string, string> = {}, tail: string | null = "", body?: ReactNode) => (
     <div key={key} className={`flex min-w-0 items-center gap-2.5 ${rowPad}`} {...extra}>
       <span className={`${tile} bg-success-soft text-success`}><Check className={tileIcon} aria-hidden /></span>
       <span className={`min-w-0 flex-1 ${phone ? "text-body" : "text-[12px]"} leading-[1.35] text-muted [overflow-wrap:anywhere]`} data-done-receipt-text="">
-        {title}
-        {tail === null ? null : <>{tail ? ` ${tail}` : ""}{"\u00a0· "}<span className="whitespace-nowrap">{t("done.acceptedMark")}</span></>}
+        {body ?? <>
+          {title}
+          {tail === null ? null : <>{tail ? ` ${tail}` : ""}{"\u00a0· "}<span className="whitespace-nowrap">{t("done.acceptedMark")}</span></>}
+        </>}
       </span>
       <button type="button" className={quiet} data-done-undo={key} aria-label={t("done.undoAria", { title: tail ? `${title} ${tail}` : title })} onClick={onUndo}>{t("done.undo")}</button>
     </div>
@@ -281,7 +291,8 @@ export function DoneSection({ items, current, projectNames, surface, acknowledge
     const waiting = members.filter((member) => !accepted(member));
     const taken = members.length - waiting.length;
     if (!waiting.length) {
-      return receipt(`group:${id}`, `${name}\u00a0·\u00a0${members.length}`, () => run(members, true), { "data-done-group-receipt": id });
+      const count = t("done.group.acceptedCount", { count: members.length });
+      return receipt(`group:${id}`, `${name}: ${count}`, () => run(members, true), { "data-done-group-receipt": id }, null, <>{name}: <span className="whitespace-nowrap">{count}</span></>);
     }
     const Icon = GROUP_ICON[id];
     const expanded = open.has(id);

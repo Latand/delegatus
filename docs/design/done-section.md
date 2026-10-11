@@ -289,7 +289,8 @@ this order:
    `GitMerge` icon, short topics and «і ще N», the double check with N and a
    chevron at the right end. A topic is a sentence's first clause cut at a
    word to at most three words, with no ellipsis and lower case after the first
-   (an acronym or, in Ukrainian copy, a Latin name keeps its case); topics are
+   (an acronym or, in Ukrainian copy, a Latin name keeps its case; a topic
+   never ends on an adjective without its noun, «Прибрано порожній лоток»); topics are
    listed while they fit about two short lines and «і ще N» names the rest,
    never cut. Expanded, each member is a line: the task's icon, `#number`
    linked, the sentence, its own check, and the head repeats no member: it
@@ -302,7 +303,8 @@ this order:
 An item acknowledged while the panel or the sheet is open collapses in place to
 «<назва> · прийнято» with «Повернути» (the name is the sentence's first clause,
 «Лендінг #2691 · прийнято»; it wraps rather than clips, and «· прийнято» is
-never cut), and leaves when the panel closes or the
+never cut; a whole group reads «Технічні виправлення: 10 прийнято», so a
+wrap falls after the colon), and leaves when the panel closes or the
 sheet is dismissed. In an expanded group an acknowledged member keeps its line
 with a filled check, and the group head reads «6 з 10 · 4 прийнято» (the
 desktop keeps «6 з 10» beside the name, the phone moves it onto the line under

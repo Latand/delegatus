@@ -7571,7 +7571,7 @@ describe("«Готово» in the phone sheet", () => {
             expect(receipt.text).toMatch(/прийнято$/);
             expect(receipt.markClipped, receipt.text).toBe(false);
           }
-          expect(after.receipts.map((receipt) => receipt.text)).toContain("Технічні виправлення · 10 · прийнято");
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Технічні виправлення: 10 прийнято");
           await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.screenshot({ path: path.join(out, `${scheme}-5-group-accepted.png`) });
 
