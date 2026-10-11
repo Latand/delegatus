@@ -16,22 +16,17 @@ The worker retires after 60 seconds idle or a reply reporting RSS above 512 MiB.
 
 Retirement closes the guardian's lease pipe. Windows terminates a process on
 `SIGTERM` without running its JavaScript cleanup, so signaling the guardian
-could leave a busy query holding stdout open. Before launching a helper, the guardian enters an anonymous Windows job with
-a non-inheritable handle and kill-on-close enabled. Descendants inherit job
-membership, which survives helper crashes and normal exits. Cleanup reads
-that job's membership, retains each process handle and verifies its current
-job membership before terminating it. The guardian waits for verified tree
-closure on helper exit and requested retirement; its own abrupt exit also
-closes the job. Replacement waits for confirmed closure. A caller's five-second retirement deadline leaves the shared
+could leave a busy query holding stdout open. Windows cleanup now runs inside
+the guardian, takes a fresh descendant snapshot and retains process handles,
+verifying each current parent link before ending descendants and the owned
+helper. Replacement still waits for
+confirmed closure. A caller's five-second retirement deadline leaves the shared
 exit barrier pending, allowing a later confirmed exit to unblock the lane.
 
 The worker lifecycle tests cover busy-query cancellation, timeout and shutdown
 with an inherited-stream descendant, successful replacement, empty lease records,
-and recovery after a late confirmed exit. Crash and normal exit cases wait
-for a descendant holding inherited output, then require clean failure,
-shutdown and replacement before test cleanup, while an unrelated peer stays
-alive. A native Windows case also hard-kills the guardian itself. The busy
-tests emulate unhandled Windows termination on Unix, and the same file runs on the native Windows CI
+and recovery after a late confirmed exit. The busy tests emulate unhandled
+Windows termination on Unix, and the same file runs on the native Windows CI
 runner under Bun 1.4.0 through the owned gate runner.
 
 A trusted redactor receives the complete highlighted source through the worker

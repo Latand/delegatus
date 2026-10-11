@@ -229,7 +229,26 @@ test("a saturated queue is bounded and pre-cancelled requests never launch", asy
 });
 
 test("exit and malformed protocol fail cleanly and the next request starts a replacement", async () => {
+  // Bun on Windows can reap its own children at exit. Keep that outer Bun
+  // alive until a Node guardian's inherited output closes, so the fixture
+  // exercises the lease's ownership proof independently of Bun's cleanup.
+  const node = Bun.which("node");
+  expect(node).not.toBeNull();
+  const previousEntry = process.env.LLV_HELPER_LEASE_ENTRY;
+  const guardianEntry = path.resolve(previousEntry ?? "bin/helper-lease.mjs");
+  const bridge = path.join(root, "guardian-bridge.mjs");
+  fs.writeFileSync(bridge, `import fs from "node:fs"; import { spawn } from "node:child_process";
+    const guardian = spawn(${JSON.stringify(node)}, [${JSON.stringify(guardianEntry)}, ...process.argv.slice(2)], { stdio: ["pipe", "pipe", "pipe", "pipe"] });
+    guardian.stdin.on("error", () => {}); guardian.stdio[3].on("error", () => {});
+    process.stdin.pipe(guardian.stdin);
+    fs.createReadStream(null, { fd: 3, autoClose: false }).pipe(guardian.stdio[3]);
+    guardian.stdout.pipe(process.stdout); guardian.stderr.pipe(process.stderr);
+    guardian.once("error", () => process.exit(127));
+    guardian.once("close", code => process.exit(code ?? 1));`);
+  process.env.LLV_HELPER_LEASE_ENTRY = bridge;
+  try {
   const launch = stub("process.exit(1);");
+  launch.executable = node!;
   const lane = worker({ launch });
   await expect(lane.search({ query: "exit" })).rejects.toThrow("worker is unavailable");
   stub('process.stdout.write("invalid protocol\\n");');
@@ -275,7 +294,11 @@ test("exit and malformed protocol fail cleanly and the next request starts a rep
       }
     }
   } finally { await stopFixtureProcess(peer); }
-}, 40_000);
+  } finally {
+    if (previousEntry === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = previousEntry;
+  }
+}, 60_000);
 
 test("a throwing trusted projector closes the read snapshot and remains retryable", async () => {
   await seed();
