@@ -232,6 +232,7 @@ test("exit and malformed protocol fail cleanly and the next request starts a rep
   // Bun on Windows can reap its own children at exit. Keep that outer Bun
   // alive until a Node guardian's inherited output closes, so the fixture
   // exercises the lease's ownership proof independently of Bun's cleanup.
+  // On Windows detach it too: libuv otherwise kills direct Node children.
   const node = Bun.which("node");
   expect(node).not.toBeNull();
   const previousEntry = process.env.LLV_HELPER_LEASE_ENTRY;
@@ -247,53 +248,53 @@ test("exit and malformed protocol fail cleanly and the next request starts a rep
     guardian.once("close", code => process.exit(code ?? 1));`);
   process.env.LLV_HELPER_LEASE_ENTRY = bridge;
   try {
-  const launch = stub("process.exit(1);");
-  launch.executable = node!;
-  const lane = worker({ launch });
-  await expect(lane.search({ query: "exit" })).rejects.toThrow("worker is unavailable");
-  stub('process.stdout.write("invalid protocol\\n");');
-  await expect(lane.search({ query: "malformed" })).rejects.toThrow("worker is unavailable");
-  stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
-  expect((await lane.search({ query: "repaired" })).total).toBe(0);
+    const launch = stub("process.exit(1);");
+    launch.executable = node!;
+    const lane = worker({ launch });
+    await expect(lane.search({ query: "exit" })).rejects.toThrow("worker is unavailable");
+    stub('process.stdout.write("invalid protocol\\n");');
+    await expect(lane.search({ query: "malformed" })).rejects.toThrow("worker is unavailable");
+    stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
+    expect((await lane.search({ query: "repaired" })).total).toBe(0);
 
-  const peer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
-  try {
-    for (const exitCode of [1, 0]) {
-      const descendantReady = path.join(root, `descendant-ready-${exitCode}`);
-      const descendantBody = `import fs from "node:fs";
-        fs.writeFileSync(${JSON.stringify(descendantReady)}, "ready"); setInterval(() => {}, 1000);`;
-      stub(`
-        if (frame.options.query === "prepare") {
-          const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantBody)}], { stdio: ["ignore", "inherit", "inherit"] });
-          const waitForDescendant = setInterval(() => {
-            if (!fs.existsSync(${JSON.stringify(descendantReady)})) return;
-            clearInterval(waitForDescendant);
-            fs.writeFileSync(${JSON.stringify(path.join(root, "pids"))}, JSON.stringify([process.pid, descendant.pid]));
-            process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");
-          }, 5);
-        } else { process.exit(${exitCode}); }`);
-      await lane.shutdown();
-      await lane.search({ query: "prepare" });
-      const identities = (JSON.parse(fs.readFileSync(path.join(root, "pids"), "utf8")) as number[]).map(pid => captureProcessIdentity(pid));
-      const guardian = (lane as unknown as { worker: { child: ChildProcess } }).worker.child;
-      const status = new Promise<number | null>(resolve => guardian.once("exit", resolve));
-      try {
-        const error = await lane.search({ query: "exit-with-descendant" }).catch(error => error);
-        expect(error.message).toBe("Transcript search worker is unavailable");
+    const peer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
+    try {
+      for (const exitCode of [1, 0]) {
+        const descendantReady = path.join(root, `descendant-ready-${exitCode}`);
+        const descendantBody = `import fs from "node:fs";
+          fs.writeFileSync(${JSON.stringify(descendantReady)}, "ready"); setInterval(() => {}, 1000);`;
+        stub(`
+          if (frame.options.query === "prepare") {
+            const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantBody)}], { stdio: ["ignore", "inherit", "inherit"], detached: ${process.platform === "win32"} });
+            const waitForDescendant = setInterval(() => {
+              if (!fs.existsSync(${JSON.stringify(descendantReady)})) return;
+              clearInterval(waitForDescendant);
+              fs.writeFileSync(${JSON.stringify(path.join(root, "pids"))}, JSON.stringify([process.pid, descendant.pid]));
+              process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");
+            }, 5);
+          } else { process.exit(${exitCode}); }`);
         await lane.shutdown();
-        expect(await status).toBe(exitCode);
-        expect(() => process.kill(peer.pid!, 0)).not.toThrow();
-        for (const identity of identities) {
-          expect(processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)).toBe(true);
+        await lane.search({ query: "prepare" });
+        const identities = (JSON.parse(fs.readFileSync(path.join(root, "pids"), "utf8")) as number[]).map(pid => captureProcessIdentity(pid));
+        const guardian = (lane as unknown as { worker: { child: ChildProcess } }).worker.child;
+        const status = new Promise<number | null>(resolve => guardian.once("exit", resolve));
+        try {
+          const error = await lane.search({ query: "exit-with-descendant" }).catch(error => error);
+          expect(error.message).toBe("Transcript search worker is unavailable");
+          await lane.shutdown();
+          expect(await status).toBe(exitCode);
+          expect(() => process.kill(peer.pid!, 0)).not.toThrow();
+          for (const identity of identities) {
+            expect(processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)).toBe(true);
+          }
+          stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
+          expect((await lane.search({ query: "replacement" })).total).toBe(0);
+        } finally {
+          for (const identity of identities.reverse()) await stopFixtureIdentity(identity);
+          await lane.shutdown();
         }
-        stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
-        expect((await lane.search({ query: "replacement" })).total).toBe(0);
-      } finally {
-        for (const identity of identities.reverse()) await stopFixtureIdentity(identity);
-        await lane.shutdown();
       }
-    }
-  } finally { await stopFixtureProcess(peer); }
+    } finally { await stopFixtureProcess(peer); }
   } finally {
     if (previousEntry === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
     else process.env.LLV_HELPER_LEASE_ENTRY = previousEntry;
