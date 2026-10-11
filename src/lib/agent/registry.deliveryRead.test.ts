@@ -58,6 +58,36 @@ test("indexed selections observe in-transaction inserts, changes and deletions",
   } finally { store.close(); }
 });
 
+test("admission ordering reads its conversation's aliases without loading unrelated deliveries", () => {
+  const { registry: seedRegistry, conversation, delivery } = seed("admission-order");
+  const state = seedRegistry.snapshot();
+  state.conversationAliases.conversation_old = conversation.id;
+  state.heldDeliveries[delivery.id]!.conversationId = "conversation_old";
+  state.heldDeliveries[delivery.id]!.admissionSeq = 7;
+  for (let i = 0; i < 200; i++) {
+    const id = `unrelated-${i}`;
+    state.heldDeliveries[id] = { ...structuredClone(delivery), id,
+      conversationId: `conversation_background-${i}`, admissionSeq: 999,
+      command: { ...delivery.command, operationId: `background-operation-${i}` } };
+  }
+  fs.writeFileSync(seedRegistry.filename, JSON.stringify(state));
+  let reads = 0;
+  const registry = new AgentRegistry(seedRegistry.filename, undefined, undefined, { sqliteMode: "sqlite",
+    onSqliteRowPayloadRead: (_collection, count) => { reads += count; } });
+  try {
+    reads = 0;
+    const next = registry.holdDelivery(conversation.id, "next message", "next-key");
+    expect(next.admissionSeq).toBe(8);
+    const generationId = conversation.generations.at(-1)!.id;
+    expect(registry.beginDeliveryAttempt(next.id, generationId)).toBeNull();
+    expect(registry.beginDeliveryAttempt(delivery.id, generationId)?.state).toBe("delivery-uncertain");
+    expect(reads).toBeLessThan(100);
+  } finally {
+    registry.close();
+    seedRegistry.close();
+  }
+});
+
 test("conversation upserts retain overlapping generation and continuity paths", () => {
   const { registry, conversation, delivery } = seed("overlapping-paths");
   const state = registry.snapshot();

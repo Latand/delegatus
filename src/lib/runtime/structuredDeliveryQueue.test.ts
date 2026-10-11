@@ -2810,7 +2810,20 @@ function steerQueueFixture(policies: string[] = ["steer-or-queue"], conversation
   return { queue, target, states, writes, interrupts, transitions, setActive: (turn: string | null) => { active = turn; }, effects, port };
 }
 
-for (const fallback of ["claude", "copilot"]) test(`steer-or-queue waits durably on ${fallback} without interrupting`, async () => {
+test("an explicit next-turn fence waits through a running turn without steering", async () => {
+  const f = steerQueueFixture();
+  Object.assign(f.effects[0]!.payload, { turnId: null });
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual([]);
+  expect(f.interrupts).toEqual([]);
+  expect(f.states.get("m0")!.status).toBe("queued");
+  f.setActive(null);
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual(["start:m0"]);
+  expect(f.states.get("m0")!.status).toBe("delivered");
+});
+
+for (const fallback of ["claude", "copilot"]) test(`steer-or-queue waits durably on ${fallback} without declared queued-send support`, async () => {
   const f = steerQueueFixture();
   Object.assign(f.target, { supportsSteer: false, ...(fallback === "copilot" ? {steerFallback: "interrupt"} : {}) });
   await f.queue.drain(); await f.queue.drain();
@@ -2818,6 +2831,50 @@ for (const fallback of ["claude", "copilot"]) test(`steer-or-queue waits durably
   expect(f.states.get("m0")!.status).toBe("queued");
   f.setActive(null); await f.queue.drain();
   expect(f.writes).toEqual(["start:m0"]); expect(f.states.get("m0")!.status).toBe("delivered");
+});
+
+for (const policy of ["queue", "steer-or-queue"]) test(`${policy} queues in engine order during a turn and respects the update hold`, async () => {
+  const f = steerQueueFixture([policy, policy]);
+  for (const effect of f.effects) Object.assign(effect.payload, { origin: { kind: "agent" } });
+  Object.assign(f.target, { supportsSteer: false, supportsQueuedSend: true });
+  f.target.send = async entry => {
+    f.writes.push(`queue:${entry.id}:${entry.expectedTurnId}`);
+    return { outcome: "queued-next-turn", turnId: entry.id };
+  };
+  let held = true;
+  f.port.autonomousTurnHeld = () => held;
+  await f.queue.drain();
+  expect(f.writes).toEqual([]);
+  held = false;
+  await f.queue.drain();
+  await f.queue.drain();
+  expect(f.writes).toEqual(["queue:m0:turn-a", "queue:m1:turn-a"]);
+  expect(f.interrupts).toEqual([]);
+  expect([...f.states.values()].map(receipt => receipt.status)).toEqual(["delivered", "delivered"]);
+});
+
+test("a queued send awaiting its turn frees the lane and holds later messages behind it", async () => {
+  const f = steerQueueFixture(["queue", "queue"]);
+  Object.assign(f.target, { supportsSteer: false, supportsQueuedSend: true });
+  const confirmations = new Map<string, (receipt: { outcome: "queued-next-turn"; turnId: string }) => void>();
+  f.target.send = entry => {
+    f.writes.push(`queue:${entry.id}`);
+    return new Promise(resolve => confirmations.set(entry.id, resolve));
+  };
+  await f.queue.drain();
+  await f.queue.drain();
+  expect(f.writes).toEqual(["queue:m0"]);
+  expect(f.states.get("m0")!.status).toBe("delivering");
+  expect(f.states.get("m1")!.status).toBe("queued");
+  confirmations.get("m0")!({ outcome: "queued-next-turn", turnId: "m0" });
+  for (let attempt = 0; attempt < 50 && f.states.get("m0")!.status !== "delivered"; attempt += 1) await Bun.sleep(1);
+  expect(f.states.get("m0")!.status).toBe("delivered");
+  await f.queue.drain();
+  expect(f.writes).toEqual(["queue:m0", "queue:m1"]);
+  confirmations.get("m1")!({ outcome: "queued-next-turn", turnId: "m1" });
+  for (let attempt = 0; attempt < 50 && f.states.get("m1")!.status !== "delivered"; attempt += 1) await Bun.sleep(1);
+  expect([...f.states.values()].map(receipt => receipt.status)).toEqual(["delivered", "delivered"]);
+  expect(f.interrupts).toEqual([]);
 });
 
 test("a refused steer waits on the same turn across passes", async () => {

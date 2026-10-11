@@ -269,6 +269,16 @@ interface SendEffect {
   eventSeq: number;
 }
 
+/** What a send's settlement reads from the pass that handed it over. */
+interface SendSettlementContext {
+  steerOrQueue: boolean;
+  steersIntoTurn: boolean;
+  steerByInterrupt: boolean;
+  activeTurnRef: string | null;
+  interruptedTurnId: string | null;
+  clearedRoute: RuntimeTransitionDetails;
+}
+
 /**
  * One native history injection (#1560).
  *
@@ -821,6 +831,7 @@ export class StructuredDeliveryQueue {
   };
   private readonly interruptAcknowledged = new Set<string>();
   private readonly refusedSteerTurns = new Map<string, string | null>();
+  /** Steers and native queued sends whose arrival is observed after their lane ended. */
   private readonly activeSteers = new Map<string, { conversationId: string; turnId: string; settling: Promise<void> }>();
   /** An interrupt can need several drain passes before any message is handed
    * over. Keep that first-dispatch evidence only in this executor and claim;
@@ -1895,7 +1906,8 @@ export class StructuredDeliveryQueue {
       }
       const steerOrQueue = effect.policy === "steer-or-queue";
       const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active"
-        || (steerOrQueue && host.supportsSteer === true
+        // An explicit next-turn fence queues until idle, including after recovery.
+        || (steerOrQueue && effect.turnId !== null && host.supportsSteer === true
           && this.refusedSteerTurns.get(effect.operationId) !== health.activeTurnRef);
       const maySteer = health.status === "active" && steerRequested;
       /* A host without steer that DECLARED an interrupt fallback (Copilot over
@@ -1907,9 +1919,9 @@ export class StructuredDeliveryQueue {
       // Only in-turn steering joins the original cohort. Interrupt fallback
       // replaces that turn and must wait along with other fresh turn starts.
       if ((!maySteer || steerByInterrupt) && heldForUpdate()) { updateHeld = true; this.noteWait(effect, "update-drain"); continue; }
-      /* A host that DECLARED it cannot steer, which is the Claude broker: its
-         write would land as an interrupt the operator never asked for, so the
-         message is refused here rather than delivered as something else.
+      /* A host that DECLARED it cannot steer, which is the Claude broker,
+         refuses an explicit steer before dispatch. Its queued sends preserve
+         the running turn and cannot promise in-turn steering.
          An undeclared capability is unknown and is no refusal — a host that says
          nothing about steering keeps the delivery path it has always had. */
       if (maySteer && host.supportsSteer === false && !steerByInterrupt) {
@@ -1935,7 +1947,26 @@ export class StructuredDeliveryQueue {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
         continue;
       }
-      if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt) {
+      const queuesDuringTurn = host.supportsQueuedSend === true && effect.kind === "send"
+        && (effect.policy === "queue" || steerOrQueue)
+        && (health.status === "active" || health.status === "attention") && Boolean(health.activeTurnRef);
+      const laterOperatorReplacement = effects.slice(index + 1).some(later => {
+        const status = durableStatuses.get(later.operationId)?.status;
+        return later.kind === "send" && later.conversationId === effect.conversationId
+          && later.policy === "interrupt-active" && later.origin?.kind === "operator"
+          && (status === "queued" || status === "pending");
+      });
+      if (effect.kind === "send" && (effect.policy === "queue" || steerOrQueue)
+        && !steersIntoTurn && !queuesDuringTurn
+        && laterOperatorReplacement) {
+        /* Keep this follow-up in its original journal slot until the explicit
+           operator replacement has completed. This applies across the
+           interrupt boundary too: an idle host must not let the earlier note
+           start a turn before the replacement is written. */
+        this.noteWait(effect, "awaiting-turn");
+        continue;
+      }
+      if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt && !queuesDuringTurn) {
         const interrupted = replacementIsActive && this.interruptAcknowledged.has(effect.operationId);
         const reconciled = interrupted ? await this.reconcileStalledInterrupt(effect) : "wait";
         if (reconciled === "delivered") continue;
@@ -1946,7 +1977,7 @@ export class StructuredDeliveryQueue {
       if (!replacesTurn && [...this.activeSteers.values()].some(steer =>
         steer.conversationId === effect.conversationId
         && (!steersIntoTurn || steer.turnId !== health.activeTurnRef))) {
-        this.noteWait(effect, "conversation-busy", { detail: "a steer into the running turn is still settling" });
+        this.noteWait(effect, "conversation-busy", { detail: "a message handed to the running turn is still settling" });
         blockRest("conversation-busy");
         return true;
       }
@@ -1958,6 +1989,10 @@ export class StructuredDeliveryQueue {
           : effect.turnId !== undefined
             ? effect.turnId
             : health.activeTurnRef;
+      // Native queued sends can follow the next turn after a pre-write refusal.
+      // Keep an observed fence on this attempt; only caller fences are durable.
+      const attemptTurnFenceOnly = host.supportsQueuedSend === true && effect.kind === "send"
+        && effect.policy === "queue" && effect.turnId === undefined;
       const entry: QueueEntry = {
         id: effect.operationId,
         content: effect.content,
@@ -2003,7 +2038,7 @@ export class StructuredDeliveryQueue {
         effect.operationId,
         "delivering",
         {
-          turnId: deliveryFence,
+          ...(attemptTurnFenceOnly ? {} : { turnId: deliveryFence }),
           reason: deliveringOwnershipReason(this.executorId, claim),
           ...(routedTurnId ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: routedTurnId } : {}),
         },
@@ -2090,7 +2125,14 @@ export class StructuredDeliveryQueue {
         }
         this.interruptAcknowledged.delete(effect.operationId);
       }
-      let receipt;
+      /* The route this pass recorded, or the one an earlier pass or executor
+         recorded before this message went back to the queue. */
+      const settlement: SendSettlementContext = {
+        steerOrQueue, steersIntoTurn, steerByInterrupt, activeTurnRef: health.activeTurnRef, clearedRoute,
+        interruptedTurnId: routedTurnId
+          ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null),
+      };
+      let sent: { receipt: DeliveryReceipt } | { error: unknown };
       try {
         if (this.port.handoffHeld?.()) {
           this.firstDispatches.delete(effect.operationId);
@@ -2118,94 +2160,126 @@ export class StructuredDeliveryQueue {
           void settling.catch(() => undefined);
           continue;
         }
-        receipt = await sendWithReadRetry(host, entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId));
+        const receiving = sendWithReadRetry(host, entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId));
+        if (queuesDuringTurn && !shouldInterrupt && !steersIntoTurn) {
+          /* The engine confirms a queued input only when its own turn starts,
+             which may wait on an answer to this conversation's attention. The
+             lane ends here, so controls keep flowing; later messages wait
+             behind it like they wait behind a settling steer. */
+          const settling = receiving
+            .then((receipt) => ({ receipt }), (error: unknown) => ({ error }))
+            .then((settled) => this.settleSendOutcome(effect, host, settled, settlement))
+            .then(() => undefined)
+            .finally(() => {
+              this.activeSteers.delete(effect.operationId);
+              this.retrySoon();
+            });
+          this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: health.activeTurnRef!, settling });
+          this.noteWait(effect, "dispatching", { wake: "none", detail: "queued in the engine behind the running turn; confirmed when its own turn starts" });
+          void settling.catch(() => undefined);
+          continue;
+        }
+        sent = { receipt: await receiving };
       } catch (error) {
-        const reason = failureReason(error);
-        if (error instanceof StructuredSendRefusedError || error instanceof NativeQueueProtocolRefusal) {
-          if (steerOrQueue && steersIntoTurn) {
-            this.refusedSteerTurns.set(effect.operationId, health.activeTurnRef);
-            await this.transitionUnlessSettled(effect.operationId, "queued", { reason: `steer-refused: ${reason}` });
-            this.retrySoon();
-            return true;
-          }
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
-          continue;
-        }
-        /* The one resend below is allowed only where the host is READ to be
-           alive, so an unreadable state is grouped with the host being gone:
-           the grouping that resends nothing. It costs a drain pass on a
-           conversation whose host may be fine, and buys never issuing a second
-           delivery on evidence nobody could read. */
-        const afterFailure = await this.readHealth(host);
-        const hostIsGone = !afterFailure.readable
-          || afterFailure.value.status === "dead"
-          || afterFailure.value.status === "unhosted";
-        if (!hostIsGone && isThreadReadTimeout(error)) {
-          /* The one resend this path issues, and the host dedupes it by
-             queue-entry id: it reads the thread back and returns the confirmed
-             receipt rather than writing a second message. Its own operation is
-             retried, so this is the one failure after actuation that may go
-             back to `queued`. */
-          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "delivery-auto-retry" });
-          this.noteWait(effect, "dispatching", { wake: "retry", detail: "the host's thread read timed out; retried under the same key" });
-          this.retrySoon();
-          return true;
-        }
-        /* The message was handed to the engine and the engine did not answer.
-           It may have been taken — whether the host then died or is still
-           standing, the only thing that could say is the confirmed-delivery
-           record this call failed to get — so it must not go back to `queued`,
-           which says the send was never executed and is what let a later resend
-           look safe on a send the recipient had already received (#1131), and
-           it must not settle `failed`, which the receipt reads as fenced and
-           answers `resend: "safe"`. A resend is issued under a NEW request id,
-           so nothing on the host side would dedupe it against this attempt.
-           `uncertain` is absorbing — the journal refuses every transition out
-           of it and clears the outbox row in the same transaction — so no
-           drain and no fresh request can produce a second delivery, and the
-           receipt says the fate is unknown instead of inventing one. That is
-           what keeps `failed` on a message effect meaning "never reached the
-           engine": the distinction settlement reads to decide whether a resend
-           is safe. The cost is that a precondition the host refused by throwing
-           reads as unverified too; one verification is the cheaper error. */
-        await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
-        /* A host that is gone takes the rest of this conversation's queue with
-           it; a live one keeps draining behind the send it could not answer. */
-        if (hostIsGone) return true;
-        continue;
+        sent = { error };
       }
-      if (receipt.outcome === "rejected") {
-        if (receipt.reason === "stale-turn") {
-          /* An interrupt-and-resend that lost a race with a new turn goes back
-             to the queue: the interrupt path is retried, nothing is dropped. */
-          if ((effect.kind === "send" && effect.policy !== "steer-if-active") || steerByInterrupt) {
-            await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-            this.noteWait(effect, "awaiting-turn", { detail: "a new turn started before the hand-over" });
-            return true;
-          }
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: receipt.reason });
-          continue;
-        }
-        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-        this.noteWait(effect, "awaiting-turn", { detail: receipt.reason ?? "the host declined the hand-over" });
-        return true;
-      }
-      /* The route this pass recorded, or the one an earlier pass or executor
-         recorded before this message went back to the queue. */
-      const interruptedTurnId = routedTurnId
-        ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null);
-      await this.transitionUnlessSettled(effect.operationId, "delivered", {
-        turnId: receipt.turnId,
-        /* A message that ended a running turn to start its own says so; the
-           Copilot path never reads `steered`. */
-        ...(interruptedTurnId
-          ? receipt.outcome === "turn-started"
-            ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId }
-            : clearedRoute
-          : {}),
-      });
+      if (await this.settleSendOutcome(effect, host, sent, settlement) === "stop") return true;
     }
     return Boolean(switchDeferred) || nativeReceiptUnavailable || updateHeld;
+  }
+
+  /** Settles one handed-over send from the host's answer, inline or after the
+      lane let go of a native queued send. */
+  private async settleSendOutcome(
+    effect: SendEffect,
+    host: EngineHost,
+    outcome: { receipt: DeliveryReceipt } | { error: unknown },
+    context: SendSettlementContext,
+  ): Promise<"next" | "stop"> {
+    if ("error" in outcome) {
+      const error = outcome.error;
+      const reason = failureReason(error);
+      if (error instanceof StructuredSendRefusedError || error instanceof NativeQueueProtocolRefusal) {
+        if (context.steerOrQueue && context.steersIntoTurn) {
+          this.refusedSteerTurns.set(effect.operationId, context.activeTurnRef);
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: `steer-refused: ${reason}` });
+          this.retrySoon();
+          return "stop";
+        }
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        return "next";
+      }
+      /* The one resend below is allowed only where the host is READ to be
+         alive, so an unreadable state is grouped with the host being gone:
+         the grouping that resends nothing. It costs a drain pass on a
+         conversation whose host may be fine, and buys never issuing a second
+         delivery on evidence nobody could read. */
+      const afterFailure = await this.readHealth(host);
+      const hostIsGone = !afterFailure.readable
+        || afterFailure.value.status === "dead"
+        || afterFailure.value.status === "unhosted";
+      if (!hostIsGone && isThreadReadTimeout(error)) {
+        /* The one resend this path issues, and the host dedupes it by
+           queue-entry id: it reads the thread back and returns the confirmed
+           receipt rather than writing a second message. Its own operation is
+           retried, so this is the one failure after actuation that may go
+           back to `queued`. */
+        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "delivery-auto-retry" });
+        this.noteWait(effect, "dispatching", { wake: "retry", detail: "the host's thread read timed out; retried under the same key" });
+        this.retrySoon();
+        return "stop";
+      }
+      /* The message was handed to the engine and the engine did not answer.
+         It may have been taken — whether the host then died or is still
+         standing, the only thing that could say is the confirmed-delivery
+         record this call failed to get — so it must not go back to `queued`,
+         which says the send was never executed and is what let a later resend
+         look safe on a send the recipient had already received (#1131), and
+         it must not settle `failed`, which the receipt reads as fenced and
+         answers `resend: "safe"`. A resend is issued under a NEW request id,
+         so nothing on the host side would dedupe it against this attempt.
+         `uncertain` is absorbing — the journal refuses every transition out
+         of it and clears the outbox row in the same transaction — so no
+         drain and no fresh request can produce a second delivery, and the
+         receipt says the fate is unknown instead of inventing one. That is
+         what keeps `failed` on a message effect meaning "never reached the
+         engine": the distinction settlement reads to decide whether a resend
+         is safe. The cost is that a precondition the host refused by throwing
+         reads as unverified too; one verification is the cheaper error. */
+      await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+      /* A host that is gone takes the rest of this conversation's queue with
+         it; a live one keeps draining behind the send it could not answer. */
+      if (hostIsGone) return "stop";
+      return "next";
+    }
+    const receipt = outcome.receipt;
+    if (receipt.outcome === "rejected") {
+      if (receipt.reason === "stale-turn") {
+        /* A send that lost a race with a turn change goes back to the queue.
+           An interrupt-and-resend retries its interrupt path as well. */
+        if ((effect.kind === "send" && effect.policy !== "steer-if-active") || context.steerByInterrupt) {
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
+          this.noteWait(effect, "awaiting-turn", { detail: "the turn changed before the hand-over" });
+          return "stop";
+        }
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: receipt.reason });
+        return "next";
+      }
+      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
+      this.noteWait(effect, "awaiting-turn", { detail: receipt.reason ?? "the host declined the hand-over" });
+      return "stop";
+    }
+    await this.transitionUnlessSettled(effect.operationId, "delivered", {
+      turnId: receipt.turnId,
+      /* A message that ended a running turn to start its own says so; the
+         Copilot path never reads `steered`. */
+      ...(context.interruptedTurnId
+        ? receipt.outcome === "turn-started"
+          ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: context.interruptedTurnId }
+          : context.clearedRoute
+        : {}),
+    });
+    return "next";
   }
 
   private async settleObservedSteer(effect: SendEffect, outcome: RuntimeSteerOutcome): Promise<void> {

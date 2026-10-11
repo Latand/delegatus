@@ -27,6 +27,7 @@ export interface PersistedRegistry {
   accounts: { id: string; label?: string }[];
   retired: { id: string; label?: string; archived?: boolean }[];
   removals?: { id: string; phase?: string }[];
+  legacyHidden?: boolean;
 }
 
 function source(engine: "claude" | "codex") {

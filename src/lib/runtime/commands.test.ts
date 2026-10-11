@@ -158,12 +158,12 @@ test("runtime command parsing admits image-only content with a canonical digest"
 });
 
 
-test("steer-or-queue parses and refuses any turn fence", () => {
+test("steer-or-queue accepts a next-turn fence and refuses a named turn", () => {
   const request = { conversationId: "conversation_fixture", idempotencyKey: "steer-first", text: "agent note", policy: "steer-or-queue" };
   expect(parseRuntimeCommand("send", request)).toMatchObject({policy: "steer-or-queue"});
-  for (const turnId of [null, "turn-fixture"]) {
-    expect(() => parseRuntimeCommand("send", {...request, turnId})).toThrow("takes no fence");
-  }
+  expect(parseRuntimeCommand("send", {...request, turnId: null})).toMatchObject({ policy: "steer-or-queue", turnId: null });
+  expect(() => parseRuntimeCommand("send", {...request, turnId: "turn-fixture"})).toThrow("next-turn fence on send");
+  expect(() => parseRuntimeCommand("steer", {...request, turnId: null})).toThrow("next-turn fence on send");
 });
 
 

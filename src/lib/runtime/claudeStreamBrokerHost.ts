@@ -72,7 +72,8 @@ type PendingDelivery = {
   promise: Promise<DeliveryReceipt>;
   resolve(receipt: DeliveryReceipt): void;
   reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
+  /** Null while the input waits behind another turn in the CLI's own queue. */
+  timer: ReturnType<typeof setTimeout> | null;
 };
 type PendingAnswer = {
   resolve(): void;
@@ -244,6 +245,7 @@ export interface ClaudeStreamBrokerHostOptions {
   allowSubagents?: boolean;
   /** No automatic memory: no shared-memory hook and Claude's auto memory off. */
   cleanMemory?: boolean;
+  appendSystemPrompt?: string;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   mcpStatePath?: string;
@@ -617,6 +619,10 @@ export function readClaudeTranscriptUsers(filename: string): ClaudeTranscriptUse
 /** One durable writer around a long-lived Claude stream-json process. */
 export class ClaudeStreamBrokerHost implements EngineHost {
   readonly supportsSteer = false;
+  // Keep follow-ups in Delegatus until idle. Claude can consume several inputs
+  // before one result, or combine them into a replay with one canonical UUID;
+  // native batching cannot currently preserve our per-input receipt identity.
+  readonly supportsQueuedSend = false;
   readonly identity: ClaudeSessionIdentity;
 
   private readonly child: ChildProcessWithoutNullStreams;
@@ -859,7 +865,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (options.model) args.push("--model", options.model);
     if (options.effort) args.push("--effort", options.effort);
     if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
-    if (telegram.unavailable) args.push("--append-system-prompt", TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+    const appended = [options.cleanMemory ? "" : options.appendSystemPrompt, telegram.unavailable ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : ""].filter(Boolean).join("\n\n");
+    if (appended) args.push("--append-system-prompt", appended);
     if (options.tools) args.push("--tools", options.tools.join(","));
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
       spawn(command, childArgs, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
@@ -974,19 +981,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       resolveDelivery = resolve;
       rejectDelivery = reject;
     });
-    const timer = setTimeout(() => {
-      if (this.pendingDeliveries.get(entry.id)?.promise !== promise) return;
-      // A missing replay echo says nothing about the incumbent turn's liveness.
-      // Keep the original ledger entry and transport for late canonical evidence.
-      // Retain the rejected promise too: another call with this id must not
-      // write the same input again while its original replay echo is pending.
-      rejectDelivery(new Error("Claude delivery confirmation timed out; outcome is uncertain"));
-    }, this.requestTimeoutMs);
     const pending: PendingDelivery = {
       promise,
       resolve: (receipt) => resolveDelivery(receipt),
       reject: (error) => rejectDelivery(error),
-      timer,
+      timer: null,
     };
     this.pendingDeliveries.set(entry.id, pending);
     if (this.memoryQueuePath) {
@@ -1001,11 +1000,27 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.turnQueue.push(entry.id);
     if (!this.activeTurnId) {
       this.activeTurnId = entry.id;
+      this.armDeliveryConfirmation(entry.id);
       this.emit({ kind: "turn-started", turnId: entry.id });
     } else {
       this.notifyStateListeners();
     }
     return pending.promise;
+  }
+
+  /* The CLI echoes an input when it takes it from its own queue, so one written
+     behind a running turn starts its confirmation budget with its own turn. */
+  private armDeliveryConfirmation(id: string): void {
+    const pending = this.pendingDeliveries.get(id);
+    if (!pending || pending.timer) return;
+    pending.timer = setTimeout(() => {
+      if (this.pendingDeliveries.get(id) !== pending) return;
+      // A missing replay echo says nothing about the incumbent turn's liveness.
+      // Keep the original ledger entry and transport for late canonical evidence.
+      // Retain the rejected promise too: another call with this id must not
+      // write the same input again while its original replay echo is pending.
+      pending.reject(new Error("Claude delivery confirmation timed out; outcome is uncertain"));
+    }, this.requestTimeoutMs);
   }
 
   async interrupt(turnRef: string): Promise<void> {
@@ -1410,7 +1425,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           const pending = this.pendingDeliveries.get(delivery.entry.id);
           if (pending) {
             this.pendingDeliveries.delete(delivery.entry.id);
-            clearTimeout(pending.timer);
+            if (pending.timer) clearTimeout(pending.timer);
             pending.resolve({ outcome: delivery.disposition, turnId: delivery.entry.id });
           }
         } catch (error) {
@@ -1529,6 +1544,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     this.attentions.clear();
     this.activeTurnId = this.turnQueue[0] ?? null;
+    if (this.activeTurnId) this.armDeliveryConfirmation(this.activeTurnId);
     if (this.activeTurnId) this.emit({ kind: "turn-started", turnId: this.activeTurnId });
     else this.emit({ kind: "session-status", status: "idle" });
   }
@@ -1675,7 +1691,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private rejectPending(error: Error): void {
     for (const pending of this.pendingDeliveries.values()) {
-      clearTimeout(pending.timer);
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new Error(safeError(error)));
     }
     this.pendingDeliveries.clear();
