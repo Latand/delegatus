@@ -321,7 +321,7 @@ export async function runClaimedRequest(
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
     markActive(relay, target);
-    if (owner && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner) });
+    if (owner && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
     const context = conversationContext(request.input.requester);
     if (!owner && readRelaySwitches().chat_conversations && request.chat && context) {
       sweepConversations([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), undefined, relay.id);
