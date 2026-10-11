@@ -306,10 +306,12 @@ review to ask for.
 board's ⋯ menu, is off by default.
 While it is off, a pipeline ends with its pull request open and the
 orchestrator tells you it is ready. Turn it on and Delegatus merges each
-pipeline whose reviews passed, one at a time per repository, once every
-check on the head has finished green. It updates a branch that fell behind
-and leaves conflicts to you. The pipeline shows "waiting for checks", "merge
-stopped" or "merged". A stopped merge appears under **Needs you** with **Try
+pipeline whose reviews passed, one at a time per repository, once the base
+branch's required checks on the head have settled green. Pending optional
+checks can continue; any reported check failure stops the merge. It updates a
+branch that fell behind and leaves conflicts to you. The pipeline shows
+"waiting for checks", "merge stopped" or "merged". A stopped merge appears
+under **Needs you** with **Try
 the merge again**. The orchestrator can also hand several reviewed pull
 requests to one **merger** stage, which lands them as a single batch pull
 request with one commit per original;
@@ -823,6 +825,17 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 | `VIEWER_PROC_BACKEND` | `linux`, `portable` or `windows`: forces the process-discovery backend. |
 
 ### Agent memory
+
+Before a structured, terminal or headless agent launch, Delegatus requires
+at least 2 GiB of available RAM. This floor leaves 1 GiB of headroom above
+the exhaustion observed in [#1211](https://github.com/Latand/delegatus/issues/1211).
+The check uses reclaimable RAM (`MemAvailable` on Linux), independently of
+lane count, swap usage and the memory-limit mode, including `off`. An
+unavailable reading permits the launch. A refusal reports the measured RAM
+and required floor; structured and terminal launch receipts retain that reason
+as a failed launch, which the board and pipeline failure handling display.
+This is a point-in-time check: later tool allocations remain governed by
+memory ceilings and the shared gate runner.
 
 Each agent gets a ceiling computed at launch from RAM and the number of live
 hosts. Delegatus reserves at least 4 GiB (15% of RAM) for the core and OS;

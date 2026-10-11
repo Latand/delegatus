@@ -343,6 +343,27 @@ test("a missing, malformed, unknown or rotated capability is refused before any 
   }
 });
 
+test("both HTTP migration hosts can call tools before commit and a discard withdraws only the successor", async () => {
+  agentRegistry().settleSpawn(alice.launchId, {
+    key: { engine: "claude", sessionId: crypto.randomUUID() }, artifactPath: path.join(sandbox, "handover.jsonl"),
+    cwd: sandbox, accountId: "source", status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+  const predecessor = await agentClient(alice);
+  const pending = agentRegistry().stageSpawnCapabilityForConversation(alice.conversationId, "http-handover")!;
+  const successor = await agentClient({ ...alice, capability: pending.capability });
+  try {
+    expect(payloadOf(await send(predecessor, "http-handover-predecessor"))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(successor, "http-handover-successor"))).toMatchObject({ ok: true });
+    agentRegistry().discardSpawnCapabilityForOperation("http-handover");
+    await expect(send(successor, "http-handover-discarded")).rejects.toThrow();
+    expect(payloadOf(await send(predecessor, "http-handover-after-discard"))).toMatchObject({ ok: true });
+    expect(deliveries.map(row => row.capability)).toEqual([alice.capability, pending.capability, alice.capability]);
+  } finally {
+    agentRegistry().discardSpawnCapabilityForOperation("http-handover");
+    await Promise.all([predecessor.close(), successor.close()]);
+  }
+});
+
 test("each call runs as the agent whose capability it presented, and one agent's key cannot replay another's call", async () => {
   const [a, b] = await Promise.all([agentClient(alice), agentClient(bob)]);
   try {
