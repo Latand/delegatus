@@ -26,8 +26,8 @@ export const FORGE_FULL_LIMIT = 5_000;
 export const FORGE_FILL_LIMIT = 10;
 const FORGE_TIMEOUT_MS = 20_000;
 
-const PR_FIELDS = "number,url,headRefName,headRefOid,state,isDraft,createdAt,updatedAt,closingIssuesReferences";
-const LEGACY_PR_FIELDS = "number,url,headRefName,headRefOid,state,isDraft,createdAt,updatedAt";
+const PR_FIELDS = "number,url,headRefName,headRefOid,state,isDraft,createdAt,updatedAt,title,mergedAt,closingIssuesReferences";
+const LEGACY_PR_FIELDS = "number,url,headRefName,headRefOid,state,isDraft,createdAt,updatedAt,title,mergedAt";
 
 export interface ForgeSweepPorts {
   now: () => number;
@@ -73,6 +73,9 @@ function parseRows(raw: string, checkedAt: string): SweptRow[] | null {
       closes,
       checkedAt,
       ...(typeof row.headRefOid === "string" && /^[0-9a-f]{40}$/i.test(row.headRefOid) ? { headRefOid: row.headRefOid } : {}),
+      ...(typeof row.title === "string" ? { title: row.title.slice(0, 512) } : {}),
+      /* gh answers an unmerged PR's mergedAt as null or the zero instant. */
+      ...(typeof row.mergedAt === "string" && Number.isFinite(Date.parse(row.mergedAt)) && Date.parse(row.mergedAt) > 0 ? { mergedAt: row.mergedAt } : {}),
     });
   }
   return rows;

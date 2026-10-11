@@ -41,6 +41,7 @@ import {
   BRIDGE_REPORT_LOG_SCHEMA_VERSION,
   BRIDGE_RETIRED_ID_CAPACITY,
   isBridgeDecisionRequestClass,
+  isBridgeReportOutcomeKind,
   isStoredBridgeReportClass,
   LEGACY_CONFIRMATION_CLASS,
   MANAGER_RECORD_REF,
@@ -52,6 +53,7 @@ import {
   type BridgeReportInput,
   type BridgeReportLogV1,
   type BridgeReportOrigin,
+  type BridgeReportOutcome,
   type BridgeReportTelegram,
   type BridgeReportTelegramState,
   type BridgeReportV1,
@@ -242,7 +244,23 @@ function normalizeReport(value: unknown): BridgeReportV1 | null {
     ...(Array.isArray(candidate.covers) ? { covers: candidate.covers.filter((id): id is string => typeof id === "string") } : {}),
     ...(typeof candidate.coversOwedAt === "string" ? { coversOwedAt: candidate.coversOwedAt } : {}),
     ...(normalizeTelegram(candidate.telegram) ? { telegram: normalizeTelegram(candidate.telegram) } : {}),
+    ...(normalizeOutcome(candidate.outcome) ? { outcome: normalizeOutcome(candidate.outcome) } : {}),
   };
+}
+
+function normalizeOutcome(value: unknown): BridgeReportOutcome | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Partial<BridgeReportOutcome>;
+  if (!isBridgeReportOutcomeKind(raw.kind) || typeof raw.summary !== "string") return undefined;
+  return { kind: raw.kind, summary: raw.summary };
+}
+
+/** An outcome marker survives only on a manager row with a summary left
+    after redaction. */
+function outcomeOf(input: BridgeReportInput): { outcome?: BridgeReportOutcome } {
+  const outcome = input.outcome && input.origin?.kind === "manager" ? normalizeOutcome(input.outcome) : undefined;
+  const summary = outcome ? bridgeReportBody(outcome.summary).slice(0, 240) : "";
+  return outcome && summary ? { outcome: { kind: outcome.kind, summary } } : {};
 }
 
 function emptyLog(): BridgeReportLogV1 {
@@ -875,6 +893,7 @@ export function appendBridgeReports(
         ...(input.telegram
           ? { telegram: { chat: input.telegram.chat, html: input.telegram.html, ...(input.telegram.topicId ? { topicId: input.telegram.topicId } : {}), state: "pending" as const, attempts: 0, at: input.at } }
           : {}),
+        ...outcomeOf(input),
       };
       file.reports.push(report);
       appended.push(report);

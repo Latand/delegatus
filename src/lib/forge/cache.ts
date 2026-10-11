@@ -73,6 +73,8 @@ function validEntry(value: unknown): ForgeRepositoryEntry | null {
       closes: Array.isArray(pr.closes) ? pr.closes.filter((n): n is number => Number.isSafeInteger(n) && n > 0) : [],
       checkedAt: typeof pr.checkedAt === "string" ? pr.checkedAt : "",
       ...(typeof pr.headRefOid === "string" && pr.headRefOid ? { headRefOid: pr.headRefOid } : {}),
+      ...(typeof pr.title === "string" ? { title: pr.title } : {}),
+      ...(typeof pr.mergedAt === "string" && pr.mergedAt ? { mergedAt: pr.mergedAt } : {}),
     };
   }
   const text = (field: unknown) => (typeof field === "string" && field ? field : null);
@@ -225,6 +227,8 @@ export function observeForgePullRequest(
       state: prior?.state ?? (PR_STATES.has(state) ? state as PullRequestState : "open"),
       closes: prior?.closes ?? [],
       checkedAt: prior?.checkedAt ?? now,
+      ...(prior?.title !== undefined ? { title: prior.title } : {}),
+      ...(prior?.mergedAt ? { mergedAt: prior.mergedAt } : {}),
     };
     delete entry.issues[String(pullRequest.number)];
   }, file);

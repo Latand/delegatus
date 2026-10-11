@@ -7445,6 +7445,94 @@ describe("agent memory isolation", () => {
     } finally { await browser.close(); server.stop(); }
   }, 90000);
 });
+/*
+ * «Готово» in the phone's «Чекають на вас» sheet (docs/design/done-section.md
+ * §4.3, §5) at 390 in Ukrainian, over the needs-you fixture with `&done=1`,
+ * read against variant 2's phone frames: the sheet with the thumbnail and the
+ * square check, the frame's pair in the existing viewer, technical fixes
+ * accepted one by one with the group head counting what is left, then
+ * everything accepted with the badge back to the decisions.
+ */
+describe("«Готово» in the phone sheet", () => {
+  browserTest("the sheet ends in «Готово»: square checks, groups, the viewer and the badge at 390 in uk", async () => {
+    const out = path.resolve(".artifacts/done-section/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await launchChromium();
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const scheme of ["dark", "light"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce" });
+        try {
+          await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=uk&done=1`);
+          const badge = page.locator("[data-mobile2-attention-count]");
+          await page.waitForFunction(() => Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? 0) > 18, undefined, { timeout: 15_000 });
+          const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+          const badgeCount = async () => Number(await badge.getAttribute("data-mobile2-attention-count"));
+          await page.locator('[data-mobile2-open="attention"]').click();
+          const sheet = page.locator('[data-mobile2-sheet="attention"]');
+          const section = sheet.locator('[data-done-section="phone"]');
+          await section.waitFor({ timeout: 15_000 });
+          /* The badge counts the board's decisions and the slice's «Готово»: the
+             shop-web task is another board's, so this board shows one fewer. */
+          const shown = await section.locator("[data-done-count]").innerText();
+          const decisions = await sheet.locator("[data-needs-you-row]").count();
+          expect(Number(shown)).toBe(doneCount - 1);
+          expect(await badgeCount()).toBe(decisions + doneCount - 1);
+          expect(await sheet.locator("h2").first().innerText()).toBe(`Чекають на вас · ${decisions + doneCount - 1}`);
+          const check = section.locator('[data-done-accept="pr:example/delegatus#2691"]');
+          const box = (await check.boundingBox())!;
+          expect(box.width).toBeGreaterThanOrEqual(44);
+          expect(box.height).toBeGreaterThanOrEqual(44);
+          expect(await check.innerText()).toBe("");
+          const geometry = await section.evaluate((element) => ({
+            right: Math.max(...[...element.querySelectorAll<HTMLElement>("*")].map((node) => node.getBoundingClientRect().right)),
+            overflow: document.documentElement.scrollWidth > innerWidth,
+          }));
+          expect(geometry.right).toBeLessThanOrEqual(390);
+          expect(geometry.overflow).toBe(false);
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet.png`) });
+
+          await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
+          const viewer = page.locator('[role="dialog"][aria-modal="true"]').filter({ has: page.locator("[data-lightbox-compare]") });
+          await viewer.waitFor();
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame.png`) });
+          await viewer.locator('[data-lightbox-compare-side="before"]').click();
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-before.png`) });
+          await page.keyboard.press("Escape");
+          await viewer.waitFor({ state: "detached" });
+          await section.waitFor();
+
+          await check.click();
+          await section.locator('[data-done-receipt="pr:example/delegatus#2691"]').waitFor();
+          expect(await badgeCount()).toBe(decisions + doneCount - 2);
+          await section.locator('[data-done-group-toggle="technical"]').click();
+          const checks = section.locator('[data-done-group="technical"] [data-done-member-check]');
+          for (let index = 0; index < 4; index += 1) await checks.nth(index).click();
+          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-title]')?.textContent?.includes("6 з 10"));
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-3-partial.png`) });
+
+          await section.locator("[data-done-accept-all]").click();
+          await section.locator("[data-done-all-accepted]").waitFor();
+          expect(await badgeCount()).toBe(decisions);
+          await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-4-all-accepted.png`) });
+          expect(errors).toEqual([]);
+          readings.push({ scheme, decisions, done: doneCount - 1, check: { width: box.width, height: box.height }, ...geometry });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/done-section", { recursive: true });
+      fs.writeFileSync("evidence/done-section/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", viewport: { width: 390, height: 844 }, lang: "uk", readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 browserTest("stage agent row: conversations, parked questions and earlier attempts at phone and desktop widths", async () => {
   const { base, stop } = await serveFixture();
   const browser = await launchChromium().catch((error) => { stop(); throw error; });

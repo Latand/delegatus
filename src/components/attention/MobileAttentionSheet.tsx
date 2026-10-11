@@ -12,6 +12,7 @@ import { MobileSheet, MobileSheetSection } from "@/components/mobile/MobileSheet
 import { BAR_PRESSED } from "@/components/ProjectBar";
 import type { AttentionNotice } from "@/lib/attention/types";
 import { projectTitle } from "@/lib/displayNames";
+import type { DoneItemV1 } from "@/lib/done/types";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FrameRole } from "@/lib/roleFrames";
@@ -26,6 +27,8 @@ import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine, reasonLine } from "./decision";
 import { sendDismissal } from "./dismissalOverlay";
+import { DoneSection } from "./DoneSection";
+import type { acknowledgeDone } from "./doneItems";
 import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
 import { PermissionActions } from "./PermissionActions";
 
@@ -48,6 +51,11 @@ import { PermissionActions } from "./PermissionActions";
  * (`needsYouLaneLine`, the card's `needLabel`) and its age, so one item reads
  * the same on both surfaces. The wait gives way to an ellipsis before the age
  * does: the age is the one fact on the line that must stay whole.
+ *
+ * Below the queue, «Готово» (docs/design/done-section.md) lists the finished
+ * work of the same slice still waiting to be accepted, the same section the
+ * desktop panel ends with; the header's count holds both until it is
+ * accepted, and «Dismiss all» counts only the decisions it clears.
  *
  * A row is the phone's OPEN gesture (#1244): the conversation screen it pushes
  * stamps the card seen. Pipelines have a destination once lane 7 lands the
@@ -107,6 +115,10 @@ export interface MobileAttentionSheetProps {
   /** Absent while nothing on the board waits, so no funnel is drawn (the
       island's contract). */
   onToggleFilter?: () => void;
+  /** «Готово» of the slice the badge counts: finished work still waiting. */
+  done?: readonly DoneItemV1[];
+  /** Test seam. */
+  acknowledgeDone?: typeof acknowledgeDone;
 }
 
 const ROW = "flex min-h-11 w-full items-center gap-3 px-4 py-1.5 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
@@ -116,8 +128,9 @@ const SEP = <span aria-hidden className="shrink-0 opacity-60">·</span>;
 const NO_NOTICES: readonly MobileNoticeRow[] = [];
 const NO_PIPELINES: readonly Pipeline[] = [];
 const NO_NAMES: Readonly<Record<string, string>> = {};
+const NO_DONE: readonly DoneItemV1[] = [];
 
-export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onOpenPrototype, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen, filterActive = false, onToggleFilter }: MobileAttentionSheetProps) {
+export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onOpenPrototype, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen, filterActive = false, onToggleFilter, done = NO_DONE, acknowledgeDone }: MobileAttentionSheetProps) {
   const { t } = useLocale();
   const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const shownNotices = notices.map((row) => row.notice.id).join("\n");
@@ -150,7 +163,8 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const sections = needsYouSections(entries, current, order);
   const titled = sections.length > 1;
   const dismissible = needsYouDismissibleCount(entries);
-  const title = entries.length ? t("attention.panelTitle", { count: entries.length }) : t("attention.panelAria");
+  const waiting = entries.length + done.length;
+  const title = waiting ? t("attention.panelTitle", { count: waiting }) : t("attention.panelAria");
   const row = (entry: MobileAttentionEntry) => {
     // The card keeps the sheet's content gutter; a bare card ran edge to edge.
     if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
@@ -276,9 +290,10 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
             );
           }) : sections.flatMap((section) => section.entries.map(row))}
         </div>
-      ) : notices.length ? null : (
+      ) : notices.length || done.length ? null : (
         <div className="px-4 py-4 text-center text-ui text-muted" data-mobile2-attention-empty>{t("mobile2.attention.empty")}</div>
       )}
+      <DoneSection items={done} current={current} projectNames={projectNames} surface="phone" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />
     </MobileSheet>
   );
 }

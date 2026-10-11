@@ -1,0 +1,48 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "lang": "uk",
+  "readings": [
+    {
+      "scheme": "dark",
+      "decisions": 10,
+      "done": 18,
+      "order": [
+        "pr:example/delegatus#2691",
+        "deploy:fixture-deploy",
+        "report:fixture-publication",
+        "group:technical",
+        "group:closed",
+        "limit:codex:acct-b:session:1",
+        "report:fixture-incident"
+      ],
+      "last": true,
+      "wide": 0,
+      "overflow": false,
+      "panelWidth": 320,
+      "afterAll": 10
+    },
+    {
+      "scheme": "light",
+      "decisions": 10,
+      "done": 18,
+      "order": [
+        "pr:example/delegatus#2691",
+        "deploy:fixture-deploy",
+        "report:fixture-publication",
+        "group:technical",
+        "group:closed",
+        "limit:codex:acct-b:session:1",
+        "report:fixture-incident"
+      ],
+      "last": true,
+      "wide": 0,
+      "overflow": false,
+      "panelWidth": 320,
+      "afterAll": 10
+    }
+  ]
+}

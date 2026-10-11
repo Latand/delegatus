@@ -5,6 +5,7 @@ import { useCallback, useState, type ReactNode } from "react";
 
 import { projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
+import type { DoneItemV1 } from "@/lib/done/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
@@ -12,6 +13,8 @@ import { RoleTag } from "../RoleFrameMark";
 import { fmtAge } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { sendDismissal, type DismissalRequestOutcome } from "./dismissalOverlay";
+import { DoneSection } from "./DoneSection";
+import type { acknowledgeDone } from "./doneItems";
 import {
   isFocusedNeedsYouEntry,
   needsYouDismissal,
@@ -42,6 +45,10 @@ import { PermissionActions } from "./PermissionActions";
  *
  * `docked`: a column beside the board, whose head lines up with the board's
  * bar. `overlay`: the same list under the header control, over the board.
+ *
+ * «Готово» (docs/design/done-section.md) is the last block of the body: the
+ * finished work waiting to be accepted, which the title counts with the
+ * decisions until it is accepted. «Dismiss all» still counts what it clears.
  */
 
 export type AttentionPanelPlacement = "docked" | "overlay";
@@ -66,9 +73,15 @@ export interface AttentionPanelProps {
   focus?: { path: string | null; laneId: string | null };
   /** Rows pinned above the sections (the current project's crowned conversations). */
   pinned?: ReactNode;
+  /** «Готово»: finished work still waiting to be accepted, every project's. */
+  done?: readonly DoneItemV1[];
   /** Test seam. */
   dismiss?: Dismiss;
+  /** Test seam. */
+  acknowledgeDone?: typeof acknowledgeDone;
 }
+
+const NO_DONE: readonly DoneItemV1[] = [];
 
 const FOLD_KEY = "llvNeedsYouFolds";
 
@@ -111,7 +124,9 @@ export function AttentionPanel({
   onOpen,
   focus = { path: null, laneId: null },
   pinned,
+  done = NO_DONE,
   dismiss = sendDismissal,
+  acknowledgeDone,
 }: AttentionPanelProps) {
   const { t } = useLocale();
   const sections = needsYouSections(queue, current, order);
@@ -150,7 +165,7 @@ export function AttentionPanel({
 
   const docked = placement === "docked";
   const dismissible = needsYouDismissibleCount(queue);
-  const title = t("attention.panelTitle", { count: queue.length });
+  const title = t("attention.panelTitle", { count: queue.length + done.length });
   const head = (
     <div className={`flex shrink-0 items-center gap-1 border-b border-border pl-3 pr-1.5 ${docked ? "h-12" : "h-10"}`}>
       <h2 className="min-w-0 flex-1 truncate text-ui font-semibold text-secondary" data-needs-you-title="">{title}</h2>
@@ -194,9 +209,10 @@ export function AttentionPanel({
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-1.5" data-needs-you-body="">
       {pinned}
       {error ? <p className="px-2.5 py-1.5 text-[11px] text-danger" role="status" data-needs-you-error="">{error}</p> : null}
-      {sections.length === 0 ? (
+      {sections.length === 0 && done.length === 0 ? (
         <p className="px-2.5 py-3 text-[12px] text-muted" data-needs-you-empty="">{t("attention.empty")}</p>
-      ) : sections.map((section, index) => {
+      ) : null}
+      {sections.map((section, index) => {
         const name = projectTitle(section.project, projectNames[section.project]) ?? section.project;
         const isFolded = folded(section.project);
         return (
@@ -238,6 +254,7 @@ export function AttentionPanel({
           </section>
         );
       })}
+      <DoneSection items={done} current={current} projectNames={projectNames} surface="desktop" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />
     </div>
   );
 

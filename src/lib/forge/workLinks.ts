@@ -76,6 +76,11 @@ export type CachedPullRequest = {
   /** The head commit as last read. For a merged PR it is the commit the PR
       delivered, which the worktree sweep proves a lane is contained in (#2202). */
   headRefOid?: string;
+  /** The PR's title and when it merged, as last read. A merge batch's title
+      names the PRs it landed (docs/design/done-section.md §2.1). Absent on
+      entries read before the sweep asked for them. */
+  title?: string;
+  mergedAt?: string;
 };
 
 /** One repository of the forge cache, indexed for read-time joins. */

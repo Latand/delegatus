@@ -18339,6 +18339,94 @@ describe("agent memory isolation", () => {
   }, 90000);
 });
 
+/*
+ * «Готово» in «Чекають на вас» (docs/design/done-section.md §4.3, §5): the
+ * finished work under the decisions at 1440 in Ukrainian, over the needs-you
+ * fixture with `&done=1`, read against variant 2's frames: the morning panel
+ * with its thumbnail, the frame's before and after in the existing viewer, a
+ * visible change accepted and four technical fixes accepted one by one, then
+ * everything accepted with only the decisions left in the count.
+ */
+describe("«Готово» in «Чекають на вас»", () => {
+  browserTest("the desktop panel ends in «Готово»: thumbnail, groups, acceptance and the counter at 1440 in uk", async () => {
+    const out = path.resolve(".artifacts/done-section/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const scheme of ["dark", "light"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=uk&open=1&done=1`, VIEWPORT, scheme, "uk", "reduce");
+        try {
+          const panel = page.locator("[data-needs-you-panel]");
+          const section = panel.locator("[data-done-section]");
+          await section.waitFor({ timeout: 15_000 });
+          /* The decisions arrive with the files poll; all three boards' sections. */
+          await page.waitForFunction(() => document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]").length === 3, undefined, { timeout: 15_000 });
+          const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+          const island = async () => Number((await page.locator("[data-attention-count]").innerText()).match(/\d+/g)!.at(-1));
+          const decisions = (await panel.locator("[data-needs-you-section-count]").allInnerTexts()).reduce((sum, text) => sum + Number(text), 0);
+          expect(decisions).toBeGreaterThan(0);
+          expect(await island()).toBe(decisions + doneCount);
+          expect(await panel.locator("[data-needs-you-title]").innerText()).toBe(`Чекають на вас · ${decisions + doneCount}`);
+          expect(await page.title()).toBe(`(${decisions + doneCount}) Delegatus`);
+          expect(await section.locator("[data-done-accept-all]").innerText()).toBe(`Прийняти всі ${doneCount}`);
+          expect(await panel.locator("[data-needs-you-dismiss-all]").innerText()).toBe(`Зняти всі ${decisions}`);
+          const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
+          expect(order).toEqual(["pr:example/delegatus#2691", "deploy:fixture-deploy", "report:fixture-publication", "group:technical", "group:closed", "limit:codex:acct-b:session:1", "report:fixture-incident"]);
+          const layout = await panel.evaluate((element) => {
+            const body = element.querySelector("[data-needs-you-body]")!;
+            const done = element.querySelector("[data-done-section]")!;
+            const box = element.getBoundingClientRect();
+            const wide = [...done.querySelectorAll<HTMLElement>("*")].filter((node) => node.getBoundingClientRect().right > box.right + 0.5 || node.getBoundingClientRect().left < box.left - 0.5).length;
+            return { last: body.lastElementChild === done, wide, overflow: document.documentElement.scrollWidth > innerWidth, panelWidth: box.width };
+          });
+          expect(layout).toMatchObject({ last: true, wide: 0, overflow: false });
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-1-morning.png`) });
+
+          /* The thumbnail opens the existing viewer with the frame's pair. */
+          await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
+          const viewer = page.locator('[role="dialog"][aria-modal="true"]');
+          await viewer.waitFor();
+          expect(await viewer.locator("[data-lightbox-compare-side]").count()).toBe(2);
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-after.png`) });
+          await viewer.locator('[data-lightbox-compare-side="before"]').click();
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-before.png`) });
+          await page.keyboard.press("Escape");
+          await viewer.waitFor({ state: "detached" });
+          expect(await panel.isVisible()).toBe(true);
+
+          /* A visible change accepted, then four technical fixes one by one. */
+          await section.locator('[data-done-accept="pr:example/delegatus#2691"]').click();
+          await section.locator('[data-done-receipt="pr:example/delegatus#2691"]').waitFor();
+          expect(await island()).toBe(decisions + doneCount - 1);
+          await section.locator('[data-done-group-toggle="technical"]').click();
+          const checks = section.locator('[data-done-group="technical"] [data-done-member-check]');
+          for (let index = 0; index < 4; index += 1) await checks.nth(index).click();
+          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-title]')?.textContent?.includes("6 з 10"));
+          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').innerText()).toBe("4 прийнято");
+          expect(await island()).toBe(decisions + doneCount - 5);
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-3-partial.png`) });
+
+          /* Everything accepted: the count is the decisions again. */
+          await section.locator("[data-done-accept-all]").click();
+          await section.locator("[data-done-all-accepted]").waitFor();
+          expect(await island()).toBe(decisions);
+          expect(await page.title()).toBe(`(${decisions}) Delegatus`);
+          await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-4-all-accepted.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ scheme, decisions, done: doneCount, order, ...layout, afterAll: decisions });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/done-section", { recursive: true });
+      fs.writeFileSync("evidence/done-section/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, lang: "uk", readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 // The focused common-path case shares its assertions with the phone driver.
 describe("seat hand-over with evidence answered last", () => {
   browserTest("Claude and Codex keep the opened card at 1440 in en and uk", async () => {

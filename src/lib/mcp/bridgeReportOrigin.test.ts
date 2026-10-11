@@ -140,3 +140,29 @@ test("a report for a project whose bridge reports are off is refused with an ans
   expect(recorded.recorded).toBe(true);
   expect(readBridgeReportLog().reports).toHaveLength(1);
 });
+
+/* docs/design/done-section.md §2.3: an orchestrator marks a report that tells
+   of a handled incident or an outside publication, and the marker is kept
+   beside its row with the summary it rendered, the body unchanged. From any
+   other session the report stands and the marker is ignored, with a warning. */
+test("only the orchestrator's own report keeps an outcome marker, beside an unchanged body", async () => {
+  const plain = await serviceAs(MANAGER).callTool("bridge_report", report({ key: "k-plain", body: undefined, summary: "Seven lanes restarted after the speed switch." })) as McpToolResult;
+  expect(plain.ok).toBe(true);
+  const marked = await serviceAs(MANAGER).callTool("bridge_report", report({ clientRequestId: "rep-2", key: "k-marked", body: undefined, summary: "Seven lanes restarted after the speed switch.", outcome: "incident" })) as McpToolResult & { warnings?: string[] };
+  expect(marked.ok).toBe(true);
+  const [first, second] = readBridgeReportLog().reports;
+  expect(first!.outcome).toBeUndefined();
+  expect(second!.outcome).toEqual({ kind: "incident", summary: "Seven lanes restarted after the speed switch." });
+  /* The rendered body is the same text with or without the marker, apart from its clock line. */
+  expect(second!.body.split("\n").slice(1)).toEqual(first!.body.split("\n").slice(1));
+
+  const worker = await serviceAs(WORKER).callTool("bridge_report", report({ clientRequestId: "rep-3", key: "k-worker", outcome: "publication" })) as McpToolResult & { recorded?: boolean; warnings?: string[] };
+  expect(worker.ok).toBe(true);
+  expect(worker.recorded).toBe(true);
+  expect(worker.warnings).toEqual(expect.arrayContaining([expect.stringContaining("outcome was ignored")]));
+  expect(readBridgeReportLog().reports[2]!.outcome).toBeUndefined();
+
+  const unknown = await serviceAs(MANAGER).callTool("bridge_report", report({ clientRequestId: "rep-4", key: "k-unknown", outcome: "celebration" })) as McpToolResult;
+  expect(unknown.ok).toBe(false);
+  expect(readBridgeReportLog().reports).toHaveLength(3);
+});

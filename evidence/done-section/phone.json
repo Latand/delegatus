@@ -1,0 +1,32 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "lang": "uk",
+  "readings": [
+    {
+      "scheme": "dark",
+      "decisions": 6,
+      "done": 17,
+      "check": {
+        "width": 44,
+        "height": 44
+      },
+      "right": 390,
+      "overflow": false
+    },
+    {
+      "scheme": "light",
+      "decisions": 6,
+      "done": 17,
+      "check": {
+        "width": 44,
+        "height": 44
+      },
+      "right": 390,
+      "overflow": false
+    }
+  ]
+}

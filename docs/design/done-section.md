@@ -131,12 +131,15 @@ outcome?: "incident" | "publication"
 
 It is honoured only on a manager-origin row of the caller's project (another
 origin keeps its report and the answer says the marker was ignored), stored on
-`BridgeReportV1` beside the report's `summary` text, and changes neither the
-body nor the Telegram copy. The tool description and the seat's report rules
-say when to set it: `incident` when the report tells of something that went
-wrong and was handled (a lane stuck and restarted, lanes paused by the credit
-guard, a step done by hand); `publication` when something was published
-outside Delegatus's own deploy (the landing site, a release tag).
+`BridgeReportV1` as `outcome: { kind, summary }`, the summary being the one the
+report rendered after scrubbing, and changes neither the body nor the Telegram
+copy. The tool description says when to set it: `incident` when the report
+tells of something that went wrong and was handled (a lane stuck and
+restarted, lanes paused by the credit guard, a step done by hand);
+`publication` when something was published outside Delegatus's own deploy
+(the landing site, a release tag). The seat's report rules (mandate v46) point
+at that description in one clause: the delivered mandate sits a few bytes
+under the budget that keeps a rotation's history section whole.
 
 A failed or rolled-back deploy is an incident from the ledger directly, with no
 marker.
@@ -227,8 +230,10 @@ sections do.
 Run at projection for `pr` and `pipeline` items, stopping at the first hit:
 
 1. A prototype review round on one of the item's tasks published by the
-   item's own pipeline (a build or fix stage's frames), newest round, the first
-   frame of its first variant; the frame's `original` is the `before`.
+   item's own pipeline and not decided (a build or fix stage's rendered
+   result), newest round, the first frame of its first variant; the frame's
+   `original` is the `before`. A decided round of the lane's own is a design
+   choice and is read by step 3.
 2. The newest image in the task album (`readTaskAlbum`) whose source stage
    belongs to the item's pipeline and has the `visual-critic` role, else one the
    album admits from an evidence root (`LLV_EVIDENCE_ROOTS`) from any stage of

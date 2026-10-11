@@ -32,6 +32,7 @@ import { PrototypeReviewHost } from "./prototypeReview/PrototypeReviewHost";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import { useDismissalOverlay, usePrototypeDismissalOverlay } from "./attention/dismissalOverlay";
+import { useDoneItems } from "./attention/doneItems";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
 import { AttentionIsland } from "./attention/AttentionIsland";
@@ -995,6 +996,12 @@ function ViewerApp() {
     publishBlockerNames({ projects: projectDisplayNames, conversations });
   }, [updateBlockers, updateDecision, allFiles, projectDisplayNames]);
   const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks), [files, pipelines, clock, closingPipelines, updateDecision, tasks]);
+  /* «Готово» (docs/design/done-section.md §5): finished work still waiting to
+     be accepted counts with the decisions on the header, the panel, the tab
+     title and the phone's badge, until it is accepted. The rail's ⏸, «Dismiss
+     all», the agents' read and the board report stay decisions only. */
+  const doneItems = useDoneItems();
+  const waitingCount = needsYou.length + doneItems.length;
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
@@ -1046,8 +1053,8 @@ function ViewerApp() {
   );
 
   useEffect(() => {
-    document.title = needsYou.length ? `(${needsYou.length}) ${PRODUCT_NAME}` : PRODUCT_NAME;
-  }, [needsYou.length]);
+    document.title = waitingCount ? `(${waitingCount}) ${PRODUCT_NAME}` : PRODUCT_NAME;
+  }, [waitingCount]);
 
   /* The width the board's columns have, for whether the panel can dock
      beside them: the kanban's own pane, which it hands in when it mounts (a
@@ -1074,6 +1081,8 @@ function ViewerApp() {
   useEffect(() => {
     if (!panelFloating) return;
     const onDown = (event: PointerEvent) => {
+      /* A picture opened from the panel is a modal over it, not outside it. */
+      if ((event.target as Element | null)?.closest?.('[aria-modal="true"]')) return;
       if (!queueRef.current?.contains(event.target as Node)) setPanelOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
@@ -1318,6 +1327,8 @@ function ViewerApp() {
      phone and the desktop cannot disagree either (#2129). */
   const shellEntries = project === OVERVIEW ? needsYou : projectEntries;
   const shellQueueCount = shellEntries.length;
+  /* The phone's «Готово» is the same slice, plus what belongs to no board. */
+  const shellDone = useMemo(() => (project === OVERVIEW ? doneItems : doneItems.filter((item) => item.project === null || item.project === project)), [doneItems, project]);
   /* The filter is offered while anything on the board on screen waits, a
      parked lane (#2129) included: that card is what stays lit. Scoped to the
      board, so it never offers to dim a board where nothing would stay lit.
@@ -1547,6 +1558,7 @@ function ViewerApp() {
       onOpen={jumpToEntry}
       focus={panelFocus}
       pinned={favoritesPinned}
+      done={doneItems}
     />
   );
 
@@ -1558,7 +1570,7 @@ function ViewerApp() {
   const attentionBadge = (
     <div ref={queueRef} className="pointer-events-auto relative">
       <AttentionIsland
-        count={needsYou.length}
+        count={waitingCount}
         panelOpen={panelOpen}
         filterActive={needsOnly && needsOnlyAvailable}
         onTogglePanel={() => setPanelOpen((value) => !value)}
@@ -1596,7 +1608,7 @@ function ViewerApp() {
       }
     };
     return {
-      attentionCount: shellQueueCount,
+      attentionCount: shellQueueCount + shellDone.length,
       noticeDot: phoneNotices.unseen,
       filterActive: needsOnly && needsOnlyAvailable,
       arrival: toastFile ? (
@@ -1675,13 +1687,14 @@ function ViewerApp() {
               onNoticesSeen={markNoticesSeen}
               filterActive={needsOnly}
               onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
+              done={shellDone}
             />
           );
         }
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
+  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
 
   const shell = (
     <div className="flex h-full">
