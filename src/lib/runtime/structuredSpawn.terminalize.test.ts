@@ -120,19 +120,20 @@ test("transport-null cleanup rechecks foreground settlement after its asynchrono
 
 test("orphan starting entries converge after the grace while receipt and claim evidence stay intact", async () => {
   const store = registry();
-  for (const name of ["orphan","receipt","claim","young"]) {
+  for (const name of ["orphan","receipt","claim","operation","young"]) {
     store.upsert({ key: { engine: "codex",sessionId: `orphan-${name}` },artifactPath: `/sessions/orphan-${name}.jsonl`,cwd: "/repo",accountId: null,
       status: "starting",host: null,claimEpoch: 0,claimOwner: name === "claim" ? "fixture-owner" : null,pendingAction: "spawn" });
   }
   const receipt = store.beginSpawn("codex","/repo",{ title: "Correlated starting launch" });
   const raw = JSON.parse(fs.readFileSync(store.filename,"utf8"));
   raw.receipts[receipt.launchId].artifactPath = "/sessions/orphan-receipt.jsonl";
+  raw.entries["codex:orphan-operation"].structuredHostOperationId = "fixture-operation";
   raw.entries["codex:orphan-young"].updatedAt = new Date(AGED()).toISOString();
   fs.writeFileSync(store.filename,JSON.stringify(raw));
   await terminalizeStaleStructuredSpawns(store,null,{ now: AGED });
   const snapshot = store.snapshot();
   expect(snapshot.entries["codex:orphan-orphan"]).toMatchObject({ status: "dead",pendingAction: null });
-  for (const name of ["receipt","claim","young"]) expect(snapshot.entries[`codex:orphan-${name}`]?.status).toBe("starting");
+  for (const name of ["receipt","claim","operation","young"]) expect(snapshot.entries[`codex:orphan-${name}`]?.status).toBe("starting");
 });
 
 test("a runtime-host transport failure becomes actionable on the structured spawn card", async () => {

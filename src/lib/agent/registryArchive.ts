@@ -107,6 +107,9 @@ export function archiveInactiveRegistryRows(db: Database, limit: number): number
         AND json_extract(s.value_json,'$.state') NOT IN ('completed','failed','conflicted')))
     OR (collection IN ('lineageEdges','memberships') AND EXISTS (
       SELECT 1 FROM registry_cold c WHERE c.collection='conversations' AND c.row_key=r.row_key))
+    OR (collection='migrationIntents' AND json_extract(value_json,'$.state') IN ('complete','stopped')
+      AND NOT EXISTS (SELECT 1 FROM registry_hot_rows c WHERE c.collection='conversations'
+        AND json_extract(c.value_json,'$.migration.intentId')=+r.row_key))
     OR (collection='heldDeliveries' AND json_extract(value_json,'$.state') IN ('delivered','failed','cancelled','superseded'))
     OR (collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IN ('delivered','failed'))
     ORDER BY row_order LIMIT ?`, [limit]);

@@ -5531,7 +5531,7 @@ export class AgentRegistry {
         if (terminalized.length >= options.limit) break;
         const updatedAt = Date.parse(entry.updatedAt);
         if (!Number.isFinite(updatedAt) || options.now-updatedAt < options.timeoutMs
-          || entry.pendingAction !== "spawn" || entry.host || entry.structuredHost || entry.claimOwner
+          || entry.pendingAction !== "spawn" || entry.host || entry.structuredHost || entry.structuredHostOperationId || entry.claimOwner
           || entry.structuredTerminationSurvivors?.length) continue;
         const receipts = [...registryRowsMatching(file,"receipts","artifactPath",entry.artifactPath),
           ...registryRowsMatching(file,"receipts","key.sessionId",entry.key.sessionId).filter(receipt => receipt.key?.engine === entry.key.engine)];

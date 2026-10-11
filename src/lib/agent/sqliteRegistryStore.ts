@@ -672,6 +672,8 @@ export class SqliteAgentRegistryStore {
       WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn';
     `);
     for (const [field, jsonPath] of Object.entries(LOOKUP_PATHS)) {
+      if (options.allowArchiveMigration === false
+        && !["conversationId", "artifactPath", "command.operationId", "alias"].includes(field)) continue;
       this.db.exec(`CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === 'alias' ? " WHERE collection = 'conversationAliases'" : ''}`);
     }
     // Array paths need a relational index. Triggers cover every writer,
@@ -685,14 +687,12 @@ export class SqliteAgentRegistryStore {
     // The outer UPSERT's conflict policy overrides a trigger's OR IGNORE.
     // Explicit UPSERT clauses keep overlapping generation/continuity paths
     // harmless, including writes from a predecessor release during handover.
-    const pathsVersion = this.changesReady ? "3" : "2";
-    if (this.meta("conversation_paths_trigger_version") !== pathsVersion) {
+    if (this.meta("conversation_paths_trigger_version") !== "2") {
       this.runAtomically([
         "DROP TRIGGER IF EXISTS registry_paths_insert",
         "DROP TRIGGER IF EXISTS registry_paths_update",
         "DROP TRIGGER IF EXISTS registry_paths_delete",
         `CREATE TRIGGER registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
-          DELETE FROM registry_conversation_paths WHERE conversation_id=NEW.row_key;
           INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
           INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
         END`,
@@ -704,7 +704,7 @@ export class SqliteAgentRegistryStore {
         `CREATE TRIGGER registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
           DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
         END`,
-        `INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '${pathsVersion}')
+        `INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '2')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       ]);
     }
@@ -859,7 +859,8 @@ export class SqliteAgentRegistryStore {
     this.db.exec("BEGIN");
     try {
       const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
-      if (first > this.snapshotChangeId + 1 || this.changeId() < this.snapshotChangeId) {
+      if (first > this.snapshotChangeId + 1 || this.changeId() < this.snapshotChangeId
+        || (first === 0 && this.storeStamp() !== previous.stamp)) {
         this.db.exec("COMMIT");
         return null;
       }
@@ -974,6 +975,7 @@ export class SqliteAgentRegistryStore {
 
   archiveInactive(limit = 1_000): number {
     if (!this.changesReady) return 0;
+    assertStateStartupMutation(path.dirname(this.filename), "agent registry archive");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) throw new RangeError("invalid registry archive batch limit");
     const held = this.writerHeld;
     this.writerHeld = false;

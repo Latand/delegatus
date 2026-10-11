@@ -145,6 +145,10 @@ test("an old reader sees cold history and an old writer promotes it during relea
   const legacy = new SqliteAgentRegistryStore(preUpgrade,{ initialSnapshot: initial,normalize: normalizeRegistry,allowArchiveMigration: false });
   stores.push(legacy);
   expect(legacy.archiveInactive()).toBe(0);
+  const schema = new Database(preUpgrade,{ readonly: true });
+  try {
+    expect(schema.query("SELECT name FROM sqlite_master WHERE name IN ('registry_lookup_state','registry_lookup_clientAttemptId','registry_lookup_spawnCapabilityDigest')").all()).toEqual([]);
+  } finally { schema.close(); }
   legacy.mutate(file => { file.receipts["archive-launch-0"]!.error = "pre-upgrade writer"; },false);
   expect(legacy.readOnlySnapshot().file.receipts["archive-launch-0"]?.error).toBe("pre-upgrade writer");
 });
@@ -213,6 +217,14 @@ test("a trimmed external journal falls back to the bounded hot loader and preser
   const next = reader.readOnlySnapshot().file;
   expect(next.receipts["archive-launch-2"]?.error).toBe("after gap");
   expect(next.receipts["archive-launch-0"]).toEqual(previous.receipts["archive-launch-0"]);
+  // The fallback's cursor is now zero. Another write followed by a trim must
+  // still invalidate it even though MIN/MAX(seq) are both zero again.
+  const trimmed = new Database(filename);
+  try {
+    trimmed.run("UPDATE registry_rows SET value_json=json_set(value_json,'$.error','second empty gap') WHERE collection='receipts' AND row_key='archive-launch-2'");
+    trimmed.run("DELETE FROM registry_changes");
+  } finally { trimmed.close(); }
+  expect(reader.readOnlySnapshot().file.receipts["archive-launch-2"]?.error).toBe("second empty gap");
 });
 
 test("external receipt proof changes revoke and restore a hot child's grant beside cold history", () => {
@@ -290,3 +302,28 @@ test("a 26,952-row registry retains all history while bounding payload caches an
   expect(metrics.reads).toBeLessThanOrEqual(2);
   console.info(JSON.stringify({ registryRows: 26_952,payloadBytes,archivedRows: moved,archiveMs: refresh-start,refreshMs: performance.now()-refresh,payloadReads: metrics.reads }));
 },120_000);
+
+
+test("terminal migration history goes cold while draining and referenced intents stay hot", () => {
+  const { open,filename,initial,conversationId } = fixture();
+  const time = initial.conversations[conversationId(0)]!.createdAt;
+  for (const [key,state] of [["migration-complete","complete"],["migration-stopped","stopped"],
+    ["migration-draining","draining"],["migration-referenced","complete"]] as const) {
+    initial.migrationIntents[key] = { id: key,engine: "codex",targetId: "fixture-account",origin: "manual",revision: 1,
+      state,createdAt: time,updatedAt: time,requestIds: [key],evidence: null,stoppedAt: state === "stopped" ? time : null };
+  }
+  initial.conversations[conversationId(0)]!.migration = { intentId: "migration-referenced",phase: "committed",
+    targetId: "fixture-account",revision: 1,error: null,errorCode: null,operationId: "migration-operation",
+    sourceGenerationId: id(0),providerReceipt: null,pendingContinuityPaths: [],boardProject: null,
+    boardOperationId: null,boardPlacementProject: null,updatedAt: time };
+  const store = open();
+  archiveAll(store);
+  const db = new Database(filename,{ readonly: true });
+  try {
+    expect(db.query("SELECT row_key FROM registry_hot_rows WHERE collection='migrationIntents' ORDER BY row_key").all())
+      .toEqual([{ row_key: "migration-draining" },{ row_key: "migration-referenced" }]);
+    expect(db.query("SELECT row_key FROM registry_cold WHERE collection='migrationIntents' ORDER BY row_key").all())
+      .toEqual([{ row_key: "migration-complete" },{ row_key: "migration-stopped" }]);
+  } finally { db.close(); }
+  expect(open().read(file => file.migrationIntents["migration-stopped"])).toEqual(initial.migrationIntents["migration-stopped"]);
+});
