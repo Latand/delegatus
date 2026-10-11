@@ -20,7 +20,7 @@ const { registerPipelineTick } = await import("./controllerSignal");
 const restore = registerPipelineTick(async () => {});
 afterAll(() => { restore(); Object.assign(process.env, inheritedGit); fs.rmSync(state, { recursive: true, force: true }); });
 
-function fixture() {
+function fixture({ emptyAccepted = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-repair-"));
   const repo = path.join(root, "repo");
   const remote = path.join(root, "remote.git");
@@ -41,8 +41,11 @@ function fixture() {
   const lane = pipelineCorpus(2, 1)[1]!;
   git("checkout", "-q", "-b", lane.branch);
   fs.mkdirSync(path.join(repo, "src"));
-  fs.writeFileSync(path.join(repo, "src/work.ts"), "export const work = 1;\n");
-  git("add", "."); git("commit", "-q", "-m", "accepted stage");
+  if (emptyAccepted) git("commit", "-q", "--allow-empty", "-m", "accepted stage");
+  else {
+    fs.writeFileSync(path.join(repo, "src/work.ts"), "export const work = 1;\n");
+    git("add", "."); git("commit", "-q", "-m", "accepted stage");
+  }
   const accepted = git("rev-parse", "HEAD");
   const checkout = `${repo}-pipeline-${lane.id}`;
   git("checkout", "-q", "main"); git("worktree", "add", "-q", checkout, lane.branch); workingRepo = checkout;
@@ -126,8 +129,11 @@ test.each(["declined", "deadline", "second refusal"])("an unrepairable publicati
     await h.tick();
     expect(h.current().state).toBe("needs_decision");
     expect(h.current().runs[0]!.attempts[0]!).toMatchObject({ state: "passed", verdict: { status: "pass" } });
-    expect(h.current().stateDetail).toContain("PRIVACY GATE: FAIL: fixture content");
-    expect(h.current().stateDetail).toContain(kind === "declined" ? "outside the producer scope" : kind === "deadline" ? "did not finish" : "privacy");
+    const detail = h.current().stateDetail!;
+    // The first line keeps the cause and the action a person takes.
+    expect(detail.split("\n")[0]).toStartWith('publishing the passed stage: the repository\'s pre-push hook failed in its "privacy" phase');
+    expect(detail).toContain("PRIVACY GATE: FAIL: fixture content");
+    expect(detail).toContain(kind === "declined" ? "outside the producer scope" : kind === "deadline" ? "did not finish" : "privacy");
     await h.tick();
     expect(h.requests).toHaveLength(1);
     expect(h.pushes()).toBe(kind === "second refusal" ? 2 : 1);
@@ -202,15 +208,17 @@ test("a repair commit refusal remains consumed if final park settlement is lost"
     const marker = path.join(h.root, "commit-calls");
     fs.writeFileSync(commitHook, `#!/bin/sh\necho called >> '${marker}'\necho 'pre-commit: repair still invalid' >&2\nexit 1\n`, { mode: 0o700 });
     h.endTurn(); await h.tick();
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().runs[0]!.attempts[0]!.publicationRepair?.outcome).toMatchObject({ status: "rejected", reason: expect.stringContaining("repair still invalid") });
+    // Bun's toMatchObject writes its matchers into the received object, so clear the park on a fresh read.
     const rejected = h.current();
-    expect(rejected.state).toBe("needs_decision");
-    expect(rejected.runs[0]!.attempts[0]!.publicationRepair?.outcome).toMatchObject({ status: "rejected", reason: expect.stringContaining("repair still invalid") });
     rejected.state = "running"; rejected.stateDetail = null;
     rejected.runs[0]!.attempts[0]!.state = "passed";
     savePipelines([rejected]);
     await h.tick();
     expect(h.current().state).toBe("needs_decision");
-    expect(h.current().stateDetail).toContain("pre-push: eslint");
+    expect(h.current().stateDetail!.split("\n")[0]).toStartWith('publishing the passed stage: the repository\'s pre-push hook failed in its "eslint" phase');
+    expect(h.current().stateDetail).toContain("repair still invalid");
     expect(fs.readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(1);
   } finally { h.cleanup(); }
 });
@@ -226,7 +234,8 @@ test("publication repair refuses a foreign checkout before committing any of its
     expect(h.current().state).toBe("needs_decision");
     expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
     expect(h.git("status", "--porcelain")).toContain("src/work.ts");
-    expect(h.current().stateDetail).toContain("pre-push: eslint");
+    expect(h.current().stateDetail!.split("\n")[0]).toStartWith('publishing the passed stage: the repository\'s pre-push hook failed in its "eslint" phase');
+    expect(h.current().stateDetail).toContain("not on its pipeline or delivery branch");
   } finally { h.cleanup(); }
 });
 
@@ -245,5 +254,27 @@ test("an explicit publication retry can recover a declined repair without anothe
     expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.accepted, publishedCommit: h.accepted });
     expect(h.requests).toHaveLength(1);
     expect(h.current().runs[0]!.attempts).toHaveLength(1);
+  } finally { h.cleanup(); }
+});
+
+test("a refusal of an accepted head that changes no files retries three times and parks without a repair turn", async () => {
+  const h = fixture({ emptyAccepted: true });
+  try {
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: Linux tests' >&2\necho '(fail) x' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    for (const minutes of [1, 5, 15]) {
+      expect(h.current().state).toBe("running");
+      h.advance(minutes * 60_000);
+      await h.tick();
+    }
+    h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"nothing to repair"}\n```');
+    await h.tick();
+    const current = h.current();
+    expect(current.state).toBe("needs_decision");
+    expect(current.stateDetail!.split("\n")[0]).toBe("publishing the passed stage: the repository's pre-push hook failed in its \"Linux tests\" phase"
+      + " (exit 1, 1 failing test, first: x). The stage changed no files; retried 3 times, so the cause is on the base branch or in the hook itself: fix it there, then retry-stage.");
+    expect(current.runs[0]!.attempts[0]!.publicationRepair).toBeUndefined();
+    expect(h.requests).toHaveLength(0);
+    expect(h.pushes()).toBe(4);
   } finally { h.cleanup(); }
 });

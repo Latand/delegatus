@@ -602,6 +602,9 @@ export type PipelineStageAttempt = {
     committedSha?: string;
     republishQueued?: true;
     reviewRequired?: boolean;
+    /** The park the refusal would have caused (its cause and action on the
+        first line). Every park after the repair starts with that line. */
+    parkDetail?: string;
   };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,

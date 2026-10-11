@@ -3735,7 +3735,8 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
  * hook was not allowed to finish, so there is no verdict about the branch).
  * Each failed operation is counted once on the attempt; the wait is durable
  * across ticks and restarts, and the last failure parks with its cause.
- * A refused stage that changed files proceeds to its bounded producer repair.
+ * A refused stage that changed files, or whose commits privacy refused,
+ * proceeds to its bounded producer repair.
  */
 function retryRefusedPublication(
   pipeline: Pipeline,
@@ -4110,9 +4111,12 @@ async function requestStagePublicationRepair(
   const failure = published.failure;
   const operation = pipeline.delivery?.operation;
   // The producer judges the refusal. Custom hooks and bounded log tails can
-  // omit the phase marker, so it cannot gate this repair.
+  // omit the phase marker, so it cannot gate this repair. A head that changes
+  // no files cannot have caused a refusal other than privacy's: that one has
+  // had its retries and parks with its cause, with no producer turn.
   if (attempt.publicationRepair || !failure || !operation || publicationNotLanded(published)
-    || failure.step !== "publishing the pipeline branch") return false;
+    || failure.step !== "publishing the pipeline branch"
+    || (failure.changedFiles === 0 && !commitsRefusedByPrivacy(failure))) return false;
   const ownOutputs = stage.kind === "run" && (attempt.effectiveRole.access === "read-write" || !!attemptStage(stage, attempt).outputs?.length);
   const worker = ownOutputs ? attempt : latestAcceptedRun(pipeline, stage.id);
   const workerStage = worker && pipeline.stages.find((candidate) => runFor(pipeline, candidate.id)?.attempts.includes(worker));
@@ -4128,6 +4132,7 @@ async function requestStagePublicationRepair(
     operationId: operation.id,
     stageId: workerStage.id, attempt: worker.n,
     refusedAt: ports.now(), detail: published.error, paths: [], messageTs: durable?.message?.ts ?? null,
+    parkDetail: passedPublicationParkDetail(attempt, published),
   };
   pipeline.stateDetail = PUBLICATION_REPAIR_DETAIL;
   await persist();
@@ -4146,7 +4151,7 @@ async function settlePublicationRepair(
   const fail = async (reason: string) => {
     repair.outcome = { status: "rejected", reason };
     await persist();
-    attempt.error = afterCommitRepair(attempt, reason);
+    attempt.error = afterCommitRepair(attempt, publicationRepairParkDetail(repair, reason));
     park(pipeline, attempt.error);
     return false;
   };
@@ -4213,6 +4218,13 @@ function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): strin
   return reason;
 }
 
+/** A publication repair's park: the refusal's cause and action first, then why
+    the repair did not answer it, then what the publication printed. */
+function publicationRepairParkDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, reason: string): string {
+  const [cause, ...printed] = (repair.parkDetail ?? `publishing the passed stage: ${repair.detail}`).split("\n");
+  return [cause, reason, ...printed].join("\n");
+}
+
 /** True when no repair is owed or a finished repair permits another commit. */
 async function stageCommitRepairSettled(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
@@ -4222,14 +4234,16 @@ async function stageCommitRepairSettled(
   const repair = publication ? attempt.publicationRepair : attempt.commitRepair;
   if (!repair) return true;
   const worker = publication ? publicationRepairWorker(pipeline, attempt) : { stage, attempt };
-  const parkRepair = (detail: string) => {
+  const parkRepair = (why: string) => {
+    const detail = publication ? publicationRepairParkDetail(attempt.publicationRepair!, why) : `${repair.detail}\n${why}`;
     attempt.error = detail;
     park(pipeline, detail, publication ? undefined : attempt);
   };
+  const asked = publication ? "The producer was asked once to repair the refused publication" : "The stage was asked once to repair its files";
   // The intent checkpoint can outlive final settlement. Replay its rejection
   // before considering settledAt permission to try the commit again.
   if (repair.outcome?.status === "rejected") {
-    parkRepair(`${repair.detail}\n${repair.outcome.reason}`);
+    parkRepair(repair.outcome.reason);
     return false;
   }
   if (repair.settledAt) return true;
@@ -4238,7 +4252,7 @@ async function stageCommitRepairSettled(
   const giveUp = async (why: string) => {
     repair.outcome = { status: "rejected", reason: why };
     repair.settledAt = ports.now();
-    parkRepair(`${repair.detail}\n${why}`);
+    parkRepair(why);
     await persist();
     return false;
   };
@@ -4246,7 +4260,8 @@ async function stageCommitRepairSettled(
     return publication ? giveUp("The recorded producer is unavailable for publication repair.") : true;
   }
   if (!repair.requestedAt) {
-    if (expired) return giveUp("The stage could not be asked to repair its files: its conversation accepted no message.");
+    if (expired) return giveUp(publication ? "The producer could not be asked to repair the refused publication: its conversation accepted no message."
+      : "The stage could not be asked to repair its files: its conversation accepted no message.");
     await sendStageCommitRepair(pipeline, stage, attempt, ports, persist, publication);
     return false;
   }
@@ -4260,14 +4275,14 @@ async function stageCommitRepairSettled(
   // still fall inside the repair window; a timely turn can survive a late tick.
   const completedAt = Math.max(durable?.lastRecordAt ?? 0, durable?.message?.ts ?? 0);
   if (answered && completedAt >= deadline) {
-    return giveUp("The stage was asked once to repair its files and did not finish that turn in time.");
+    return giveUp(`${asked} and did not finish that turn in time.`);
   }
   if (!answered) {
-    if (expired) return giveUp("The stage was asked once to repair its files and did not finish that turn in time.");
+    if (expired) return giveUp(`${asked} and did not finish that turn in time.`);
     return false;
   }
   const declined = stageCommitRepairDeclined(durable.message?.text ?? "");
-  if (declined !== null) return giveUp(`The stage was asked once to repair its files and reported it cannot: ${declined}`);
+  if (declined !== null) return giveUp(`${asked} and reported it cannot: ${declined}`);
   repair.outcome = { status: "accepted" };
   repair.settledAt = ports.now();
   if (pipeline.stateDetail === (publication ? PUBLICATION_REPAIR_DETAIL : COMMIT_REPAIR_DETAIL)) pipeline.stateDetail = null;
