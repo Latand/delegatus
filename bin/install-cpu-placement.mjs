@@ -2,8 +2,8 @@
 /*
  * Writes the systemd user-manager files that give production CPU priority over
  * agent work (docs/design/cpu-placement.md). It writes files only: it never
- * reloads the manager, restarts the service or moves a running process. The
- * printed steps apply them when the operator chooses a quiet moment.
+ * reloads the manager, stops or starts the service or moves a running process.
+ * The printed steps apply them when the operator chooses a quiet moment.
  *
  *   node bin/install-cpu-placement.mjs [--unit delegatus.service] [--dir DIR] [--force]
  *
@@ -36,9 +36,12 @@ export function cpuPlacementFiles({ unit = "delegatus.service", cpus = onlineCpu
 export function activationSteps(unit = "delegatus.service") {
   return [
     "systemctl --user daemon-reload",
-    "# Moving the service into delegatus.slice takes a restart; run it at a quiet moment, after hosted agents finish:",
-    `systemctl --user restart '${unit}'`,
-    `systemctl --user show '${unit}' -p Slice -p CPUWeight`,
+    "# Moving the service into delegatus.slice takes a stop and a start at a quiet moment, after hosted agents finish.",
+    "# A restart is not enough: while a process the stop spared stays in the old cgroup, systemd starts the service there again.",
+    "# A checkout installation runs scripts/deploy-checkout.py (docs/deploy-checkout.md). By hand, as one line, so the start always runs:",
+    `systemctl --user stop '${unit}'; for _ in $(seq 60); do [ -z "$(systemctl --user show '${unit}' -p ControlGroup --value)" ] && break; sleep 1; done; systemctl --user start '${unit}'`,
+    `# ControlGroup must end in delegatus.slice/${unit}; an unchanged path names a process that outlived the stop.`,
+    `systemctl --user show '${unit}' -p Slice -p ControlGroup -p CPUWeight`,
     "systemctl --user show delegatus-agents-work.slice -p CPUWeight -p CPUQuotaPerSecUSec -p CPUQuotaPeriodUSec",
   ];
 }

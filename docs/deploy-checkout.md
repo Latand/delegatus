@@ -2,8 +2,8 @@
 
 For a Linux checkout supervised by a user systemd service, run the committed
 `scripts/deploy-checkout.py`. Python 3, Bun, Git, systemd and `ss` are required.
-The procedure publishes a prepared release and restarts one explicitly named
-service. It observes protected pipeline stages through read-only MCP tools.
+The procedure publishes a prepared release, then stops and starts one
+explicitly named service. It observes protected pipeline stages through read-only MCP tools.
 
 Build the exact approved target in its release directory first. Use private
 state for the build and both rehearsals described in AGENTS.md. Save a private
@@ -26,7 +26,7 @@ Create a private JSON plan (`chmod 600`) outside the repository. Its fields are:
 | `verificationFile` | Private build and both rehearsal verdicts |
 | `tokenFile` | Existing service environment file with `DELEGATUS_TOKEN` or `LLV_TOKEN` |
 | `bun` | Absolute path of the verified Bun interpreter |
-| `unit` | The single user service approved for restart |
+| `unit` | The single user service approved for the stop and start |
 
 All filesystem paths in the private plan must be absolute. Set `LLV_STATE_DIR`
 to exactly its `stateDir`; there is no default state lookup. The bootstrap's
@@ -49,7 +49,7 @@ catalog is pending or stale, or transcript evidence is unreadable or projected.
 A consistently capped inventory needs a complete enumeration before this
 procedure can run.
 
-With `KillMode=process` a restart spares every process left in the service's
+With `KillMode=process` a stop spares every process left in the service's
 cgroup, and while one remains systemd starts the replacement in that old cgroup
 path instead of the slice the unit configures. Preflight therefore reads the
 service's kernel cgroup subtree last, immediately before publication, and
@@ -147,8 +147,8 @@ checks `/api/self-update` for automatic-update conflicts and serving identity.
 Every read of an old PID tolerates its disappearance, including exit between
 reading its stat, command line and cwd. A reused PID counts as gone. HTTP, MCP,
 registry and serving readiness reads retry within a 180 second bound per
-sample, with individual I/O calls capped at 10 seconds. Named restart jobs get
-a 300 second observation bound. After publication is attempted, all 21 health
+sample, with individual I/O calls capped at 10 seconds. Named stop and start
+jobs each get a 300 second observation bound. After publication is attempted, all 21 health
 samples run, spaced by at least 15 seconds; failed samples and stage reads
 remain diagnostic evidence while later samples continue. Read retries extend
 the observation period beyond the minimum five minutes.
@@ -171,16 +171,65 @@ its configured `Slice`'s own `ControlGroup` followed by the unit name, and the
 launcher, Viewer and runtime host must run inside it. A missing value fails the
 check. The sample records the expected and actual cgroup, and when they differ,
 the members that neither the serving generation nor an agent accounts for; the
-`Verdict:` line repeats the mismatch. The baseline is exempt in preflight,
-because reaching the configured slice is what the restart does.
+`Verdict:` line repeats the mismatch. When the unit configures `CPUWeight`,
+the kernel's `cpu.weight` in the actual cgroup must read that value: systemd
+accepts the setting even where the parent slice never enabled the cpu
+controller. The sample records both as `weight` and `effectiveWeight`. The
+baseline is exempt in preflight, because reaching the configured slice is what
+the switch does.
+
+A plain restart cannot move the service into another slice. systemd keeps a
+populated cgroup's path, and a start reuses an existing path. One old
+descendant alive while the restart cleans up therefore pins the replacement in
+the old path. On 2026-10-11 the replacement configured `Slice=delegatus.slice`
+and `CPUWeight=1000` and still ran in `app.slice/delegatus.service`, with no
+`cpu.weight` there. The switch therefore runs in this order:
+
+1. Immediately before the stop, it captures the serving generation's members
+   of the service cgroup by PID and start identity. These are the recorded
+   launcher, Viewer and runtime host, the verified launcher ancestors up to
+   `MainPID`, and every member whose parents reach them. Agent-owned members are
+   not captured.
+2. It submits `systemctl --user --no-block stop` and waits until no job is
+   pending and the unit is inactive or failed.
+3. For up to 30 seconds it waits for the old cgroup to be empty and released.
+   Released means its directory is gone, or systemd no longer names it as the
+   unit's `ControlGroup`.
+4. If the bound passes first, it lists every survivor with its PID, start
+   identity, parent PID and arguments. A survivor is proven when it, or a
+   parent its chain still reaches, is a captured member with the same start
+   identity. A chain that reaches an agent host, the user manager, a reused PID
+   or an exited process proves nothing. If every survivor is proven, each one
+   gets SIGTERM and, after five seconds, SIGKILL. The signal goes through a
+   pidfd opened before the start identity and cgroup are rechecked. The
+   switch then waits up to 30 seconds more. If any survivor is unproven, no
+   process is signalled: signalling the proven ones could not release the path.
+5. It always submits `systemctl --user --no-block start` once a stop was
+   submitted, whatever steps 2 to 4 found. A refused or failed start is retried
+   up to three times. SIGTERM and SIGHUP to the worker are held from the stop
+   until the start has run, and are delivered afterwards.
+6. It reads the placement right after the start. The health samples then
+   verify the cgroup, `cpu.weight`, the serving release and protected stages as
+   described above.
+
+`relocation` in `verdict.json` and a `relocation` event in `switch.log` record
+the old and new cgroup, the survivors with their proof, the signals sent, the
+start attempts, the placement read after the start (`placed` or `failed`) and
+an outcome. The outcomes are `released`,
+`released-after-retirement`, `unproven-survivors`, `not-released`,
+`stop-incomplete` and `start-failed`. The `Verdict:` line names the outcome.
+Survivor arguments appear only in the private run directory; standard error
+never carries them. An unproven survivor leaves the service running in its old
+path: the placement check fails the verdict and the survivors list names what
+held it.
 
 The final verdict describes the final sample: `pass` requires all three
 processes serving the target, successful HTTP/socket/MCP/service/placement
 checks and protected work preserved or recovered. `fail` names unhealthy or different
 serving processes or confirmed lost work. `needs_decision` names unresolved
 protected work or a preflight refusal. Earlier submission or read errors cannot
-override a healthy recovered final state. The procedure issues one restart and
-performs no automatic rollback; the verdict supplies evidence for the next
+override a healthy recovered final state. The procedure issues one stop and
+one start, retries only a refused start, and performs no automatic rollback; the verdict supplies evidence for the next
 approved action.
 
 Regression checks run only the named files against private state:

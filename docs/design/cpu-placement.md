@@ -224,11 +224,14 @@ CPUQuotaPeriodSec=20ms
 ```sh
 node bin/install-cpu-placement.mjs            # --unit NAME.service if the service has another name
 systemctl --user daemon-reload
-# Moving the service into delegatus.slice takes a restart; run it after hosted agents finish:
-systemctl --user restart delegatus.service
+# Moving the service into delegatus.slice takes a stop and a start after hosted agents
+# finish. A restart is not enough: while any process the stop spared stays in the old
+# cgroup, systemd reuses that path and the service never moves (2026-10-10, 2026-10-11).
+# A checkout installation runs scripts/deploy-checkout.py (docs/deploy-checkout.md),
+# which also retires proven leftovers. By hand, as one line, so the start always runs:
+systemctl --user stop delegatus.service; for _ in $(seq 60); do [ -z "$(systemctl --user show delegatus.service -p ControlGroup --value)" ] && break; sleep 1; done; systemctl --user start delegatus.service
 # ControlGroup must end in delegatus.slice/delegatus.service. Slice alone reads the
-# configuration: while any process the restart spared stays in the old cgroup,
-# systemd reuses that path and the service never moves (2026-10-10).
+# configuration.
 systemctl --user show delegatus.service -p Slice -p ControlGroup -p CPUWeight
 systemctl --user show delegatus-agents-work.slice -p CPUWeight -p CPUQuotaPerSecUSec -p CPUQuotaPeriodUSec
 systemd-cgls --user-unit delegatus.slice
