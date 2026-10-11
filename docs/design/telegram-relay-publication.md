@@ -58,6 +58,9 @@ and instrumentation bundles. Replies with a known review reference still use
 the web decision path, even when the selected target has owner tier off. This
 narrow deterministic control launches no agent and grants no host access;
 other text follows the target's existing answer profile.
+Owner authority is checked against the current pairing while recording the
+decision. The saved operator decision uses the web review's background delivery
+worker, including its idempotent retry and recovery after Viewer restart.
 
 ## Immutable install capture
 

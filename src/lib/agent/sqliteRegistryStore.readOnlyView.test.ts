@@ -200,6 +200,30 @@ test("a reload copies only the rows whose decided value changed", () => {
   expect(before.receipts[kept]?.error).toBeNull();
 });
 
+test("interleaved external revisions read only changed payloads, including unversioned writes", () => {
+  const { open, filename, kept, removed } = fixture();
+  const reader = open();
+  const writer = open();
+  reader.readOnlySnapshot();
+  let reads = 0;
+  let loads = 0;
+  const observed = reader as unknown as { onRowPayloadRead: (_collection: string, count: number) => void; onSnapshotLoad: () => void };
+  observed.onRowPayloadRead = (_collection, count) => { reads += count; };
+  observed.onSnapshotLoad = () => { loads += 1; };
+  writer.mutate(file => { file.receipts[kept]!.error = "first external revision"; }, false);
+  writer.mutate(file => { file.receipts[removed]!.error = "second external revision"; }, false);
+  const db = new Database(filename);
+  try {
+    db.query("UPDATE registry_rows SET value_json = json_set(value_json, '$.error', ?) WHERE collection='receipts' AND row_key=?")
+      .run("external write without a revision", kept);
+  } finally { db.close(); }
+  const next = reader.readOnlySnapshot();
+  expect(next.file.receipts[kept]?.error).toBe("external write without a revision");
+  expect(next.file.receipts[removed]?.error).toBe("second external revision");
+  expect(loads).toBe(0);
+  expect(reads).toBeLessThanOrEqual(2);
+});
+
 test("two readers share one view and neither can corrupt the other; a detached snapshot stays mutable", () => {
   const { open, kept } = fixture();
   const store = open();

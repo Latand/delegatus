@@ -19,7 +19,7 @@ import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/account
 import { claudeTierDisplayName } from "@/lib/agent/models";
 import { type TFunction, useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
-import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow } from "@/lib/rateLimit";
+import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow, weeklyQuota } from "@/lib/rateLimit";
 import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -1104,16 +1104,14 @@ export function mobileAccountState(account: AccountOption, activeId: string): Mo
   return MOBILE_STATE_OF[rowState(account, activeId)];
 }
 
-/** The corner number: the tightest window, named. `null` without a reading. */
-export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { left: number; window: string; tone: MeterTone } | null {
-  const effective = effectiveQuota(quota);
-  if (!effective) return null;
-  const effectiveTier = tierOfWindowKey(effective.window);
-  const window = effectiveTier
-    ? t("limits.tierWeek", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
-    : windowLabel(t, effective.window === "weekly" ? "weekly" : "session", effective.value.windowMinutes);
-  const left = Math.round(effective.percent);
-  return { left, window, tone: meterTone(left) };
+/** The corner number: what is left of the weekly window, named, as the sidebar footer reads it.
+    A reading with no weekly window says so (`left` null); `null` without any reading. */
+export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { left: number | null; window: string; tone: MeterTone } | null {
+  if (!quota.session && !quota.weekly && !quota.tiers.length) return null;
+  const weekly = weeklyQuota(quota);
+  if (!weekly) return { left: null, window: t("limits.noWeekly"), tone: "accent" };
+  const left = Math.round(weekly.percent);
+  return { left, window: windowLabel(t, "weekly", weekly.value.windowMinutes), tone: meterTone(left) };
 }
 
 /** The sign-in a row can start: Claude restarts its login in place for any
@@ -1206,6 +1204,9 @@ function MobileEngineFill({ engine }: { engine: "claude" | "codex" }) {
 const CORNER_TONE: Record<MeterTone, string> = { accent: "text-primary", warning: "text-warning", danger: "text-danger" };
 
 function MobileCorner({ corner, t }: { corner: NonNullable<ReturnType<typeof mobileAccountCorner>>; t: TFunction }) {
+  if (corner.left === null) {
+    return <span data-mobile2-account-corner data-mobile2-account-window="" className="ml-auto shrink-0 pr-1.5 text-right text-caption font-semibold text-muted">{corner.window}</span>;
+  }
   return (
     <span
       data-mobile2-account-corner

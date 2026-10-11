@@ -1,9 +1,10 @@
 import type { EphemeralAgentRun } from "@/lib/agent/ephemeral";
-import { decidePrototype, type PrototypeDelivery } from "@/lib/prototypeReview/decision";
+import { decidePrototype, prototypeDelivery, type PrototypeDelivery } from "@/lib/prototypeReview/decision";
+import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
 import { PrototypeError } from "@/lib/prototypeReview/input";
 import { prototypeCopyLine, type PrototypeAnswerMatch } from "@/lib/prototypeReview/telegramAnswer";
-import type { PrototypeWorld } from "@/lib/prototypeReview/world";
+import { prototypeWorld, type PrototypeWorld } from "@/lib/prototypeReview/world";
 
 /** An owner control with the runner's normal lease and cancellation lifetime. */
 export function runPrototypeAnswer(match: PrototypeAnswerMatch, replyTo: string, authorize: () => void,
@@ -19,7 +20,12 @@ export function runPrototypeAnswer(match: PrototypeAnswerMatch, replyTo: string,
     if (match.error !== undefined) text = `Не записав: ${match.error}. Формат: ${expected}`;
     else {
       try {
-        await decidePrototype({ kind: "operator-in-process", authorize: guard }, round.taskId, match.input, ports.world, ports.delivery);
+        if (decidePrototype({ kind: "operator-in-process", authorize: guard }, round.taskId, match.input, ports.world)) {
+          // Authority is checked while saving. The durable operator decision
+          // then uses the same background delivery and boot recovery as the web.
+          deliverPrototypeDecision(round.taskId, round.id, { world: ports.world ?? prototypeWorld,
+            delivery: ports.delivery ?? prototypeDelivery, now: Date.now });
+        }
         const decision = findPrototypeRound(round.taskId, round.id)?.decision;
         if (!decision) throw new Error("decision unavailable");
         const choices = decision.chosen.length ? `варіанти ${decision.chosen.join(", ")}` : "";

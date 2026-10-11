@@ -97,9 +97,14 @@ test.each(["off", "sqlite"] as const)("%s: both migration hosts retain identity 
     operationId, providerReceipt: receipt, updatedAt: new Date().toISOString(),
   });
   const successor = registry.stageSpawnCapabilityForConversation(launch.conversationId, operationId)!;
-  const reloaded = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+  let snapshotLoads = 0;
+  const reloaded = new AgentRegistry(filename, undefined, undefined, {
+    sqliteMode, onSqliteSnapshotLoad: () => { snapshotLoads++; },
+  });
+  snapshotLoads = 0;
   expect(reloaded.conversationIdForSpawnCapabilityDigest(digest(predecessor))).toBe(launch.conversationId);
   expect(reloaded.conversationIdForSpawnCapabilityDigest(digest(successor.capability))).toBe(launch.conversationId);
+  expect(snapshotLoads).toBe(0);
   expect(() => reloaded.commitSuccessor(launch.conversationId, {
     id: receipt.nativeId, path: receipt.path, accountId: "target",
   }, 2, operationId, receipt)).toThrow("ownership is stale");

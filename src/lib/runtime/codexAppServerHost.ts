@@ -8,6 +8,10 @@ import { StructuredSendRefusedError } from "./engineHost";
 import type { FirstDispatchEvidence } from "./engineHost";
 import { basename } from "node:path";
 import { isNonblockingCodexQuestion } from "./codexAttention";
+import { CodexPinnedProtocol, installedCodexVersion } from "@/lib/accounts/codexPinnedProtocol";
+import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
+import { encodeCodexServerResponse } from "./codexServerRequests";
+import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
 import { StringDecoder } from "node:string_decoder";
 import { NativeCodexQueue, NativeQueueProtocolRefusal } from "./nativeCodexQueue";
@@ -26,6 +30,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
+import { codexProcessCleanupArgs, codexProcessCleanupConfig } from "@/lib/agent/processCleanupPolicy";
 import { nativeCodexActivityMethod } from "./codexSubagentDetection";
 import { installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
@@ -191,6 +196,9 @@ export interface CodexAppServerHostOptions {
   cwd: string;
   codexHome?: string;
   binary?: string;
+  /** Dependency injection for protocol compatibility rehearsals. Production
+      identifies the selected executable with --version before spawning. */
+  readProtocolVersion?: typeof installedCodexVersion;
   model?: string;
   effort?: string;
   allowSubagents?: boolean;
@@ -530,14 +538,6 @@ function turnIdFromParams(params: JsonObject): string | null {
   return stringField(params.turn, "id") ?? stringField(params, "turnId");
 }
 
-function protocolVersionFromInitialize(value: JsonObject | null): string | null {
-  const direct = stringField(value, "appServerVersion")
-    ?? stringField(value, "serverVersion")
-    ?? stringField(value, "version");
-  if (direct) return direct;
-  return stringField(value, "userAgent")?.match(/^[^/]+\/([^\s]+)/)?.[1] ?? null;
-}
-
 function terminalStatus(value: unknown): "completed" | "interrupted" | "error" {
   return value === "completed" ? "completed" : value === "interrupted" ? "interrupted" : "error";
 }
@@ -547,7 +547,7 @@ function modelSupportsImageInput(value: unknown, requestedModel: string | undefi
   if (!Array.isArray(models)) return false;
   const candidates = models.map(record).filter((model): model is JsonObject => model !== null);
   const selected = requestedModel
-    ? candidates.find((model) => stringField(model, "id") === requestedModel)
+    ? candidates.find((model) => stringField(model, "id") === requestedModel || stringField(model, "model") === requestedModel)
     : candidates.find((model) => model.isDefault === true);
   return Array.isArray(selected?.inputModalities) && selected.inputModalities.includes("image");
 }
@@ -1324,7 +1324,7 @@ export class CodexAppServerHost implements EngineHost {
   private readonly attentions = new Map<string, PendingAttention>();
   private readonly stateListeners = new Set<(state: HostState) => void>();
   private readonly preRestoreEvents: UnsequencedEvent[] = [];
-  private readonly preRestoreMessages: Array<{ message: JsonObject; bytes: number }> = [];
+  private readonly preRestoreMessages: Array<{ message: JsonObject; bytes: number; receivedAt: string }> = [];
   private readonly bufferedTerminalTurnIds = new Set<string>();
   private bufferedActiveTurnId: string | null = null;
   private bufferedNotificationOverlap: string[] = [];
@@ -1340,6 +1340,11 @@ export class CodexAppServerHost implements EngineHost {
       "finished". */
   private readonly terminatedTurnIds = new Set<string>();
   private protocolVersion: string | null = null;
+  private protocol = new CodexPinnedProtocol();
+  private experimentalApi = false;
+  private providerCapabilities: { webSearch: boolean; imageGeneration: boolean } | null = null;
+  private protocolAnomalies = 0;
+  private historyCapability: "unknown" | "supported" | "unsupported" = "unknown";
   private modelCatalog: unknown = null;
   private authRecovery: "unknown" | "started" | "completed-unverified" = "unknown";
   private account: HostState["account"] = null;
@@ -1350,6 +1355,7 @@ export class CodexAppServerHost implements EngineHost {
       the next image send. */
   private imageInputSupport: "supported" | "unsupported" | "unknown" = "unknown";
   private requestedModel: string | undefined;
+  private readonly reroutedModels = new Map<string, string>();
   private realtimeDeliveryEpoch = 0;
   private readonly memoryCell: AgentMemoryCell | null;
   private releasing = false;
@@ -1441,8 +1447,15 @@ export class CodexAppServerHost implements EngineHost {
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
+    let protocol: CodexPinnedProtocol;
+    try { protocol = new CodexPinnedProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, options.env ?? process.env)); }
+    catch (error) { options.releaseCleanup?.(); throw error; }
     let features: ReturnType<typeof readCodexFeatures>;
-    try { features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env); }
+    let cleanupArgs: string[];
+    try {
+      features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
+      cleanupArgs = codexProcessCleanupArgs(options.codexHome);
+    }
     catch (error) { options.releaseCleanup?.(); throw error; }
     const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
     const granted = grantedPlugins(options.plugins);
@@ -1453,6 +1466,7 @@ export class CodexAppServerHost implements EngineHost {
       "-c", `agents.enabled=${options.allowSubagents === true}`,
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
       ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
+      ...cleanupArgs,
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
         ? [
@@ -1493,12 +1507,17 @@ export class CodexAppServerHost implements EngineHost {
       throw error;
     }
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
+    provisional.protocol = protocol;
+    provisional.protocolVersion = protocol.version;
     try {
-      const initialized = record(await provisional.rpc("initialize", {
+      // Native queue and realtime need the single experimental opt-in. Account
+      // probes use stable APIs; no unrelated extension is requested here.
+      const capabilities = protocol.initializeCapabilities(["thread/queue/list", "thread/realtime/start"]);
+      provisional.experimentalApi = capabilities.experimentalApi;
+      await provisional.rpc("initialize", {
         clientInfo: { name: "llv-structured-host", title: "Delegatus", version: "0.11.7" },
-        capabilities: { experimentalApi: true },
-      }));
-      provisional.protocolVersion = protocolVersionFromInitialize(initialized);
+        capabilities,
+      });
       provisional.notify("initialized", {});
       const accountResult = record(await provisional.rpc("account/read", { refreshToken: false }));
       const account = record(accountResult?.account);
@@ -1517,6 +1536,14 @@ export class CodexAppServerHost implements EngineHost {
            An image send triggers another discovery attempt. */
         provisional.imageInputSupport = "unknown";
       }
+      if (protocol.hasMethod("ClientRequest", "modelProvider/capabilities/read")) {
+        try {
+          const receipt = record(await provisional.rpc("modelProvider/capabilities/read", {}, Math.min(250, provisional.requestTimeoutMs), true));
+          if (typeof receipt?.webSearch === "boolean" && typeof receipt.imageGeneration === "boolean") {
+            provisional.providerCapabilities = { webSearch: receipt.webSearch, imageGeneration: receipt.imageGeneration };
+          }
+        } catch { /* A missing receipt remains unknown, never a capability grant. */ }
+      }
       if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier);
       const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       const config = headlessCodexThreadConfig(
@@ -1532,6 +1559,9 @@ export class CodexAppServerHost implements EngineHost {
         options.cleanMemory === true,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      const cleanup = codexProcessCleanupConfig(options.codexHome);
+      Object.assign(config.features as Record<string, unknown>, cleanup.features);
+      config.hooks = cleanup.hooks;
       if (memoryHook) {
         const hookSetupDeadline = performance.now() + Math.min(250, provisional.requestTimeoutMs);
         try {
@@ -1592,6 +1622,7 @@ export class CodexAppServerHost implements EngineHost {
       }
       provisional.identity.threadId = identity.threadId;
       provisional.identity.path = identity.path;
+      provisional.requestedModel = stringField(result, "model") ?? provisional.requestedModel;
       if (granted.length > 0) await provisional.verifyPluginGrant(granted, config);
       provisional.rememberConfirmedDeliveries(result);
       provisional.restoreEvents();
@@ -1607,7 +1638,9 @@ export class CodexAppServerHost implements EngineHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
+      provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
+      await provisional.negotiateHistoryCapability();
       /* Before the queue's head can start a turn, so the first turn of this
          run already reads it. */
       if (noticeIntoHistory) await provisional.injectRunNotice(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
@@ -1636,7 +1669,7 @@ export class CodexAppServerHost implements EngineHost {
     const allowed = new Set(grantedPluginServerNames(granted));
     let listed: unknown;
     try {
-      listed = await this.rpc("mcpServerStatus/list", { threadId: this.identity.threadId });
+      listed = await this.rpc("mcpServerStatus/list", {});
     } catch (error) {
       throw new Error(`Codex plugin grant could not be verified: ${safeError(error)}`);
     }
@@ -1689,7 +1722,8 @@ export class CodexAppServerHost implements EngineHost {
       transition to supported re-advertises the capability flag. */
   private async refreshImageInputSupport(): Promise<void> {
     try {
-      this.imageInputSupport = modelSupportsImageInput(await this.rpc("model/list", {}), this.requestedModel)
+      this.modelCatalog = await this.rpc("model/list", {});
+      this.imageInputSupport = modelSupportsImageInput(this.modelCatalog, this.currentImageModel())
         ? "supported"
         : "unsupported";
     } catch {
@@ -1712,29 +1746,38 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private supportsNativeHistory(): boolean {
-    const version = this.protocolVersion?.match(/^(\d+)\.(\d+)\./);
-    return !!version && (Number(version[1]) > 0 || Number(version[2]) >= 153);
+    return this.historyCapability !== "unsupported" && this.protocol.hasMethod("ClientRequest", "thread/turns/list") && this.protocol.hasMethod("ClientRequest", "thread/items/list");
+  }
+
+  private async negotiateHistoryCapability(): Promise<void> {
+    // After a queue method refusal, check stable history independently. A
+    // working native queue avoids a cold scan.
+    if (this.queueCapability !== "unsupported" || !this.supportsNativeHistory()) return;
+    try {
+      await this.rpc("thread/turns/list", { threadId: this.identity.threadId, limit: 1, itemsView: "notLoaded" }, Math.min(250, this.requestTimeoutMs), true);
+      this.historyCapability = "supported";
+    } catch (error) {
+      if (error instanceof NativeQueueProtocolRefusal && error.code === -32601) this.historyCapability = "unsupported";
+      // Transport and permission faults leave capability unknown. Canonical
+      // history must still refuse uncertain delivery evidence in that state.
+    }
   }
 
   /**
-   * Injection capability, decided from the negotiated protocol rather than by
-   * probing (#1560).
+   * Injection capability comes from the selected executable's pinned schema.
    *
    * There is no read-only way to ask whether `thread/inject_items` exists: the
    * method's only form is the mutating one, and calling it to find out would
-   * write into the operator's thread. So the same protocol floor the native
-   * queue uses decides it — `thread/inject_items` is part of that generation of
-   * the app-server API — and the authoritative correction comes from the call
+   * write into the operator's thread. The pin admits the method and the
+   * authoritative correction comes from the call
    * site, where a method-not-found flips this to `unsupported` for good and
    * re-advertises the capability so the composer stops offering the action.
    *
-   * Unknown stays unknown until the protocol version is known, and unknown is
-   * fail-closed: no action is offered and an admitted injection is refused.
+   * An executable without a reviewed schema is refused before thread startup.
    */
   private resolveInjectCapability(): void {
-    if (!this.protocolVersion) return;
     if (this.injectCapability === "unsupported") return;
-    this.injectCapability = this.supportsNativeHistory() ? "supported" : "unsupported";
+    this.injectCapability = this.protocol.hasMethod("ClientRequest", "thread/inject_items") ? "supported" : "unsupported";
   }
 
   private async initializeNativeQueue(): Promise<void> {
@@ -1849,10 +1892,13 @@ export class CodexAppServerHost implements EngineHost {
 
   private prepareDelivery(normalized: ReturnType<typeof normalizeQueueEntry>): QueueEntry {
     if (normalized.content.images.length) {
-      if (this.imageInputSupport === "unsupported") {
+      const support = !this.activeTurnId && normalized.runtime?.model && this.modelCatalog !== null
+        ? modelSupportsImageInput(this.modelCatalog, normalized.runtime.model) ? "supported" : "unsupported"
+        : this.imageInputSupport;
+      if (support === "unsupported") {
         throw new Error("The selected Codex model does not advertise image input through app-server.");
       }
-      if (this.imageInputSupport !== "supported") {
+      if (support !== "supported") {
         throw new Error("Codex image capability discovery is temporarily unavailable; retry shortly.");
       }
     }
@@ -2019,7 +2065,9 @@ export class CodexAppServerHost implements EngineHost {
       clientUserMessageId: entry.id,
     });
     const turnId = turnIdFromResult(result, "turn/start");
+    if (typeof profile.model === "string") this.requestedModel = profile.model;
     this.activeTurnId = turnId;
+    this.selectModel(this.currentImageModel());
     this.notifyStateListeners();
     return this.awaitDeliveryConfirmation(entry, { outcome: "turn-started", turnId });
   }
@@ -2894,6 +2942,7 @@ export class CodexAppServerHost implements EngineHost {
     if (attention?.origin === "restored") throw new Error("attention belongs to a previous host generation; answer ownership is unavailable");
     if (!attention) throw new Error("attention request is missing or already answered");
     if (attention.answer) throw new Error("attention answer is already awaiting confirmation");
+    const result = encodeCodexServerResponse(this.protocol, attention.method, value);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         attention.answer = undefined;
@@ -2902,7 +2951,7 @@ export class CodexAppServerHost implements EngineHost {
         this.fail(error);
       }, this.requestTimeoutMs);
       attention.answer = { resolve, reject, timer };
-      this.write({ jsonrpc: "2.0", id: attention.rpcId, result: value ?? {} });
+      this.write({ jsonrpc: "2.0", id: attention.rpcId, result });
     });
   }
 
@@ -2948,9 +2997,11 @@ export class CodexAppServerHost implements EngineHost {
       pendingAttention: [...this.attentions.keys()],
       nativeQueueRevision: this.nativeQueueRevision,
       ...memoryField(this.memoryCell),
-      activeFlags: [...this.activeFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.supportsNativeHistory() && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
+      activeFlags: [...this.activeFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.protocol.hasRequestField("turn/start", "model") && this.protocol.hasRequestField("turn/start", "effort") && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
       account: this.account,
-      diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery },
+      diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery,
+        protocol: normalizeCodexProtocolReceipt({ schemaVersion: this.protocol.version, schemaDigest: this.protocol.schemaDigest, experimentalApi: this.experimentalApi,
+          provider: this.providerCapabilities, models: record(this.modelCatalog)?.data, anomalies: this.protocolAnomalies }) },
     };
   }
 
@@ -3169,7 +3220,10 @@ export class CodexAppServerHost implements EngineHost {
        turn — a terminal notification, a resume that finds it already over, an
        error that terminalizes it — leaves the same evidence for the voice
        ledger. Bounded, because a long-lived host ends a great many turns. */
-    if (event.kind === "turn-ended") this.recordTerminatedTurn(event.turnId);
+    if (event.kind === "turn-ended") {
+      this.recordTerminatedTurn(event.turnId);
+      if (!this.activeTurnId) this.selectModel(this.requestedModel);
+    }
     if (!this.eventLedgerRestored) {
       if (this.preRestoreEvents.length + this.preRestoreMessages.length >= MAX_PRE_RESTORE_FRAMES) {
         this.ledgerFailed = true;
@@ -3211,6 +3265,7 @@ export class CodexAppServerHost implements EngineHost {
       record instead of retiring work on missing evidence. */
   private recordTerminatedTurn(turnId: string): void {
     if (!turnId) return;
+    this.reroutedModels.delete(turnId);
     this.terminatedTurnIds.delete(turnId);
     this.terminatedTurnIds.add(turnId);
     while (this.terminatedTurnIds.size > MAX_TERMINATED_TURN_MEMORY) {
@@ -3595,7 +3650,7 @@ export class CodexAppServerHost implements EngineHost {
       const turnId = stringField(turn, "id");
       return turnId ? [[turnId, turn] as const] : [];
     }));
-    for (const { message, bytes } of this.preRestoreMessages.splice(0)) {
+    for (const { message, bytes, receivedAt } of this.preRestoreMessages.splice(0)) {
       this.preRestoreBytes -= bytes;
       if (message.method === "turn/completed") {
         const params = record(message.params) ?? {};
@@ -3603,7 +3658,7 @@ export class CodexAppServerHost implements EngineHost {
         const turn = turnId ? turns.get(turnId) : null;
         if (turn) this.reconcileTurnHistory(turn);
       }
-      this.acceptParsedMessage(message, true);
+      this.acceptParsedMessage(message, true, receivedAt);
       if (this.dead || this.releasing || this.released) break;
     }
     this.preRestoreBytes = 0;
@@ -3636,6 +3691,17 @@ export class CodexAppServerHost implements EngineHost {
     });
   }
 
+  private currentImageModel(): string | undefined {
+    return this.activeTurnId ? this.reroutedModels.get(this.activeTurnId) ?? this.requestedModel : this.requestedModel;
+  }
+
+  private selectModel(model: string | undefined): void {
+    const previous = this.imageInputSupport;
+    this.imageInputSupport = this.modelCatalog === null ? "unknown"
+      : modelSupportsImageInput(this.modelCatalog, model) ? "supported" : "unsupported";
+    if (previous !== this.imageInputSupport) this.setSessionStatus(this.engineStatus, this.activeFlags);
+  }
+
   private emitThreadStatus(status: ThreadStatus): void {
     if (status.type === "systemError") {
       /* app-server publishes `systemError` for an ordinary failed turn. Its
@@ -3651,6 +3717,7 @@ export class CodexAppServerHost implements EngineHost {
 
   private rpc(method: string, params: JsonObject = {}, timeoutMs = this.requestTimeoutMs, preserveHost = false): Promise<unknown> {
     if (this.dead || this.releasing || this.released) return Promise.reject(new Error("Codex app-server host is unavailable"));
+    try { this.protocol.assertRequest(method, params, this.experimentalApi); } catch (error) { return Promise.reject(error); }
     const id = this.nextRpcId++;
     if (REPLAY_ENVELOPE_METHODS.has(method)) this.trackReplayEnvelopeRequest(id);
     return new Promise((resolve, reject) => {
@@ -3688,6 +3755,7 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private notify(method: string, params: JsonObject): void {
+    this.protocol.assertNotification(method, params);
     this.write({ jsonrpc: "2.0", method, params });
   }
 
@@ -3831,6 +3899,7 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private acceptMessage(line: string): void {
+    const receivedAt = new Date().toISOString();
     let message: JsonObject | null;
     try { message = record(JSON.parse(line)); } catch { message = null; }
     if (!message) {
@@ -3844,22 +3913,24 @@ export class CodexAppServerHost implements EngineHost {
         this.fail(new Error("Codex app-server pre-restore notification buffer exceeded its bounded capacity"));
         return;
       }
-      this.preRestoreMessages.push({ message, bytes });
+      this.preRestoreMessages.push({ message, bytes, receivedAt });
       this.preRestoreBytes += bytes;
       return;
     }
-    this.acceptParsedMessage(message);
+    this.acceptParsedMessage(message, false, receivedAt);
   }
 
-  private acceptParsedMessage(message: JsonObject, reconcileBufferedLifecycle = false): void {
+  private acceptParsedMessage(message: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
+    try { parseAppServerMessage(message); }
+    catch (error) { this.fail(error instanceof Error ? error : new Error("Invalid Codex protocol envelope")); return; }
     const id = message.id;
     const method = typeof message.method === "string" ? message.method : null;
     if ((typeof id === "number" || typeof id === "string") && !method) {
-      if (typeof id !== "number") return this.fail(new Error("Codex app-server response id is invalid"));
+      if (typeof id !== "number") { this.protocolAnomalies++; this.notifyStateListeners(); return; }
       this.replayEnvelopeRequestIds.delete(id);
       const pending = this.pending.get(id);
       if (!pending && this.consumeLateThreadReadResponse(id)) return;
-      if (!pending) return this.fail(new Error("Codex app-server response has no matching request"));
+      if (!pending) { this.protocolAnomalies++; this.notifyStateListeners(); return; }
       this.pending.delete(id);
       clearTimeout(pending.timer);
       const error = record(message.error);
@@ -3876,13 +3947,19 @@ export class CodexAppServerHost implements EngineHost {
     if (typeof id === "number" || typeof id === "string") {
       const baseAttentionId = `${method}:${String(id)}`;
       const currentRequest = [...this.attentions].find(([, attention]) => attention.origin === "current" && attention.rpcId === id && attention.method === method);
-      const attentionId = currentRequest?.[0] ?? (this.attentions.get(baseAttentionId)?.origin === "restored"
-        ? `${baseAttentionId}:generation-${this.cursor + 1}` : baseAttentionId);
+      let attentionId = currentRequest?.[0] ?? baseAttentionId;
+      if (!currentRequest && this.attentions.has(attentionId)) {
+        const generation = `${baseAttentionId}:generation-${this.cursor + 1}`;
+        attentionId = generation;
+        let collision = 0;
+        while (this.attentions.has(attentionId)) attentionId = `${generation}:${++collision}`;
+      }
       this.attentions.set(attentionId, { ...currentRequest?.[1], rpcId: id, method, origin: "current", isBlocking: !isNonblockingCodexQuestion(method, params) });
       const event = { kind: "attention" as const, id: attentionId, method, attention: params };
       if (!reconcileBufferedLifecycle || !this.consumeBufferedNotification(event)) this.emit(event);
       return;
     }
+    if (!this.protocol.hasMethod("ServerNotification", method)) { this.protocolAnomalies++; this.notifyStateListeners(); return; }
     if (method === "modelProvider/authRecoveryStarted" || method === "modelProvider/authRecoveryCompleted") {
       const valid = params.threadId === this.identity.threadId && typeof params.turnId === "string" && params.turnId.length > 0
         && typeof params.provider === "string" && typeof params.message === "string";
@@ -3893,7 +3970,7 @@ export class CodexAppServerHost implements EngineHost {
       this.nativeQueueRevision++;
       this.emit({ kind: "native-queue-changed", threadId: this.identity.threadId });
     }
-    this.acceptNotification(method, params, reconcileBufferedLifecycle);
+    this.acceptNotification(method, params, reconcileBufferedLifecycle, receivedAt);
   }
 
   /**
@@ -3928,7 +4005,7 @@ export class CodexAppServerHost implements EngineHost {
     return threadId !== null && threadId !== this.identity.threadId;
   }
 
-  private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false): void {
+  private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
     /* #1629: the canonical transcript. These are the app-server's own
        notifications, so they survive a data-channel drop and are what the
        thread's committed timeline is built from. Answered before the pending
@@ -3991,7 +4068,7 @@ export class CodexAppServerHost implements EngineHost {
       const requestId = params.requestId;
       if (typeof requestId !== "number" && typeof requestId !== "string") return;
       const resolved = [...this.attentions.entries()].find(([, attention]) =>
-        attention.origin === "current" && String(attention.rpcId) === String(requestId));
+        attention.origin === "current" && attention.rpcId === requestId);
       if (!resolved) return;
       const answer = resolved[1].answer;
       if (answer) {
@@ -4009,6 +4086,23 @@ export class CodexAppServerHost implements EngineHost {
        it — or refusing only its `serverRequest/resolved` and stranding the
        attention it opened — would strand work the parent delegated. */
     if (this.foreignThreadNotification(params)) return;
+    if (method === "model/rerouted") {
+      const model = stringField(params, "toModel");
+      if (!turnId || !model) { this.protocolAnomalies += 1; return; }
+      if (this.terminatedTurnIds.has(turnId)) return;
+      // A reroute may precede the start reply/notification. Keep it by turn ID
+      // without changing the configured model for subsequent turns.
+      this.reroutedModels.set(turnId, model);
+      if (this.reroutedModels.size > 64) {
+        const oldest = this.reroutedModels.keys().next().value;
+        if (oldest !== undefined) this.reroutedModels.delete(oldest);
+      }
+      if (this.activeTurnId === turnId) {
+        this.selectModel(model);
+        this.notifyStateListeners();
+      }
+      return;
+    }
     if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
       const reviewId = stringField(params, "reviewId");
       if (reviewId) this.emit({
@@ -4027,6 +4121,7 @@ export class CodexAppServerHost implements EngineHost {
       this.cancelledVoiceTurns.delete(turnId);
       if (reconcileBufferedLifecycle) this.bufferedActiveTurnId = turnId;
       this.activeTurnId = turnId;
+      this.selectModel(this.currentImageModel());
       this.emit({ kind: "turn-started", turnId });
       return;
     }
@@ -4064,12 +4159,15 @@ export class CodexAppServerHost implements EngineHost {
       const voiceResponse = phase === "completed" && eventTurnId
         ? this.finalizeVoiceStreamItem(eventTurnId, params.item)
         : undefined;
+      const user = record(params.item);
+      const operationId = user?.type === "userMessage" ? stringField(user, "clientId") : null;
       this.emit({
         kind: "item",
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
+        ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt } } : {}),
       });
       /* #862: the compaction item is the completion signal for a manual
          compact control. It is read after the emit so the durable event ledger
