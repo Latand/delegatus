@@ -62,7 +62,7 @@ fi
 exit 0
 `, { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const result = spawnSync("sh", ["-c", move], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}` } });
+    const result = spawnSync("sh", ["-c", move], { encoding: "utf8", env: { NODE_ENV: "test", PATH: `${bin}:${process.env.PATH}` } });
     expect(result.status).toBe(0);
     const lines = fs.readFileSync(calls, "utf8").trim().split("\n");
     expect(lines[0]).toBe("--user stop viewer.service");
