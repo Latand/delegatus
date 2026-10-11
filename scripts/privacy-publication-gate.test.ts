@@ -1120,6 +1120,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       `_${split}_`,
       `__${split}__`,
       `___${split}___`,
+      `____${split}____`,
+      `${"_".repeat(32)}${split}${"_".repeat(32)}`,
+      `_${split}\ncontinued_`,
       `_${token.replace(String.fromCharCode(103, 104), String.fromCharCode(103) + " " + String.fromCharCode(104))}_`,
       `${token[0]} <b>${token[1]}</b> ${kind} _ ${body}`,
     ];
@@ -1130,6 +1133,25 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const body = ["0", ["A".repeat(24), "B".repeat(24), "C".repeat(24)].join(".")].join("_");
     const token = syntheticShortGithubToken("s", body);
     expect(sensitiveClasses([...token].join(" ")).has("credential")).toBe(true);
+  });
+
+  test("detects synthetic fine-grained tokens under multiline and nested emphasis", () => {
+    const split = [...syntheticFineGrainedPat()].join(" ");
+    for (const text of [`_${split}\ncontinued_`, `____${split}____`]) {
+      expect(sensitiveClasses(text).has("credential")).toBe(true);
+    }
+  });
+
+  test("unclosed emphasis candidates stay bounded across many marker widths", () => {
+    const split = [...syntheticShortGithubToken("p")].join(" ");
+    const text = Array.from({ length: 512 }, (_, index) => "_".repeat(index + 1) + split).join("\n");
+    expect(sensitiveClasses(text).has("credential")).toBe(false);
+  });
+
+  test("an incomplete refresh prefix leaves a following formatted token detectable", () => {
+    const incomplete = [...syntheticShortGithubToken("r", "")].join(" ");
+    const split = [...syntheticShortGithubToken("p")].join(" ");
+    expect(sensitiveClasses(`${incomplete} _${split}_`).has("credential")).toBe(true);
   });
 
   test.concurrent("fails closed when required known-value fingerprints are unavailable", async () => {
