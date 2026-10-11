@@ -22,6 +22,53 @@ test.each(forbidden)("classifies forbidden shell commands: %s", command => {
   expect(forbiddenProcessCleanup(command)).toBe(true);
 });
 
+const shellBoundaries: [string, number][] = [
+  ["lsof -ti :12345 |\n  xargs kill", 2],
+  ["lsof -ti :12345 | \\\n  xargs kill", 2],
+  ["lsof -ti :12345 |\n # lookup continues\n xargs kill", 2],
+  ["ls\\\nof -ti :12345 | xargs ki\\\nll", 2],
+  ["lsof -ti :12345\nkill 111", 0],
+  ['kill "$recorded_pid"', 0],
+  ["cat <<'EOF'\npkill -f fixture-server\n$(killall fixture-server)\nEOF", 0],
+  ['cat <<"EOF"\npkill fixture-server\nEOF', 0],
+  ["cat <<\\EOF\npkill fixture-server\nEOF", 0],
+  ["cat <<-'EOF'\n\tpkill fixture-server\n\tEOF\nkill 111", 0],
+  ["cat <<'EOF'\npkill fixture-server\nEOF\npkill fixture-server", 2],
+  ["cat <<EOF\npkill fixture-server\nEOF", 0],
+  ["cat <<EOF\n$(pkill fixture-server)\nEOF", 2],
+  ["cat <<EOF\n'$(pkill fixture-server)'\nEOF", 2],
+  ["cat <<EOF\n`killall fixture-server`\nEOF", 2],
+  ["cat <<EOF\n\\$(pkill fixture-server)\nEOF", 0],
+  ["cat <<'FIRST' <<SECOND\n$(pkill fixture-server)\nFIRST\npkill fixture-server\nSECOND", 0],
+  ["bash <<'EOF'\npkill fixture-server\nEOF", 2],
+  ["cat <<'EOF' | bash\npkill fixture-server\nEOF", 2],
+  ["cat <<'EOF' |\npkill fixture-server\nEOF\nbash", 2],
+  ["cat <<'EOF' |\npkill fixture-server\nEOF\ncat", 0],
+  ["cat <<EOF\nEO\\\nF\npkill fixture-server", 2],
+  ['cat <<"E\\OF"\npkill fixture-server\nE\\OF\npkill fixture-server', 2],
+  ['cat <<"E\\OF"\npkill fixture-server\nE\\OF', 0],
+  ["cat <<'EOF'; kill 111\npkill fixture-server\nEOF", 0],
+  ["cat <<'EOF'\n$(pkill fixture-server)\nEOF\necho $(pkill fixture-server)", 2],
+  ["cat <<'EOF'>fixture-output\npkill fixture-server\nEOF\npkill fixture-server", 2],
+  ["cat <<'EOF'>fixture-output\npkill fixture-server\nEOF", 0],
+  ["bash fixture-script <<'EOF'\npkill fixture-server\nEOF", 0],
+  ["bash -s fixture-script <<'EOF'\npkill fixture-server\nEOF", 2],
+];
+
+// Feed both engine payload shapes to the installed hook; never execute the input.
+test.each(shellBoundaries)("hook respects shell boundaries: %s (exit %s)", async (command, code) => {
+  expect(forbiddenProcessCleanup(command)).toBe(code === 2);
+  for (const tool_input of [{ command }, { cmd: command }]) {
+    const child = Bun.spawn(["sh", "-c", installedHook()], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    child.stdin.write(JSON.stringify({ tool_input }));
+    child.stdin.end();
+    const stderr = new Response(child.stderr).text();
+    expect(await child.exited).toBe(code);
+    if (code === 2) expect(await stderr).toContain("PID-only");
+    else expect(await stderr).toBe("");
+  }
+});
+
 test.each(["kill 111", "kill -TERM 111", 'kill "$recorded_pid"', "echo 'pkill fixture-server'", "printf '%s' killall", "lsof -i :12345; kill 111", "pgrep fixture-server", "command -v pkill", "# pkill fixture-server\nkill 111"])("allows PID cleanup and inert text: %s", command => {
   expect(forbiddenProcessCleanup(command)).toBe(false);
 });

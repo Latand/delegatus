@@ -8,9 +8,12 @@ export const PROCESS_CLEANUP_DENY_MESSAGE = "PID-only process cleanup: stop only
 
 /** Recognizes common process cleanup commands at the hook boundary.
  * Kept self-contained so the installed hook needs no repository or packages. */
-export function forbiddenProcessCleanup(command: string): boolean {
+export function forbiddenProcessCleanup(command: string, expansionsOnly = false): boolean {
   type Word = { value: string; substituted: boolean };
   const words: Word[] = [];
+  const heredocs: { delimiter: string; literal: boolean; stripTabs: boolean; executable: boolean }[] = [];
+  const pipelineBodies: string[] = [];
+  let pipelineContinuation = false, pipelineHeredocStart = 0;
   let word = "", started = false, substituted = false, quote = "", pipelineLookup = false;
   const basename = (value: string) => value.split("/").pop() ?? value;
   const flush = () => {
@@ -18,6 +21,7 @@ export function forbiddenProcessCleanup(command: string): boolean {
     word = ""; started = false; substituted = false;
   };
   const inspect = (input: Word[]): boolean => {
+    if (expansionsOnly) return false;
     const args = [...input];
     while (args.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(args[0].value)
       || ["!", "if", "then", "else", "do"].includes(args[0].value))) args.shift();
@@ -28,6 +32,21 @@ export function forbiddenProcessCleanup(command: string): boolean {
     if (executable === "kill") return pipelineLookup || args.some((arg) => arg.substituted);
     if (["sh", "bash", "zsh", "dash", "ksh"].includes(executable)) {
       const index = args.findIndex(({ value }) => /^-[^-]*c/.test(value));
+      // A shell reading stdin executes even a quoted heredoc, including one
+      // supplied by an earlier command in the same pipeline.
+      let readsStdin = true;
+      for (let index = 0; index < args.length; index++) {
+        const value = args[index].value;
+        if (/^-[^-]*s/.test(value)) break;
+        if (["-o", "+o", "-O", "+O", "--rcfile", "--init-file"].includes(value)) { index++; continue; }
+        if (value !== "-" && /^[+-]/.test(value)) continue;
+        readsStdin = value === "-";
+        break;
+      }
+      if (index < 0 && readsStdin) {
+        if (pipelineBodies.some(body => forbiddenProcessCleanup(body))) return true;
+        for (const document of heredocs.slice(pipelineHeredocStart)) document.executable = true;
+      }
       return index >= 0 && forbiddenProcessCleanup(args[index + 1]?.value ?? "");
     }
     if (["command", "builtin", "exec", "nohup", "sudo", "pkexec", "env", "rtk", "xargs", "timeout"].includes(executable)) {
@@ -51,9 +70,35 @@ export function forbiddenProcessCleanup(command: string): boolean {
   };
   for (let i = 0; i < command.length; i++) {
     const char = command[i];
+    // Shell line continuations contribute no character or word boundary.
+    if (char === "\\" && quote !== "'" && command[i + 1] === "\n") { i++; continue; }
     if (char === "\\" && quote !== "'") { word += command[++i] ?? ""; started = true; continue; }
     if (char === quote) { quote = ""; continue; }
-    if (!quote && (char === "'" || char === '"')) { quote = char; started = true; continue; }
+    if (!expansionsOnly && !quote && (char === "'" || char === '"')) { quote = char; started = true; continue; }
+    if (!expansionsOnly && !quote && char === "<" && command[i + 1] === "<" && command[i + 2] !== "<" && command[i - 1] !== "<") {
+      flush();
+      let end = i + 2, delimiter = "", delimiterQuote = "", literal = false;
+      const stripTabs = command[end] === "-";
+      if (stripTabs) end++;
+      while (/[ \t]/.test(command[end] ?? "")) end++;
+      for (; end < command.length; end++) {
+        const current = command[end];
+        if (!delimiterQuote && /[\s;|&<>()>]/.test(current)) break;
+        if (current === "\\" && delimiterQuote !== "'") {
+          if (command[end + 1] === "\n") { end++; continue; }
+          literal = true;
+          if (delimiterQuote === '"' && !/[$`"\\]/.test(command[end + 1] ?? "")) delimiter += current;
+          else delimiter += command[++end] ?? "";
+          continue;
+        }
+        if (current === delimiterQuote) { delimiterQuote = ""; continue; }
+        if (!delimiterQuote && (current === "'" || current === '"')) { delimiterQuote = current; literal = true; continue; }
+        delimiter += current;
+      }
+      heredocs.push({ delimiter, literal, stripTabs, executable: false });
+      i = end - 1;
+      continue;
+    }
     if (quote !== "'" && (char === "`" || (char === "$" && command[i + 1] === "("))) {
       const backtick = char === "`";
       const start = i + (backtick ? 1 : 2);
@@ -71,13 +116,45 @@ export function forbiddenProcessCleanup(command: string): boolean {
       word += command.slice(i, end + 1); started = true; substituted = true; i = end;
       continue;
     }
-    if (!quote && char === "#" && !started) {
+    if (!expansionsOnly && !quote && char === "#" && !started) {
       while (i < command.length && command[i] !== "\n") i++;
     }
     if (!quote && /[;|&\n(){}]/.test(command[i] ?? "")) {
       flush();
+      const hadWords = words.length > 0;
       if (inspect(words.splice(0))) return true;
-      if (command[i] !== "|" || command[i + 1] === "|" || command[i - 1] === "|") pipelineLookup = false;
+      if (command[i] === "|" && command[i + 1] !== "|" && command[i - 1] !== "|") pipelineContinuation = true;
+      else if (!(command[i] === "\n" && !hadWords && pipelineContinuation)) {
+        pipelineLookup = false; pipelineContinuation = false; pipelineHeredocStart = heredocs.length;
+        pipelineBodies.length = 0;
+      }
+      if (command[i] === "\n" && heredocs.length) {
+        // Bodies begin after the complete command line, in declaration order.
+        // Quotes in an unquoted body are data; only its expansions run here.
+        let offset = i + 1;
+        for (const document of heredocs.splice(0)) {
+          let body = "";
+          while (offset < command.length) {
+            let line = "", continued: boolean;
+            do {
+              const newline = command.indexOf("\n", offset);
+              const end = newline < 0 ? command.length : newline;
+              const physical = command.slice(offset, end);
+              offset = newline < 0 ? end : end + 1;
+              continued = !document.literal && newline >= 0 && (physical.match(/\\+$/)?.[0].length ?? 0) % 2 === 1;
+              line += continued ? physical.slice(0, -1) : physical;
+            } while (continued && offset < command.length);
+            if (document.stripTabs) line = line.replace(/^\t+/, "");
+            if (line === document.delimiter) break;
+            body += line + "\n";
+          }
+          if ((!document.literal && forbiddenProcessCleanup(body, true))
+            || (document.executable && forbiddenProcessCleanup(body))) return true;
+          if (pipelineContinuation) pipelineBodies.push(body);
+        }
+        i = offset - 1;
+        pipelineHeredocStart = 0;
+      }
     } else if (!quote && /\s/.test(command[i] ?? "")) flush();
     else { word += command[i] ?? ""; started = true; }
   }
