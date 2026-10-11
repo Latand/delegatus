@@ -35,14 +35,17 @@ content and short why lines, plus model, prompt version and locale. Unchanged
 slices return immediately on Refresh; only changed slices and the overall
 regenerate. A failed part retains its previous summary and can be retried.
 
-One model constant selects the catalogue’s Claude Haiku 5.5 entry when present;
-until then it selects `haiku`. The Messages API rejected the bare `haiku` alias,
+One model constant selects the catalogue’s Claude Haiku 5.5 entry, now available
+on main; before that entry it selects `haiku`. The Messages API rejected the bare `haiku` alias,
 so that alias maps to the verified Haiku 4.5 API target. A project Claude account
 is selected through the existing account admission policy. Its current OAuth
 credential stays inside the direct caller. Provider accounts and expired
 credentials are excluded. Unavailable capacity or no eligible credential
 produces the account error. No API-key fallback.
 Each call has a 30-second deadline and a small maximum output token budget.
+Haiku 5.5 uses low effort. The caller reads text blocks and discards thinking
+and redacted-thinking blocks; tool calls and incomplete responses still fail.
+This follows the [Haiku 5.5 migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide).
 
 ## Input, answer and validation
 
@@ -131,6 +134,22 @@ warm. The harness supplies a current credential directly and uses an in-memory
 storage port; production account admission and SQLite persistence are covered
 separately by focused tests. The measurements are observations from this
 machine, with seven independent summary jobs per cold locale.
+
+The continuation merged the current catalogue and repeated the rendered checks:
+all eight layouts and the five phone states passed. The final focused run
+passed 27 tests across seven explicit paths, including pinned model selection
+and responses containing thinking blocks. Full TypeScript checking passed
+with the repository's standard invocation under isolated state.
+
+**Haiku 5.5 timing verification is blocked.** Direct requests returned HTTP 429
+(`rate_limit_error`) on both eligible project accounts with current credentials,
+including a minimal request without rules or a schema. An older-target
+comparison request returned HTTP 200. A delayed retry through the final
+adapter still returned 429. The provider supplied no retry time.
+The Haiku 5.5 browser benchmark timed out waiting for a generated headline;
+its first-result and completion targets remain unverified. The table above
+records the predecessor's Haiku 4.5 observations and establishes no Haiku 5.5
+timing claim. See `evidence/memory-profile/haiku-verification.json`.
 
 Focused tests cover scope slicing, number binding, locale retry, cache/stale
 behavior, persistence isolation, structured requests, route authority and stream

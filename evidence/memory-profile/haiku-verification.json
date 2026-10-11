@@ -1,0 +1,22 @@
+{
+  "model": "claude-haiku-5-5",
+  "date": "2026-10-11",
+  "sourceRules": 106,
+  "slices": 6,
+  "directRequestStatus": 429,
+  "providerErrorType": "rate_limit_error",
+  "eligibleAccountsChecked": 2,
+  "credentialsCurrent": true,
+  "minimalRequestStatus": 429,
+  "delayedFinalAdapterRecheckStatus": 429,
+  "retryAfter": null,
+  "comparisonModel": "claude-haiku-4-5-20251001",
+  "comparisonStatus": 200,
+  "comparisonSingleSliceMs": 4249,
+  "firstVisibleMs": null,
+  "completeMs": null,
+  "timingVerdict": "blocked",
+  "renderedLayoutCasesPassed": 8,
+  "renderedPhoneStatesPassed": 5,
+  "focusedTestsPassed": 27
+}

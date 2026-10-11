@@ -23,7 +23,7 @@ export function directProfileCaller(oauthToken: string, model: string, request: 
         body: JSON.stringify({ model: model === "haiku" ? HAIKU_ALIAS_TARGET : model,
           max_tokens: input.scope === OVERALL_SCOPE ? 1100 : 650,
           messages: [{ role: "user", content: profilePrompt(input, locale) }],
-          output_config: { format: { type: "json_schema", schema: profileSchema(input.scope === OVERALL_SCOPE) } },
+          output_config: { ...(model === "claude-haiku-5-5" ? { effort: "low" } : {}), format: { type: "json_schema", schema: profileSchema(input.scope === OVERALL_SCOPE) } },
         }),
       });
     } catch (error) {
@@ -35,8 +35,8 @@ export function directProfileCaller(oauthToken: string, model: string, request: 
     }
     try {
       const body = await response.json() as { stop_reason?: string; content?: { type: string; text?: string }[] };
-      if (body.stop_reason !== "end_turn" || !Array.isArray(body.content) || body.content.some(part => part.type !== "text")) throw new MemoryProfileError("invalid");
-      return JSON.parse(body.content.map(part => part.text ?? "").join(""));
+      if (body.stop_reason !== "end_turn" || !Array.isArray(body.content) || body.content.some(part => !["text", "thinking", "redacted_thinking"].includes(part.type))) throw new MemoryProfileError("invalid");
+      return JSON.parse(body.content.filter(part => part.type === "text").map(part => part.text ?? "").join(""));
     } catch { throw new MemoryProfileError("invalid"); }
   };
 }
