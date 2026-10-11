@@ -31,7 +31,7 @@ function recordedChatId(alias: string): string | null {
   } finally { db.close(); }
 }
 
-/** A reply, or the immediately preceding message, must match a confirmed
+/** A reply, or a bare approval's immediately preceding message, must match a confirmed
  * publication receipt and the report's own Telegram message id and chat. */
 export function resolveOwnerBridgeContext(request: ExternalRelayRequest, owner: OwnerInstruction, apiBase: string,
   ports: OwnerBridgeContextPorts = {
@@ -44,7 +44,7 @@ export function resolveOwnerBridgeContext(request: ExternalRelayRequest, owner: 
   const trigger = messages[triggerIndex];
   if (!trigger) return null;
   const previous = messages.slice(0, triggerIndex).at(-1);
-  const messageKey = trigger.reply_to ?? previous?.id;
+  const messageKey = trigger.reply_to ?? (ownerNeedsClarification({ ...owner, bridgeReport: null }) ? previous?.id : undefined);
   if (!messageKey) return null;
   const reference = ports.reference(messageKey);
   if (!reference || reference.apiBase !== apiBase || reference.targetId !== request.target_id) return null;

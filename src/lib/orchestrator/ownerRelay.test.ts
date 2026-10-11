@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 // Isolate before importing the route's state-resolving module graph.
@@ -215,6 +215,87 @@ test("an owner report reply carries verbatim approval and stored report only to 
   expect(response.status).toBe(409);
   expect(delivered).toHaveLength(1);
 });
+
+for (const approval of [false, true])
+  test(`runner routes ${approval ? "an adjacent approval to its report seat" : "an independent instruction past an unrelated report"} through MCP and HTTP`, async () => {
+    const { Database } = await import("bun:sqlite");
+    const { appendBridgeReports, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
+    const { recordPublishedRelayReference } = await import("@/lib/externalRelay/publishedReferences");
+    const { readRelayStore, readRunLedger, dropRun } = await import("@/lib/externalRelay/store");
+    const { runClaimedRequest } = await import("@/lib/externalRelay/runner");
+    const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
+    const { accountManager } = await import("@/lib/accounts/manager");
+    const sender = actor(); const recipient = actor("project-a"); const source = actor("project-b");
+    ownerRun(sender);
+    dropRun("owner-request");
+    const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+    updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, origin: server.origin, api_base: `${server.origin}/v1` })) }));
+    const paired = readRelayStore().relays[0]!;
+    const chatId = String(2 ** 6), messageId = 2 ** 5;
+    const directory = path.join(process.env.LLV_STATE_DIR!, "telegram");
+    fs.mkdirSync(directory, { recursive: true });
+    const db = new Database(path.join(directory, "bot.sqlite"));
+    db.exec("CREATE TABLE chats (chat_id TEXT PRIMARY KEY, alias TEXT)");
+    db.query("INSERT INTO chats VALUES (?, ?)").run(chatId, "report-room");
+    db.close();
+    const reportText = "Implement the previously reported feature in project-b?";
+    const at = "2026-10-11T12:00:00Z";
+    const report = appendBridgeReports([{ key: "preceding-report", project: "project-b", targetSeatConversationId: source.id,
+      origin: { kind: "manager", conversationId: source.id, role: "orchestrator" }, class: "question", at, body: reportText,
+      telegram: { chat: "report-room", html: reportText } }]).appended[0];
+    recordBridgeReportTelegram(report.id, { state: "sent", messageIds: [messageId], at });
+    recordPublishedRelayReference(paired.api_base, "/targets/target/messages", "POST", { chat_id: Number(chatId), message_id: messageId }, 200,
+      { message_key: "preceding-report", replayed: false });
+    const words = approval ? "go ahead" : "Implement the new feature in project-a.";
+    const wire = requestSchema.parse({ ...contextRequest, target_id: "target", request_id: "owner-request",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true }, request_text: words, respond_to: "owner-message",
+        conversation: [
+          { ...contextRequest.input.conversation[0], id: "preceding-report", text: reportText, author: { ...contextRequest.input.conversation[0]!.author, self: true } },
+          { ...contextRequest.input.conversation[0], id: "owner-message", text: `/ai ${words}`, reply_to: null },
+        ],
+      },
+    });
+    const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+      engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env },
+    } });
+    const tools = toolsFor(sender);
+    let launchPrompt = "";
+    let custody: ReturnType<typeof readRunLedger>["runs"][number]["ownerTurn"];
+    let handoff: unknown;
+    let wrongSeat: unknown;
+    try {
+      const result = await runClaimedRequest(paired, wire, undefined, { timeoutMs: 10000, ownerPorts: {
+        launch: async input => {
+          launchPrompt = input.prompt;
+          return { status: 202, body: { conversationId: sender.id } };
+        },
+        observe: async () => {
+          custody = readRunLedger().runs.find(run => run.requestId === wire.request_id)!.ownerTurn!;
+          const project = approval ? "project-b" : "project-a";
+          handoff = await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("runner-owner-send"), project });
+          if (approval) wrongSeat = await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("runner-wrong-seat"), project: "project-a" });
+          return { state: "ended", finalText: `Handed the request to ${project}.` };
+        }, stop: async () => {}, pollMs: 1,
+      } });
+      expect(handoff).toMatchObject({ ok: true, conversationId: approval ? source.id : recipient.id });
+      expect(custody?.request).toEqual({ text: `/ai ${words}`, requestText: words });
+      expect(launchPrompt).toContain(words);
+      if (approval) {
+        expect(custody?.bridgeReport).toMatchObject({ project: "project-b", sourceSeat: source.id });
+        expect(launchPrompt).toContain(reportText);
+        expect(wrongSeat).toMatchObject({ ok: false, code: "owner_report_seat_unavailable" });
+      } else {
+        expect(custody?.bridgeReport).toBeUndefined();
+        expect(launchPrompt).not.toContain('"sourceSeat"');
+      }
+      expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "owner-message" } });
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0].text).toContain(JSON.stringify({ text: `/ai ${words}`, requestText: words }));
+      expect(delivered[0].origin).toMatchObject({ kind: "agent", role: "owner-relay", conversationId: sender.id });
+      if (approval) expect(delivered[0].text).toContain(reportText);
+      else expect(delivered[0].text).not.toContain(reportText);
+    } finally { select.mockRestore(); await server.close(); }
+  }, 20000);
 
 for (const scenario of ["member", "switch-off", "worker", "cancelled", "dead-owner", "missing-owner-request", "paused", "disabled"] as const)
   test(`${scenario} cannot acquire owner relay authority through MCP or HTTP`, async () => {

@@ -79,6 +79,25 @@ test("an approval immediately following a published report resolves even at the 
   expect(resolveOwnerBridgeContext(request, ownerTierFor({ ownerTier: true }, request)!, "http://127.0.0.1:1/v1")).toMatchObject({ reportText: body });
 });
 
+for (const requestText of ["Implement the new feature in project-a.", null])
+  test(`an independent owner instruction does not inherit the preceding report (${requestText === null ? "message text" : "request text"})`, () => {
+    report(); receipt("http://127.0.0.1:1/v1");
+    const request = ownerRequest(null, "published-report");
+    request.input.request_text = requestText;
+    request.input.conversation[1]!.text = "/ai Implement the new feature in project-a.";
+    const owner = ownerTierFor({ ownerTier: true }, request)!;
+    expect(ownerNeedsClarification(owner)).toBe(false);
+    expect(resolveOwnerBridgeContext(request, owner, "http://127.0.0.1:1/v1")).toBeNull();
+  });
+
+test("an explicit reply retains its report context even with a substantive instruction", () => {
+  report(); receipt("http://127.0.0.1:1/v1");
+  const request = ownerRequest();
+  request.input.request_text = "Implement the feature described in this report.";
+  expect(resolveOwnerBridgeContext(request, ownerTierFor({ ownerTier: true }, request)!, "http://127.0.0.1:1/v1"))
+    .toMatchObject({ project: "project-b", sourceSeat: "seat-b", reportText: body });
+});
+
 for (const mismatch of ["chat", "target", "unpublished", "intervening-message", "unknown-reply"] as const)
   test(`${mismatch} cannot turn stale chat text into report context or a task`, async () => {
     report();
