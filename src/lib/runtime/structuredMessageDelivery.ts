@@ -1,5 +1,5 @@
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
-import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
 
@@ -59,7 +59,9 @@ import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./reco
 
 export interface StructuredMessageRequest {
   /** Live authorization at fresh reservation, after runtime and lock waits. */
-  admissionGuard?: () => void;
+  admissionGuard?: DeliveryAdmissionGuard;
+  /** The autonomous caller's authority fence during replacement host publication. */
+  recoveryAuthorityGuard?: () => void;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -839,6 +841,8 @@ async function recoverReclaimedMessage(
       origin: reservation.command.origin,
       operationId: reservation.command.operationId,
       admittedAt: reservation.createdAt,
+      admissionGuard: request.admissionGuard,
+      authorityGuard: request.recoveryAuthorityGuard,
     }, {
       registry,
       client,
@@ -854,6 +858,7 @@ async function recoverReclaimedMessage(
         outcome: "failed",
         error: settled.error,
         status: 503,
+        code: "structured_revival_impossible",
         operationId: admitted.operationId,
       };
     }
@@ -1637,6 +1642,8 @@ export async function enqueueStructuredMessage(
         origin: recoveryReservation?.command.origin,
         operationId: recoveryReservation?.command.operationId,
         admittedAt: recoveryReservation?.createdAt,
+        admissionGuard: request.admissionGuard,
+        authorityGuard: request.recoveryAuthorityGuard,
       }, { registry, client });
     } catch (error) {
       const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;
@@ -1649,6 +1656,7 @@ export async function enqueueStructuredMessage(
           outcome: "failed",
           error: settled.error,
           status: 503,
+          code: "structured_revival_impossible",
           operationId: recoveryReservation.command.operationId,
         };
       }

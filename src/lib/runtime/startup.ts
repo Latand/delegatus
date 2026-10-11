@@ -1,3 +1,4 @@
+import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import fs from "node:fs";
 
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -1744,6 +1745,7 @@ export function claudeStartupHostOptions(
     spawnPolicyBaseSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath ?? null,
     allowSubagents: entry.launchProfile?.allowSubagents ?? false,
     cleanMemory: entry.launchProfile?.cleanMemory === true,
+    appendSystemPrompt: learnedRulesForLaunchProfile(entry.launchProfile),
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
     mcpStatePath: launchPaths?.mcpStatePath,
     readOnly: launchProfileEngineReadOnly(entry.launchProfile),
@@ -1861,7 +1863,7 @@ async function adoptStructuredHostsPass(
   }
   /* A queued message's on-demand recovery waits for these rows as well, until
      the re-probe decides them or reaches its cap. */
-  if (!admitHeldPendingWork) for (const key of heldHostKeys) holdRestartCutRow(key);
+  for (const key of heldHostKeys) holdRestartCutRow(key, { admitPendingWork: admitHeldPendingWork });
   const stamps = recognition.stamps;
   const self = captureProcessIdentity(process.pid);
   const withdrawMovedProposals = (key: string, stamp: RestartCutStamp): void => {
@@ -1895,7 +1897,7 @@ async function adoptStructuredHostsPass(
     console.error("[structured hosts] restart cut evidence moved after it was decided; holding the row", { key });
     withdrawMovedProposals(key, stamp);
     heldHostKeys.add(key);
-    if (!admitHeldPendingWork) holdRestartCutRow(key);
+    holdRestartCutRow(key, { admitPendingWork: admitHeldPendingWork });
     return true;
   };
   const controllerBoundEarly = client !== null;
@@ -2101,6 +2103,7 @@ async function adoptStructuredHostsPass(
           approvalPolicy: entry.launchProfile?.permissionMode ?? undefined,
           allowSubagents: entry.launchProfile?.allowSubagents ?? false,
           cleanMemory: entry.launchProfile?.cleanMemory === true,
+          developerInstructions: learnedRulesForLaunchProfile(entry.launchProfile),
           mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
           /* Re-adoption replays the durable grant (issue #687) — a session never
@@ -2431,8 +2434,9 @@ function rememberDeferredStructuredStartup(
   };
   deferredStartup = state;
   /* Past the cap, pending work takes a row that still cannot be decided, on
-     demand as well as in a pass. */
-  setRestartCutHeldRows(state.capAdmitted ? [] : held.keys());
+     demand as well as in a pass. Automatic stage recovery still waits for
+     the evidence to be resolved. */
+  setRestartCutHeldRows(held.keys(), { admitPendingWork: state.capAdmitted });
   if (!sameEvidence) console.error(`[structured hosts] ${message}; re-probing the evidence`, { hosts: hostKeys, nextProbeMs: delayMs });
   scheduleDeferredStartupReprobe(dependencies, registry, state);
 }
@@ -2573,7 +2577,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
     const state = await host.health();
     try {
-      if (!await handOverHostForDemotion(registry, key, state, options)) return;
+      if (!await handOverHostForDemotion(registry, key, state, options, () => host.health())) return;
     } catch (error) {
       console.error("[viewer release] interrupted turn could not be recorded; leaving its unpublished host running", {
         hostKey: sessionKeyId(key), error,

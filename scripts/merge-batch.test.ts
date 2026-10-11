@@ -1644,6 +1644,81 @@ test("a Bun preload retains a literal detector and refuses publication without p
 const limitTest = (expected: number, extra = "") => "const { test, expect } = require('bun:test');\n"
   + `const { limit } = require('./limit.js');\ntest('limit', () => expect(limit).toBe(${expected}));\n// one\n// two\n// three\n${extra}`;
 
+for (const order of [[12, 13], [13, 12]]) test(`reviewed contract replacement supersedes an unrelated base copy in order ${order}`, async () => {
+  const f = landingFixture("green", realTests);
+  const chipTest = (label: string) => "const { test, expect } = require('bun:test');\n"
+    + `test('chip label', () => expect(require('./chip.js').label).toBe('${label}'));\n`;
+  f.seed("chip.js", "exports.label = 'hourly';\n");
+  f.seed("chip.test.tsx", chipTest("hourly"));
+  f.addPr(12, "chip.js", "exports.label = 'switch';\n");
+  const replacement = extendPr(f, 12, { "chip.test.tsx": chipTest("switch") });
+  const unrelated = f.addPr(13, "unrelated.txt", "unrelated\n");
+  const heads = new Map([[12, replacement], [13, unrelated]]);
+  await f.batch.build(order.map(number => `${number}@${heads.get(number)}`).join(","));
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "clean"]);
+  expect(gated.gated!.candidate.prs).toEqual(order.map(number => ({ number, head: heads.get(number)! })));
+  expect(gated.gated!.tip).toBe(gated.tip);
+  expect(gated.gated!.notApplicable).toContainEqual({ source: `#13@${unrelated}`, file: "chip.test.tsx",
+    reason: `unchanged review-base copy superseded by #12@${replacement}` });
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "merged"]);
+  expect(git(f.repo, ["show", "HEAD:chip.test.tsx"])).toBe(chipTest("switch").trimEnd());
+}, 60_000);
+
+test("a changed detector keeps its assertions when another member replaces the contract", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  f.addPr(12, "limit.js", "exports.limit = 2;\n");
+  const reviewed = extendPr(f, 12, { "limit.test.ts": limitTest(2) });
+  const detector = f.addPr(13, "limit.test.ts", limitTest(1, "test('positive', () => expect(limit > 0).toBe(true));\n"));
+  await f.batch.build(`12@${reviewed},13@${detector}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["culprit", "clean"]);
+  expect(gated.attributionLog.map(entry => [entry.test.name, entry.prs])).toEqual([["limit", [12]]]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["culprit", "merged"]);
+  unchangedCulprit(f, 12, reviewed);
+  expect(git(f.repo, ["show", "HEAD:limit.test.ts"])).toBe(limitTest(1, "test('positive', () => expect(limit > 0).toBe(true));\n").trimEnd());
+}, 60_000);
+
+test("an unchanged behavioural detector still withholds a regression beside a reviewed contract replacement", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  f.seed("adder.js", "exports.add = (a, b) => a + b;\n");
+  f.seed("adder.test.ts", "const { test, expect } = require('bun:test');\n"
+    + "test('adds', () => expect(require('./adder.js').add(5, 3)).toBe(8));\n");
+  f.addPr(12, "limit.js", "exports.limit = 2;\n");
+  const replacement = extendPr(f, 12, { "limit.test.ts": limitTest(2) });
+  const bad = f.addPr(13, "adder.js", "exports.add = (a, b) => a - b;\n");
+  const healthy = f.addPr(14, "healthy.txt", "healthy\n");
+  await f.batch.build(`12@${replacement},13@${bad},14@${healthy}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit", "clean"]);
+  expect(gated.attributionLog.map(entry => [entry.test.name, entry.prs])).toEqual([["adds", [13]]]);
+  expect(gated.gated!.notApplicable.some(entry => entry.file === "adder.test.ts")).toBeFalse();
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit", "merged"]);
+  unchangedCulprit(f, 13, bad);
+}, 60_000);
+
+test("an unreviewed weakening of a built contract replacement cannot earn a receipt", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  f.addPr(12, "limit.js", "exports.limit = 2;\n");
+  const replacement = extendPr(f, 12, { "limit.test.ts": limitTest(2) });
+  const healthy = f.addPr(13, "healthy.txt", "healthy\n");
+  const built = await f.batch.build(`12@${replacement},13@${healthy}`);
+  writeFileSync(join(built.work, "limit.test.ts"), "const { test, expect } = require('bun:test');\ntest('limit', () => expect(true).toBe(true));\n");
+  await expect(f.batch.gate()).rejects.toThrow("Batch worktree changed outside this run");
+  expect(f.batch.read().gated).toBeNull();
+  await expect(f.batch.land()).rejects.toThrow("Batch worktree changed outside this run");
+  expect(f.calls.some(args => args[0] === "pr" && ["create", "merge", "close"].includes(args[1]!))).toBeFalse();
+}, 60_000);
+
 test("an older PR tree's stale copy of a test file main changed defers only that PR and the rest lands", async () => {
   const f = landingFixture("green", realTests);
   f.seed("limit.js", "exports.limit = 1;\n");
@@ -1672,7 +1747,7 @@ test("an older PR tree's stale copy of a test file main changed defers only that
   expect(summary).toContain("Attributed failures (rule: a removal clears them; only the PRs it narrows to are held):");
 }, 60_000);
 
-test("a PR that changed the same main-changed test file keeps today's unattributable stop", async () => {
+test("a main contract update is carried into a reviewed detector without losing its independent added case", async () => {
   const f = landingFixture("green", realTests);
   f.seed("limit.js", "exports.limit = 1;\n");
   f.seed("limit.test.ts", limitTest(1));
@@ -1683,12 +1758,77 @@ test("a PR that changed the same main-changed test file keeps today's unattribut
   const healthy = f.addPr(14, "healthy.txt", "healthy");
   await f.batch.build(`12@${own},14@${healthy}`);
   expect(f.batch.read().rows.map(row => row.status)).toEqual(["clean", "clean"]);
-  await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for limit\.test\.ts > .* > limit; detectors retained; batch not gated \(rule: no removal clears it and it is no stale reviewed detector/);
-  const state = f.batch.read();
-  expect(state.gated).toBeNull();
+  const state = await f.batch.gate();
+  expect(state.gated!.tip).toBe(state.tip);
   expect(state.rows.map(row => [row.status, row.detail])).toEqual([["clean", ""], ["clean", ""]]);
   expect(state.attributionLog).toEqual([]);
-  expect(f.calls.some(args => args[0] === "pr" && ["create", "merge", "close"].includes(args[1]!))).toBeFalse();
+  expect(state.gated!.adapted).toEqual([{ source: `#12@${own}`, file: "limit.test.ts",
+    reason: "main contract update merged with the unchanged reviewed test patch" }]);
+  expect(report(state)).toContain("Adapted reviewed detectors:");
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "merged"]);
+  expect(git(f.repo, ["show", "HEAD:limit.test.ts"])).toBe(limitTest(2, "test('limit is set', () => expect(limit).toBeDefined());\n").trimEnd());
+}, 60_000);
+
+test("a main contract adaptation retains a PR's added regression through removal probes", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  const extra = "test('healthy companion', () => expect(require('./companion.js').value).toBe(1));\n";
+  f.seed("companion.js", "exports.value = 1;\n");
+  const detector = f.addPr(12, "limit.test.ts", limitTest(1, extra));
+  f.seed("limit.js", "exports.limit = 2;\n");
+  f.seed("limit.test.ts", limitTest(2));
+  const bad = f.addPr(13, "companion.js", "exports.value = 0;\n");
+  const healthy = f.addPr(14, "healthy.txt", "healthy\n");
+  await f.batch.build(`12@${detector},13@${bad},14@${healthy}`);
+  const state = await f.batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit", "clean"]);
+  expect(state.attributionLog.map(entry => [entry.test.name, entry.prs])).toEqual([["healthy companion", [13]]]);
+  expect(state.gated!.adapted).toHaveLength(1);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit", "merged"]);
+  expect(git(f.repo, ["show", "HEAD:limit.test.ts"])).toBe(limitTest(2, extra).trimEnd());
+  unchangedCulprit(f, 13, bad);
+}, 60_000);
+
+test("a main contract adaptation retains a reviewed strengthening of an existing assertion", async () => {
+  const f = landingFixture("green", realTests);
+  const companionTest = (assertion: string) => `test('companion', () => expect(require('./companion.js').value${assertion});\n`;
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("companion.js", "exports.value = 1;\n");
+  f.seed("limit.test.ts", limitTest(1, companionTest(" > 0).toBe(true)")));
+  const strengthened = companionTest(").toBe(1)");
+  const detector = f.addPr(12, "limit.test.ts", limitTest(1, strengthened));
+  f.seed("limit.js", "exports.limit = 2;\n");
+  f.seed("limit.test.ts", limitTest(2, companionTest(" > 0).toBe(true)")));
+  const bad = f.addPr(13, "companion.js", "exports.value = 2;\n");
+  const healthy = f.addPr(14, "healthy.txt", "healthy\n");
+  await f.batch.build(`12@${detector},13@${bad},14@${healthy}`);
+  const state = await f.batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit", "clean"]);
+  expect(state.attributionLog.map(entry => [entry.test.name, entry.prs])).toEqual([["companion", [13]]]);
+  expect(state.gated!.adapted).toHaveLength(1);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit", "merged"]);
+  expect(git(f.repo, ["show", "HEAD:limit.test.ts"])).toBe(limitTest(2, strengthened).trimEnd());
+  unchangedCulprit(f, 13, bad);
+}, 60_000);
+
+test("an overlapping main contract patch is deferred and cannot supersede another member's base copy", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  const reviewed = f.addPr(12, "limit.test.ts", limitTest(2));
+  f.seed("limit.js", "exports.limit = 3;\n");
+  f.seed("limit.test.ts", limitTest(3));
+  const healthy = f.addPr(13, "healthy.txt", "healthy\n");
+  await f.batch.build(`12@${reviewed},13@${healthy}`);
+  // Build defers the conflicting patch; it supplies no replacement authority.
+  const state = await f.batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["deferred", "clean"]);
+  expect(state.gated!.adapted ?? []).toEqual([]);
+  expect(state.gated!.notApplicable.some(entry => entry.reason.includes("superseded"))).toBeFalse();
 }, 60_000);
 
 function extendPr(f: ReturnType<typeof fixture>, number: number, changes: Record<string, string | null>): string {
