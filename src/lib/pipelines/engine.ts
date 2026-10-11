@@ -2308,7 +2308,7 @@ function providerBackoffStartedAt(attempt: PipelineStageAttempt, now: string): s
     ? now : attempt.providerRecoveryBudget?.startedAt ?? wait?.startedAt ?? now;
 }
 
-function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAttempt, condition: ProviderCondition, reason: string, ports: PipelinePorts, persist: () => void): void {
+function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAttempt, condition: ProviderCondition, reason: string, ports: PipelinePorts, persist: () => void, cutAt?: number): void {
   const now = ports.now();
   const detail = `recovery after ${condition.label}: ${redactBounded(reason, 300)}`;
   if (bookControllerWaitRound(attempt, now, now, ports,
@@ -2316,7 +2316,10 @@ function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAtte
     recordProviderRecovery(attempt, "park", condition, detail, now);
     attempt.completedAt = now;
     park(pipeline, `provider transport recovery exhausted after 10 minutes; ${detail}`, attempt);
-  } else pipeline.stateDetail = `waiting for provider transport; ${detail}`;
+  } else {
+    if (cutAt !== undefined) attempt.controllerWait!.providerCutAt ??= cutAt;
+    pipeline.stateDetail = `waiting for provider transport; ${detail}`;
+  }
   persist();
 }
 
@@ -6514,7 +6517,8 @@ async function tickRunStage(
      verdict settles once — even when the runtime ledger is stale `running`, the
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attemptEvidenceFloor(attempt), undefined, attempt.providerWait?.turnTs);
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attemptEvidenceFloor(attempt), undefined,
+    attempt.providerWait?.turnTs ?? attempt.controllerWait?.providerCutAt);
   const unregisteredHostDeath = structuredActive === true
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
@@ -6540,6 +6544,12 @@ async function tickRunStage(
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attemptEvidenceFloor(attempt))
     ? providerCutNotice(attempt.effectiveRole.engine, terminalProviderMessage) : null;
+  // An incomplete first read can start confirmation before providerWait exists.
+  // Retire that clock only when the reader proves its cut's chain closed,
+  // including output observed without a subsequent provider notice.
+  if (attempt.controllerWait?.providerCutAt !== undefined && durable?.requestedCutOpen === false) {
+    delete attempt.controllerWait;
+  }
   if (!oomDeath && !heldForDeployCut && !restartCut && (notice || attempt.providerWait)) {
     // Agent output closed the saved wait's chain, or the chain a zero-time
     // successor inherited, and its budget and confirmation wait go with it,
@@ -6551,7 +6561,8 @@ async function tickRunStage(
       if (durable.firstProviderCutAt) delete attempt.providerWait;
     }
     if ((notice || attempt.providerWait && attempt.providerWait.turnTs > 0) && durable?.promptHistoryComplete === false) {
-      waitForProviderTransport(pipeline, attempt, attempt.providerWait?.condition ?? notice!.condition, "delivered prompt history is incomplete", ports, persist);
+      waitForProviderTransport(pipeline, attempt, attempt.providerWait?.condition ?? notice!.condition, "delivered prompt history is incomplete", ports, persist,
+        durable.firstProviderCutAt ?? notice?.ts);
       return;
     }
     if (!(attempt.providerWait?.turnTs && attempt.providerWait.turnTs > 0) && durable?.firstProviderCutAt
