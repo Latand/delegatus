@@ -69,7 +69,7 @@ export function staticSensitiveClasses(
     `g${separator}h${separator}[pousr]`,
     `x${legacySeparator}o${legacySeparator}x${legacySeparator}[baprs]`,
     `s${legacySeparator}k`,
-  ].join("|") + String.raw`)[^\p{L}\p{N}\r\n]{0,8}?(?=[_-])`, "giu");
+  ].join("|") + String.raw`)[^\p{L}\p{N}\r\n]{0,8}?(?=\\?[_-])`, "giu");
   const splitTokenBody = /^[^\p{L}\p{N}\r\n]*[a-z0-9](?:[^\p{L}\p{N}\r\n]*[a-z0-9])*/iu;
   let emphasisClosings: Map<number, number> | undefined;
   let lineStart = 0;

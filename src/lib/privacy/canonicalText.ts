@@ -21,8 +21,23 @@ function decodePercentEncoding(text: string): string {
   });
 }
 
-function decodeHtmlEntities(text: string): string {
-  return decodeHTMLStrict(text);
+function decodeHtmlEntities(text: string, preserveLiteralUnderscores = false): string {
+  if (!preserveLiteralUnderscores) return decodeHTMLStrict(text);
+  let decoded = "";
+  let cursor = 0;
+  for (const match of text.matchAll(/&[^&;\s]*;/g)) {
+    decoded += text.slice(cursor, match.index);
+    const literal = decodeHTMLStrict(match[0]);
+    // Entity references produce literal text, including inside emphasis.
+    if (literal === "_") {
+      let backslashes = 0;
+      for (let index = decoded.length - 1; decoded[index] === "\\"; index -= 1) backslashes += 1;
+      if (backslashes % 2 === 0) decoded += "\\";
+    }
+    decoded += literal;
+    cursor = match.index + match[0].length;
+  }
+  return decoded + text.slice(cursor);
 }
 
 function decodeCommonMarkEscapes(text: string): string {
@@ -87,7 +102,7 @@ export function decodeSensitiveText(
             jsonEscapes ? decodeWithOffsets(decoded, decodeJsonStringEscapes, /\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt])/g, offsets) : decoded,
             decodePercentEncoding, /(?:%[0-9a-f]{2})+/gi, offsets,
           ),
-          decodeHtmlEntities, /&[^&;\s]*;/g, offsets,
+          (value) => decodeHtmlEntities(value, preserveCommonMarkEscapes), /&[^&;\s]*;/g, offsets,
         ),
         preserveCommonMarkEscapes ? (value) => value : decodeCommonMarkEscapes,
         /\\[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, offsets,
@@ -99,7 +114,7 @@ export function decodeSensitiveText(
   return { error: true, text: decoded };
 }
 
-/** Token emphasis pairing needs a view that retains literal Markdown escapes. */
+/** Token emphasis pairing retains backslash escapes and literal entity underscores. */
 export function canonicalSensitiveText(text: string, jsonEscapes = false, preserveCommonMarkEscapes = false): { error: boolean; text: string } {
   return decodeSensitiveText(text, false, undefined, jsonEscapes, preserveCommonMarkEscapes);
 }
