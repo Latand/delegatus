@@ -299,7 +299,7 @@ export async function runClaimedRequest(
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
-      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}` } } : {}),
+      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, request: { text: owner.text, requestText: owner.requestText } } } : {}),
       requestId,
       leaseId,
       relayId: relay.id,

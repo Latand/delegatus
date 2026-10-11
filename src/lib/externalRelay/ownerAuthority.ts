@@ -1,22 +1,39 @@
 import fs from "node:fs";
 import { procBackend } from "@/lib/proc";
-import { externalRelayFile, type RunLedger, type RelayStore } from "./store";
+import { bridgeDirectiveBody } from "@/lib/bridge/directive";
+import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
+import { externalRelayFile, type RunLedger, type RelayStore, type RunRecord } from "./store";
 
 /** MCP reads only: no store creation, pruning or mutation during admission. */
 export function liveOwnerRelayConversation(conversationId: string): boolean {
+  return liveOwnerRelayRun(conversationId) !== null;
+}
+
+function liveOwnerRelayRun(conversationId: string): RunRecord | null {
   try {
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
     const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
-    if (ledger.v !== 1 || store.v !== 1) return false;
-    return ledger.runs.some(run => {
-      if (run.ownerTurn?.cancel || run.conversationId !== conversationId || !run.ownerIdentity || procBackend.processIdentity(run.ownerPid) !== run.ownerIdentity) return false;
+    if (ledger.v !== 1 || store.v !== 1) return null;
+    return ledger.runs.find(run => {
+      if (!run.ownerTurn || run.ownerTurn.cancel || run.conversationId !== conversationId || !run.ownerIdentity || procBackend.processIdentity(run.ownerPid) !== run.ownerIdentity) return false;
       const relay = store.relays.find(r => r.id === run.relayId);
       const target = relay?.targets.find(t => t.id === run.targetId);
       return relay?.paused === false && target?.enabled === true && target.ownerTier === true;
-    });
+    }) ?? null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Reuse the gateway's directive body, keeping agent authorship. The quoted
+ * instruction comes from the runner's verified owner turn, never MCP input. */
+export function ownerRelayPayload(text: string, conversationId: string): { text: string; origin: MessageOrigin } | null {
+  const request = liveOwnerRelayRun(conversationId)?.ownerTurn?.request;
+  if (!request || typeof request.text !== "string" || (request.requestText !== null && typeof request.requestText !== "string")) return null;
+  return {
+    text: bridgeDirectiveBody(`The install owner delegated this request through a verified owner relay. The quoted owner request carries operator authority, as a voice gateway directive does. Act on it within this project's scope.\n\nOwner request: ${JSON.stringify(request)}\n\nRelay context:\n${text}`),
+    origin: { kind: "agent", role: "owner-relay", conversationId },
+  };
 }
 
 

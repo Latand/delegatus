@@ -2192,7 +2192,8 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
         ownerPorts: {
           launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_owner_runner" } }; },
           observe: async () => {
-            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null });
+            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null,
+              ownerTurn: { request: { text: contextRequest.input.conversation[0]!.text, requestText: null } } });
             if (!beats.length || scenario === "lease_lost" || scenario === "hard_cap") return { state: "running" };
             return { state: "ended", finalText: "Owner reply" };
           },
