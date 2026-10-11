@@ -27,6 +27,7 @@ export interface AccountSidecarCleanupReport {
 export interface AccountOrphanCleanupReport {
   removed: string[];
   unresolved: string[];
+  archived?: Array<{ id: string; files: number; bytes: number }>;
   history?: Record<string, AccountHistoryInventoryReport>;
 }
 
@@ -241,6 +242,33 @@ function validatedHomeRemovalContext(
 
 type TreeRemovalResult = { complete: boolean; changed: boolean };
 
+class AccountEntryIdentityChangedError extends Error {
+  constructor() { super("account-home entry identity changed during removal"); }
+}
+
+function sameEntryIdentity(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino
+    && (left.mode & fs.constants.S_IFMT) === (right.mode & fs.constants.S_IFMT);
+}
+
+/** Linux O_PATH pins a link itself with O_NOFOLLOW, without reading its
+ * target or opening a device/FIFO. Keep the inode pinned through the unlink
+ * and recheck the final pathname immediately before acting on it. */
+function unlinkClassifiedEntry(pathname: string, expected: fs.Stats): void {
+  if (process.platform !== "linux") throw new Error("entry identity binding requires Linux");
+  const linuxOPath = 0o10000000;
+  const descriptor = fs.openSync(pathname, linuxOPath | fs.constants.O_NOFOLLOW);
+  try {
+    const opened = fs.fstatSync(descriptor);
+    if (!sameEntryIdentity(opened, expected) || !sameEntryIdentity(fs.lstatSync(pathname), opened)) {
+      throw new AccountEntryIdentityChangedError();
+    }
+    fs.unlinkSync(pathname);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function entryPassesRemovalChecks(
   context: ReturnType<typeof validatedHomeRemovalContext>,
   stat: fs.Stats,
@@ -306,11 +334,6 @@ function removeNonHistoryTree(
         const current = accountHistoryInventory(engine, accountId, home);
         throw blockedInventory(current, relative, "account-home entry is outside deletion ownership");
       }
-      if (stat.isSymbolicLink()) {
-        try { fs.rmSync(pathname, { force: true }); changed = true; }
-        catch { complete = false; }
-        continue;
-      }
       if (stat.isDirectory()) {
         const child = removeNonHistoryTree(engine, accountId, home, context, pathname, relative, stat, retainedTopLevel);
         if (!child.complete) complete = false;
@@ -325,8 +348,19 @@ function removeNonHistoryTree(
         }
         continue;
       }
-      try { fs.rmSync(pathname, { force: true }); changed = true; }
-      catch { complete = false; }
+      try { unlinkClassifiedEntry(pathname, stat); changed = true; }
+      catch (error) {
+        if (error instanceof AccountEntryIdentityChangedError) {
+          let current: AccountHistoryInventoryReport;
+          try { current = accountHistoryInventory(engine, accountId, home); }
+          catch (inventoryError) {
+            if (!(inventoryError instanceof AccountHistoryInventoryBlockedError)) throw inventoryError;
+            current = inventoryError.report;
+          }
+          throw blockedInventory(current, relative, error.message);
+        }
+        complete = false;
+      }
     }
     return { complete, changed };
   } finally {
@@ -635,7 +669,7 @@ function unlinkExact(root: string, relative: string, remove: (stat: fs.Stats) =>
     const target = path.join(`/proc/self/fd/${descriptors.at(-1)}`, parts.at(-1)!);
     const stat = lstatOrNull(target);
     if (!stat || !remove(stat)) return true;
-    try { fs.unlinkSync(target); } catch { return false; }
+    try { unlinkClassifiedEntry(target, stat); } catch { return false; }
     return lstatOrNull(target) === null;
   } catch {
     return false;
@@ -821,6 +855,9 @@ export function recoverManagedAccountRemoval(input: {
   home: string;
   entry: AccountRemovalJournalEntry;
   listed: boolean;
+  /** An older retired record still names the original home. It participates
+      in the same move/commit recovery as a listed account. */
+  retiredInPlace?: boolean;
   /** The accounts-registry commit of a finished removal: the account leaves,
       a retired record points at its archive, the journal moves to `scrubbing`. */
   commitRetired(): void;
@@ -840,7 +877,7 @@ export function recoverManagedAccountRemoval(input: {
   if (input.entry.phase === "retiring") {
     /* A home in place means the failed step already undid the retirement. */
     if (homeExists) { input.clearJournal(); return "restored"; }
-    if (!input.listed) return scrub();
+    if (!input.listed && !input.retiredInPlace) return scrub();
     try {
       /* Busy, like any refusal here, is retried by the next listing. */
       agentRegistry().retireAccountNow(input.engine, input.accountId, "default", {}, { rewrite: input.entry.rewrites ?? [] });
@@ -852,7 +889,7 @@ export function recoverManagedAccountRemoval(input: {
     reach("accounts-committed");
     return scrub();
   }
-  if (!homeExists && archiveExists && !input.listed) return null;
+  if (!homeExists && archiveExists && !input.listed && !input.retiredInPlace) return null;
   if (homeExists || archiveExists) {
     const restored = agentRegistry().deliveryWriteNow({ label: "account.archive-recovery", operationId: `account-removal:${input.engine}:${input.accountId}` }, () => {
       if (!homeExists && archiveExists) fs.renameSync(archive, home);

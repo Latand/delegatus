@@ -88,7 +88,7 @@ for (const busy of [false, true]) test(`failed account commit restores immediate
   }
 });
 
-for (const renamed of [false, true]) test(`archive recovery refuses a busy writer without clearing its path intent, then restores and delivers once (home already restored: ${renamed})`, async () => {
+for (const retiredInPlace of [false, true]) for (const renamed of [false, true]) test(`archive recovery refuses a busy writer without clearing its path intent, then restores and delivers once (retired in place: ${retiredInPlace}, home already restored: ${renamed})`, async () => {
   const made = sqliteRegistryFixture("llv-archive-recovery");
   const registry = made.registry;
   setAgentRegistryForTests(registry);
@@ -104,7 +104,7 @@ for (const renamed of [false, true]) test(`archive recovery refuses a busy write
   if (renamed) fs.renameSync(archive, home);
   let cleared = false;
   const recover = () => recoverManagedAccountRemoval({ engine: "claude", accountId, home,
-    entry: { id: accountId, phase: "archiving", startedAt: Date.now() }, listed: true,
+    entry: { id: accountId, phase: "archiving", startedAt: Date.now() }, listed: !retiredInPlace, retiredInPlace,
     commitRetired: () => {}, clearJournal: () => { cleared = true; } });
   try {
     resetBlockingWaitsForTests(() => {});
@@ -113,6 +113,9 @@ for (const renamed of [false, true]) test(`archive recovery refuses a busy write
     expect(gapMs).toBeLessThan(50);
     expect(value).toBeNull();
     expect(cleared).toBe(false);
+    expect(fs.existsSync(home)).toBe(renamed);
+    expect(fs.existsSync(archive)).toBe(!renamed);
+    expect(registry.conversation(conversation.id)?.generations.at(-1)?.path).toBe(pathname);
     expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "account.archive-recovery")).toMatchObject({
       operationId: `account-removal:claude:${accountId}`, synchronous: false, refused: true,
     });
