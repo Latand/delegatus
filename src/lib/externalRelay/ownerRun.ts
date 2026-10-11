@@ -55,7 +55,7 @@ function ownerMissingOutcomeAnswer(request: ExternalRelayRequest, owner: OwnerIn
   const explanation = ukrainian
     ? "Агент завершив роботу без звіту про виконання чи успішну передачу. Відкрийте місце оркестратора потрібного проєкту й надішліть запит туди ще раз."
     : "The agent ended without reporting completion or a successful handoff. Open the project's orchestrator seat and resend your request there.";
-  const compact = ukrainian ? "Без звіту. Ще /ai." : "No result. Retry /ai";
+  const compact = ukrainian ? "Без звіту. Повтори." : "No report. Retry.";
   return ownerAnswer(Array.from(explanation).length <= request.answer.max_chars ? explanation : compact, request, owner);
 }
 

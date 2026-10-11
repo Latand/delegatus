@@ -53,7 +53,7 @@ test(`a missing owner outcome remains actionable within a small reply budget for
   }).done;
   expect(result).toMatchObject({ status: "done", answer: { action: "reply", reply_to: owner.messageId } });
   const answer = result.answer as { text: string };
-  expect(answer.text).toContain("/ai");
+  expect(answer.text).toContain(/[а-яіїєґ]/iu.test(text) ? "Повтори" : "Retry");
   expect(answer.text).not.toContain("…");
   expect(Array.from(answer.text).length).toBeLessThanOrEqual(20);
   expect(/[а-яіїєґ]/iu.test(answer.text)).toBe(/[а-яіїєґ]/iu.test(text));
