@@ -175,7 +175,7 @@ const click = async (element: Element | null) => {
 
 const text = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 
-test("every meter on the active card fills with what remains, and the corner names its tightest window", async () => {
+test("every meter on the active card fills with what remains, and the corner names its weekly window", async () => {
   const { host } = await mount([engineState("claude", [claudeMain, claudeLab], "cl-main")]);
 
   const card = host.querySelector('[data-mobile2-account="cl-main"]')!;
@@ -195,9 +195,23 @@ test("every meter on the active card fills with what remains, and the corner nam
   expect(corner.getAttribute("data-mobile2-account-window")).toBe("Week");
   expect(text(corner)).toBe("8% leftWeek");
   expect(corner.getAttribute("aria-label")).toBe("8% left of the Week window");
-  // The number the corner shows is the tightest window's headroom, never the
+  // The number the corner shows is the weekly window's headroom, never the
   // first window's and never what was used.
   expect(mobileAccountCorner({ session: null, weekly: null, tiers: [], plan: null }, (key: string) => key)).toBeNull();
+});
+
+test("the corner names the week even when the 5-hour window is tighter, and says so when there is no week", async () => {
+  // The operator's reading: 77 % of the week left, 36 % of the 5-hour window.
+  const both = account({ id: "cl-both", label: "Both", plan: "max", limits: { freshness: "fresh", session: window5h(64, NOW + 2 * HOUR), weekly: windowWeek(23, NOW + 3 * DAY), plan: "max", capturedAt: NOW - 60, checkedAt: new Date((NOW - 60) * 1000).toISOString() } } as Partial<AccountOption> & { id: string; label: string });
+  const fiveHourOnly = account({ id: "cl-5h", label: "Five", plan: "max", limits: { freshness: "fresh", session: window5h(64, NOW + 2 * HOUR), weekly: null, plan: "max", capturedAt: NOW - 60, checkedAt: new Date((NOW - 60) * 1000).toISOString() } } as Partial<AccountOption> & { id: string; label: string });
+  const { host } = await mount([engineState("claude", [both, fiveHourOnly], "cl-both")]);
+
+  const corner = host.querySelector('[data-mobile2-account="cl-both"] [data-mobile2-account-corner]')!;
+  expect(text(corner)).toBe("77% leftWeek");
+  expect(corner.getAttribute("aria-label")).toBe("77% left of the Week window");
+  const bare = host.querySelector('[data-mobile2-account="cl-5h"] [data-mobile2-account-corner]')!;
+  expect(text(bare)).toBe("no weekly data");
+  expect(text(bare)).not.toContain("36");
 });
 
 test("the quiet row of an authenticated account switches future launches on the tap, and the receipt carries Switch back", async () => {

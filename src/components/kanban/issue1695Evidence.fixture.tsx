@@ -3082,12 +3082,12 @@ if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: nu
 Object.assign(window, { launchRun });
 
 /* The account picker's driver block (kanbanBoard.browser.test.tsx, "account chips with the weekly limit left"):
-   `&accountpicker=1` gives any scenario the accounts the build's brief names. Each session window is looser than
-   its weekly one, so the sidebar footer's line (the tightest window) and the chip name the same number. */
+   `&accountpicker=1` gives any scenario the accounts the build's brief names. The sidebar footer's line and the
+   chip both name the weekly window. */
 const ACCOUNT_PICKER = new URLSearchParams(location.search).has("accountpicker");
-const pickerReading = (weeklyUsed: number | null, sessionUsed: number) => ({
+const pickerReading = (weeklyUsed: number | null, sessionUsed: number | null) => ({
   state: "fresh", checkedAt: iso(5 * MIN),
-  session: { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
+  session: sessionUsed === null ? null : { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
   weekly: weeklyUsed === null ? null : { usedPercent: weeklyUsed, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 },
 });
 const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<typeof pickerReading> | null, signedOut = false) => ({
@@ -3097,7 +3097,19 @@ const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<t
 /* `&pickeractive=team` makes the long-labelled account the Claude active one, and `&pickerdelay=<ms>` holds the
    accounts reply back, so the readings land after the chooser is open. */
 const PICKER_PARAMS = new URLSearchParams(location.search);
-const pickerAccounts = {
+/* `&sidebarweekly=1` (the "sidebar names each account's weekly limit" block): Claude «Main» with 77 % of its week
+   and 36 % of its 5-hour window left, «Work» with a week only, «Night» with a 5-hour window only; Codex weekly
+   only, as its plans report. */
+const SIDEBAR_WEEKLY = PICKER_PARAMS.has("sidebarweekly");
+const pickerAccounts = SIDEBAR_WEEKLY ? {
+  claude: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Main", "Max", pickerReading(23, 64)), pickerRow("work", "Work", "Max", pickerReading(59, null)),
+    pickerRow("night", "Night", "Pro", pickerReading(null, 30)),
+  ] },
+  codex: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Personal", "Pro", pickerReading(22, null)), pickerRow("review", "Review", "Plus", pickerReading(77, null)),
+  ] },
+} : {
   claude: { active: PICKER_PARAMS.get("pickeractive") ?? "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
     pickerRow("default", "Main", "Max", pickerReading(8, 5)), pickerRow("work", "Work", "Max", pickerReading(59, 44)),
     pickerRow("backup", "Backup", "Pro", pickerReading(93, 70)), pickerRow("old", "Old login", "Pro", null, true),

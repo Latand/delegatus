@@ -145,3 +145,49 @@ test("a failed deploy's task changes are headed as not on prod yet; hidden title
   });
   expect(renderPlain(cut)).toContain("📋 Tasks since the previous deploy (not on prod yet)\n• Done: A task title (1 hidden)");
 });
+
+test("a report the display shows whole carries no second copy", () => {
+  const { complete } = render({ summary: "Two lanes running.", sections: { inProgress: ["the board's scroll speed"], decision: ["pick the next wave"] } });
+  expect(complete).toBeNull();
+});
+
+test("what the display leaves out stays in the complete copy, in order, with the long summary uncut and private items still out", () => {
+  const long = `${"довгий пункт про перевірку звіту ".repeat(8).trim()}.`;
+  const summary = `Звіт для голосу: ${"усе, що сталося за ранок, ".repeat(6).trim()}.`;
+  const { cut, complete } = render({
+    locale: "uk",
+    summary,
+    sections: { queued: ["a", "b", "c", "d", "e", "f"], inProgress: [long, "short", "the build reads /srv/build/checkout"] },
+  });
+  const plain = renderPlain(cut);
+  expect(plain).not.toContain(long);
+  expect(plain).toContain("і ще 2");
+  expect(complete).toEqual({
+    summary,
+    sections: [{ heading: "В роботі", items: [long, "short"] }, { heading: "Далі", items: ["a", "b", "c", "d", "e", "f"] }],
+  });
+  expect(JSON.stringify(complete)).not.toContain("/srv/build");
+});
+
+test("the complete copy of a report the size budget cut keeps every item; one past its own bound is flagged too large and kept nowhere", () => {
+  const filler = (prefix: string) => Array.from({ length: 6 }, (_, index) => `${prefix} ${index}: ${"довгий опис роботи ".repeat(9).trim()}`.slice(0, 199));
+  const sections = { prod: filler("прод"), merged: filler("змерджено"), inProgress: filler("в роботі"), queued: filler("далі").slice(0, 4), decision: ["рішення"] };
+  const { cut, complete, tooLarge } = render({ locale: "uk", class: "blocked", summary: "Потрібне рішення.", sections });
+  expect(Buffer.byteLength(renderPlain(cut), "utf8")).toBeLessThanOrEqual(REPORT_PLAIN_BUDGET_BYTES);
+  expect(tooLarge).toBe(false);
+  expect(complete!.sections.flatMap((section) => section.items)).toEqual([...sections.prod, ...sections.merged, ...sections.inProgress, ...sections.queued, ...sections.decision]);
+
+  // Sixty distinct Cyrillic items of 199 characters: no copy may silently drop the last ones.
+  const many = Array.from({ length: 60 }, (_, index) => `пункт ${index + 1}: ${"я".repeat(190)}`.slice(0, 199));
+  const over = render({ locale: "uk", summary: "Багато пунктів.", sections: { inProgress: many } });
+  expect(over.tooLarge).toBe(true);
+  expect(over.complete).toBeNull();
+});
+
+test("an older caller's long body line is cut for display only: the complete copy keeps its tail fact", () => {
+  const legacyBody = `${"The first fact. ".repeat(20)}TAIL_FACT: deployment is waiting.`;
+  const { cut, complete, tooLarge } = render({ summary: "Report.", legacyBody });
+  expect(renderPlain(cut)).not.toContain("TAIL_FACT");
+  expect(tooLarge).toBe(false);
+  expect(complete).toEqual({ summary: "Report.", sections: [{ heading: "In progress", items: [legacyBody.trim()] }] });
+});

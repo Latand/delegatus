@@ -2177,6 +2177,61 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
 }, 30000);
 
 
+test("unresolved short owner approval asks one question without account selection or work", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const select = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => { throw new Error("a clarification needs no agent account"); });
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner-clarification", answer: { max_chars: 1000, progress: "none" },
+      input: { ...contextRequest.input, request_text: "го", requester: { ...contextRequest.input.requester, is_owner: true },
+        conversation: contextRequest.input.conversation.map(message => ({ ...message, text: "/ai го" })) } });
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining("Що саме підтверджуєте?") } });
+    expect(select).not.toHaveBeenCalled();
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { select.mockRestore(); await server.close(); }
+});
+
+test("runner freezes the stored report context into owner custody and the launched prompt", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { appendBridgeReports, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
+  const { recordPublishedRelayReference } = await import("./publishedReferences");
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const directory = path.join(process.env.LLV_STATE_DIR!, "telegram");
+  fs.mkdirSync(directory, { recursive: true });
+  const filename = path.join(directory, "bot.sqlite");
+  const db = new Database(filename);
+  db.exec("CREATE TABLE chats (chat_id TEXT PRIMARY KEY, alias TEXT)");
+  const chatId = String(2 ** 6), messageId = 2 ** 5;
+  db.query("INSERT INTO chats VALUES (?, ?)").run(chatId, "report-room");
+  db.close();
+  const body = "Create a clone with one button? Confirm the start.";
+  const report = appendBridgeReports([{ key: "owner-report", project: "project-b", targetSeatConversationId: "seat-b",
+    origin: { kind: "manager", conversationId: "seat-b", role: "orchestrator" }, class: "question", at: new Date().toISOString(), body,
+    telegram: { chat: "report-room", html: body } }]).appended[0];
+  recordBridgeReportTelegram(report.id, { state: "sent", messageIds: [messageId], at: new Date().toISOString() });
+  recordPublishedRelayReference(paired.api_base, "/targets/target_1/messages", "POST", { chat_id: Number(chatId), message_id: messageId }, 200, { message_key: "posted-report", replayed: false });
+  let launches = 0;
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner-report-reply", answer: { max_chars: 1000, progress: "none" },
+      input: { ...contextRequest.input, request_text: "го", requester: { ...contextRequest.input.requester, is_owner: true },
+        conversation: contextRequest.input.conversation.map(message => ({ ...message, text: "/ai го", reply_to: "posted-report" })) } }, undefined,
+      { ownerPorts: { launch: async input => { launches++; expect(input.prompt).toContain(body); return { status: 202, body: { conversationId: "conversation_report_reply" } }; },
+        observe: async () => {
+          expect(readRunLedger().runs.find(run => run.requestId === "owner-report-reply")?.ownerTurn).toMatchObject({
+            request: { text: "/ai го", requestText: "го" }, bridgeReport: { project: "project-b", sourceSeat: "seat-b", reportText: body },
+          });
+          return { state: "ended", finalText: "Передано до місця проєкту." };
+        }, stop: async () => {}, pollMs: 1 } });
+    expect(result).toMatchObject({ outcome: "answered" });
+    expect(launches).toBe(1);
+  } finally { await server.close(); fs.rmSync(filename, { force: true }); }
+});
+
 for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "invalid_request"] as const)
   test(`owner tier runner: ${scenario}`, async () => {
     const { contextRequest } = await import("./request.fixture");
@@ -2207,7 +2262,8 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
         ownerPorts: {
           launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_owner_runner" } }; },
           observe: async () => {
-            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null });
+            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null,
+              ownerTurn: { request: { text: contextRequest.input.conversation[0]!.text, requestText: null } } });
             if (!beats.length || scenario === "lease_lost" || scenario === "hard_cap") return { state: "running" };
             return { state: "ended", finalText: "Owner reply" };
           },
