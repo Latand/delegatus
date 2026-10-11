@@ -25,7 +25,17 @@ export interface CompanionDeliveryPaths {
 const sameRequest = (row: StoredProposal, sourceItemId: string, instruction: string, sourceTurn?: number, project?: string | null) =>
   requestText(row.proposal.instruction) === requestText(instruction)
   && (project === undefined || (project !== null && canonicalProject(row.proposal.recipient.project) === canonicalProject(project)))
-  && (sourceTurn !== undefined && row.sourceTurn !== undefined ? row.sourceTurn === sourceTurn : row.proposal.sourceItemId === sourceItemId);
+  && sameAttempt(row, sourceItemId, sourceTurn);
+/** One operator attempt: the same completed operator turn or, when either side
+ * has no transcribed turn, the same Live delegation. */
+const sameAttempt = (row: StoredProposal, sourceItemId: string, sourceTurn?: number) =>
+  sourceTurn !== undefined && row.sourceTurn !== undefined ? row.sourceTurn === sourceTurn : row.proposal.sourceItemId === sourceItemId;
+/** The request a renewal sends once more, followed back to the first send. */
+const lineageRoot = (session: StoredSession, row: StoredProposal) => {
+  let root = row;
+  for (let depth = 0; root.renews && session.proposals[root.renews] && depth < 64; depth += 1) root = session.proposals[root.renews]!;
+  return root.proposal.proposalId;
+};
 /** Every request the session holds but `except`, for the gate's look back. */
 const earlierRequests = (session: StoredSession, except?: string, project?: string): EarlierRequest[] => Object.values(session.proposals)
   .filter(row => row.proposal.proposalId !== except && (project === undefined || canonicalProject(row.proposal.recipient.project) === canonicalProject(project))).map(row => ({ turn: row.sourceTurn, instruction: row.proposal.instruction }));
@@ -64,8 +74,10 @@ const reportStatus = (report: BridgeReportV1): "progress" | "result" | "question
  * answersDirective; without it, a result or a failure answers, while progress,
  * a question back and a blocker leave the request waiting. */
 const answersRequest = (report: BridgeReportV1) => report.answersDirective ?? (report.class === "completed" || report.class === "review_verdict" || report.class === "failed");
-/** Reports owed to the voice kept per session; the transcript and orchestrator_reports keep every report besides. */
+/** Reports owed to the voice that one scan fills the queue up to; it scans on only after the voice has taken some. */
 const REPORT_SPEECH_CAPACITY = 64;
+/** Only an open Live call has a voice to owe reports to; prototype sessions read them from their events. */
+const owesSpeech = (session: StoredSession) => !session.closed && session.authority === "live-model";
 
 function appendEvent(session: StoredSession, payload: Payload, now: number, clean: (text: string) => string): CompanionEvent {
   const event = { ...cleanStrings(payload, clean), version: 1 as const, sessionId: session.id, generation: session.generation,
@@ -109,6 +121,8 @@ export class CompanionAdmission {
   private readonly secrets = new Set<string>();
   /** Requests awaiting a report that the backend was shown, per session and delegation. */
   private readonly shown = new Map<string, Set<string>>();
+  /** Reports a backend delegation already asked to hear again, per session and delegation. */
+  private readonly reread = new Map<string, Set<string>>();
   constructor(readonly storage: CompanionStorage, private readonly paths: CompanionDeliveryPaths, private readonly now = Date.now) {}
   create(options: { project: string; locale: Locale; authority?: "live-model"; startedBy?: SessionStarter }): StoredSession {
     const session: StoredSession = { id: randomUUID(), project: canonicalProject(options.project), locale: options.locale, generation: 1,
@@ -275,9 +289,11 @@ export class CompanionAdmission {
     if (held?.answered && !options.renewed) return { state: "answered", request: callRequest(session, held, this.now()), report: reportText(session, held.answered) };
     if (options.pendingRequest !== undefined && !options.renewed) return { state: "refused", code: "request_not_waiting" };
     // The operator explicitly asked to send it once more: it goes again under its
-    // own delivery key, once per operator turn whatever the model's wording.
-    const renews = held && options.renewed && (awaitingReport(held) || held.answered) ? held.proposal.proposalId : undefined;
-    const resent = renews ? Object.values(session.proposals).find(row => row.renews === renews && (options.sourceTurn === undefined || row.sourceTurn === options.sourceTurn)) : undefined;
+    // own delivery key, once per operator attempt whatever the model's wording or
+    // which handle of the request it names, the original or a renewal.
+    const renews = held && options.renewed && (awaitingReport(held) || held.answered) ? lineageRoot(session, held) : undefined;
+    const resent = renews ? Object.values(session.proposals).find(row => lineageRoot(session, row) === renews
+      && sameAttempt(row, clean(sourceItemId), options.sourceTurn)) : undefined;
     if (resent) return this.outcome(id, resent.proposal.proposalId);
     const proposal = this.propose(id, callId, sourceItemId, instruction, { ...options, autosend: !options.confirmation?.trim(), ...(renews ? { renews } : {}) });
     const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === clean(callId)
@@ -331,13 +347,16 @@ export class CompanionAdmission {
     const minutes = (atMs: number) => Math.max(0, Math.floor((this.now() - atMs) / 60_000));
     const label = (project: string) => withoutLocalPaths(reportHeaderName(project, session.locale));
     const reported = session.events.flatMap(event => event.type === "orchestrator.answer" || event.type === "orchestrator.report" ? [event] : []);
+    const reportHandles = new Map(this.relayedReports(id).map(row => [row.reportId, row.handle]));
+    const handled = (reportId: string) => reportHandles.has(reportId) ? { report: reportHandles.get(reportId) } : {};
     const requests = Object.values(session.proposals).filter(row => row.state === "admitted" && row.delivery).map(row => {
       const request = callRequest(session, row, this.now());
       const answer = row.answered ? reported.find(event => event.reportId === row.answered) : undefined;
       const asked = !answer && row.askedBack ? reported.find(event => event.reportId === row.askedBack) : undefined;
       return { request: request.handle, project: label(request.project), ask: request.instruction, sentMinutesAgo: request.sentMinutesAgo,
         state: row.status === "failed" ? "delivery_failed" : row.answered ? "answered" : asked ? "orchestrator_asked_back" : "waiting_for_report", progressReports: request.progressReports,
-        ...(answer ? { answer: { status: answer.status, text: answer.text } } : {}), ...(asked ? { askedBack: { status: asked.status, text: asked.text } } : {}) };
+        ...(answer ? { answer: { status: answer.status, text: answer.text, ...handled(answer.reportId) } } : {}),
+        ...(asked ? { askedBack: { status: asked.status, text: asked.text, ...handled(asked.reportId) } } : {}) };
     });
     // Answers and questions back travel with their requests; the latest other reports follow, whole, within a bound.
     const answering = new Set(Object.values(session.proposals).flatMap(row => [row.answered, row.answered ? undefined : row.askedBack]).filter(Boolean));
@@ -346,7 +365,7 @@ export class CompanionAdmission {
     const others = reported.filter(event => !answering.has(event.reportId)).reverse();
     for (const event of others) {
       const row = event.type === "orchestrator.answer" ? session.proposals[event.delivery.proposalId] : undefined;
-      const report = { status: event.status, project: label(event.type === "orchestrator.answer" ? event.delivery.recipient.project : event.project),
+      const report = { ...handled(event.reportId), status: event.status, project: label(event.type === "orchestrator.answer" ? event.delivery.recipient.project : event.project),
         minutesAgo: minutes(session.createdAt + event.atMs), text: event.text, ...(row ? { about: handles.get(row.proposal.proposalId) } : {}) };
       size += JSON.stringify(report).length;
       if (reports.length >= 5 || size > 12_000) break;
@@ -575,6 +594,10 @@ export class CompanionAdmission {
       for (const report of reports.sort((a, b) => a.seq - b.seq)) {
         const project = canonicalProject(report.project!);
         if (report.seq <= marks[project]) continue;
+        // A full speech queue stops the scan before the next report, so nothing
+        // owed is ever dropped: the rest stay past the watermark for a later poll,
+        // once the voice has taken what waits. Migration recovery is bounded by its requests.
+        if (!legacy && owesSpeech(session) && (session.reportSpeech?.length ?? 0) >= REPORT_SPEECH_CAPACITY) break;
         // Advance even past rows that are not spoken. The bounded id ring is
         // a second guard; the durable sequence is what prevents old replay.
         marks[project] = report.seq;
@@ -591,7 +614,7 @@ export class CompanionAdmission {
           else if (status === "question" || status === "blocked") row.askedBack = report.id;
         }
         // Owed to the voice in the same commit that moves the scan past it.
-        if (!session.closed) (session.reportSpeech ??= []).push({ reportId: report.id, project, status, text, handed: 0 });
+        if (owesSpeech(session)) (session.reportSpeech ??= []).push({ reportId: report.id, project, status, text, handed: 0 });
         // A card can join only a receipt already published to the client. A
         // report arriving during a send or after a lost transport reply still
         // gets its own visible card, without inventing an operation identity.
@@ -608,9 +631,48 @@ export class CompanionAdmission {
       // unrelated reports. First visits in current calls only set a baseline.
       for (const [project, seq] of baselines) marks[project] = Math.max(marks[project], seq);
       session.spokenReports = spoken.slice(-256);
-      if (session.reportSpeech) session.reportSpeech = session.reportSpeech.slice(-REPORT_SPEECH_CAPACITY);
       return events;
     });
+  }
+  /** Owes the voice a report this call relayed, once more, whole: it is read from
+   * the report text through the same parts as a new report, never retold by a
+   * model. `report` is a report handle, a request handle (its answer, else its
+   * latest report) or null for the latest report of the call. */
+  rereadReport(id: string, report: string | null, delegationId?: string): { status: "reading" | "already_owed"; report: string } | { status: "not_found" } {
+    const relayed = this.relayedReports(id);
+    const asked = delegationId === undefined ? undefined : `${id}\0${delegationId}`;
+    return this.storage.change(document => {
+      const session = document.sessions[id];
+      if (!session || session.closed) return { status: "not_found" as const };
+      const request = report === null ? undefined : Object.values(session.proposals).find(row => requestHandles(session).get(row.proposal.proposalId) === report);
+      const reportId = request ? request.answered ?? request.askedBack ?? request.reports.at(-1) : undefined;
+      const found = report === null ? relayed.at(-1) : relayed.find(row => request ? row.reportId === reportId : row.handle === report);
+      if (!found) return { status: "not_found" as const };
+      const queue = session.reportSpeech ??= [];
+      // Once per delegation: a model asking twice in one answer hears it once.
+      if (queue.some(row => row.reportId === found.reportId) || (asked && this.reread.get(asked)?.has(found.reportId))) return { status: "already_owed" as const, report: found.handle };
+      if (asked) {
+        this.reread.set(asked, new Set([...this.reread.get(asked) ?? [], found.reportId]));
+        while (this.reread.size > 1_024) this.reread.delete(this.reread.keys().next().value!);
+      }
+      queue.push({ reportId: found.reportId, project: found.project, status: found.status, text: found.text, handed: 0, reread: true });
+      return { status: "reading" as const, report: found.handle };
+    });
+  }
+  /** Every report this call relayed, in order, each with its handle. The
+   * transcript keeps them all; the bounded event ring covers a record that
+   * reached the transcript's size limit. */
+  private relayedReports(id: string): Array<{ handle: string; reportId: string; status: string; text: string; project: string }> {
+    const rows = new Map<string, { status: string; text: string; project: string }>();
+    for (const entry of this.records.read(id).entries) {
+      const delivery = entry.data.delivery as Delivery | undefined;
+      const project = delivery?.recipient.project ?? entry.data.project;
+      if (entry.kind === "report" && entry.id.startsWith("report-") && typeof entry.data.text === "string" && typeof entry.data.status === "string" && typeof project === "string")
+        rows.set(entry.id.slice("report-".length), { status: entry.data.status, text: entry.data.text, project: canonicalProject(project) });
+    }
+    for (const event of this.session(id).events) if ((event.type === "orchestrator.answer" || event.type === "orchestrator.report") && !rows.has(event.reportId))
+      rows.set(event.reportId, { status: event.status, text: event.text, project: canonicalProject(event.type === "orchestrator.answer" ? event.delivery.recipient.project : event.project) });
+    return [...rows].map(([reportId, row], index) => ({ handle: `k${index + 1}`, reportId, ...row }));
   }
   /** Reports owed to the voice, oldest first, each with the parts already handed to the provider. */
   reportSpeech(id: string): ReportSpeech[] { return this.session(id).reportSpeech ?? []; }
@@ -637,6 +699,6 @@ export class CompanionAdmission {
       delete session.reportSpeech;
       for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }
     });
-    for (const key of this.shown.keys()) if (key.startsWith(`${id}\0`)) this.shown.delete(key);
+    for (const map of [this.shown, this.reread]) for (const key of map.keys()) if (key.startsWith(`${id}\0`)) map.delete(key);
   }
 }

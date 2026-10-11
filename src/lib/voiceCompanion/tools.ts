@@ -89,6 +89,14 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       const waiting = read.requests.filter(row => row.state === "waiting_for_report").length;
       return { ...read, speech: `${read.requests.length} request(s) sent in this call, ${waiting} still waiting for the orchestrator's report; ${read.reports.length} other report(s) shown.` };
     } },
+  { name: "reread_orchestrator_report", capability: "Read a report again: reads a report from this call to the operator once more, whole and in its own words.", class: "call-read",
+    description: "When the operator asks to hear a report again, whole, or an answer the orchestrator already gave, call this instead of retelling it: the report is read to the operator from its own text, every item in order. report is a report handle (k…) or a request handle (r…) from orchestrator_reports, or null for the latest report of this call. Afterwards answer with one short sentence that introduces it and never restate its contents. Sends nothing.",
+    parameters: schema({ report: { type: ["string", "null"], maxLength: 16, description: "A report or request handle from orchestrator_reports; null for the latest report of this call." } }),
+    handler: (context, args) => {
+      const result = context.admission.rereadReport(context.sessionId, typeof args.report === "string" && args.report.trim() ? args.report.trim() : null, context.delegationId);
+      return result.status === "not_found" ? { status: "not_found", speech: "No such report in this call. Read orchestrator_reports for the handles, or say that no report has arrived yet." }
+        : { status: "reading", report: result.report, speech: "The report is read to the operator from its own text right after your answer. Say one short sentence that introduces it; never restate, shorten or summarize it." };
+    } },
   { name: "request_orchestrator_delegation", capability: "Send to the orchestrator: sends the operator's request to the project's orchestrator at once; its answer comes back to you as a report.", class: "delegation",
     description: `Send one short ask to the project's orchestrator when the operator explicitly asks to send work or a question to it, and the board, its messages and its reports cannot answer it. The instruction is the operator's latest request in their own words and language, at most ${VOICE_ASK_MAX_CHARS} characters: never translated, expanded, or bundled with earlier questions. It is delivered at once, with no confirmation. Asking first is the exception and your own judgment: set confirmation_reason to one short sentence only when the action is critical or hard to undo, or when you are unsure you understood the request; then nothing is sent until the operator answers. In every other case pass null. When the ask repeats or rephrases a request whose report has not arrived, pass its handle in pending_request: nothing is sent and the operator hears that the answer is on its way. When one turn repeats a waiting request and also asks something new, pass the repeat with its handle and send the new part as its own ask. Words that match a request already raised in an earlier turn are a repeat and send nothing, unless the operator explicitly asked to send it once more and you set asked_again: then it is sent again, also while its report is pending. Input transcripts are optional context.`,
     // The schema keeps the old envelope, so an overlong ask reaches the handler and is recomposed rather than failing validation.
@@ -117,6 +125,10 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       // A request this delegation sent is known to it.
       context.admission.showAwaiting(context.sessionId, context.delegationId,
         context.admission.awaitingReports(context.sessionId).map(request => request.proposalId).filter(proposalId => !before.has(proposalId)));
+      // An answer already given is read again from the report's own text, never retold.
+      if (outcome.state === "answered" && outcome.report && context.admission.rereadReport(context.sessionId, outcome.request.handle, context.delegationId).status !== "not_found")
+        return { status: "answered", request: outcome.request.handle, report: outcome.report,
+          speech: "Nothing was sent: the orchestrator already answered this, and its report is read to the operator from its own text right after your answer. Say one short sentence that introduces it; never restate, shorten or summarize it." };
       return spoken(outcome);
     } },
   { name: "resolve_orchestrator_confirmation", capability: "Confirmation answer: passes on the operator's yes or no to a request you asked about.", class: "delegation",

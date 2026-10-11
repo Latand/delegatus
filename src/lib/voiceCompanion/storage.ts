@@ -56,7 +56,9 @@ export type SessionStarter = { memberId: string } | { operator: true };
 /** A report owed to the voice. Kept until every part is handed to the provider,
  * committed with the scan position that found it, so a failed hand-off resumes
  * at the first part not handed and never repeats one that was. */
-export interface ReportSpeech { reportId: string; project: string; status: string; text: string; parts?: string[]; handed: number }
+export interface ReportSpeech { reportId: string; project: string; status: string; text: string; parts?: string[]; handed: number;
+  /** The operator asked to hear a report this call already relayed once more. */
+  reread?: boolean }
 export interface StoredSession {
   backend?: "codex";
   startedBy?: SessionStarter;

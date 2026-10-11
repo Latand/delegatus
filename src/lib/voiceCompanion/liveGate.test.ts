@@ -25,10 +25,13 @@ test("a bundle of earlier questions is refused for its length, in English and Uk
   }
 });
 
-test("the same words from an earlier turn are a repeat whatever their case, spacing or closing stop; a model renewal lets the gate pass them on", () => {
+test("the same words from an earlier turn are a repeat whatever their spacing, closing stop or opening capital; a model renewal lets the gate pass them on", () => {
   const earlier = [{ turn: 1, instruction: "Що з ревʼю голосу?" }];
-  expect(requestText("  що  з ревʼю ГОЛОСУ… ")).toBe(requestText("Що з ревʼю голосу?"));
-  expect(liveProposalRefusal("що  з ревʼю ГОЛОСУ", [said("що з ревʼю голосу", 2)], 2, earlier)).toBe("already_requested");
+  expect(requestText("  що  з ревʼю голосу… ")).toBe(requestText("Що з ревʼю голосу?"));
+  expect(liveProposalRefusal("що  з ревʼю голосу", [said("що з ревʼю голосу", 2)], 2, earlier)).toBe("already_requested");
+  // Case past the opening letter names the target: branch Release and branch release are two requests.
+  expect(requestText("Що змінилося у гілці Release?")).not.toBe(requestText("Що змінилося у гілці release?"));
+  expect(liveProposalRefusal("What changed on branch release?", [said("What changed on branch release?", 2)], 2, [{ turn: 1, instruction: "What changed on branch Release?" }])).toBeNull();
   // Admission still holds a renewed ask while its report is pending; the gate only judges the words.
   expect(liveProposalRefusal("що з ревʼю голосу", [said("що з ревʼю голосу", 2)], 2, earlier, true)).toBeNull();
   expect(liveProposalRefusal("Яку модель обрати для голосу?", [said("Яку модель обрати?", 2)], 2, earlier)).toBeNull();

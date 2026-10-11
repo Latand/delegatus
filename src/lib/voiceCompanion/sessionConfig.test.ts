@@ -32,7 +32,7 @@ test("the Live configuration exposes the explicit read allowlist and the delegat
   expect(LIVE_MODEL).toBe("gpt-live-1");
   expect(COMPANION_TOOLS.map(tool => tool.name)).toEqual([
     "list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame",
-    "orchestrator_reports", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
+    "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
   ]);
   for (const locale of ["en", "uk"] as const) {
     const config = liveSessionConfiguration(locale);
@@ -64,6 +64,7 @@ test("the backend answers from reads, sends one short ask in the operator's word
   expect(BACKEND_INSTRUCTIONS).toContain("pass the repeat with its handle and send only the new part as its own ask");
   expect(BACKEND_INSTRUCTIONS).toContain("Pass project only when the operator named another project; never invent one");
   expect(BACKEND_INSTRUCTIONS).toContain("keep each fact with its own subject and in the report's words");
+  expect(BACKEND_INSTRUCTIONS).toContain("call reread_orchestrator_report: the report is read from its own text, so never retell it");
   for (const locale of ["en", "uk"] as const) {
     const instructions = liveSessionConfiguration(locale).instructions;
     expect(instructions).toContain("answer from this list in plain words; that needs no delegation");

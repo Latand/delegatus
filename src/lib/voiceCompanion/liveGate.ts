@@ -3,8 +3,14 @@ import { gateSentences, retractsRequest, type OperatorInput } from "./gate";
 /** Withdrawal applies only to a confirmation already waiting. */
 const REFUSED = /\b(?:don['’]?t|do not|never)\s+(?:send|delegate|ask|tell)\b|(?:не\s+(?:надсилай|відправляй|делегуй|прос[иі]|передавай))/iu;
 const words = (rows: readonly OperatorInput[]) => rows.map(row => row.text).join(" ");
-/** Instruction text as one request reads, whatever its spacing, case or closing stop. */
-export const requestText = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "").toLowerCase();
+/** Instruction text as one request reads, whatever its spacing, closing stop or opening capital. Case anywhere
+ * else is kept: a branch "Release" and a branch "release" are two targets, so two requests. A rephrasing is
+ * named by its request handle, never by folding words together. */
+export const requestText = (text: string) => {
+  const words = text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "");
+  const [first = ""] = words;
+  return first.toLowerCase() + words.slice(first.length);
+};
 /** One short ask in the operator's words, counted in Unicode scalars. A longer
  * text is a bundle or an expansion; the backend recomposes it, nothing slices it. */
 export const VOICE_ASK_MAX_CHARS = 400;

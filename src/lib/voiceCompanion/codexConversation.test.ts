@@ -306,3 +306,88 @@ for (const [locale, words] of Object.entries(LEAN) as Array<["en" | "uk", typeof
     expect(f.deliveries).toHaveLength(2);
   } finally { await f.close(); }
 }, 20_000);
+
+/* Case-sensitive targets, explicit asks again with no transcript and switched handles, then a report read again, on the real adapter. The words are written for this test. */
+const TARGETS = {
+  en: { upper: "What changed on branch Release?", lower: "What changed on branch release?", reworded: "So what about branch Release?", ask: "Review the plan", again: "Send the plan review once more",
+    reread: "Read the whole last report again", fact: (n: number) => `fact ${n}: the check passed on every platform` },
+  uk: { upper: "Що змінилося у гілці Release?", lower: "Що змінилося у гілці release?", reworded: "То що там з гілкою Release?", ask: "Переглянь план", again: "Надішли перегляд плану ще раз",
+    reread: "Прочитай ще раз увесь останній звіт", fact: (n: number) => `факт ${n}: перевірку пройдено` },
+};
+for (const [locale, words] of Object.entries(TARGETS) as Array<["en" | "uk", typeof TARGETS.en]>) test(`${locale}: on the real Codex adapter two case-distinct targets send once each, explicit asks again without a transcript send once per handoff whatever handle, and a report asked for again is voiced whole`, async () => {
+  const f = await fixture();
+  const send = (id: string, turnId: string, instruction: string, pending: string | null, again: string | null = null) =>
+    tool(id, turnId, "request_orchestrator_delegation", { project: null, instruction, pending_request: pending, confirmation_reason: null, asked_again: again });
+  const answered = async (id: string) => JSON.parse((await f.reply(id)).contentItems[0].text);
+  const finish = (turnId: string, text: string) => [note("turn/completed", { turn: { id: turnId, status: "completed" } }), delta("assistant", text), done("assistant", text)];
+  const speech = () => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").map(row => row.params.text as string);
+  try {
+    f.replay(delta("user", words.upper), done("user", words.upper), handoff("upper", words.upper), turn("upper"), send("send-upper", "upper", words.upper, null));
+    expect(await answered("send-upper")).toMatchObject({ status: "sent" });
+    f.replay(...finish("upper", "Sent."), delta("user", words.lower), done("user", words.lower), handoff("lower", words.lower), turn("lower"), send("send-lower", "lower", words.lower, null));
+    expect(await answered("send-lower")).toMatchObject({ status: "check_waiting", waiting: [{ request: "r1", ask: words.upper }] });
+    f.replay(send("send-lower-new", "lower", words.lower, null));
+    expect(await answered("send-lower-new")).toMatchObject({ status: "sent" });
+    f.replay(...finish("lower", "Sent."), delta("user", words.reworded), done("user", words.reworded), handoff("reworded", words.reworded), turn("reworded"), send("send-reworded", "reworded", words.reworded, "r1"));
+    expect(await answered("send-reworded")).toMatchObject({ status: "awaiting_report", request: "r1" });
+    expect(f.deliveries.map(row => row.text.split("\n")[0])).toEqual([words.upper, words.lower]);
+    // Handoffs with no input transcript: each explicit ask again sends once, whichever handle of the request it names.
+    f.replay(...finish("reworded", "On its way."), handoff("plan", words.ask), turn("plan"), send("send-plan", "plan", words.ask, null));
+    expect(await answered("send-plan")).toMatchObject({ status: "check_waiting" });
+    f.replay(send("send-plan-new", "plan", words.ask, null));
+    expect(await answered("send-plan-new")).toMatchObject({ status: "sent" });
+    let handle = "r3";
+    for (const attempt of ["again-1", "again-2"]) {
+      f.replay(...finish(attempt === "again-1" ? "plan" : "again-1", "Sent."), handoff(attempt, words.again), turn(attempt), send(`${attempt}-a`, attempt, words.ask, handle, words.again));
+      expect(await answered(`${attempt}-a`)).toMatchObject({ status: "sent" });
+      handle = attempt === "again-1" ? "r4" : "r5";
+      for (const [suffix, named] of [["b", handle], ["c", "r3"]] as const) {
+        f.replay(send(`${attempt}-${suffix}`, attempt, `${words.again} ${suffix}`, named, words.again));
+        expect(await answered(`${attempt}-${suffix}`)).toMatchObject({ status: "sent" });
+      }
+    }
+    expect(f.deliveries.map(row => row.text.split("\n")[0])).toEqual([words.upper, words.lower, words.ask, words.ask, words.ask]);
+    expect(new Set(f.deliveries.map(row => row.delivery.clientMessageId)).size).toBe(5);
+    f.replay(...finish("again-2", "Sent."));
+    // A report over one append, voiced when it arrives, then asked for again: read from its text, every fact to its last.
+    const lines = [...Array.from({ length: 14 }, (_, index) => `- ${words.fact(index + 1)}`), "- TAIL_FACT"];
+    f.reports.push({ id: "long", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: lines.join("\n"),
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(f.session.sessionId, 0);
+    const expected = speechParts('The orchestrator for project "fixture" reports result.', lines.join("\n"), "", 500);
+    expect(expected.length).toBeGreaterThan(1);
+    for (const [index, part] of expected.entries()) {
+      await until(() => speech().length === index + 1);
+      f.replay(delta("assistant", part), done("assistant", part));
+    }
+    f.replay(delta("user", words.reread), done("user", words.reread), handoff("reread", words.reread), turn("reread"), tool("reread-call", "reread", "reread_orchestrator_report", { report: null }));
+    expect(await answered("reread-call")).toMatchObject({ status: "reading", report: "k1" });
+    f.replay(...finish("reread", "Here it is again."));
+    const again = speechParts('Once more, the orchestrator for project "fixture" reports result.', lines.join("\n"), "", 500);
+    for (const [index, part] of again.entries()) {
+      await until(() => speech().length === expected.length + index + 1);
+      f.replay(delta("assistant", part), done("assistant", part));
+    }
+    const reread = speech().slice(expected.length);
+    expect(reread).toEqual(again);
+    expect(reread.join("\n").split("\n").slice(1)).toEqual(lines);
+    expect(f.deliveries).toHaveLength(5);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("on the real Codex adapter more reports than the speech queue holds are all voiced once and in order", async () => {
+  const f = await fixture();
+  const speech = () => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").map(row => row.params.text as string);
+  try {
+    for (let seq = 1; seq <= 66; seq += 1) f.reports.push({ id: `queued-${seq}`, seq, project: "fixture", at: "2026-10-11T00:00:00Z", class: "completed", body: `Report number ${seq}.`,
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(f.session.sessionId, 0);
+    for (let seq = 1; seq <= 66; seq += 1) {
+      await f.service.events(f.session.sessionId, 0);
+      await until(() => speech().length === seq);
+      f.replay(delta("assistant", `Report number ${seq}.`), done("assistant", `Report number ${seq}.`));
+    }
+    expect(speech().map(text => text.match(/Report number (\d+)/)?.[1])).toEqual(Array.from({ length: 66 }, (_, index) => String(index + 1)));
+    expect(f.admission.reportSpeech(f.session.sessionId)).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
