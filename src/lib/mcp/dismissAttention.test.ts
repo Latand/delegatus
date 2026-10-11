@@ -378,30 +378,52 @@ test("the scoped maintainer reads through the binding with its capability, and s
 });
 
 /* docs/design/attention-auto-resolve.md: a seat hands a wait routed to it to
-   the operator with its question, behind the same gate as a dismissal. */
-test("the seat escalates a routed wait with its question; a worker or another project's seat cannot", async () => {
+   the operator through a decision form, a prototype-review round it already
+   published, behind the same gate as a dismissal. The escalation holds the
+   round and no question of its own (docs/design/operator-decision-forms.md §4). */
+test("the seat escalates a routed wait to a waiting decision round; a worker, another project's seat or a settled round cannot", async () => {
   const state = world();
-  const escalate = { question: "Retry the build on the bigger runner, or close the lane?", options: ["Retry", "Close"], recommended: 0, effect: "the lane retries or closes" };
-  const lane = await serviceAs(MANAGER, state).callTool("dismiss_attention", { clientRequestId: "e-lane", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate }) as Answer & { escalated?: { key: string; question: string; seat: string | null } };
+  const round = (id: string, decided: boolean) => ({ id, title: id, createdAt: "2026-09-24T09:40:00.000Z", variants: [],
+    questions: [{ id: "q1", text: "Retry the build on the bigger runner, or close the lane?", options: [{ label: "Retry", recommended: true }, { label: "Close" }] }],
+    ...(decided ? { decision: { chosen: [], comment: "", at: "2026-09-24T09:45:00.000Z", delivery: { state: "sent" } } } : {}) });
+  const tasks = [
+    { ...TASK, prototypeReviews: [round("round-old", false), round("round-1", false)] },
+    { ...TASK, id: "task-decided", prototypeReviews: [round("round-decided", true)] },
+    { ...TASK, id: "task-elsewhere", project: "elsewhere", prototypeReviews: [round("round-elsewhere", false)] },
+  ] as unknown as BoardTask[];
+  const as = (authority: AttentionCallerAuthority) => serviceAs(authority, state, undefined, { loadTasks: () => tasks });
+  const lane = await as(MANAGER).callTool("dismiss_attention", { clientRequestId: "e-lane", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-1" } }) as Answer & { escalated?: { key: string; seat: string | null } };
   expect(lane.ok).toBe(true);
-  expect(lane.escalated).toMatchObject({ question: escalate.question, options: ["Retry", "Close"], recommended: 0, effect: "the lane retries or closes", seat: SEAT });
+  expect(lane.escalated).toMatchObject({ taskId: "task-1", reviewId: "round-1", seat: SEAT });
+  expect(Object.keys(lane.escalated!).sort()).toEqual(["at", "key", "reviewId", "seat", "taskId"]);
   expect(lane.escalated!.key).toMatch(/^lane:lane-1:lane-decision:/);
   expect(state.writes).toEqual([]);
   expect(readAttentionDismissals().records).toMatchObject([{ kind: "escalation", subject: `escalation:${lane.escalated!.key}`, by: { kind: "manager", conversationId: SEAT } }]);
 
   for (const [authority, refusedAs] of [[WORKER, "worker"], [OTHER_SEAT, "cross-project"]] as const) {
-    const refused = await serviceAs(authority, state).callTool("dismiss_attention", { clientRequestId: `e-${refusedAs}`, target: { kind: "pipeline", pipelineId: "lane-1" }, escalate }) as Answer;
+    const refused = await as(authority).callTool("dismiss_attention", { clientRequestId: `e-${refusedAs}`, target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-1" } }) as Answer;
     expect(refused.ok).toBe(false);
     expect(refused.details).toMatchObject({ code: "DISMISS_NOT_PERMITTED", refusedAs });
   }
-  /* A conversation's wait is named by its reason, and malformed words are refused before anything is written. */
-  const unnamed = await serviceAs(MANAGER, state).callTool("dismiss_attention", { clientRequestId: "e-no-reason", target: { kind: "conversation", conversationId: "conversation_asker" }, escalate }) as Answer;
+  /* A conversation's wait is named by its reason; a question of the seat's
+     own, a round of another project, a missing, retired or decided round are
+     refused before anything is written. */
+  const unnamed = await as(MANAGER).callTool("dismiss_attention", { clientRequestId: "e-no-reason", target: { kind: "conversation", conversationId: "conversation_asker" }, escalate: { reviewId: "round-1" } }) as Answer;
   expect(unnamed.details).toMatchObject({ code: "INVALID_TARGET" });
-  const single = await serviceAs(MANAGER, state).callTool("dismiss_attention", { clientRequestId: "e-one-option", target: { kind: "conversation", conversationId: "conversation_asker", reasonId: "ask-1" }, escalate: { question: "Which?", options: ["Only"] } }) as Answer;
-  expect(single.ok).toBe(false);
+  for (const [escalate, code] of [
+    [{ question: "Which?", options: ["One", "Two"] }, "INVALID_ESCALATION"],
+    [{ reviewId: "round-elsewhere" }, "ROUND_NOT_FOUND"],
+    [{ reviewId: "round-missing" }, "ROUND_NOT_FOUND"],
+    [{ reviewId: "round-old" }, "ROUND_NOT_WAITING"],
+    [{ reviewId: "round-decided" }, "ROUND_NOT_WAITING"],
+  ] as const) {
+    const refused = await as(MANAGER).callTool("dismiss_attention", { clientRequestId: `e-${code}-${JSON.stringify(escalate)}`, target: { kind: "pipeline", pipelineId: "lane-1" }, escalate }) as Answer;
+    expect(refused.ok).toBe(false);
+    expect(refused.details).toMatchObject({ code });
+  }
   expect(readAttentionDismissals().records).toHaveLength(1);
 
-  const withdrawn = await serviceAs(MANAGER, state).callTool("dismiss_attention", { clientRequestId: "e-undo", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: {}, undo: true }) as Answer & { changed?: boolean };
+  const withdrawn = await as(MANAGER).callTool("dismiss_attention", { clientRequestId: "e-undo", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: {}, undo: true }) as Answer & { changed?: boolean };
   expect(withdrawn).toMatchObject({ ok: true, changed: true });
   expect(readAttentionDismissals().records).toEqual([]);
 });

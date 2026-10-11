@@ -1,7 +1,7 @@
 import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
 import { permissionHeadline } from "@/lib/runtime/permissionRequests";
 import type { AttentionDismissalMark, ConversationReasonKind } from "@/lib/attention/dismissalTypes";
-import { conversationRouteKey, type AttentionEscalationMark, type AttentionRouteMark } from "@/lib/attention/routeTypes";
+import { conversationRouteKey, type AttentionRouteMark } from "@/lib/attention/routeTypes";
 import type { OperatorAskMark } from "@/lib/asks/types";
 import type { BridgeAsk, FileEntry } from "@/lib/types";
 import { DELIVERY_UNCERTAIN_MS, DELIVERY_WAIT_HELD_MS } from "@/components/runtime/deliveryWait";
@@ -217,12 +217,10 @@ export interface ConversationReason {
       first line. Dismissing it resolves that report in the report log. */
   report?: { seq: number; body: string | null };
   /** Who answers it when it is not the operator (docs/design/attention-auto-resolve.md):
-      the project's seat, stamped by `/api/files` for this reason's id. A
-      routed reason is no needs-you item, like a dismissed one. */
+      the project's seat, or the decision form the seat escalated it to,
+      stamped by `/api/files` for this reason's id. A routed reason is no
+      needs-you item, like a dismissed one: an escalated one is the form's row. */
   route?: AttentionRouteMark | null;
-  /** The seat's escalation of this reason to the operator: the question it
-      asks them, its options and what the answer does next. */
-  escalation?: AttentionEscalationMark | null;
 }
 
 /**
@@ -263,7 +261,6 @@ export function attentionReason(file: FileEntry, now: number = Date.now() / 1000
     ...reason,
     dismissal: dismissalCovers(reason, file.attentionDismissal) ? file.attentionDismissal! : null,
     route: file.attentionRoute?.key === key ? file.attentionRoute : null,
-    escalation: file.attentionEscalation?.key === key ? file.attentionEscalation : null,
   };
 }
 

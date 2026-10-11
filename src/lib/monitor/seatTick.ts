@@ -734,7 +734,7 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
     const review = lane.review;
     const short = (sha: string | null | undefined) => sha ? sha.slice(0, 12) : "unknown";
     const verdict = review ? `${review.stageId} said ${review.lastVerdict} with ${review.findings} finding${review.findings === 1 ? "" : "s"} on ${short(review.reviewedHead)}; ` : "";
-    return `${lane.title} — lane you launched: last review failed, head unreviewed: ${verdict}current head ${short(review?.currentHead)} was never reviewed. The review budget is fixed: accept the head with pipeline_action accept-head when the findings are fixed, or escalate the choice with dismiss_attention escalate`;
+    return `${lane.title} — lane you launched: last review failed, head unreviewed: ${verdict}current head ${short(review?.currentHead)} was never reviewed. The review budget is fixed: accept the head with pipeline_action accept-head when the findings are fixed, or ask the operator with publish_prototype_review and dismiss_attention escalate {reviewId}`;
   }
   const settled = lane.settled === "completed"
     ? "completed"
@@ -1314,7 +1314,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const asks = input.workerAsks ?? [];
   if (asks.length > 0) {
     const more = asks.length > 1 ? ` and ${asks.length - 1} more` : "";
-    candidates.push({ kind: "worker-ask", detail: `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, or escalate it to the operator with dismiss_attention escalate` });
+    candidates.push({ kind: "worker-ask", detail: `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, or ask the operator in a decision form (publish_prototype_review) and dismiss_attention escalate {reviewId}` });
   }
   // A newly owed outcome is due on the next check, including after a recent
   // interval wake. Delivery accounting still discharges it exactly once.

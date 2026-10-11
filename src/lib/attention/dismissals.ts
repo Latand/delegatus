@@ -22,7 +22,7 @@ import {
   type DismissalTarget,
   type DismissedBy,
 } from "./dismissalTypes";
-import { parseEscalation, type AttentionEscalationMark } from "./routeTypes";
+import { parseEscalationMark, type AttentionEscalationMark } from "./routeTypes";
 
 /**
  * Needs-you dismissals (docs/design/needs-attention.md §5): one service behind
@@ -81,7 +81,8 @@ export interface AttentionDismissalV1 {
       the same rule from clearing the same reason again. */
   restoredAt?: string;
   restoredBy?: DismissedBy;
-  /** Only on an `escalation` record: what the seat asks the operator. */
+  /** Only on an `escalation` record: the wait and the decision round the
+      seat asked the operator in. It holds no question of its own. */
   escalation?: AttentionEscalationMark;
 }
 
@@ -102,15 +103,6 @@ function emptyFile(now: Date): AttentionDismissalsFileV1 {
 
 const REASON_KINDS: ReadonlySet<string> = new Set(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask"]);
 const nullableString = (value: unknown): value is string | null => value === null || typeof value === "string";
-
-/** A stored escalation, checked as strictly as the tool checks a new one. */
-function parseEscalationMark(value: unknown): AttentionEscalationMark | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  const body = parseEscalation(raw);
-  if (typeof body === "string" || typeof raw.key !== "string" || !raw.key || typeof raw.at !== "string") return null;
-  return { key: raw.key, at: raw.at, seat: typeof raw.seat === "string" ? raw.seat : null, ...body };
-}
 
 function parseRecord(value: unknown): AttentionDismissalV1 | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -674,10 +666,10 @@ export function attentionEscalationIndex(file: AttentionDismissalsFileV1 = readA
 }
 
 /**
- * A seat hands one routed wait to the operator, with the question it cannot
- * answer, the choices and what the answer does next; `undo` takes it back. The
- * wait itself is untouched: the routed row comes back to the operator's list
- * carrying these words, and answering it answers the original control.
+ * A seat hands one routed wait to the operator by naming the decision round it
+ * asked them in; `undo` takes it back. The wait itself is untouched: while the
+ * round waits, the form's row is the operator's row for it, and once the round
+ * is answered the wait is the seat's again, to carry the answer to the asker.
  */
 export function writeAttentionEscalation(
   escalation: Omit<AttentionEscalationMark, "at">,

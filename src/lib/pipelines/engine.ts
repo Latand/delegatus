@@ -12570,7 +12570,6 @@ export async function reportStageCompletion(
       actor,
       verdict: normalized.verdict,
       summary: normalized.summary,
-      ...(normalized.decision ? { decision: normalized.decision } : {}),
       provenance,
       provenanceFence: stageProvenanceFence(pipeline),
       calls: (prior?.calls ?? 0) + 1,

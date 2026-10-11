@@ -187,7 +187,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724647",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743826",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -201,17 +201,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
-          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
-          "options": [
-            "1.Знімати автоматично, з Undoрекомендовано",
-            "2.Лише позначати"
-          ],
-          "recommended": 0,
+          "sentence": "Дайте відповідь на запитання етапу «diagnose» у його процесі; етап продовжиться з вашою відповіддю.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 224.5
+          "openerHeight": 185.5
         }
       ]
     },
@@ -220,7 +217,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Чекають на вас · 11",
       "count": 11,
@@ -300,21 +298,6 @@
           "openerHeight": 127.5
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": "conversation",
-          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
-          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
-          "options": [
-            "1.Банк-партнеррекомендовано",
-            "2.Швидший сервіс"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 206.5
-        },
-        {
           "id": "toolu-plan-1",
           "kind": "conversation",
           "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
@@ -325,6 +308,18 @@
           "inside": true,
           "buttonsVisible": true,
           "openerHeight": 109.5
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": "prototype",
+          "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 90.75
         },
         {
           "id": "lane-digest",
@@ -339,7 +334,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724650",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743829",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -353,17 +348,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
-          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
-          "options": [
-            "1.Знімати автоматично, з Undoрекомендовано",
-            "2.Лише позначати"
-          ],
-          "recommended": 0,
+          "sentence": "Дайте відповідь на запитання етапу «diagnose» у його процесі; етап продовжиться з вашою відповіддю.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 224.5
+          "openerHeight": 185.5
         }
       ]
     },
@@ -372,7 +364,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Чекають на вас · 11",
       "count": 11,
@@ -452,21 +445,6 @@
           "openerHeight": 127.5
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": "conversation",
-          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
-          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
-          "options": [
-            "1.Банк-партнеррекомендовано",
-            "2.Швидший сервіс"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 206.5
-        },
-        {
           "id": "toolu-plan-1",
           "kind": "conversation",
           "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
@@ -477,6 +455,18 @@
           "inside": true,
           "buttonsVisible": true,
           "openerHeight": 109.5
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": "prototype",
+          "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 90.75
         },
         {
           "id": "lane-digest",
@@ -491,7 +481,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724654",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743833",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -505,17 +495,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
-          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
-          "options": [
-            "1.Знімати автоматично, з Undoрекомендовано",
-            "2.Лише позначати"
-          ],
-          "recommended": 0,
+          "sentence": "Дайте відповідь на запитання етапу «diagnose» у його процесі; етап продовжиться з вашою відповіддю.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 224.5
+          "openerHeight": 185.5
         }
       ]
     },
@@ -524,7 +511,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Чекають на вас · 11",
       "count": 11,
@@ -604,21 +592,6 @@
           "openerHeight": 111
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": "conversation",
-          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
-          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
-          "options": [
-            "1.Банк-партнеррекомендовано",
-            "2.Швидший сервіс"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 188.5
-        },
-        {
           "id": "toolu-plan-1",
           "kind": "conversation",
           "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
@@ -629,6 +602,18 @@
           "inside": true,
           "buttonsVisible": true,
           "openerHeight": 93
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": "prototype",
+          "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 90.75
         },
         {
           "id": "lane-digest",
@@ -643,7 +628,7 @@
           "openerHeight": 109.5
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724658",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743836",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -657,17 +642,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
-          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
-          "options": [
-            "1.Знімати автоматично, з Undoрекомендовано",
-            "2.Лише позначати"
-          ],
-          "recommended": 0,
+          "sentence": "Дайте відповідь на запитання етапу «diagnose» у його процесі; етап продовжиться з вашою відповіддю.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 172
+          "openerHeight": 167.5
         }
       ]
     },
@@ -676,7 +658,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Чекають на вас · 11",
       "count": 11,
@@ -756,21 +739,6 @@
           "openerHeight": 111
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": "conversation",
-          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
-          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
-          "options": [
-            "1.Банк-партнеррекомендовано",
-            "2.Швидший сервіс"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 188.5
-        },
-        {
           "id": "toolu-plan-1",
           "kind": "conversation",
           "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
@@ -781,6 +749,18 @@
           "inside": true,
           "buttonsVisible": true,
           "openerHeight": 93
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": "prototype",
+          "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 90.75
         },
         {
           "id": "lane-digest",
@@ -795,7 +775,7 @@
           "openerHeight": 109.5
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724662",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743839",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -809,17 +789,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
-          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
-          "options": [
-            "1.Знімати автоматично, з Undoрекомендовано",
-            "2.Лише позначати"
-          ],
-          "recommended": 0,
+          "sentence": "Дайте відповідь на запитання етапу «diagnose» у його процесі; етап продовжиться з вашою відповіддю.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 172
+          "openerHeight": 167.5
         }
       ]
     },
@@ -828,7 +805,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Чекають на вас · 11",
       "count": null,
@@ -908,24 +886,21 @@
           "openerHeight": 118
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": null,
-          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
-          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
-          "options": [
-            "1.Банк-партнеррекомендовано",
-            "2.Швидший сервіс"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 193.25
-        },
-        {
           "id": "toolu-plan-1",
           "kind": null,
           "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": null,
+          "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "question": null,
           "options": [],
           "recommended": -1,
@@ -947,7 +922,7 @@
           "openerHeight": 118.25
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724666",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743843",
           "kind": null,
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -961,17 +936,14 @@
         {
           "id": "lane-diagnose",
           "kind": null,
-          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
-          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
-          "options": [
-            "1.Знімати автоматично, з Undoрекомендовано",
-            "2.Лише позначати"
-          ],
-          "recommended": 0,
+          "sentence": "Дайте відповідь на запитання етапу «diagnose» у його процесі; етап продовжиться з вашою відповіддю.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 176.75
+          "openerHeight": 174.25
         }
       ]
     },
@@ -980,7 +952,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Чекають на вас · 11",
       "count": null,
@@ -1060,24 +1033,21 @@
           "openerHeight": 118
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": null,
-          "sentence": "Оберіть відповідь на запитання оркестратора; далі: білдер підключить обраного провайдера й відкриє PR",
-          "question": "Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?",
-          "options": [
-            "1.Банк-партнеррекомендовано",
-            "2.Швидший сервіс"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 193.25
-        },
-        {
           "id": "toolu-plan-1",
           "kind": null,
           "sentence": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 101.75
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": null,
+          "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "question": null,
           "options": [],
           "recommended": -1,
@@ -1099,7 +1069,7 @@
           "openerHeight": 118.25
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724669",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743845",
           "kind": null,
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -1113,17 +1083,14 @@
         {
           "id": "lane-diagnose",
           "kind": null,
-          "sentence": "Оберіть один із варіантів етапу «diagnose»; етап продовжиться з вашим вибором.",
-          "question": "Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?",
-          "options": [
-            "1.Знімати автоматично, з Undoрекомендовано",
-            "2.Лише позначати"
-          ],
-          "recommended": 0,
+          "sentence": "Дайте відповідь на запитання етапу «diagnose» у його процесі; етап продовжиться з вашою відповіддю.",
+          "question": "Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 176.75
+          "openerHeight": 174.25
         }
       ]
     },
@@ -1319,7 +1286,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724675",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743850",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1333,17 +1300,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
-          "question": "Clear rows the server proved settled on their own, or only mark them?",
-          "options": [
-            "1.Clear them, with Undorecommended",
-            "2.Only mark them"
-          ],
-          "recommended": 0,
+          "sentence": "Answer the question of the diagnose stage on its lane; the stage resumes with your answer.",
+          "question": "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 190
+          "openerHeight": 185.5
         }
       ]
     },
@@ -1352,7 +1316,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Waiting for you · 11",
       "count": 11,
@@ -1432,21 +1397,6 @@
           "openerHeight": 111
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": "conversation",
-          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
-          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
-          "options": [
-            "1.The partner bankrecommended",
-            "2.The faster service"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 188.5
-        },
-        {
           "id": "toolu-plan-1",
           "kind": "conversation",
           "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
@@ -1457,6 +1407,18 @@
           "inside": true,
           "buttonsVisible": true,
           "openerHeight": 109.5
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": "prototype",
+          "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 90.75
         },
         {
           "id": "lane-digest",
@@ -1471,7 +1433,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724679",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743853",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1485,17 +1447,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
-          "question": "Clear rows the server proved settled on their own, or only mark them?",
-          "options": [
-            "1.Clear them, with Undorecommended",
-            "2.Only mark them"
-          ],
-          "recommended": 0,
+          "sentence": "Answer the question of the diagnose stage on its lane; the stage resumes with your answer.",
+          "question": "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 190
+          "openerHeight": 185.5
         }
       ]
     },
@@ -1504,7 +1463,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Waiting for you · 11",
       "count": 11,
@@ -1584,21 +1544,6 @@
           "openerHeight": 111
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": "conversation",
-          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
-          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
-          "options": [
-            "1.The partner bankrecommended",
-            "2.The faster service"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 188.5
-        },
-        {
           "id": "toolu-plan-1",
           "kind": "conversation",
           "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
@@ -1609,6 +1554,18 @@
           "inside": true,
           "buttonsVisible": true,
           "openerHeight": 109.5
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": "prototype",
+          "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 90.75
         },
         {
           "id": "lane-digest",
@@ -1623,7 +1580,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724683",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743857",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1637,17 +1594,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
-          "question": "Clear rows the server proved settled on their own, or only mark them?",
-          "options": [
-            "1.Clear them, with Undorecommended",
-            "2.Only mark them"
-          ],
-          "recommended": 0,
+          "sentence": "Answer the question of the diagnose stage on its lane; the stage resumes with your answer.",
+          "question": "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 190
+          "openerHeight": 185.5
         }
       ]
     },
@@ -1656,7 +1610,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Waiting for you · 11",
       "count": 11,
@@ -1736,21 +1691,6 @@
           "openerHeight": 111
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": "conversation",
-          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
-          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
-          "options": [
-            "1.The partner bankrecommended",
-            "2.The faster service"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 188.5
-        },
-        {
           "id": "toolu-plan-1",
           "kind": "conversation",
           "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
@@ -1761,6 +1701,18 @@
           "inside": true,
           "buttonsVisible": true,
           "openerHeight": 109.5
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": "prototype",
+          "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 90.75
         },
         {
           "id": "lane-digest",
@@ -1775,7 +1727,7 @@
           "openerHeight": 109.5
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724687",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743860",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1789,17 +1741,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
-          "question": "Clear rows the server proved settled on their own, or only mark them?",
-          "options": [
-            "1.Clear them, with Undorecommended",
-            "2.Only mark them"
-          ],
-          "recommended": 0,
+          "sentence": "Answer the question of the diagnose stage on its lane; the stage resumes with your answer.",
+          "question": "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 172
+          "openerHeight": 151
         }
       ]
     },
@@ -1808,7 +1757,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Waiting for you · 11",
       "count": 11,
@@ -1888,21 +1838,6 @@
           "openerHeight": 111
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": "conversation",
-          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
-          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
-          "options": [
-            "1.The partner bankrecommended",
-            "2.The faster service"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 188.5
-        },
-        {
           "id": "toolu-plan-1",
           "kind": "conversation",
           "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
@@ -1913,6 +1848,18 @@
           "inside": true,
           "buttonsVisible": true,
           "openerHeight": 109.5
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": "prototype",
+          "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 90.75
         },
         {
           "id": "lane-digest",
@@ -1927,7 +1874,7 @@
           "openerHeight": 109.5
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724691",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743864",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1941,17 +1888,14 @@
         {
           "id": "lane-diagnose",
           "kind": "pipeline",
-          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
-          "question": "Clear rows the server proved settled on their own, or only mark them?",
-          "options": [
-            "1.Clear them, with Undorecommended",
-            "2.Only mark them"
-          ],
-          "recommended": 0,
+          "sentence": "Answer the question of the diagnose stage on its lane; the stage resumes with your answer.",
+          "question": "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 172
+          "openerHeight": 151
         }
       ]
     },
@@ -1960,7 +1904,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Waiting for you · 11",
       "count": null,
@@ -2040,24 +1985,21 @@
           "openerHeight": 118
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": null,
-          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
-          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
-          "options": [
-            "1.The partner bankrecommended",
-            "2.The faster service"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 193.25
-        },
-        {
           "id": "toolu-plan-1",
           "kind": null,
           "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": null,
+          "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "question": null,
           "options": [],
           "recommended": -1,
@@ -2079,7 +2021,7 @@
           "openerHeight": 118.25
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724695",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743867",
           "kind": null,
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -2093,17 +2035,14 @@
         {
           "id": "lane-diagnose",
           "kind": null,
-          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
-          "question": "Clear rows the server proved settled on their own, or only mark them?",
-          "options": [
-            "1.Clear them, with Undorecommended",
-            "2.Only mark them"
-          ],
-          "recommended": 0,
+          "sentence": "Answer the question of the diagnose stage on its lane; the stage resumes with your answer.",
+          "question": "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 176.75
+          "openerHeight": 157.75
         }
       ]
     },
@@ -2112,7 +2051,8 @@
         "retired": "conversation_delegatus-17,conversation_delegatus-18,conversation_delegatus-19",
         "replied": "conversation_delegatus-20",
         "deployer": "ask:deployer-rollout",
-        "escalated": "ask:builder-instalments"
+        "escalated": "ask:builder-instalments",
+        "escalationRound": "round-instalments"
       },
       "title": "Waiting for you · 11",
       "count": null,
@@ -2192,24 +2132,21 @@
           "openerHeight": 118
         },
         {
-          "id": "ask:builder-instalments",
-          "kind": null,
-          "sentence": "Choose an answer to the orchestrator's question; next: the builder wires in that provider and opens a pull request",
-          "question": "Pick the instalment provider: the partner bank, or the service that connects faster?",
-          "options": [
-            "1.The partner bankrecommended",
-            "2.The faster service"
-          ],
-          "recommended": 0,
-          "cut": false,
-          "inside": true,
-          "buttonsVisible": true,
-          "openerHeight": 193.25
-        },
-        {
           "id": "toolu-plan-1",
           "kind": null,
           "sentence": "Approve the agent's plan or ask for changes in its conversation; it starts the work only once you approve.",
+          "question": null,
+          "options": [],
+          "recommended": -1,
+          "cut": false,
+          "inside": true,
+          "buttonsVisible": true,
+          "openerHeight": 118.25
+        },
+        {
+          "id": "prototype:round-instalments",
+          "kind": null,
+          "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "question": null,
           "options": [],
           "recommended": -1,
@@ -2231,7 +2168,7 @@
           "openerHeight": 118.25
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791724697",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791743870",
           "kind": null,
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -2245,17 +2182,14 @@
         {
           "id": "lane-diagnose",
           "kind": null,
-          "sentence": "Choose one of the options of the diagnose stage; the stage resumes with your choice.",
-          "question": "Clear rows the server proved settled on their own, or only mark them?",
-          "options": [
-            "1.Clear them, with Undorecommended",
-            "2.Only mark them"
-          ],
-          "recommended": 0,
+          "sentence": "Answer the question of the diagnose stage on its lane; the stage resumes with your answer.",
+          "question": "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them.",
+          "options": [],
+          "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 176.75
+          "openerHeight": 157.75
         }
       ]
     },

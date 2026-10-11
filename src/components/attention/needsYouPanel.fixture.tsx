@@ -28,7 +28,7 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import type { DismissalSubjectRequest } from "@/lib/attention/dismissalTypes";
 import { attentionSystemClears } from "@/lib/attention/reconcile";
 import { conversationRouteKey, type AttentionEscalationMark } from "@/lib/attention/routeTypes";
-import { stampAttentionRoutes } from "@/lib/attention/routing";
+import { stampAttentionRoutes, waitingRoundIds } from "@/lib/attention/routing";
 import type { ReportLogEntry, ReportLogPage } from "@/lib/bridge/reportLog";
 import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -293,13 +293,18 @@ if (AUTO) {
   });
   AUTO_IDS.deployer = asked(deployer, "ask:deployer-rollout", say("Викочувати 1.9 зараз, поки черга порожня, чи чекати вечора?", "Roll 1.9 out now while the queue is empty, or wait for the evening?"), 12 * MIN).operatorAsk!.id;
   task(D, "t-rollout", "assigned", say("Викатка релізу 1.9", "Roll out release 1.9"), { assignments: [assign(deployer)], icon: "rocket" });
-  /* shop-web: a builder's question its seat could not decide and escalated. */
+  /* shop-web: a builder's question its seat could not decide: it asked the
+     operator in a decision form on the task and escalated the wait to it. */
   const builder = conversation(S, say("Оплата частинами", "Pay in instalments"), {
     durableLineage: { kind: "spawn", role: "builder", depth: 1, parentConversationId: idOf(seatShop), reviewsConversationId: null, memberships: [] },
   });
   AUTO_IDS.escalated = asked(builder, "ask:builder-instalments", say("Яким провайдером розстрочки користуватися?", "Which instalment provider should I use?"), 40 * MIN).operatorAsk!.id;
-  task(S, "t-instalments", "assigned", say("Оплата частинами", "Pay in instalments"), { assignments: [assign(builder)], icon: "credit-card" });
-  /* tg-bot has no seat: a diagnose stage reported its own question. */
+  AUTO_IDS.escalationRound = "round-instalments";
+  task(S, "t-instalments", "assigned", say("Оплата частинами", "Pay in instalments"), { assignments: [assign(builder)], icon: "credit-card",
+    /* The seat's decision form, published when it escalated. */
+    ...(AUTO_AFTER ? { prototypeReview: { latestReviewId: AUTO_IDS.escalationRound, waitingReviewId: AUTO_IDS.escalationRound, rounds: 1, createdAt: iso(5 * MIN), asks: "questions",
+      title: say("Провайдер розстрочки: банк-партнер чи швидший сервіс?", "Instalment provider: the partner bank or the faster service?") } } : {}) });
+  /* tg-bot has no seat: a diagnose stage reported its own question in its summary. */
   const diagnose = lane(B, "lane-diagnose", say("Чекають на вас: що знімати автоматично", "Waiting for you: what clears on its own"), ["t-diagnose"], "needs_decision", [
     { id: "diagnose", state: "needs_decision", ago: 25 * MIN, role: "researcher" },
   ], { stateDetail: "stage verdict: needs_decision" });
@@ -307,13 +312,8 @@ if (AUTO) {
   attempt.verdict = { status: "needs_decision" };
   attempt.report = {
     seq: 1, at: iso(25 * MIN), actor: { kind: "agent", conversationId: attempt.conversationId, role: "researcher" }, verdict: { status: "needs_decision" },
-    summary: say("Питання й варіанти в рішенні.", "The question and its options are in the decision."),
-    decision: {
-      question: say("Знімати рядки, які сервер довів завершеними, автоматично чи лише позначати їх?", "Clear rows the server proved settled on their own, or only mark them?"),
-      options: [say("Знімати автоматично, з Undo", "Clear them, with Undo"), say("Лише позначати", "Only mark them")],
-      recommended: 0,
-      effect: null,
-    },
+    summary: say("Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+      "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them."),
     provenance: { state: "complete", head: null, branch: "lane/diagnose", uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
   } as unknown as typeof attempt.report;
   task(B, "t-diagnose", "assigned", say("Чекають на вас: що знімати автоматично", "Waiting for you: what clears on its own"), { icon: "search" });
@@ -326,19 +326,19 @@ if (AUTO) {
       const entry = files.find((file) => file.path === clear.path)!;
       entry.attentionDismissal = { at: iso(2 * MIN), by: { kind: "system", rule: clear.rule }, reasonId: clear.reasonId };
     }
-    /* What `/api/files` stamps: each project's seat and the one escalation. */
+    /* What `/api/files` stamps: each project's seat and the one escalation,
+       which names the waiting decision round and no question of its own. */
     const escalation: AttentionEscalationMark = {
-      key: conversationRouteKey(AUTO_IDS.escalated), at: iso(5 * MIN), seat: idOf(seatShop),
-      question: say("Обрати провайдера розстрочки: банк-партнер чи сервіс зі швидшим підключенням?", "Pick the instalment provider: the partner bank, or the service that connects faster?"),
-      options: [say("Банк-партнер", "The partner bank"), say("Швидший сервіс", "The faster service")], recommended: 0,
-      effect: say("білдер підключить обраного провайдера й відкриє PR", "the builder wires in that provider and opens a pull request"),
+      key: conversationRouteKey(AUTO_IDS.escalated), at: iso(5 * MIN), seat: idOf(seatShop), taskId: "t-instalments", reviewId: AUTO_IDS.escalationRound,
     };
+    const waiting = waitingRoundIds(tasks as unknown as BoardTask[]);
     const seatIds = new Set([...Object.values(seats).map(idOf), ...retired]);
     stampAttentionRoutes(files, pipelines, now, {
       seatFor: (project) => (seats[project] ? idOf(seats[project]!) : null),
       canonicalProject: (project) => project,
       isSeatConversation: (id) => seatIds.has(id),
       escalation: (key) => (key === escalation.key ? escalation : null),
+      formWaiting: (reviewId) => waiting.has(reviewId),
     });
   }
 }

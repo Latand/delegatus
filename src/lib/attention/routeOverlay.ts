@@ -11,9 +11,10 @@ import { stampAttentionRoutes, type AttentionRoutingInputs } from "./routing";
 /*
  * The production half of attention routing (docs/design/attention-auto-resolve.md):
  * who holds each project's seat, whether its tick can wake it, which
- * conversations ever held a seat, and the escalations seats wrote. Read once
- * per projection; `/api/files` stamps the answer and the seat tick reads the
- * stamps, so both see one routing.
+ * conversations ever held a seat, the escalations seats wrote and which of
+ * their decision rounds still wait. Read once per projection; `/api/files`
+ * stamps the answer and the seat tick reads the stamps, so both see one
+ * routing.
  */
 
 type OrchestratorSeatFile = NonNullable<ReturnType<typeof readOrchestratorSeatFileOrNull>>;
@@ -49,9 +50,9 @@ export function productionRoutingSources(canonicalConversationId: (id: string) =
 /**
  * The routing inputs one projection reads. An unreadable seat record routes
  * nothing, so the operator still sees every ask; an unreadable escalation
- * record loses only the seat's words, and the wait stays with the seat.
+ * record loses only the link to the form, and the wait stays with the seat.
  */
-export function routingInputs(sources: RoutingSources, now: number): AttentionRoutingInputs {
+export function routingInputs(sources: RoutingSources, now: number, waitingRounds: ReadonlySet<string> = new Set()): AttentionRoutingInputs {
   const file = sources.seats();
   const canonical = (id: string) => sources.canonicalConversationId(id);
   const seats = new Set([...seatConversationIds(file)].map(canonical));
@@ -66,6 +67,7 @@ export function routingInputs(sources: RoutingSources, now: number): AttentionRo
     canonicalProject: canonicalOrchestratorProject,
     isSeatConversation: (conversationId) => seats.has(canonical(conversationId)),
     escalation: (key) => escalations.get(key) ?? null,
+    formWaiting: (reviewId) => waitingRounds.has(reviewId),
     seatFor: (project) => {
       if (seatByProject.has(project)) return seatByProject.get(project)!;
       const active = file ? orchestratorSeatIn(file, project).active : null;
@@ -82,19 +84,17 @@ export function routingInputs(sources: RoutingSources, now: number): AttentionRo
 }
 
 /** Stamp who answers each conversation's and lane's wait onto the projection.
-    A failure stamps nothing, which leaves every wait with the operator. */
-export function overlayAttentionRoutes(files: readonly FileEntry[], pipelines: readonly Pipeline[], now: number, sources: RoutingSources = productionRoutingSources()): void {
+    `waitingRounds` are the board's waiting decision rounds, which keep an
+    escalated wait on its form. A failure stamps nothing, which leaves every
+    wait with the operator. */
+export function overlayAttentionRoutes(
+  files: readonly FileEntry[], pipelines: readonly Pipeline[], waitingRounds: ReadonlySet<string>, now: number, sources: RoutingSources = productionRoutingSources(),
+): void {
   try {
-    stampAttentionRoutes(files, pipelines, now, routingInputs(sources, now));
+    stampAttentionRoutes(files, pipelines, now, routingInputs(sources, now, waitingRounds));
   } catch (error) {
     console.error("[attention routes] projection failed; every wait stays with the operator", error instanceof Error ? error.name : "unknown");
-    for (const file of files) {
-      delete file.attentionRoute;
-      delete file.attentionEscalation;
-    }
-    for (const pipeline of pipelines) {
-      delete pipeline.attentionRoute;
-      delete pipeline.attentionEscalation;
-    }
+    for (const file of files) delete file.attentionRoute;
+    for (const pipeline of pipelines) delete pipeline.attentionRoute;
   }
 }

@@ -5,16 +5,19 @@ import { buildNeedsYouQueue } from "@/components/attention/attentionQueue";
 import { conversationNeed, laneNeed } from "@/components/attention/needReason";
 import { pipelineAsks } from "@/components/mobile/mobileBoardModel";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import type { AttentionEscalationMark } from "./routeTypes";
-import { stampAttentionRoutes, type AttentionRoutingInputs } from "./routing";
+import { seatAgendaAsks } from "./seatAgenda";
+import { stampAttentionRoutes, waitingRoundIds, type AttentionRoutingInputs } from "./routing";
 
 /*
  * docs/design/attention-auto-resolve.md, acceptance 3 and 4: a worker's or a
  * stage's wait goes to the project's designated seat first, and leaves every
- * operator surface at once; the operator gets it back when the seat escalates
- * it or when the project has no seat to wake.
+ * operator surface at once; the operator answers it when the project has no
+ * seat to wake, or through the decision form the seat escalated it to, whose
+ * row stands for it while it waits.
  */
 
 const now = Date.parse("2026-10-11T12:00:00Z") / 1000;
@@ -35,13 +38,14 @@ const lane = (id: string, state: Pipeline["state"], extra: Partial<Pipeline> = {
   cursor: { stageId: "diagnose" }, stateDetail: null, srcConversationId: "conversation_seat", ...extra,
 }) as unknown as Pipeline;
 
-function inputs(options: { seat?: string | null; escalations?: AttentionEscalationMark[] } = {}): AttentionRoutingInputs {
+function inputs(options: { seat?: string | null; escalations?: AttentionEscalationMark[]; waiting?: ReadonlySet<string> } = {}): AttentionRoutingInputs {
   const seat = options.seat === undefined ? "conversation_seat" : options.seat;
   return {
     seatFor: () => seat,
     canonicalProject: (project) => project,
     isSeatConversation: (id) => id === "conversation_seat" || id === "conversation_old_seat",
     escalation: (key) => options.escalations?.find((entry) => entry.key === key) ?? null,
+    formWaiting: (reviewId) => options.waiting?.has(reviewId) ?? false,
   };
 }
 
@@ -81,19 +85,47 @@ test("a stage's memory kill and permission request are the seat's", () => {
   expect(asking.attentionRoute).toEqual({ key: "reason:/t/asking.jsonl:permission:perm-1", owner: "seat", seat: "conversation_seat" });
 });
 
-test("a seat's escalation brings the wait back to the operator with its words; a newer ask is routed afresh", () => {
-  const escalation: AttentionEscalationMark = { key: "reason:ask-1", at, question: "Roll out tonight?", options: ["Tonight", "Tomorrow"], recommended: 0, effect: null, seat: "conversation_seat" };
-  const worker = file("deployer", { durableLineage: delegated, operatorAsk: ask("ask-1") });
-  stampAttentionRoutes([worker], [], now, inputs({ escalations: [escalation] }));
-  expect(worker.attentionRoute).toBeUndefined();
-  expect(worker.attentionEscalation).toEqual(escalation);
-  expect(attentionId(worker, now)).toBe("ask-1");
-  expect(buildAttentionQueue([worker], now)[0]?.reason.escalation).toEqual(escalation);
+/** A task whose newest decision round is `reviewId`, waiting or decided. */
+const formTask = (reviewId: string, decided = false): BoardTask => ({
+  id: "task-form", project: "project-a", text: "Roll out release", status: "assigned", assignments: [], createdAt: at, updatedAt: at,
+  prototypeReviews: [{ id: reviewId, title: "Roll out tonight?", createdAt: at, variants: [],
+    questions: [{ id: "q1", text: "Roll out tonight?", options: [{ label: "Tonight", recommended: true }, { label: "Tomorrow" }] }],
+    ...(decided ? { decision: { chosen: [], comment: "", at, delivery: { state: "sent" } } } : {}) }],
+}) as unknown as BoardTask;
 
+test("an escalated wait is the decision form's while the round waits: the form's row is the only row, and the seat's agenda drops it", () => {
+  const escalation: AttentionEscalationMark = { key: "reason:ask-1", at, seat: "conversation_seat", taskId: "task-form", reviewId: "round-1" };
+  const worker = file("deployer", { durableLineage: delegated, operatorAsk: ask("ask-1") });
+  const tasks = [formTask("round-1")];
+  stampAttentionRoutes([worker], [], now, inputs({ escalations: [escalation], waiting: waitingRoundIds(tasks) }));
+  expect(worker.attentionRoute).toEqual({ key: "reason:ask-1", owner: "form", seat: "conversation_seat", form: { taskId: "task-form", reviewId: "round-1" } });
+  expect(attentionId(worker, now)).toBeNull();
+  expect(conversationNeed(worker, now)).toBeNull();
+  expect(buildNeedsYouQueue([worker], [], now, [], null, tasks).map((entry) => entry.id)).toEqual(["prototype:round-1"]);
+  expect(seatAgendaAsks({ files: [worker], pipelines: [] }, now, "project-a")).toEqual([]);
+
+  /* The operator answered the form: the answer went to the seat, and the wait
+     is the seat's again, to carry it to the asker. */
+  const answered = [formTask("round-1", true)];
+  stampAttentionRoutes([worker], [], now, inputs({ escalations: [escalation], waiting: waitingRoundIds(answered) }));
+  expect(worker.attentionRoute).toEqual({ key: "reason:ask-1", owner: "seat", seat: "conversation_seat" });
+  expect(buildNeedsYouQueue([worker], [], now, [], null, answered)).toEqual([]);
+  expect(seatAgendaAsks({ files: [worker], pipelines: [] }, now, "project-a").map((entry) => entry.key)).toEqual(["reason:ask-1"]);
+
+  /* A newer ask is routed afresh, to the seat. */
   worker.operatorAsk = ask("ask-2");
-  stampAttentionRoutes([worker], [], now, inputs({ escalations: [escalation] }));
-  expect(worker.attentionEscalation).toBeUndefined();
-  expect(worker.attentionRoute?.key).toBe("reason:ask-2");
+  stampAttentionRoutes([worker], [], now, inputs({ escalations: [escalation], waiting: waitingRoundIds(tasks) }));
+  expect(worker.attentionRoute).toEqual({ key: "reason:ask-2", owner: "seat", seat: "conversation_seat" });
+});
+
+test("a lane escalated to a form leaves the operator's lane rows while the round waits", () => {
+  const parked = lane("parked", "needs_decision");
+  const escalation: AttentionEscalationMark = { key: "lane:parked:lane-decision:none", at, seat: "conversation_seat", taskId: "task-form", reviewId: "round-1" };
+  stampAttentionRoutes([], [parked], now, inputs({ escalations: [escalation], waiting: new Set(["round-1"]) }));
+  expect(parked.attentionRoute?.owner).toBe("form");
+  expect(pipelineAsks(parked)).toBe(false);
+  expect(laneNeed(parked)).toBeNull();
+  expect(seatAgendaAsks({ files: [], pipelines: [parked] }, now, "project-a")).toEqual([]);
 });
 
 test("parked lanes, spent review budgets and stopped merges go to the seat; an automatic retry asks nobody", () => {

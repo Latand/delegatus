@@ -14383,13 +14383,15 @@ describe("attention auto resolve", () => {
    * docs/design/attention-auto-resolve.md, over `needsYouPanel.fixture.tsx`
    * with `?scenario=auto-resolve`: three asks from seats since handed on, a
    * deployer's question its seat answers, a worker's question the seat
-   * escalated with options, and a stage's own decision in a project with no
-   * seat. «After» is the fixture running the server's pure rules
+   * escalated to a decision form (a prototype-review round, the one question
+   * store), and a stage's own question in a project with no seat. «After» is
+   * the fixture running the server's pure rules
    * (`attentionSystemClears`, `stampAttentionRoutes`) over the same board.
    *
    * Gated on readings at 1440×900, 1000×900 and 390×844, light and dark, in en
    * and uk: the count before and after, which rows left and why, the escalated
-   * and the stage rows' question, options and sentence, the old seat's card
+   * wait answered on its form's row alone, the stage row's question and
+   * sentence, the old seat's card
    * saying who cleared it with Undo, no horizontal overflow, no clipped
    * sentence, option or button, and phone rows at least 44 px tall. Frames go
    * to AUTO_RESOLVE_OUT (default /var/tmp/llv-attention-auto-resolve); readings
@@ -14431,12 +14433,13 @@ describe("attention auto resolve", () => {
       };
       const rows = [...(root?.querySelectorAll("[data-needs-you-row]") ?? [])].map((row) => {
         const box = row.getBoundingClientRect();
-        const opener = row.querySelector("button") as HTMLElement | null;
+        /* A phone form row is its own button. */
+        const opener = (row.matches("button") ? row : row.querySelector("button")) as HTMLElement | null;
         const sentence = row.querySelector("[data-needs-you-sentence]");
         const question = row.querySelector("[data-needs-you-question]");
         const asking = row.querySelector("[data-needs-you-question-title]");
         const options = [...row.querySelectorAll("[data-needs-you-option]")];
-        const buttons = [...row.querySelectorAll("button")].map((button) => button.getBoundingClientRect());
+        const buttons = [...(row.matches("button") ? [row] : []), ...row.querySelectorAll("button")].map((button) => button.getBoundingClientRect());
         return {
           id: row.getAttribute("data-needs-you-row"),
           kind: row.getAttribute("data-needs-you-kind"),
@@ -14509,14 +14512,14 @@ describe("attention auto resolve", () => {
               check(frame, after.rows.length === 11, `${after.rows.length} rows after, expected 11: ${JSON.stringify(rowIds)}`);
               /* Cleared on evidence, and routed to the seat: none of them asks the operator. */
               for (const gone of ["ask:retired-1", "ask:retired-2", "ask:retired-3", "ask:analyst-september", ids.deployer, "lane-limit"]) check(frame, !rowIds.includes(gone ?? ""), `${gone} still asks the operator`);
-              /* The seat's escalation: its question, its options, what happens next. */
-              const escalated = after.rows.find((row) => row.id === ids.escalated);
-              check(frame, Boolean(escalated && escalated.question && escalated.options.length === 2 && escalated.recommended === 0
-                && escalated.sentence === translate(lang, "needs.ask.escalatedEffect", { effect: lang === "en" ? "the builder wires in that provider and opens a pull request" : "білдер підключить обраного провайдера й відкриє PR" })),
-              `the escalated row reads ${JSON.stringify(escalated)}`);
-              /* The stage's own decision, in a project with no seat. */
+              /* The seat's escalation: the wait draws no row; its decision form's row asks. */
+              check(frame, !rowIds.includes(ids.escalated ?? ""), "the escalated wait still draws a row of its own");
+              const form = after.rows.find((row) => row.id === `prototype:${ids.escalationRound}`);
+              check(frame, Boolean(form && form.sentence === translate(lang, "needs.ask.prototypeQuestions")),
+                `the escalated wait's form row reads ${JSON.stringify(form)}`);
+              /* The stage's own question, in a project with no seat. */
               const diagnose = after.rows.find((row) => row.id === "lane-diagnose");
-              check(frame, Boolean(diagnose && diagnose.question && diagnose.options.length === 2 && diagnose.recommended === 0 && diagnose.sentence && !diagnose.sentence.includes("diagnose ·")),
+              check(frame, Boolean(diagnose && diagnose.question?.includes(lang === "en" ? "only mark them?" : "лише позначати їх?") && diagnose.sentence && !diagnose.sentence.includes("diagnose ·")),
                 `the stage row reads ${JSON.stringify(diagnose)}`);
               /* Every remaining row says what to do in a sentence, whole, on screen. */
               for (const row of after.rows) {

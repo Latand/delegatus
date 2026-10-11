@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isDismissedBy } from "@/lib/attention/dismissalTypes";
-import { parseOperatorQuestion } from "@/lib/attention/routeTypes";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { effortScale } from "@/lib/agent/efforts";
@@ -401,7 +400,6 @@ function isStageReport(value: unknown): boolean {
     && isActor(report.actor)
     && stageVerdictFrom(report.verdict, { allowLegacySeverityOnly: true }) !== null
     && isNullableString(report.summary)
-    && (report.decision === undefined || typeof parseOperatorQuestion(report.decision, "decision") !== "string")
     && isStageProvenance(report.provenance)
     && (report.provenanceFence === undefined || (typeof report.provenanceFence === "string" && /^[0-9a-f]{64}$/.test(report.provenanceFence)))
     && Number.isSafeInteger(report.calls) && (report.calls as number) >= 1;

@@ -471,7 +471,7 @@ test("a retired seat's clear covers every reason it raised up to then, and leave
 
 test("an escalation is stored by the wait it names, replays by operation, and undo withdraws it", () => {
   const by: DismissedBy = { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" };
-  const escalation = { key: "reason:ask-1", seat: "conversation_seat", question: "Ship tonight or with the release?", options: ["Tonight", "With the release"], recommended: 1, effect: "the deployer rolls out what you choose" };
+  const escalation = { key: "reason:ask-1", seat: "conversation_seat", taskId: "task-1", reviewId: "round-1" };
   const first = writeAttentionEscalation(escalation, by, { operationKey: "op-1", now: new Date("2026-09-24T10:00:00.000Z") });
   expect(first).toEqual({ changed: true, escalation: { ...escalation, at: "2026-09-24T10:00:00.000Z" } });
   expect(writeAttentionEscalation(escalation, by, { operationKey: "op-1", now: new Date("2026-09-24T10:05:00.000Z") }).changed).toBe(false);

@@ -35,19 +35,19 @@ test("a routed prose ask names the question, the conversation to answer and how 
   expect(line).toMatchObject({ key: "reason:ask-1", id: "conversation_deployer" });
   expect(line!.label).toContain("deployer asks: «Roll out to production now?»");
   expect(line!.label).toContain("send_message to conversation_deployer");
-  expect(line!.label).toContain('reasonId:"ask-1"');
+  expect(line!.label).toContain('dismiss_attention escalate {reviewId} with target {kind:"conversation", conversationId:"conversation_deployer", reasonId:"ask-1"}');
 });
 
-test("a routed lane names the stage's own question and options, and the decision answer path", () => {
+test("a routed lane names the stage's own question, the decision answer path and the form to escalate through", () => {
   const lane = {
     id: "lane", task: "Fix the panel", project: "project-a", state: "needs_decision", createdAt: at, stateDetail: "stage verdict: needs_decision",
     stages: [{ id: "diagnose", kind: "run" }], cursor: { stageId: "diagnose" },
-    runs: [{ stageId: "diagnose", attempts: [{ n: 1, state: "needs_decision", report: { verdict: { status: "needs_decision" }, summary: "prose", decision: { question: "Keep or switch?", options: ["Keep", "Switch"], recommended: 1, effect: null } } }] }],
+    runs: [{ stageId: "diagnose", attempts: [{ n: 1, state: "needs_decision", report: { verdict: { status: "needs_decision" }, summary: "Keep the current behaviour or switch? I recommend switching." } }] }],
     attentionRoute: { key: "lane:lane:lane-decision:none", owner: "seat", seat: "conversation_seat" },
   } as unknown as Pipeline;
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
   expect(line).toMatchObject({ key: "lane:lane:lane-decision:none", id: "lane" });
-  expect(line!.label).toContain("stage diagnose asks «Keep or switch?» options: 1) Keep; 2) Switch (recommended)");
+  expect(line!.label).toContain("stage diagnose asks «Keep the current behaviour or switch? I recommend switching.»");
   expect(line!.label).toContain("pipeline_action resolve-decision");
-  expect(line!.label).toContain('{kind:"pipeline", pipelineId:"lane"}');
+  expect(line!.label).toContain('publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"pipeline", pipelineId:"lane"}');
 });

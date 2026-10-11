@@ -1,5 +1,4 @@
 import type { TFunction } from "@/lib/i18n";
-import { laneEscalationNow } from "@/lib/attention/routeTypes";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -15,9 +14,10 @@ import { laneStageId } from "./needReason";
  * happens next. The desktop panel, the phone sheet and the project read all
  * draw from here, so a row says the same thing on every surface.
  *
- * A stage's question is the stage's own text: a decision it reported, else
- * the summary it reported with its verdict. A stage name is metadata and never
- * stands in for the question.
+ * A stage's question is the stage's own text: the summary it reported with
+ * its verdict. A stage name is metadata and never stands in for the question.
+ * A question with choices is a decision form (a prototype-review round), whose
+ * own row carries it; a seat's escalation points at one and draws no row.
  */
 
 export interface OperatorAsk {
@@ -39,24 +39,12 @@ function clipQuestion(text: string): string {
   return trimmed.length > QUESTION_DISPLAY_MAX ? `${trimmed.slice(0, QUESTION_DISPLAY_MAX - 1).trimEnd()}…` : trimmed;
 }
 
-/** A seat's escalation of a routed wait: its own question, choices and what
-    the answer does next. */
-function escalatedAsk(t: TFunction, escalation: NonNullable<ConversationReason["escalation"]>): OperatorAsk {
-  return {
-    question: escalation.question,
-    options: escalation.options,
-    recommended: escalation.recommended,
-    sentence: escalation.effect ? t("needs.ask.escalatedEffect", { effect: escalation.effect }) : t("needs.ask.escalated"),
-  };
-}
-
 const plain = (sentence: string): OperatorAsk => ({ question: null, options: [], recommended: null, sentence });
 
 /** What one conversation's reason asks of the operator. A native question
     carries its own text and options; an orchestrator's report is the row's
     title already, so it is not repeated here. */
 export function conversationOperatorAsk(t: TFunction, reason: ConversationReason, file?: Pick<FileEntry, "pendingQuestion">): OperatorAsk {
-  if (reason.escalation) return escalatedAsk(t, reason.escalation);
   switch (reason.kind) {
     case "decision":
       return plain(t("needs.ask.decision"));
@@ -92,17 +80,10 @@ const UNSTATED = /^stage verdict: (needs_decision|fail)$/;
 
 /** What a parked lane asks of the operator. */
 export function laneOperatorAsk(t: TFunction, pipeline: Pipeline): OperatorAsk {
-  const escalation = laneEscalationNow(pipeline);
-  if (escalation) return escalatedAsk(t, escalation);
   const stage = laneStageLabel(t, pipeline, laneStageId(pipeline)) || t("needs.laneDecision");
   if (pipeline.state === "needs_review") return plain(t("needs.ask.laneReview", { stage }));
   const attempt = parkedAttempt(pipeline);
   const report = attempt?.report;
-  /* The stage reported the question itself. */
-  if (report?.verdict.status === "needs_decision" && report.decision) {
-    const { question, options, recommended } = report.decision;
-    return { question, options, recommended, sentence: t(options.length ? "needs.ask.laneOptions" : "needs.ask.laneQuestion", { stage }) };
-  }
   if (report?.verdict.status === "needs_decision" && report.summary?.trim()) {
     return { question: clipQuestion(report.summary), options: [], recommended: null, sentence: t("needs.ask.laneQuestion", { stage }) };
   }

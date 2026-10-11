@@ -29,7 +29,7 @@ function conversationLine(file: FileEntry, reason: NonNullable<ReturnType<typeof
   const who = file.durableLineage?.role?.trim() || "agent";
   const title = clip(cleanTitle(file.title ?? "", 90) || who, 90);
   const id = file.conversationId ?? file.path;
-  const escalate = `if only the operator can decide, dismiss_attention escalate with target {kind:"conversation", conversationId:"${id}", reasonId:"${reason.id}"}`;
+  const escalate = `if only the operator can decide, ask them with publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"conversation", conversationId:"${id}", reasonId:"${reason.id}"}`;
   switch (reason.kind) {
     case "memory":
       return `${title} — ${who} was killed out of memory${reason.header ? ` (${clip(reason.header, 80)})` : ""}; resume it or close its work with conversation_action; ${escalate}`;
@@ -40,15 +40,10 @@ function conversationLine(file: FileEntry, reason: NonNullable<ReturnType<typeof
   }
 }
 
-/** A parked lane's question in the stage's own words, with its options. */
+/** A parked lane's question in the stage's own words. */
 function laneQuestion(pipeline: Pipeline): string {
   const stageId = pipeline.cursor?.stageId;
   const attempt = stageId ? pipeline.runs.find((run) => run.stageId === stageId)?.attempts.at(-1) : undefined;
-  const decision = attempt?.report?.decision;
-  if (decision) {
-    const options = decision.options.map((option, index) => `${index + 1}) ${clip(option, 80)}${decision.recommended === index ? " (recommended)" : ""}`).join("; ");
-    return `«${clip(decision.question, QUESTION_MAX)}»${options ? ` options: ${options}` : ""}`;
-  }
   const summary = attempt?.report?.verdict.status === "needs_decision" ? attempt.report.summary?.trim() : null;
   return summary ? `«${clip(summary, QUESTION_MAX)}»` : `stopped: ${clip(pipeline.stateDetail ?? "no reason recorded", QUESTION_MAX)}`;
 }
@@ -56,7 +51,7 @@ function laneQuestion(pipeline: Pipeline): string {
 function laneLine(pipeline: Pipeline): string {
   const title = clip(pipeline.task || pipeline.id, 90);
   const stage = pipeline.cursor?.stageId ? ` stage ${pipeline.cursor.stageId}` : "";
-  const escalate = `if only the operator can decide, dismiss_attention escalate with target {kind:"pipeline", pipelineId:"${pipeline.id}"}`;
+  const escalate = `if only the operator can decide, ask them with publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"pipeline", pipelineId:"${pipeline.id}"}`;
   switch (laneNeedKind(pipeline)) {
     case "lane-merge":
       return `${title} — completed, its merge stopped: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; repair it and pipeline_action retry-merge; ${escalate}`;

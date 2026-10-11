@@ -1,5 +1,7 @@
 import { attentionReason } from "@/components/attention";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import type { ConversationReasonKind, LaneReasonKind } from "./dismissalTypes";
@@ -58,6 +60,13 @@ export function laneReservedForOperator(pipeline: Pick<Pipeline, "srcConversatio
   return kind === "lane-review" && !pipeline.srcConversationId;
 }
 
+/** The decision rounds that wait on the operator now, by round id: the same
+    rounds «Waiting for you» draws a row for. `tasks` carry the summary the
+    board reads, with a dismissed round's mark on it. */
+export function waitingRoundIds(tasks: readonly BoardTask[]): Set<string> {
+  return new Set(prototypeReviewNotices(tasks).map((notice) => notice.reviewId));
+}
+
 export interface AttentionRoutingInputs {
   /** The designated seat of a canonical project whose tick can wake it, or
       null when the project has none (or its tick is off): then nothing is
@@ -69,24 +78,30 @@ export interface AttentionRoutingInputs {
   isSeatConversation(conversationId: string): boolean;
   /** The seat's escalation of this exact wait, when it made one. */
   escalation(key: string): AttentionEscalationMark | null;
+  /** Whether a decision round still waits on the operator: published, not
+      decided, not dismissed and not replaced by a newer round. */
+  formWaiting(reviewId: string): boolean;
 }
 
-export interface AttentionRoute {
-  route: AttentionRouteMark | null;
-  escalation: AttentionEscalationMark | null;
-}
+/** Who answers a wait; null for the operator. */
+export type AttentionRoute = AttentionRouteMark | null;
 
-const OPERATOR: AttentionRoute = { route: null, escalation: null };
+const OPERATOR: AttentionRoute = null;
 
-/** A wait a seat answers, or the operator's once that seat escalated it. */
+/** A wait a seat answers, or the decision form's while the round the seat
+    escalated it to waits. A form the operator settled hands the wait back to
+    the seat, which received the answer and carries it to the asker. */
 function seatRoute(key: string, seat: string, inputs: AttentionRoutingInputs): AttentionRoute {
   const escalation = inputs.escalation(key);
-  return escalation ? { route: null, escalation } : { route: { key, owner: "seat", seat }, escalation: null };
+  if (escalation && inputs.formWaiting(escalation.reviewId)) {
+    return { key, owner: "form", ...(escalation.seat ? { seat: escalation.seat } : {}), form: { taskId: escalation.taskId, reviewId: escalation.reviewId } };
+  }
+  return { key, owner: "seat", seat };
 }
 
-/** Who answers one conversation's current reason; both null for the operator. */
+/** Who answers one conversation's current reason; null for the operator. */
 export function conversationRoute(file: FileEntry, now: number, inputs: AttentionRoutingInputs): AttentionRoute {
-  const reason = attentionReason({ ...file, attentionRoute: undefined, attentionEscalation: undefined }, now);
+  const reason = attentionReason({ ...file, attentionRoute: undefined }, now);
   if (!reason || reason.report || !SEAT_CONVERSATION_KINDS.has(reason.kind) || !delegatedConversation(file)) return OPERATOR;
   if (file.conversationId && inputs.isSeatConversation(file.conversationId)) return OPERATOR;
   const seat = inputs.seatFor(inputs.canonicalProject(file.project));
@@ -94,12 +109,12 @@ export function conversationRoute(file: FileEntry, now: number, inputs: Attentio
   return seatRoute(conversationRouteKey(reason.id), seat, inputs);
 }
 
-/** Who answers what one lane waits on; both null for the operator. */
+/** Who answers what one lane waits on; null for the operator. */
 export function laneRoute(pipeline: Pipeline, inputs: AttentionRoutingInputs): AttentionRoute {
   const kind = laneNeedKind(pipeline);
   if (!kind) return OPERATOR;
   const key = laneRouteKey(pipeline, kind);
-  if (kind === "lane-decision" && laneAwaitsAutomaticRetry(pipeline)) return { route: { key, owner: "system" }, escalation: null };
+  if (kind === "lane-decision" && laneAwaitsAutomaticRetry(pipeline)) return { key, owner: "system" };
   const seat = inputs.seatFor(inputs.canonicalProject(pipeline.project));
   if (!seat || laneReservedForOperator(pipeline, kind)) return OPERATOR;
   return seatRoute(key, seat, inputs);
@@ -113,17 +128,13 @@ export function laneRoute(pipeline: Pipeline, inputs: AttentionRoutingInputs): A
 export function stampAttentionRoutes(files: readonly FileEntry[], pipelines: readonly Pipeline[], now: number, inputs: AttentionRoutingInputs): void {
   for (const file of files) {
     delete file.attentionRoute;
-    delete file.attentionEscalation;
     if (file.supersededBy || file.migratedTo) continue;
-    const { route, escalation } = conversationRoute(file, now, inputs);
+    const route = conversationRoute(file, now, inputs);
     if (route) file.attentionRoute = route;
-    if (escalation) file.attentionEscalation = escalation;
   }
   for (const pipeline of pipelines) {
     delete pipeline.attentionRoute;
-    delete pipeline.attentionEscalation;
-    const { route, escalation } = laneRoute(pipeline, inputs);
+    const route = laneRoute(pipeline, inputs);
     if (route) pipeline.attentionRoute = route;
-    if (escalation) pipeline.attentionEscalation = escalation;
   }
 }

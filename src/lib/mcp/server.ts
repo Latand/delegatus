@@ -3374,7 +3374,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
     "With target, clear one conversation reason, parked lane, report question or waiting prototype round; task targets include the waiting round. Only the operator's root/gateway session and this project's designated seat may clear. Its maintainer may read and cannot clear; workers and unidentified callers are refused. Update decisions stay answer-only.",
     'Targets: {kind:"conversation",conversationId|path,reasonId}, {kind:"pipeline",pipelineId,laneMovedAt}, {kind:"report",seq}, {kind:"prototype",taskId,reviewId}, {kind:"task",taskId}. Optional reason is one line up to 200 characters, retained beside server attribution in the read\'s cleared list. undo:true restores the mark. New reasons and rounds ask again. Dismissal resolves a report question in its log and leaves prototype choices open. pipeline_action dismiss/undismiss is the same lane write.',
-    "A worker's ask, memory kill or permission request and a parked lane in a project with a seat wait on that seat first and are off the operator's list; your wakes name them. Answer each where it asked (send_message to the conversation, conversation_action, pipeline_action resolve-decision or accept-head). Only when the operator alone can decide, pass escalate with a conversation target and its reasonId, or a pipeline target: {question, options?, recommended?, effect?} in the operator's language puts the row back on their list with those words; undo:true withdraws it.",
+    "A worker's ask, memory kill or permission request and a parked lane in a project with a seat wait on that seat first and are off the operator's list; your wakes name them. Answer each where it asked (send_message to the conversation, conversation_action, pipeline_action resolve-decision or accept-head). Only when the operator alone can decide, ask them in a decision form (publish_prototype_review with questions, in their language), then pass escalate {reviewId} with a conversation target and its reasonId, or a pipeline target: the form's row stands for the wait until they answer, and their answer comes to you to carry back. undo:true withdraws it.",
   ].join(" "),
   bridge_report: [
     "Append one report to the durable bridge log: the report log beside the orchestrator chat, the voice relay, and, for the designated orchestrator of a project that set one, the project's Telegram chat, posted by Delegatus from the same report. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
@@ -3879,12 +3879,6 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Required reason when blocked:true. Retained independently of prose and output truncation; requires blocked:true."),
     summary: z.string().max(MAX_STAGE_REPORT_SUMMARY_CHARS).optional()
       .describe("What was done, in a few sentences, with any notes that block nothing; for needs_decision, the question, the options and your recommendation. Shown on the card and relayed to the next stage."),
-    decision: z.object({
-      question: z.string().min(1).max(400).describe("The one question, in the operator's interface language."),
-      options: z.array(z.string().min(1).max(160)).min(2).max(6).optional().describe("The choices, each a short label; omit for a free answer."),
-      recommended: z.number().int().min(0).optional().describe("Index of your recommended option."),
-      effect: z.string().min(1).max(240).optional().describe("What the stage does once answered."),
-    }).optional().describe("needs_decision only: the question as «Waiting for you» shows it, with its options."),
     stageId: z.string().min(1).optional()
       .describe("Only when this conversation holds more than one live stage; the refusal lists them."),
   }).passthrough(),
@@ -4213,11 +4207,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     reason: z.string().max(200).optional().describe("One line retained beside who cleared the row."),
     undo: z.boolean().optional().describe("true brings back what an earlier dismissal cleared."),
     escalate: z.object({
-      question: z.string().min(1).max(400).optional().describe("What the operator must decide, in one or two plain sentences; required unless undo."),
-      options: z.array(z.string().min(1).max(160)).min(2).max(6).optional(),
-      recommended: z.number().int().min(0).optional().describe("Index of your recommended option."),
-      effect: z.string().min(1).max(240).optional().describe("What happens once they answer."),
-    }).optional().describe("Hand a wait routed to you to the operator instead of clearing it."),
+      reviewId: z.string().min(1).max(200).optional().describe("The decision round publish_prototype_review answered; required unless undo."),
+    }).optional().describe("Hand a wait routed to you to the operator through a decision form instead of clearing it."),
   }).passthrough(),
   bridge_report: z.object({
     clientRequestId: clientRequestIdSchema,

@@ -305,11 +305,6 @@ export type PipelineStageReport = {
   actor: PauseResumeActor;
   verdict: StageVerdict;
   summary: string | null;
-  /** A needs_decision report's question as the stage put it: the choices and
-      what the answer does next, which «Waiting for you» shows the operator
-      (docs/design/attention-auto-resolve.md). Absent on reports that carry
-      the question in `summary` alone. */
-  decision?: import("@/lib/attention/routeTypes").OperatorQuestion;
   provenance: PipelineStageProvenance;
   /** Exact admitted lane authority for the deferred observation. */
   provenanceFence?: string;
@@ -1049,8 +1044,6 @@ export type Pipeline = {
       it is not the operator (docs/design/attention-auto-resolve.md), stamped
       by `/api/files` for the movement it names. */
   attentionRoute?: import("@/lib/attention/routeTypes").AttentionRouteMark;
-  /** Projection only: the seat handed that wait to the operator. */
-  attentionEscalation?: import("@/lib/attention/routeTypes").AttentionEscalationMark;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */

@@ -173,13 +173,15 @@ test("waits routed to the seat leave the operator's count and are counted for th
   expect(needsYouAnswer(body, decision, now, "project-a", ports(body)).rows.some(r => r.kind === "ask")).toBe(true);
 });
 
-test("a seat's escalation brings its words back to the operator's row", () => {
+test("a wait the seat escalated to a decision form draws no row of its own and is not the seat's to count", () => {
   const body = fixture();
   const ask = body.files.find(f => f.name === "ask")!;
-  ask.attentionEscalation = { key: "reason:operator-ask", at, question: "Ship the hotfix tonight or wait for the release?", options: ["Tonight", "With the release"], recommended: 1, effect: "the deployer starts the rollout you choose", seat: "conversation_seat" };
-  const row = needsYouAnswer(body, decision, now, "project-a", ports(body)).rows.find(r => r.kind === "ask")!;
-  expect(row).toMatchObject({ question: "Ship the hotfix tonight or wait for the release?", options: ["Tonight", "With the release"], recommended: 1,
-    line: "Choose an answer to the orchestrator's question; next: the deployer starts the rollout you choose" });
+  const before = needsYouAnswer(body, decision, now, "project-a", ports(body));
+  ask.attentionRoute = { key: "reason:operator-ask", owner: "form", seat: "conversation_seat", form: { taskId: "task-1", reviewId: "round-1" } };
+  const answer = needsYouAnswer(body, decision, now, "project-a", ports(body));
+  expect(answer.rows.some(r => r.kind === "ask")).toBe(false);
+  expect(answer.count).toBe(before.count - 1);
+  expect(answer.routedToSeat).toBeUndefined();
 });
 
 test("a reason Delegatus cleared is in the cleared list with its rule, and a restored one is not", () => {

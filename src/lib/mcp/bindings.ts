@@ -58,6 +58,7 @@ import { readAttentionFile } from "@/lib/attention/store";
 import { DismissalError, dismissAttention as dismissAttentionService, parseDismissalTarget, writeAttentionEscalation, type DismissalPorts } from "@/lib/attention/dismissals";
 import type { DismissalTarget, DismissedBy } from "@/lib/attention/dismissalTypes";
 import { conversationRouteKey, laneNeedKind, laneRouteKey, parseEscalation } from "@/lib/attention/routeTypes";
+import { prototypeReviewSummary } from "@/lib/prototypeReview/model";
 import {
   CONVERSATION_PATH_EXAMPLE,
   describeFocusTargetRejection,
@@ -6714,12 +6715,15 @@ async function dismissThroughService(
 }
 
 /**
- * A seat hands one wait routed to it to the operator
- * (docs/design/attention-auto-resolve.md): the question it cannot answer,
- * the choices and what the answer does next, keyed by the exact wait so a
- * newer ask or a lane that moved is not covered. The gate is the dismissal's,
- * in the same two phases, and a refused caller writes nothing. The wait itself
- * is untouched: the operator answers it where it asked.
+ * A seat hands one routed wait to the operator
+ * (docs/design/attention-auto-resolve.md): it asks the question in a decision
+ * form with publish_prototype_review, then names that round here. The
+ * escalation holds the round's id and no question of its own
+ * (docs/design/operator-decision-forms.md §4), keyed by the exact wait so a
+ * newer ask or a lane that moved is not covered. While the round waits, its
+ * row is the operator's row for the wait; once answered, the wait is the
+ * seat's again. The gate is the dismissal's, in the same two phases, and a
+ * refused caller writes nothing.
  */
 async function escalateThroughService(
   target: DismissalTarget,
@@ -6732,8 +6736,8 @@ async function escalateThroughService(
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const admission = permitAttentionDismissal(authority, seats, null);
   if (!admission.allowed) throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
-  const question = undo ? null : parseEscalation(escalate);
-  if (typeof question === "string") throw new McpToolRefusal(question, { code: "INVALID_ESCALATION" });
+  const round = undo ? null : parseEscalation(escalate);
+  if (typeof round === "string") throw new McpToolRefusal(round, { code: "INVALID_ESCALATION" });
   let key: string;
   let focus: FocusTarget;
   if (target.kind === "conversation") {
@@ -6753,6 +6757,19 @@ async function escalateThroughService(
   const project = canonicalOrchestratorProject(await focusTargetProject(focus, "", dependencies));
   const verdict = permitAttentionDismissal(authority, seats, project);
   if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
+  let taskId = "";
+  if (round) {
+    /* The round is the operator's question: it has to exist in this project
+       and still wait, or the wait would leave the seat for a form nobody sees. */
+    const task = dependencies.loadTasks().find(candidate => candidate.prototypeReviews?.some(held => held.id === round.reviewId));
+    if (!task || canonicalOrchestratorProject(task.project) !== project) {
+      throw new McpToolRefusal(`no decision round ${round.reviewId} in this project: ask with publish_prototype_review first and pass the reviewId it answers`, { code: "ROUND_NOT_FOUND" });
+    }
+    if (prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.reviewId) {
+      throw new McpToolRefusal(`decision round ${round.reviewId} no longer waits: read it with read_prototype_review and carry its answer to the asker`, { code: "ROUND_NOT_WAITING" });
+    }
+    taskId = task.id;
+  }
   const attribution = attributionOf(dependencies);
   const by: DismissedBy = {
     kind: attribution.kind,
@@ -6761,7 +6778,7 @@ async function escalateThroughService(
     ...(attribution.via ? { via: { deputy: attribution.via.deputy } } : {}),
   };
   const written = writeAttentionEscalation(
-    { key, seat: attribution.conversationId, ...(question ?? { question: "", options: [], recommended: null, effect: null }) },
+    { key, seat: attribution.conversationId, taskId, reviewId: round?.reviewId ?? "" },
     by,
     { undo, operationKey },
   );

@@ -394,8 +394,6 @@ export interface FileEntry {
       (docs/design/attention-auto-resolve.md): its project's seat, stamped by
       `/api/files` for the one reason it names. */
   attentionRoute?: import("@/lib/attention/routeTypes").AttentionRouteMark;
-  /** The seat handed that reason to the operator, with what to choose. */
-  attentionEscalation?: import("@/lib/attention/routeTypes").AttentionEscalationMark;
   /** Durable launch projection shown before its transcript enters the scan. */
   spawn?: StructuredSpawnCardState;
   /** Transient launch/delivery facts of the launch that CREATED this live

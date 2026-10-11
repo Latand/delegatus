@@ -1699,7 +1699,7 @@ test("a needs_review lane's wake line says the last review failed and the head i
   expect(verdict.items[0]).toMatchObject({
     kind: "pipeline",
     id: "pipeline_a1",
-    label: `ship the exporter — lane you launched: last review failed, head unreviewed: review said fail with 2 findings on ${"1".repeat(12)}; current head ${"2".repeat(12)} was never reviewed. The review budget is fixed: accept the head with pipeline_action accept-head when the findings are fixed, or escalate the choice with dismiss_attention escalate`,
+    label: `ship the exporter — lane you launched: last review failed, head unreviewed: review said fail with 2 findings on ${"1".repeat(12)}; current head ${"2".repeat(12)} was never reviewed. The review budget is fixed: accept the head with pipeline_action accept-head when the findings are fixed, or ask the operator with publish_prototype_review and dismiss_attention escalate {reviewId}`,
     laneAnnouncement: "pipeline_a1:needs_review",
   });
   expect(verdict.items[0]!.label).not.toContain("completed");

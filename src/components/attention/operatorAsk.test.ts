@@ -5,7 +5,6 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 import { attentionReason } from "../attention";
-import { laneStageLabel } from "./decision";
 import { conversationOperatorAsk, laneOperatorAsk } from "./operatorAsk";
 
 /*
@@ -35,18 +34,6 @@ const verdict = { status: "needs_decision" };
 
 for (const locale of ["en", "uk"] as const) {
   const tr = t(locale);
-
-  test(`${locale}: a lane decision shows the stage's own question and options, and says the stage resumes with the choice`, () => {
-    const decision = { question: "Keep the current behaviour or switch to the requested one?", options: ["Keep it", "Switch"], recommended: 1, effect: null };
-    const lane = diagnose({ verdict, summary: "long prose", decision });
-    const ask = laneOperatorAsk(tr, lane);
-    expect(ask.question).toBe(decision.question);
-    expect(ask.options).toEqual(["Keep it", "Switch"]);
-    expect(ask.recommended).toBe(1);
-    const stage = laneStageLabel(tr, lane, "diagnose");
-    expect(stage).not.toBe("");
-    expect(ask.sentence).toBe(tr("needs.ask.laneOptions", { stage }));
-  });
 
   test(`${locale}: a reported summary is the question when the stage named no options`, () => {
     const ask = laneOperatorAsk(tr, diagnose({ verdict, summary: "Should the panel keep showing cleared rows?" }));
@@ -86,12 +73,5 @@ for (const locale of ["en", "uk"] as const) {
       expect(ask.sentence.length).toBeGreaterThan(50);
     }
     expect(new Set(sentences.map((ask) => ask.sentence)).size).toBe(sentences.length);
-  });
-
-  test(`${locale}: a seat's escalation is asked in the seat's words, with what happens next`, () => {
-    const entry = file({ operatorAsk: { id: "ask", messageAt: (now - 600) * 1000, gist: "Roll out?", state: "open" } as FileEntry["operatorAsk"],
-      attentionEscalation: { key: "reason:ask", at, question: "Roll out tonight or with the release?", options: ["Tonight", "With the release"], recommended: 1, effect: "the deployer starts that rollout", seat: null } });
-    const ask = conversationOperatorAsk(tr, attentionReason(entry, now)!, entry);
-    expect(ask).toEqual({ question: "Roll out tonight or with the release?", options: ["Tonight", "With the release"], recommended: 1, sentence: tr("needs.ask.escalatedEffect", { effect: "the deployer starts that rollout" }) });
   });
 }

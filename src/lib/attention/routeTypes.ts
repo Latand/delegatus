@@ -10,9 +10,11 @@ import type { LaneReasonKind } from "./dismissalTypes";
  *
  * The operator's list keeps only what is theirs. A worker's or a stage's ask
  * goes to the project's designated seat first, and a lane that waits for an
- * automatic retry waits for nobody. A seat that cannot decide escalates the
- * ask, and the escalation carries the question, its options and what the
- * answer does next, so the row the operator gets says what to choose.
+ * automatic retry waits for nobody. A seat that cannot decide asks the
+ * operator in a decision form, a prototype-review question round, and
+ * escalates the wait to that round: the escalation holds the round's id and
+ * no question of its own (docs/design/operator-decision-forms.md §4), so the
+ * form's row is the one row the operator answers.
  */
 
 /** A reason nobody but its owner answers, stamped onto the conversation or
@@ -22,17 +24,28 @@ import type { LaneReasonKind } from "./dismissalTypes";
 export interface AttentionRouteMark {
   key: string;
   /** `seat`: the project's designated seat answers it first.
-      `system`: an automatic retry already owns it; nobody is asked. */
-  owner: "seat" | "system";
-  /** The seat conversation that answers a `seat` reason. */
+      `system`: an automatic retry already owns it; nobody is asked.
+      `form`: the seat escalated it, and the operator answers the waiting
+      decision form `form` names; the wait draws no row of its own. */
+  owner: "seat" | "system" | "form";
+  /** The seat conversation that answers a `seat` reason, or that escalated a
+      `form` one. */
   seat?: string;
+  /** The round a `form` reason waits on. */
+  form?: AttentionFormRef;
 }
 
-/** What a seat could not decide and handed to the operator, in its words:
-    the question (one plain sentence or two), the choices as it named them
-    (empty for a free answer), its recommendation and what the answer does
-    next. */
-export interface AttentionEscalationMark extends OperatorQuestion {
+/** One prototype-review round: a decision form the operator answers. */
+export interface AttentionFormRef {
+  taskId: string;
+  reviewId: string;
+}
+
+/** A seat handed one routed wait to the operator by asking in a decision
+    form. While that round waits, the wait is the form's; once the operator
+    decides it, dismisses it or a newer round replaces it, the wait is the
+    seat's again, with the operator's answer in its conversation. */
+export interface AttentionEscalationMark extends AttentionFormRef {
   key: string;
   /** Server clock, ISO. */
   at: string;
@@ -40,54 +53,26 @@ export interface AttentionEscalationMark extends OperatorQuestion {
   seat: string | null;
 }
 
-/** Bounds of an escalation, shared by the tool, the store and the tests. */
-export const ESCALATION_QUESTION_MAX = 400;
-export const ESCALATION_OPTION_MAX = 160;
-export const ESCALATION_OPTIONS_MAX = 6;
-export const ESCALATION_EFFECT_MAX = 240;
+const ROUND_ID_MAX = 200;
 
-/** A question put to the operator, with its choices and what the answer does
-    next: a seat's escalation and a stage's decision request share it. */
-export interface OperatorQuestion {
-  question: string;
-  options: string[];
-  recommended: number | null;
-  effect: string | null;
-}
-
-/** A question as a caller sent it, checked; a string names what is wrong.
-    `field` is the argument it came in, for the refusal. */
-export function parseOperatorQuestion(value: unknown, field: string): OperatorQuestion | string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be an object { question, options?, recommended?, effect? }`;
+/** An escalation as a caller sent it, checked; a string names what is wrong.
+    Only the round is named: the task it belongs to is resolved on the server. */
+export function parseEscalation(value: unknown): { reviewId: string } | string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "escalate must be an object { reviewId }: publish the question with publish_prototype_review first";
   const raw = value as Record<string, unknown>;
-  const question = typeof raw.question === "string" ? raw.question.trim() : "";
-  if (!question || question.length > ESCALATION_QUESTION_MAX) return `${field}.question must be 1 to ${ESCALATION_QUESTION_MAX} characters`;
-  const options: string[] = [];
-  if (raw.options !== undefined) {
-    if (!Array.isArray(raw.options) || raw.options.length > ESCALATION_OPTIONS_MAX) return `${field}.options must be a list of at most ${ESCALATION_OPTIONS_MAX}`;
-    for (const option of raw.options) {
-      const label = typeof option === "string" ? option.trim() : "";
-      if (!label || label.length > ESCALATION_OPTION_MAX) return `each ${field} option must be 1 to ${ESCALATION_OPTION_MAX} characters`;
-      options.push(label);
-    }
-    if (options.length === 1) return `${field}.options needs two or more choices, or none for a free answer`;
-  }
-  let recommended: number | null = null;
-  if (raw.recommended !== undefined && raw.recommended !== null) {
-    if (!Number.isInteger(raw.recommended) || (raw.recommended as number) < 0 || (raw.recommended as number) >= options.length) return `${field}.recommended must index one of the options`;
-    recommended = raw.recommended as number;
-  }
-  let effect: string | null = null;
-  if (raw.effect !== undefined && raw.effect !== null) {
-    effect = typeof raw.effect === "string" ? raw.effect.trim() : "";
-    if (!effect || effect.length > ESCALATION_EFFECT_MAX) return `${field}.effect must be 1 to ${ESCALATION_EFFECT_MAX} characters`;
-  }
-  return { question, options, recommended, effect };
+  const reviewId = typeof raw.reviewId === "string" ? raw.reviewId.trim() : "";
+  if (!reviewId || reviewId.length > ROUND_ID_MAX) return "escalate.reviewId must name the decision round publish_prototype_review answered";
+  return { reviewId };
 }
 
-/** A seat's escalation as the tool received it. */
-export function parseEscalation(value: unknown): OperatorQuestion | string {
-  return parseOperatorQuestion(value, "escalate");
+/** A stored escalation, checked as strictly as the tool checks a new one. */
+export function parseEscalationMark(value: unknown): AttentionEscalationMark | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const round = parseEscalation(raw);
+  if (typeof round === "string" || typeof raw.taskId !== "string" || !raw.taskId) return null;
+  if (typeof raw.key !== "string" || !raw.key || typeof raw.at !== "string") return null;
+  return { key: raw.key, at: raw.at, seat: typeof raw.seat === "string" ? raw.seat : null, taskId: raw.taskId, reviewId: round.reviewId };
 }
 
 /** What a lane waits on, whoever answers it: a decision, a spent review
@@ -118,11 +103,4 @@ export function laneRouteNow(pipeline: Pipeline): AttentionRouteMark | null {
   const kind = laneNeedKind(pipeline);
   const route = pipeline.attentionRoute;
   return kind && route && route.key === laneRouteKey(pipeline, kind) ? route : null;
-}
-
-/** The escalation that covers what this lane waits on now, or null. */
-export function laneEscalationNow(pipeline: Pipeline): AttentionEscalationMark | null {
-  const kind = laneNeedKind(pipeline);
-  const escalation = pipeline.attentionEscalation;
-  return kind && escalation && escalation.key === laneRouteKey(pipeline, kind) ? escalation : null;
 }
