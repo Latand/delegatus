@@ -81,7 +81,7 @@ test("ManagedCodexRuntime.record commits a completion behind a short foreign hol
   const dir = path.join(RUNTIME_SANDBOX, "foreign-completion");
   const stateFile = path.join(dir, "attempts.json");
   const child = new FakeChild();
-  const runtime = new ManagedCodexRuntime({ stateFile, startClient: async home => CodexAppServerClient.start({ home, spawn: () => child as never }) });
+  const runtime = new ManagedCodexRuntime({ stateFile, startClient: async home => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   const login = await runtime.startLogin(account("short-holder", path.join(dir, "account")));
   const holder = await foreignAccountHolder();
   try {
@@ -99,7 +99,7 @@ test("Codex provider probes wait behind account deletion mutations", async () =>
       const child = new FakeChild();
       child.authenticated = true;
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   });
   let release!: () => void;
@@ -157,7 +157,7 @@ test("managed login keeps one per-home child until completion and returns only c
     startClient: async (home) => {
       const child = new FakeChild();
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
     now: () => 123,
   });
@@ -179,7 +179,7 @@ test("lock contention defers Codex completion persistence and still closes the c
   try {
     const runtime = new ManagedCodexRuntime({
       stateFile,
-      startClient: async (home) => CodexAppServerClient.start({ home, spawn: () => child as never }),
+      startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }),
       now: () => 123,
     });
     const work = account("contended", path.join(dir, "account"));
@@ -219,7 +219,7 @@ test("Codex completion write failures log with backoff and eventually persist", 
   const child = new FakeChild();
   const runtime = new ManagedCodexRuntime({
     stateFile,
-    startClient: async (home) => CodexAppServerClient.start({ home, spawn: () => child as never }),
+    startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }),
     now: () => 123,
   });
   const work = account("retry-write", path.join(dir, "account"));
@@ -250,7 +250,7 @@ test("#2166: Main, the legacy home, signs in with the same device login and can 
       homes.push(home);
       const child = new FakeChild();
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
     now: () => 456,
   });
@@ -284,7 +284,7 @@ test("cancellation and independent homes never share a managed app-server child"
       homes.push(home);
       const child = new FakeChild();
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   });
   const first = account("first", "/accounts/first");
@@ -310,7 +310,7 @@ test("cancellation waits for an in-flight client startup to be reaped", async ()
 
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(cancelled).toBe(false);
-  release(await CodexAppServerClient.start({ home: work.home, spawn: () => child as never }));
+  release(await CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home: work.home, spawn: () => child as never }));
   await cancel;
   await launch;
   expect(cancelled).toBe(true);
@@ -328,7 +328,7 @@ test("child death, false completion, and account-read failure become recoverable
       child.readFailure = nextReadFails;
       nextReadFails = false;
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   });
   const work = account("work", "/accounts/work");
@@ -355,7 +355,7 @@ test("observing a finished, authenticated login again writes nothing and leaves 
       const child = new FakeChild();
       child.authenticated = true;
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   });
   const finished = account("finished", "/accounts/finished");
@@ -380,7 +380,7 @@ test("a login whose account read keeps failing is recorded stale once", async ()
     startClient: async (home) => {
       const child = new FakeChild();
       child.readFailure = readFails;
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   });
   const offline = account("offline", "/accounts/offline");
@@ -404,13 +404,13 @@ test("restart reconstruction marks a pending child stale and retry owns a fresh 
   const work = account("work", path.join(dir, "home"));
   const first = new ManagedCodexRuntime({ stateFile, startClient: async (home) => {
     const child = new FakeChild(); firstChildren.push(child);
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   await first.startLogin(work);
   const secondChildren: FakeChild[] = [];
   const second = new ManagedCodexRuntime({ stateFile, startClient: async (home) => {
     const child = new FakeChild(); secondChildren.push(child);
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   await expect(second.loginSnapshot(work)).resolves.toEqual({ state: "stale", attemptState: "stale", deviceAuth: null });
   await expect(second.retryLogin(work)).resolves.toEqual(expect.objectContaining({ accountId: "work" }));
@@ -431,7 +431,7 @@ test("concurrent starts reserve one canonical-home supervisor before awaiting st
   const one = runtime.startLogin(work);
   const two = runtime.startLogin(work);
   expect(starts).toBe(1);
-  resolveStart!(await CodexAppServerClient.start({ home: work.home, spawn: () => child as never }));
+  resolveStart!(await CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home: work.home, spawn: () => child as never }));
   const [first, second] = await Promise.all([one, two]);
   expect(first).toEqual(second);
   expect(starts).toBe(1);
@@ -443,12 +443,12 @@ test("account/read owns authentication independently from auth.json diagnostics"
   fs.writeFileSync(path.join(dir, "auth.json"), "invalid credentials");
   const unavailable = new ManagedCodexRuntime({ startClient: async (home) => {
     const child = new FakeChild();
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   await expect(unavailable.loginSnapshot(work)).resolves.toEqual({ state: "idle", attemptState: null, deviceAuth: null });
   const valid = new ManagedCodexRuntime({ startClient: async (home) => {
     const child = new FakeChild(); child.authenticated = true;
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   const missingFile = { ...work, authPresent: false };
   await expect(valid.loginSnapshot(missingFile)).resolves.toEqual({ state: "authenticated", attemptState: "completed", deviceAuth: null });
@@ -491,7 +491,7 @@ test("legacy Main and managed homes use the read-only account-plus-limits probe"
     child.authenticated = true;
     child.requiresOpenaiAuth = true;
     children.push(child);
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   const main: CodexAccount = { id: "default", label: "Main", kind: "legacy", home: "/accounts/main", sessionsDir: "/accounts/main/sessions", authPresent: true, loginPane: null, createdAt: 0 };
   const managed = account("managed", "/accounts/managed");
@@ -536,7 +536,7 @@ class RedeemChild extends FakeChild {
 test("a quota probe carries the reset-credit summary beside the limits (#1373)", async () => {
   const child = new RedeemChild();
   child.authenticated = true;
-  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ home, spawn: () => child as never }) });
+  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   const probe = await runtime.probeQuota(account("credited", "/accounts/credited"));
   expect(probe.resetCredits).toEqual({ availableCount: 1, credits: null });
   expect(probe.rateLimits.primary).toMatchObject({ usedPercent: 100 });
@@ -549,7 +549,7 @@ test("redeeming a reset credit reads, consumes once with the caller's key, and r
     const child = new RedeemChild();
     child.authenticated = true;
     children.push(child);
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   const redemption = await runtime.redeemResetCredit(account("credited", "/accounts/credited"), "attempt-one");
   expect(redemption.outcome).toBe("reset");
@@ -570,7 +570,7 @@ test("a pre-read that shows no credit refuses locally and sends no consume (#137
   const child = new RedeemChild();
   child.authenticated = true;
   child.available = 0;
-  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ home, spawn: () => child as never }) });
+  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   const redemption = await runtime.redeemResetCredit(account("spent", "/accounts/spent"), "attempt-two");
   expect(redemption).toMatchObject({ outcome: "noCredit", refusedLocally: true });
   expect(redemption.after).toBe(redemption.before);
@@ -582,7 +582,7 @@ test("an unknown credit count is not a refusal: the backend answers, and its ans
   child.authenticated = true;
   child.available = null;
   child.consumeOutcome = "noCredit";
-  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ home, spawn: () => child as never }) });
+  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   const redemption = await runtime.redeemResetCredit(account("unknown-count", "/accounts/unknown-count"), "attempt-three");
   expect(redemption).toMatchObject({ outcome: "noCredit", refusedLocally: false });
   expect(child.methods.filter((method) => method === "account/rateLimitResetCredit/consume")).toHaveLength(1);
@@ -596,7 +596,7 @@ test("a login observation cannot settle credentials replaced during the read", a
   const child = new FakeChild(); child.authenticated = true;
   const runtime = new ManagedCodexRuntime({ stateFile: path.join(home, "attempts.json"), startClient: async () => {
     fs.writeFileSync(path.join(home, "auth.json"), "after-reauthentication");
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   expect(await runtime.loginSnapshot(account("login-read", home))).toMatchObject({ state: "idle" });
   expect(persistedAttemptStates(path.join(home, "attempts.json"))).toEqual([]);
@@ -617,7 +617,7 @@ for (const phase of ["before-consume", "after-consume"] as const) {
     };
     const runtime = new ManagedCodexRuntime({ startClient: async () => {
       if (phase === "before-consume") fs.writeFileSync(path.join(home, "auth.json"), "after-reauthentication");
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     } });
     await expect(runtime.redeemResetCredit(account("credit-race", home), "preserved-attempt-key")).rejects.toThrow("account changed during credit redemption");
     expect(child.methods.filter((method) => method === "account/rateLimitResetCredit/consume")).toHaveLength(phase === "before-consume" ? 0 : 1);

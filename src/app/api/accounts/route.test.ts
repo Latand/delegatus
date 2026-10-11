@@ -52,7 +52,7 @@ function installRuntime(authenticated: boolean): void {
   setManagedCodexRuntimeForTests(new ManagedCodexRuntime({ startClient: async (home) => {
     const child = new FakeChild();
     child.authenticated = authenticated;
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } }));
 }
 

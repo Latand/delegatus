@@ -81,6 +81,11 @@ function requestId(message: Record<string, unknown>): number {
   return message.id as number;
 }
 
+function signalFakeGroup(): never {
+  // Route lifecycle signals to FakeChild.kill.
+  throw new Error("fake process group is absent");
+}
+
 function clientWith(handler: (child: FakeChild, message: Record<string, unknown>) => void): {
   child: FakeChild;
   start: (options?: Partial<CodexAppServerOptions>) => Promise<CodexAppServerClient>;
@@ -89,9 +94,20 @@ function clientWith(handler: (child: FakeChild, message: Record<string, unknown>
   child.onWrite = (message) => handler(child, message);
   return {
     child,
-    start: (options = {}) => CodexAppServerClient.start({ ...options, home: "/fake/home", spawn: () => child as never }),
+    start: (options = {}) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, ...options, home: "/fake/home", spawn: () => child as never }),
   };
 }
+
+test("an unsupported executable is refused before spawning an account app-server", async () => {
+  let spawned = false;
+  await expect(CodexAppServerClient.start({
+    home: "/fake/home",
+    readProtocolVersion: () => "0.999.0",
+    signalProcess: signalFakeGroup,
+    spawn: () => { spawned = true; return new FakeChild() as never; },
+  })).rejects.toThrow("has no pinned schema");
+  expect(spawned).toBe(false);
+});
 
 test("account-management app-server retains zero-MCP process isolation", async () => {
   const child = new FakeChild();
@@ -100,7 +116,9 @@ test("account-management app-server retains zero-MCP process isolation", async (
   };
   let spawnArgs: unknown;
   const client = await CodexAppServerClient.start({
+    readProtocolVersion: () => "0.162.1",
     home: "/managed/home",
+    signalProcess: signalFakeGroup,
     spawn: (...args: unknown[]) => {
       spawnArgs = args[1];
       return child as never;
@@ -293,6 +311,7 @@ test("a child exit rejects an in-flight request and reaps the child", async () =
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const client = await CodexAppServerClient.start({
+    readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,
     clock,
@@ -363,7 +382,7 @@ test("an ambiguous request timeout closes the transport and ignores later bytes"
   child.onWrite = (message) => {
     if (message.method === "initialize") child.respond(requestId(message), {});
   };
-  const client = await CodexAppServerClient.start({ home: "/fake/home", spawn: () => child as never, clock, requestTimeoutMs: 1, shutdownGraceMs: 1 });
+  const client = await CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", spawn: () => child as never, clock, requestTimeoutMs: 1, shutdownGraceMs: 1 });
   const seen: string[] = [];
   client.onNotification((notification) => seen.push(notification.method));
   const pending = client.readAccount();
@@ -447,7 +466,7 @@ test("SIGTERM acknowledgement and escalation both end in a reaped child", async 
   const unacknowledged = new FakeChild();
   unacknowledged.onWrite = (message) => { if (message.method === "initialize") unacknowledged.respond(requestId(message), {}); };
   const reaped: string[] = [];
-  const escalating = await CodexAppServerClient.start({ home: "/fake/home", spawn: () => unacknowledged as never, clock, shutdownGraceMs: 1 });
+  const escalating = await CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", spawn: () => unacknowledged as never, clock, shutdownGraceMs: 1 });
   escalating.onLifecycle((event) => { if (event.type === "reaped") reaped.push(event.type); });
   escalating.close();
   clock.runAll();
@@ -464,6 +483,7 @@ test("shutdown escalates the detached process group after its leader exits durin
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const client = await CodexAppServerClient.start({
+    readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,
     clock,
@@ -493,6 +513,7 @@ test("unexpected leader exit still cleans its detached process group", async () 
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   await CodexAppServerClient.start({
+    readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,
     clock,
