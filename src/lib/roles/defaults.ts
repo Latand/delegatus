@@ -298,7 +298,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   },
   {
     id: "maintainer", name: "Maintainer",
-    description: "Keeps a project's board current: statuses, blocked reasons, half-done tasks and inbox attention. Runs on the seat tick.",
+    description: "Maintains the board and inbox on the seat tick.",
     config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
     parameters: [], promptScaffold: `${MAINTAINER_BODY} ${SHARED_RULES}`,
     safetyFences: ["Files stay untouched: no edits, staging, commits or pushes in any repository; git and gh are for reading.", "Write the board only through create_task and update_task. Never delete or overwrite details, or mark done a task with an open pipeline or live agent. Hide only a confirmed retired orchestrator seat card as done history; preserve its transcript and details."],
@@ -306,7 +306,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   },
   {
     id: "curator", name: "Curator",
-    description: "Generalizes and consolidates learned rules at their true level on the seat tick.",
+    description: "Curates role memory.",
     config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     parameters: [],
     promptScaffold: `You are a Curator. Read the repository and its instructions, judge the currency and readers of each rule, and change role memory only through curate_rules. Follow the pass brief and checklist. Never quote rule text outside the local tool calls. End with counts and rule ids. Never start a child agent or pipeline. ${SHARED_RULES}`,
