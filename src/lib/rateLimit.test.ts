@@ -8,7 +8,7 @@ import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry } from "@/lib/agent/registry";
 import type { EngineLimits, FileEntry, LimitsProvenance } from "@/lib/types";
 
-import { projectRateLimitReadModel, quotaAsEngineLimits, quotaReadingFromAccountLimits, quotaReadingFromEngineLimits, rateLimitFromQuotaObservation, reconcileQuotaReadings } from "./rateLimit";
+import { projectRateLimitReadModel, quotaAsEngineLimits, quotaReadingFromAccountLimits, quotaReadingFromEngineLimits, rateLimitFromQuotaObservation, reconcileQuotaReadings, weeklyQuota } from "./rateLimit";
 
 const NOW = new Date("2026-07-10T16:00:00.000Z").getTime();
 const RESET = Math.floor(NOW / 1000) + 7_200;
@@ -792,4 +792,20 @@ test("legacy stored flagship readings retain their named tier", () => {
   const sample = { ...observation(10), engine: "claude" as const, limits };
   expect(rateLimitFromQuotaObservation(sample, NOW, "opus")?.resetAt).toBe(RESET);
   expect(rateLimitFromQuotaObservation(sample, NOW, "fable")).toBeNull();
+});
+
+test("weeklyQuota reads the general week and never lets a 5-hour or tier window stand in for it", () => {
+  const now = Math.floor(NOW / 1000);
+  const reconcile = (limits: EngineLimits) => reconcileQuotaReadings(quotaReadingFromEngineLimits(limits, { source: "live", reason: null, staleSince: null }, now), null, now);
+  const session = { usedPercent: 64, resetsAt: now + 3_600, windowMinutes: 300 };
+  const weekly = { usedPercent: 23, resetsAt: now + 4 * 86_400, windowMinutes: 10_080 };
+  const tiers = [{ usedPercent: 90, resetsAt: now + 4 * 86_400, windowMinutes: 10_080, tier: "opus" }];
+  // Both windows: the week, however tight the 5-hour window and the tier are.
+  expect(weeklyQuota(reconcile({ session, weekly, tiers, plan: "max", capturedAt: now }))).toMatchObject({ percent: 77 });
+  expect(weeklyQuota(reconcile({ session: null, weekly, plan: "max", capturedAt: now }))).toMatchObject({ percent: 77 });
+  // A 5-hour window alone, or with a tier: no weekly reading at all.
+  expect(weeklyQuota(reconcile({ session, weekly: null, plan: "max", capturedAt: now }))).toBeNull();
+  expect(weeklyQuota(reconcile({ session, weekly: null, tiers, plan: "max", capturedAt: now }))).toBeNull();
+  // #606: a window filed under session that declares a week is that week.
+  expect(weeklyQuota(reconcile({ session: { ...weekly, usedPercent: 15 }, weekly: null, plan: "pro", capturedAt: now }))).toMatchObject({ percent: 85 });
 });

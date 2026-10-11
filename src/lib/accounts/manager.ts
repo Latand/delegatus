@@ -651,6 +651,7 @@ export const accountManager: AccountManager = {
         observations: agentRegistry().quotaObservations("copilot"),
         bindings: [],
         requestedId: request.requestedId,
+        requireCapacity: request.requireCapacity,
         preferredId: request.preferredId ?? activeCopilotAccountId(),
         excludedIds: request.excludedIds ?? [],
         unavailableIds: request.unavailableIds ?? [],
@@ -668,6 +669,7 @@ export const accountManager: AccountManager = {
       observations: agentRegistry().quotaObservations(engine),
       bindings: accountProjectBindings(),
       requestedId: request.requestedId,
+      requireCapacity: request.requireCapacity,
       model: request.model,
       /* The caller's continuity hint outranks the engine's routing as an
          ORDERING, and neither one widens the candidate set. */

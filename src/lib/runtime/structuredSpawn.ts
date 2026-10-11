@@ -975,11 +975,13 @@ export async function terminalizeStaleStructuredSpawns(
   const timeoutMs = options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS;
   const actuationCap = options.actuationCap ?? STALE_STRUCTURED_SPAWN_ACTUATION_CAP;
   const reconcile = options.reconcile ?? reconcileStructuredSpawnReplay;
+  await registry.deliveryWrite({ label: "spawn.orphan-hygiene" },() =>
+    registry.terminalizeAbandonedSpawnEntries({ now: now(),timeoutMs,limit: actuationCap }));
   const snapshot = registry.readOnlySnapshot();
   const terminalized: string[] = [];
   const recovered: string[] = [];
   let examined = 0;
-  for (const receipt of Object.values(snapshot.receipts)) {
+  for (const receipt of registry.openSpawnReceipts()) {
     options.assertActive?.();
     if (examined >= actuationCap) break;
     if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") continue;
@@ -1024,6 +1026,30 @@ export async function terminalizeStaleStructuredSpawns(
           launchId: receipt.launchId,
           error,
         });
+      }
+      continue;
+    }
+    if (receipt.transport === null && !receipt.key && !receipt.pane && !receipt.verifiedHost
+      && !receipt.admissionOwner && !receipt.queuedPinnedSpawn) {
+      if (!client) continue;
+      examined += 1;
+      try {
+        const operation = await client.operationStatus(receipt.launchId);
+        const effect = await structuredSpawnEffectForLaunch(client,receipt.launchId);
+        const session = client.readSession
+          ? await client.readSession({ conversationId: receipt.conversationId })
+          : (await client.snapshot()).sessions.find(candidate => candidate.conversationId === receipt.conversationId);
+        options.assertActive?.();
+        if (operation || effect || session) continue;
+        const failure = await registry.failStructuredSpawnOffLoop(receipt.launchId,
+          `spawn interrupted before transport or runtime admission: ${receipt.launchId}`, {
+            recoveryFence: (_file,current) => current.transport === null && !current.key && !current.pane
+              && !current.verifiedHost && !current.admissionOwner && !current.queuedPinnedSpawn
+              && Number.isFinite(Date.parse(current.createdAt)) && now()-Date.parse(current.createdAt) >= timeoutMs,
+          });
+        if (failure.claimed) terminalized.push(receipt.launchId);
+      } catch (error) {
+        spawnDiagnosticErrorFor(receipt.clientAttemptId,"[reaper] unproven spawn reconciliation failed",{ launchId: receipt.launchId,error });
       }
       continue;
     }

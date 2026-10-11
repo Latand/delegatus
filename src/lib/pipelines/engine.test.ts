@@ -22,7 +22,7 @@ import { endRestartGate, restartGateFile } from "@/lib/selfUpdate/restartGate";
 import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError } from "@/lib/accounts/accountMutation";
-import { accountManager } from "@/lib/accounts/manager";
+import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError } from "@/lib/accounts/manager";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
@@ -19848,6 +19848,399 @@ async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: s
   return { h, sends, cut, now: () => now, advance: (ms: number) => { now += ms; }, resetsAt };
 }
 
+const parkedAccountCases = (["claude", "codex"] as const).flatMap(engine =>
+  (["usage_limit", "auth_required"] as const).map(kind => ({ engine, kind })));
+
+test.each((["claude", "codex"] as const).flatMap(engine => (["capacity", "authentication", "signed-out"] as const)
+  .flatMap(kind => (["automatic", "pause-resume", "closed", ...(kind === "capacity" ? ["stale-capacity" as const] : [])] as const)
+    .map(control => ({ engine, kind, control })))))
+("a fresh allowed $engine account resumes unlaunched $kind admission with control=$control", async ({ engine, kind, control }) => {
+  const h = harness();
+  await create(h.ports, [{ id: "plan", kind: "run", engine, model: engine === "claude" ? "fable" : "gpt-5.6-sol",
+    role: { roleId: "builder" }, prompt: "Build {{task}}", next: null }] as never);
+  await tickPipelines([], h.ports);
+  let available = false;
+  const project = loadPipelines()[0]!.project;
+  h.ports.allowedAccountIds = () => available ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT];
+  h.ports.resolveProjectSpawn = () => available
+    ? { kind: "available", account: { engine, accountId: control === "stale-capacity" ? LIMITED_ACCOUNT : SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } }
+    : { kind: "exhausted", resetsAt: Math.floor(Date.parse(h.ports.now()) / 1000) + 86_400, allowedAccountIds: [LIMITED_ACCOUNT] };
+  h.ports.engineReadiness = () => kind === "signed-out" && !available ? "signed-out" : "connected";
+  h.ports.accountRecovered = () => available && control !== "stale-capacity";
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, reserved) => {
+    if (!available) {
+      if (kind === "authentication") throw new AccountAuthenticationRequiredError(engine, LIMITED_ACCOUNT);
+      throw new ProjectAccountRefusedError({ kind: "exhausted", resetsAt: Math.floor(Date.parse(h.ports.now()) / 1000) + 86_400,
+        allowedAccountIds: [LIMITED_ACCOUNT] }, engine, project);
+    }
+    return spawn(input, reserved);
+  };
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(parked.runs[0]!.attempts[0]!.launchId).toBeNull();
+  h.advanceWallClock(1000);
+  if (control === "pause-resume") {
+    await patchPipeline(parked.id, { action: "pause" }, h.ports);
+    await patchPipeline(parked.id, { action: "resume" }, h.ports);
+  } else if (control === "closed") {
+    parked.closedAt = h.ports.now();
+    savePipelines([parked]);
+  }
+  available = true;
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], { ...h.ports });
+  const resumed = loadPipelines()[0]!;
+  expect(h.spawnInputs).toHaveLength(control === "automatic" ? 1 : 0);
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.worktreeDir).toBe(parked.worktreeDir);
+});
+
+async function parkedAccountHarness(engine: "claude" | "codex", kind: "usage_limit" | "auth_required", pinned = false, resetDelay: number | null = 24 * 60 * 60_000) {
+  const f = await providerRecoveryHarness(engine, kind === "auth_required" ? "unauthorized"
+    : engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
+  kind === "auth_required" ? "Authentication required" : "You've hit your usage limit", resetDelay, pinned);
+  const accounts = [{ id: LIMITED_ACCOUNT, authPresent: kind !== "auth_required" }, { id: SPARE_ACCOUNT, authPresent: true }];
+  const observations: DurableQuotaObservation[] = [{ engine, accountId: LIMITED_ACCOUNT, authenticated: kind !== "auth_required",
+    authCheckedAt: f.h.ports.now(), observedAt: f.h.ports.now(), bootId: "fixture",
+    limits: { session: { usedPercent: 100, resetsAt: f.resetsAt }, weekly: null, plan: "pro", capturedAt: f.now() },
+    provenance: { source: "live", reason: null, staleSince: null } }];
+  let allowed = [LIMITED_ACCOUNT];
+  f.h.ports.allowedAccountIds = () => allowed;
+  f.h.ports.resolveProjectSpawn = (_engine, input) => {
+    const selection = selectProjectAccount({ project: loadPipelines()[0]!.project, engine, accounts, observations,
+      bindings: allowed.map(accountId => ({ project: loadPipelines()[0]!.project, engine, accountId, createdAt: f.h.ports.now() })),
+      unavailableIds: input.unavailableIds, requestedId: input.requestedId, now: f.now(), model: input.model,
+      ...{ requireCapacity: input.requireCapacity } });
+    return selection.kind === "available" ? { kind: "available", account: {
+      engine, accountId: selection.accountId!, kind: "managed", home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selection;
+  };
+  const lane = loadPipelines()[0]!;
+  if (kind === "usage_limit") lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+  savePipelines([lane]);
+  return { ...f, accounts, observations, allow: (ids: string[]) => { allowed = ids; } };
+}
+
+test.each((["claude", "codex"] as const).flatMap(engine => (["capacity", "authentication"] as const).map(kind => ({ engine, kind }))))
+("unlaunched $engine $kind recovery fences a stale refused source through spawn", async ({ engine, kind }) => {
+  const h = harness();
+  await create(h.ports, [{ id: "plan", kind: "run", engine, model: engine === "claude" ? "fable" : "gpt-5.6-sol",
+    role: { roleId: "builder" }, prompt: "Build {{task}}", next: null }] as never);
+  await tickPipelines([], h.ports);
+  const project = loadPipelines()[0]!.project;
+  const accounts = [{ id: LIMITED_ACCOUNT, authPresent: true }, { id: SPARE_ACCOUNT, authPresent: true }];
+  const observations: DurableQuotaObservation[] = [{ engine, accountId: LIMITED_ACCOUNT, authenticated: kind === "capacity",
+    observedAt: h.ports.now(), authCheckedAt: h.ports.now(), bootId: "fixture",
+    limits: { session: { usedPercent: 100, resetsAt: Math.floor(Date.parse(h.ports.now()) / 1000) + 86_400 }, weekly: null,
+      plan: "pro", capturedAt: Date.parse(h.ports.now()) }, provenance: { source: "live", reason: null, staleSince: null } }];
+  let available = false;
+  h.ports.allowedAccountIds = () => available ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT];
+  h.ports.accountRecovered = () => false;
+  h.ports.resolveProjectSpawn = (_engine, input) => {
+    const selected = selectProjectAccount({ engine, project, accounts, observations, preferredId: LIMITED_ACCOUNT,
+      bindings: h.ports.allowedAccountIds!(project, engine)!.map(accountId => ({ engine, project, accountId, createdAt: h.ports.now() })),
+      requestedId: input.requestedId, unavailableIds: input.unavailableIds, model: input.model, now: Date.parse(h.ports.now()) });
+    return selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selected;
+  };
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, reserved) => {
+    if (!available) {
+      if (kind === "authentication") throw new AccountAuthenticationRequiredError(engine, LIMITED_ACCOUNT);
+      throw new ProjectAccountRefusedError({ kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT] }, engine, project);
+    }
+    expect(input.requestedAccountId).toBe(SPARE_ACCOUNT);
+    expect(input.unavailableAccountIds).toContain(LIMITED_ACCOUNT);
+    const selected = h.ports.resolveProjectSpawn!(engine, { project, model: input.role.model,
+      requestedId: input.requestedAccountId, unavailableIds: input.unavailableAccountIds });
+    if (selected.kind !== "available") throw new ProjectAccountRefusedError(selected, engine, project);
+    return spawn({ ...input, requestedAccountId: selected.account.accountId }, reserved);
+  };
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(h.spawnInputs).toHaveLength(0);
+  h.advanceWallClock(10 * 60_000);
+  available = true;
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(h.spawnInputs[0]!.requestedAccountId).toBe(SPARE_ACCOUNT);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accountId).toBe(SPARE_ACCOUNT);
+  expect(loadPipelines()[0]!.worktreeDir).toBe(parked.worktreeDir);
+});
+
+test.each(parkedAccountCases.flatMap(item => (["binding", "login", "capacity"] as const).map(event => ({ ...item, event }))))
+("a fresh allowed $engine account resumes a parked $kind stage after $event", async ({ engine, kind, event }) => {
+  const f = await parkedAccountHarness(engine, kind);
+  if (event !== "binding") f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  if (event === "login") f.accounts[1]!.authPresent = false;
+  if (event === "capacity") f.observations.push({ ...f.observations[0]!, accountId: SPARE_ACCOUNT, authenticated: true });
+  await tickPipelines([], f.h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  const receipt = parked.runs[0]!.attempts[0]!.launchId;
+  if (event === "binding") f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  if (event === "login") f.accounts[1]!.authPresent = true;
+  if (event === "capacity") f.observations[1]!.limits!.session!.usedPercent = 25;
+  // A fresh port object models a Viewer restart, with no in-memory event.
+  await tickPipelines([], { ...f.h.ports });
+  expect(f.h.spawnInputs).toHaveLength(2);
+  for (let tick = 0; tick < 3; tick++) await tickPipelines([], f.h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(SPARE_ACCOUNT);
+  expect(resumed.runs[0]!.attempts).toHaveLength(2);
+  expect(resumed.runs[0]!.attempts[0]!.launchId).toBe(receipt);
+  expect(resumed.worktreeDir).toBe(parked.worktreeDir);
+  expect(resumed.runs[0]!.attempts[1]!.input).toBe(parked.runs[0]!.attempts[0]!.input);
+  expect(f.sends).toHaveLength(0);
+  expect(f.h.calls.some(call => /reset --hard|clean -/.test(call))).toBe(false);
+});
+
+test.each(parkedAccountCases)("a pinned $engine $kind park requires fresh proof on its own account", async ({ engine, kind }) => {
+  const f = await parkedAccountHarness(engine, kind, true);
+  await tickPipelines([], f.h.ports);
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  f.accounts[0]!.authPresent = true;
+  f.observations[0]!.authenticated = true;
+  f.observations[0]!.limits!.session!.usedPercent = 25;
+  let recovered = false;
+  f.h.ports.accountRecovered = (_engine, id) => recovered && id === LIMITED_ACCOUNT;
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  recovered = true;
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
+  expect(f.h.spawnInputs[1]!.unavailableAccountIds).not.toContain(LIMITED_ACCOUNT);
+});
+
+test.each(["claude", "codex"] as const)("a fresh allowed %s account replaces an authentication target refused before reservation", async engine => {
+  const f = await parkedAccountHarness(engine, "auth_required");
+  await tickPipelines([], f.h.ports);
+  const spawn = f.h.ports.spawnAgent;
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    if (input.requestedAccountId === SPARE_ACCOUNT) throw new AccountAuthenticationRequiredError(engine, SPARE_ACCOUNT);
+    return spawn(input, reserved);
+  };
+  f.advance(1000);
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  for (let tick = 0; tick < 3; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.stateDetail).toContain("target preflight failed");
+  f.accounts.push({ id: "account-c", authPresent: true });
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT, "account-c"]);
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe("account-c");
+  expect(f.h.spawnInputs[1]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
+  expect(f.sends).toHaveLength(0);
+});
+
+test.each(parkedAccountCases.flatMap(item => (["binding", "login"] as const).map(event => ({ ...item, event }))))
+("a fresh allowed $engine account replaces a $kind target signed out before launch after $event", async ({ engine, kind, event }) => {
+  const f = await parkedAccountHarness(engine, kind);
+  await tickPipelines([], f.h.ports);
+  let replacement = false;
+  f.h.ports.engineReadiness = () => {
+    if (!replacement && loadPipelines()[0]!.runs[0]!.attempts.length > 1) {
+      f.accounts[1]!.authPresent = false;
+      return "signed-out";
+    }
+    return "connected";
+  };
+  f.advance(1000);
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  for (let tick = 0; tick < 3; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  f.advance(1000);
+  replacement = true;
+  const target = event === "binding" ? "account-c" : SPARE_ACCOUNT;
+  if (event === "binding") {
+    f.accounts.push({ id: target, authPresent: true });
+    f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT, target]);
+  } else {
+    f.accounts[1]!.authPresent = true;
+    f.h.ports.accountRecovered = (_engine, id, _cutAt, _model, condition) => id === SPARE_ACCOUNT && condition === "auth_required";
+  }
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(target);
+  if (event === "binding") expect(f.h.spawnInputs[1]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
+  else expect(f.h.spawnInputs[1]!.unavailableAccountIds).not.toContain(SPARE_ACCOUNT);
+  expect(f.sends).toHaveLength(0);
+});
+
+test.each((["claude", "codex"] as const).flatMap(engine => (["binding", "capacity", "reset"] as const).map(event => ({ engine, event }))))
+("a $engine authentication target's exhausted preflight keeps its quota fence until $event", async ({ engine, event }) => {
+  const f = await parkedAccountHarness(engine, "auth_required");
+  await tickPipelines([], f.h.ports);
+  const spawn = f.h.ports.spawnAgent;
+  let refused = false;
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    if (input.requestedAccountId === SPARE_ACCOUNT && !refused) {
+      refused = true;
+      f.observations.push({ ...f.observations[0]!, accountId: SPARE_ACCOUNT, authenticated: true });
+      throw new ProjectAccountRefusedError({ kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] },
+        engine, loadPipelines()[0]!.project);
+    }
+    return spawn(input, reserved);
+  };
+  f.advance(1000);
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  for (let tick = 0; tick < 3; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  f.advance(1000);
+  const quota = f.observations[1]!.limits!;
+  f.observations[1]!.limits = null;
+  let capacity = false;
+  f.h.ports.accountRecovered = (_engine, id, _cutAt, _model, condition) => id === SPARE_ACCOUNT && (condition === "auth_required" || capacity);
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  const target = event === "binding" ? "account-c" : SPARE_ACCOUNT;
+  if (event === "binding") {
+    f.accounts.push({ id: target, authPresent: true });
+    f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT, target]);
+  } else if (event === "capacity") {
+    capacity = true;
+    f.observations[1]!.limits = { ...quota, session: { usedPercent: 25, resetsAt: f.resetsAt } };
+  } else f.advance(f.resetsAt! * 1000 + 60_000 - f.now());
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(event === "reset" ? null : target);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(target);
+  if (event === "reset") {
+    expect(f.h.spawnInputs[1]!.unavailableAccountIds).toContain(LIMITED_ACCOUNT);
+    expect(f.h.spawnInputs[1]!.unavailableAccountIds).not.toContain(SPARE_ACCOUNT);
+  }
+  expect(f.sends).toHaveLength(0);
+});
+
+test.each(["claude", "codex"] as const)("fresh %s authentication cannot clear a recorded usage limit", async engine => {
+  const f = await parkedAccountHarness(engine, "auth_required", true);
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.usageLimitedAccounts = [{ engine, accountId: LIMITED_ACCOUNT,
+    limitedAt: f.now() - 1000, resetsAt: f.resetsAt }];
+  savePipelines([lane]);
+  await tickPipelines([], f.h.ports);
+  f.advance(1000);
+  f.accounts[0]!.authPresent = true;
+  f.observations[0]!.authenticated = true;
+  f.observations[0]!.limits = null;
+  f.h.ports.accountRecovered = (_engine, _id, _cutAt, _model, condition) => condition === "auth_required";
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(f.sends).toHaveLength(0);
+});
+
+test.each(parkedAccountCases.flatMap(item => [false, true].map(pinned => ({ ...item, pinned }))))
+("a fresh allowed $engine source resumes its parked $kind stage with pinned=$pinned", async ({ engine, kind, pinned }) => {
+  const f = await parkedAccountHarness(engine, kind, pinned);
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `source-recovery-${crypto.randomUUID()}.json`));
+  setAgentRegistryForTests(registry);
+  const clock = spyOn(Date, "now").mockImplementation(f.now);
+  try {
+    f.h.ports.accountRecovered = defaultPipelinePorts().accountRecovered;
+    await tickPipelines([], f.h.ports);
+    const parked = loadPipelines()[0]!;
+    expect(parked.state).toBe("needs_decision");
+    const receipt = parked.runs[0]!.attempts[0]!.launchId;
+    f.advance(1000);
+    f.accounts[0]!.authPresent = true;
+    const observation = { ...f.observations[0]!, authenticated: true, authCheckedAt: f.h.ports.now(), observedAt: f.h.ports.now(),
+      limits: kind === "auth_required" ? null : { ...f.observations[0]!.limits!, session: { usedPercent: 25, resetsAt: f.resetsAt } },
+      provenance: { source: kind === "auth_required" ? "unavailable" as const : "live" as const, reason: null, staleSince: null } };
+    f.observations[0] = observation;
+    registry.recordQuotaObservation(observation);
+    for (let tick = 0; tick < 4; tick++) await tickPipelines([], { ...f.h.ports });
+    const resumed = loadPipelines()[0]!;
+    expect(f.h.spawnInputs).toHaveLength(2);
+    expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
+    expect(f.h.spawnInputs[1]!.unavailableAccountIds).not.toContain(LIMITED_ACCOUNT);
+    expect(resumed.runs[0]!.attempts[0]!.launchId).toBe(receipt);
+    expect(resumed.worktreeDir).toBe(parked.worktreeDir);
+    expect(f.sends).toHaveLength(0);
+  } finally {
+    clock.mockRestore();
+    setAgentRegistryForTests(null);
+  }
+});
+
+test.each((["claude", "codex"] as const).flatMap(engine => [null, -60_000].map(resetDelay => ({ engine, resetDelay }))))
+("a fresh allowed $engine account resumes after its bounded fallback is exhausted (reset=$resetDelay)", async ({ engine, resetDelay }) => {
+  const f = await parkedAccountHarness(engine, "usage_limit", false, resetDelay);
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.providerFallbackRetries = 1;
+  savePipelines([lane]);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("retry exhausted");
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(SPARE_ACCOUNT);
+  expect(f.sends).toHaveLength(0);
+});
+
+test.each(parkedAccountCases.flatMap(item => (["fresh", "prior", "stale", "future", "exhausted", "credits", "signed-out", "transcript", "other-engine", "fresh-auth-only", "prior-auth", "stale-auth"] as const)
+  .map(sample => ({ ...item, sample }))))
+("parked $engine $kind recovery requires a fresh live $sample observation", ({ engine, kind, sample }) => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `account-recovery-${crypto.randomUUID()}.json`));
+  setAgentRegistryForTests(registry);
+  const now = Date.now();
+  const cutAt = now - 2000;
+  const sampledAt = sample === "prior" ? cutAt - 1000 : sample === "stale" ? now - 6 * 60_000
+    : sample === "future" ? now + 60_000 : now - 1000;
+  registry.recordQuotaObservation({ engine: sample === "other-engine" ? engine === "claude" ? "codex" : "claude" : engine,
+    accountId: LIMITED_ACCOUNT, authenticated: sample !== "signed-out", observedAt: new Date(sampledAt).toISOString(),
+    authCheckedAt: new Date(sample === "prior-auth" ? cutAt - 1000 : sample === "stale-auth" ? now - 6 * 60_000 : sampledAt).toISOString(), bootId: "fixture",
+    limits: sample === "fresh-auth-only" ? null : { session: { usedPercent: sample === "exhausted" || sample === "credits" ? 100 : 25, resetsAt: Math.floor(now / 1000) + 86_400 },
+      weekly: null, plan: "pro", capturedAt: sampledAt },
+    provenance: { source: sample === "transcript" ? "transcript" : sample === "fresh-auth-only" ? "unavailable" : "live", reason: null, staleSince: null },
+    resetCredits: sample === "credits" ? { availableCount: 10, expiresAt: null } : null });
+  try {
+    expect(defaultPipelinePorts().accountRecovered!(engine, LIMITED_ACCOUNT, cutAt, null, kind))
+      .toBe(sample === "fresh" || kind === "auth_required" && sample === "fresh-auth-only");
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test.each(parkedAccountCases.flatMap(item => (["pause", "pause-resume", "reply", "stop", "report", "delivery", "closed", "hidden", "deferred-stop", "revoked-during-stop"] as const)
+  .map(control => ({ ...item, control }))))
+("fresh account recovery respects $control on a parked $engine $kind stage", async ({ engine, kind, control }) => {
+  const f = await parkedAccountHarness(engine, kind);
+  await tickPipelines([], f.h.ports);
+  const parked = loadPipelines()[0]!;
+  f.advance(1000);
+  if (control === "pause" || control === "pause-resume") {
+    expect((await patchPipeline(parked.id, { action: "pause" }, f.h.ports)).error).toBeUndefined();
+    if (control === "pause-resume") expect((await patchPipeline(parked.id, { action: "resume" }, f.h.ports)).error).toBeUndefined();
+  } else if (control === "reply") {
+    f.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", message: null,
+      terminalProviderMessage: { ...f.h.durableTurns.get("/codex/stage-1.jsonl")!.terminalProviderMessage!, ts: f.now() },
+      externalPromptAfterCut: true, promptHistoryComplete: true });
+  } else if (control === "stop") f.h.ports.conversationOperatorStopped = async () => true;
+  else if (control === "closed" || control === "hidden") {
+    if (control === "closed") parked.closedAt = f.h.ports.now();
+    else parked.hiddenAt = f.h.ports.now();
+    savePipelines([parked]);
+  } else if (control === "deferred-stop") f.h.ports.stopStageAgent = async () => ({ outcome: "deferred" });
+  else if (control === "report") {
+    parked.runs[0]!.attempts[0]!.report = recoveryReport(f.h.ports.now());
+    savePipelines([parked]);
+  } else if (control === "delivery") f.h.ports.conversationDeliveryOutstanding = () => true;
+  else f.h.ports.stopStageAgent = async () => { f.allow([LIMITED_ACCOUNT]); return { outcome: "stopped" }; };
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.sends).toHaveLength(0);
+});
+
 test("a deploy cut followed by restored Codex settings takes restart recovery before opening a provider wait", async () => {
   const f = await providerRecoveryHarness("codex", "turn_aborted", "stage turn aborted before completion");
   const cut = f.now();
@@ -23734,12 +24127,16 @@ const CHAIN_RESET = { "10pm": Date.parse("2026-10-05T19:00:00Z") / 1000, "2am": 
 // A parked retry holds while its stage works and follows the chain the turn ends in.
 for (const engine of ["claude", "codex"] as const) {
   for (const pool of [false, true]) {
-    test.each(["harness", "harness-three", "harness-busy", "operator-busy", "reply-after", "control-after", "harness-no-output", "operator-refused"] as const)(`${engine} a parked retry follows the open cut chain (pool=${pool}, %s)`, async activity => {
+    test.each(["harness", "harness-fresh", "harness-three", "harness-busy", "operator-busy", "reply-after", "control-after", "harness-no-output", "operator-refused"] as const)(`${engine} a parked retry follows the open cut chain (pool=${pool}, %s)`, async activity => {
       const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
       f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
       let reset = CHAIN_RESET["10pm"];
       const allowed = pool ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT];
       f.h.ports.allowedAccountIds = () => allowed;
+      if (activity === "harness-fresh") f.h.ports.accountRecovered = (_engine, id, cutAt) => {
+        const sampledAt = reset * 1000 + 60_000;
+        return id === LIMITED_ACCOUNT && sampledAt > cutAt && f.now() >= sampledAt && f.now() - sampledAt <= 5 * 60_000;
+      };
       f.h.ports.resolveProjectSpawn = () => f.now() >= reset * 1000 + 60_000
         ? { kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
         : { kind: "exhausted", resetsAt: reset, allowedAccountIds: allowed };
@@ -25188,6 +25585,104 @@ test.each([false, true])("pre-publication replacement persists one new activatio
   expect(h.spawnInputs.at(-1)!.clientAttemptId).toStartWith("handshake_retry_1_");
   expect(persistedActivations).toBe(1);
   expect(box.order).toEqual(publication);
+});
+
+
+test.each(parkedAccountCases)("recovery admission: target quota changes after selection for $engine $kind", async ({ engine, kind }) => {
+  const f = await parkedAccountHarness(engine, kind);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  let usedPercent = 100;
+  const spawn = f.h.ports.spawnAgent;
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    // A concurrent lane consumes the target's last subscription capacity
+    // after controller selection and before the actual spawn admission.
+    f.observations.push({ ...f.observations[0]!, accountId: SPARE_ACCOUNT, authenticated: true,
+      observedAt: f.h.ports.now(), authCheckedAt: f.h.ports.now(),
+      limits: { session: { usedPercent, resetsAt: f.resetsAt }, weekly: null, plan: "pro", capturedAt: f.now() } });
+    const selected = f.h.ports.resolveProjectSpawn!(engine, { project: loadPipelines()[0]!.project, model: input.role.model,
+      requestedId: input.requestedAccountId, unavailableIds: input.unavailableAccountIds,
+      ...{ requireCapacity: input.requireAccountCapacity } });
+    // This is the same requested-id admission used by spawnPipelineAgent.
+    if (selected.kind !== "available") throw new ProjectAccountRefusedError(selected, engine, loadPipelines()[0]!.project);
+    return spawn({ ...input, requestedAccountId: selected.account.accountId }, reserved);
+  };
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.launchId).toBeNull();
+  usedPercent = 25;
+  f.advance(1000);
+  f.observations[1]!.limits!.session!.usedPercent = usedPercent;
+  f.h.ports.accountRecovered = (_engine, id) => id === SPARE_ACCOUNT;
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
+});
+
+
+test.each((["claude", "codex"] as const).flatMap(engine => (["headroom", "reset"] as const).map(event => ({ engine, event }))))
+("recovery admission: $engine exhausted target stays fenced across later signout until $event", async ({ engine, event }) => {
+  const f = await parkedAccountHarness(engine, "usage_limit");
+  await tickPipelines([], f.h.ports);
+  const targetReset = f.resetsAt! - 3600;
+  const spawn = f.h.ports.spawnAgent;
+  let refused = false;
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    if (input.requestedAccountId === SPARE_ACCOUNT && !refused) {
+      refused = true;
+      f.observations.push({ ...f.observations[0]!, accountId: SPARE_ACCOUNT, authenticated: true });
+      throw new ProjectAccountRefusedError({ kind: "exhausted", resetsAt: targetReset,
+        allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] }, engine, loadPipelines()[0]!.project);
+    }
+    return spawn(input, reserved);
+  };
+  f.advance(1000);
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  f.accounts.push({ id: "account-c", authPresent: true });
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT, "account-c"]);
+  f.h.ports.engineReadiness = () => {
+    if (loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait?.switchedAccountId === "account-c") {
+      f.accounts[2]!.authPresent = false;
+      return "signed-out";
+    }
+    return "connected";
+  };
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait!.condition.kind).toBe("auth_required");
+  f.advance(1000);
+  f.observations[1]!.limits = null;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `review-real-recovery-${crypto.randomUUID()}.json`));
+  setAgentRegistryForTests(registry);
+  const clock = spyOn(Date, "now").mockImplementation(f.now);
+  try {
+    registry.recordQuotaObservation({ ...f.observations[1]!, authenticated: true,
+      observedAt: f.h.ports.now(), authCheckedAt: f.h.ports.now(),
+      provenance: { source: "unavailable", reason: null, staleSince: null } });
+    f.h.ports.accountRecovered = defaultPipelinePorts().accountRecovered;
+    for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(1);
+    const limited = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.usageLimitedAccounts!
+      .find(item => item.accountId === SPARE_ACCOUNT)!;
+    expect(limited.engine).toBe(engine);
+    expect(limited.limitedAt).toBeGreaterThan(0);
+    expect(limited.resetsAt).toBe(targetReset);
+    if (event === "headroom") {
+      f.advance(1000);
+      f.observations[1]!.limits = { session: { usedPercent: 25, resetsAt: targetReset },
+        weekly: null, plan: "pro", capturedAt: f.now() };
+      registry.recordQuotaObservation({ ...f.observations[1]!, authenticated: true,
+        observedAt: f.h.ports.now(), authCheckedAt: f.h.ports.now(),
+        provenance: { source: "live", reason: null, staleSince: null } });
+    } else f.advance(targetReset * 1000 + 60_000 - f.now());
+    for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
+  } finally { clock.mockRestore(); setAgentRegistryForTests(null); }
 });
 
 test.each(["completed", "open"] as const)("a held restart proposal waits for ledger repair (%s turn)", async (ending) => {

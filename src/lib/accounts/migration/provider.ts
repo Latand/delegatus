@@ -83,7 +83,7 @@ export class CodexForkOutcomeUnknownError extends Error {
 
 const defaultDependencies: ProviderDependencies = {
   accounts: accountManager,
-  startCodex: (home) => CodexAppServerClient.start({ home }),
+  startCodex: (home) => CodexAppServerClient.start({ home, protocolProfile: "thread-control" }),
   claudeStatus: (home) => realClaudeLoginPorts.status(home),
   verifyClaudeHost: (host) => verifyTmuxHostEvidence(host),
   cancelClaude: (host) => cleanupTmuxHostIfMatches(host),
