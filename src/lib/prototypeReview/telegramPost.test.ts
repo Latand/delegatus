@@ -46,14 +46,31 @@ async function connected() {
 test("rich rendering labels slides, recommendations and bounded copy buttons and escapes input", () => {
   const round = telegramRound(); round.title = 'Layout <tg-button type="url">';
   round.questions![0]!.options[1]!.label = "Second | option <script>";
-  const rendered = renderPrototypeTelegram(round, [{ id: "v1f1", caption: "1 · Compact", blob: new Blob() }], "Task");
+  round.variants[0]!.description = "A complete description with all words preserved ".repeat(5).trim();
+  const rendered = renderPrototypeTelegram(round, [
+    { id: "v1f1", variantNumber: 1, caption: "1 · Compact", blob: new Blob() },
+    { id: "v2f1", variantNumber: 2, caption: "2 · Spacious", blob: new Blob() },
+    { id: "v1f2", variantNumber: 1, caption: "1 · Detail", blob: new Blob() },
+  ], "Task");
   expect(rendered.markdown).toContain('<tg-slideshow>\n![](tg://photo?id=v1f1 "1 · Compact")');
-  expect(rendered.markdown).toContain("✅ рекомендовано");
+  const carousels = [...rendered.markdown.matchAll(/<tg-slideshow>([\s\S]*?)<\/tg-slideshow>/g)].map(match => match[1]!);
+  expect(carousels).toHaveLength(2);
+  expect(carousels[0]).toContain("v1f2");
+  expect(carousels[0]).not.toContain("v2f1");
+  expect(carousels[1]).toContain("v2f1");
+  expect(carousels[1]).not.toContain("v1f");
+  expect(rendered.markdown).toContain(`**1 · Choice 1**\n\n${round.variants[0]!.description}`);
+  expect(rendered.markdown).toContain('<p><b>Питання 1/3');
+  expect(rendered.markdown).toContain("<br>a) ");
+  expect(rendered.markdown).toContain(" ✅<br>b)");
+  expect(rendered.markdown).not.toContain("|:--");
+  expect(rendered.markdown).not.toContain("## Питання");
+  expect(rendered.markdown).toContain("+ Інше — у коментарі");
   expect(rendered.markdown).toContain("Скопіювати рекомендовані");
   expect(rendered.markdown.match(/type="copy_text"/g)).toHaveLength(4);
   expect(rendered.markdown).toContain("1a 2a 3a");
   expect(rendered.markdown).not.toContain("<script>");
-  expect(rendered.markdown).toContain("Second \\| option");
+  expect(rendered.markdown).toContain("Second | option &lt;script&gt;");
   delete round.questions;
   expect(renderPrototypeTelegram(round, []).markdown).not.toContain("Скопіювати рекомендовані");
   round.variants = Array.from({ length: 9 }, (_, i) => ({ ...round.variants[0]!, number: i + 1 }));
@@ -82,7 +99,7 @@ test("stored media honors 50 slides, variant coverage, WebP, invalid dimensions 
 test("one rich send per round, multipart photo objects, topic, receipt and replay", async () => {
   const { service, transport, store } = await connected();
   const round = telegramRound();
-  const message = renderPrototypeTelegram(round, [{ id: "v1f1", caption: "1 · Compact", blob: new Blob(["frame"], { type: "image/webp" }) }]);
+  const message = renderPrototypeTelegram(round, [{ id: "v1f1", variantNumber: 1, caption: "1 · Compact", blob: new Blob(["frame"], { type: "image/webp" }) }]);
   transport.script("sendRichMessage", ok({ message_id: 10, date: 1 }));
   const input = { chat: "reports", topicId: 7, clientRequestId: round.id, message };
   expect(await service.sendRichMessage(input)).toMatchObject({ alreadySent: false, messageIds: [10], parts: 1 });
@@ -104,7 +121,7 @@ test("only definite media errors resend without slides; uncertain sends and malf
   const { service, transport, store } = await connected();
   const round = telegramRound();
   const input = { chat: "reports", clientRequestId: round.id, message: renderPrototypeTelegram(round,
-    [{ id: "v1f1", caption: "1 · Compact", blob: new Blob(["frame"]) }]), fallbackMarkdown: renderPrototypeTelegram(round, []).markdown };
+    [{ id: "v1f1", variantNumber: 1, caption: "1 · Compact", blob: new Blob(["frame"]) }]), fallbackMarkdown: renderPrototypeTelegram(round, []).markdown };
   transport.script("sendRichMessage", refused(400, "invalid photo dimensions"), ok({ message_id: 10, date: 1 }));
   await service.sendRichMessage(input);
   expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
@@ -123,16 +140,22 @@ test("publication calls the post path, replay posts once, and a project without 
   const { transport, destination } = await connected();
   saveTasks([telegramTask([])]);
   transport.script("sendRichMessage", ok({ message_id: 10, date: 1 }));
-  const publish = () => publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" },
-    body: JSON.stringify({ clientRequestId: "publication", taskId: "task-prototype", title: "Review", questions: telegramRound().questions }) }));
+  const publish = (key = "publication") => publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" },
+    body: JSON.stringify({ clientRequestId: key, taskId: "task-prototype", title: "Review", questions: telegramRound().questions }) }));
   expect((await publish()).status).toBe(200);
   for (let n = 0; n < 100 && !transport.callsOf("sendRichMessage").length; n++) await Bun.sleep(10);
   expect((await publish()).status).toBe(200);
   await Bun.sleep(30);
   expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
+  transport.script("sendRichMessage", ok({ message_id: 11, date: 2 }));
+  expect((await publish("next-publication")).status).toBe(200);
+  for (let n = 0; n < 100 && transport.callsOf("sendRichMessage").length < 2; n++) await Bun.sleep(10);
+  expect((await publish("next-publication")).status).toBe(200);
+  await Bun.sleep(30);
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
   destination.mockReturnValue(null);
   await postPrototypeReviewToTelegram(telegramRound("no-destination"));
-  expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
 });
 
 test("rich sends follow chat migrations within the same journal claim", async () => {

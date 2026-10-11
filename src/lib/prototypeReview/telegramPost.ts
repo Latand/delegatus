@@ -10,7 +10,7 @@ import type { PrototypeFrame, PrototypeReviewRound } from "./types";
 
 const inline = (text: string) => text.replace(/\s+/g, " ").replace(/([\\`*_{}\[\]()#+.!|<>~-])/g, "\\$1");
 const attribute = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-export interface PrototypeSlide { id: string; caption: string; blob: Blob }
+export interface PrototypeSlide { id: string; variantNumber: number; caption: string; blob: Blob }
 
 /** First valid frame of each variant gets priority when the round exceeds 50. */
 export async function prototypeSlides(round: PrototypeReviewRound): Promise<PrototypeSlide[]> {
@@ -23,7 +23,7 @@ export async function prototypeSlides(round: PrototypeReviewRound): Promise<Prot
     const slides: PrototypeSlide[] = [];
     for (const [index, frame] of variant.frames.entries()) {
       const blob = await frameBlob(root, round.id, frame);
-      if (blob) slides.push({ id: `v${variant.number}f${index + 1}`, caption: `${variant.number} · ${variant.name} — ${frame.caption}`, blob });
+      if (blob) slides.push({ id: `v${variant.number}f${index + 1}`, variantNumber: variant.number, caption: `${variant.number} · ${variant.name} — ${frame.caption}`, blob });
       if (slides.length === 50) break;
     }
     groups.push(slides);
@@ -50,16 +50,16 @@ async function frameBlob(root: string, reviewId: string, frame: PrototypeFrame):
 export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: readonly PrototypeSlide[], taskTitle = "", sample = false): TelegramRichMessage {
   const lines = [`# 🧪 ${sample ? "Зразок · " : ""}Прототип · ${inline(round.title)}`, `${inline(taskTitle.split("\n")[0]!)} · ${prototypeReference(round)}`, ""];
   if (sample) lines.push("Це зразок нового повідомлення для перегляду на телефоні.", "");
-  if (slides.length) lines.push("<tg-slideshow>", ...slides.map(s => `![](tg://photo?id=${s.id} ${JSON.stringify(s.caption.replace(/[\r\n]/g, " "))})`), "</tg-slideshow>", "");
-  else if (round.variants.length) lines.push("Кадри — у Delegatus.", "");
   for (const variant of [...round.variants].sort((a, b) => a.number - b.number)) {
-    lines.push(`**${variant.number} · ${inline(variant.name)}** — ${inline(variant.description.split("\n")[0]!.slice(0, 140))}`, "");
+    lines.push(`**${variant.number} · ${inline(variant.name)}**`, "", inline(variant.description), "");
+    const frames = slides.filter(slide => slide.variantNumber === variant.number);
+    if (frames.length) lines.push("<tg-slideshow>", ...frames.map(s => `![](tg://photo?id=${s.id} ${JSON.stringify(s.caption.replace(/[\r\n]/g, " "))})`), "</tg-slideshow>", "");
+    else lines.push("Кадри — у Delegatus.", "");
   }
   for (const [i, question] of (round.questions ?? []).entries()) {
-    lines.push(`## Питання ${i + 1}/${round.questions!.length} · ${inline(question.text)}${question.multiple ? " (можна кілька)" : ""}`, "",
-      "| | Відповідь | |", "|:--|:--|:--:|",
-      ...question.options.map((option, j) => `| **${String.fromCharCode(97 + j)}** | ${inline(option.label)} | ${option.recommended ? "✅ рекомендовано" : ""} |`),
-      ...(question.other ? ["| **+** | Інше (поясніть у коментарі) | |"] : []), "");
+    const heading = `<b>${attribute(`Питання ${i + 1}/${round.questions!.length} · ${question.text.replace(/\s+/g, " ")}${question.multiple ? " (можна кілька)" : ""}`)}</b>`;
+    const options = question.options.map((option, j) => `${String.fromCharCode(97 + j)}) ${attribute(option.label.replace(/\s+/g, " "))}${option.recommended ? " ✅" : ""}`);
+    lines.push(`<p>${[heading, ...options, ...(question.other ? ["+ Інше — у коментарі"] : [])].join("<br>")}</p>`, "");
   }
   lines.push("---", "Як відповісти: натисніть кнопку, надішліть скопійований рядок клону відповіддю на це повідомлення і, за бажанням, допишіть коментар з нового рядка. Повне рев’ю — у Delegatus.", "");
   const button = (label: string, text: string, recommended = false) => `<tg-button type="copy_text"${recommended ? ' style="success"' : ""} text="${attribute(text)}">${label}</tg-button>`;

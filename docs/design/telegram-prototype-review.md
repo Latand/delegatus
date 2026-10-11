@@ -214,33 +214,41 @@ arrive, and the Celestia half also fills the owner-tier gap of §2.1.
 
 ### 4.1 Message layout
 
+The operator's phone review approved the message and requested this refinement:
+one slideshow per variant, full descriptions, and compact question paragraphs
+with inline recommendations instead of answer tables. Automatic posting stays
+enabled for every published round with a linked report destination, once per round.
+
 One `sendRichMessage` with `rich_message.markdown` and the frames uploaded in
 the same call (`media: [{ id, media: "attach://…" }]`, multipart; proven by
 research test 6). The body follows research test 5 (slideshow with a caption
 per frame: `![](tg://photo?id=v1 "Варіант 1 · …")` inside `<tg-slideshow>`)
-and test 1 (headings per question, an option table with the recommendation
-marked, `<tg-button-row>` rows). Ukrainian, the operator's interface
+and compact question paragraphs with recommendations marked inline, plus
+`<tg-button-row>` rows. Ukrainian, the operator's interface
 language. Counters are written `1/3`, never uppercased.
 
 ```
 # 🧪 Прототип · {round title}
 _{first line of the task}_ · #proto-{ref}
 
+**1 · {name}**
+
+{full description, whitespace folded to one line}
+
 <tg-slideshow>
 ![](tg://photo?id=v1f1 "1 · {variant name} — {frame caption}")
 ![](tg://photo?id=v1f2 "1 · {variant name} — {frame caption}")
+</tg-slideshow>
+
+**2 · {name}**
+
+{full description}
+
+<tg-slideshow>
 ![](tg://photo?id=v2f1 "2 · {variant name} — {frame caption}")
 </tg-slideshow>
 
-**1 · {name}** — {description, first line, at most 140 characters}
-**2 · {name}** — …
-
-## Питання 1/3 · {question text}{" (можна кілька)" when multiple}
-
-| | Відповідь | |
-|:--|:--|:--:|
-| **a** | {option label} | ✅ рекомендовано |
-| **b** | {option label} | |
+<p><b>Питання 1/3 · {question text}{" (можна кілька)" when multiple}</b><br>a) {option label} ✅<br>b) {option label}<br>+ Інше — у коментарі</p>
 
 …one section per question…
 
@@ -280,7 +288,11 @@ Rules:
 - **Limits.** 32 768 characters, 500 blocks (`Rich Message Limits`). A round
   is at most 9 variants and 7 questions of 6 options
   (`input.ts:8`, `:18-20`), about 80 blocks; no truncation rule is needed
-  beyond the description cut.
+  for descriptions: each is at most 300 characters and is shown in full.
+  Several slideshow blocks are supported in one rich message, within the
+  shared 50-attachment limit; Telegram's Rich HTML examples contain two
+  adjacent `tg-slideshow` blocks. Question options use paragraph line breaks
+  and normal body text, with the short "Інше" note only when allowed.
 
 ### 4.2 When and where it is posted
 
@@ -449,7 +461,9 @@ short words, no identifier-shaped values.
   120-character title.
 - Rendering with the fake transport (`src/lib/telegram/bot/fakeTransport.ts`):
   one `sendRichMessage` per round, slide captions start with the variant
-  number, the recommended option is marked, the buttons and their texts, the
+  number, each carousel contains only its variant's frames, descriptions
+  remain complete, questions use compact paragraph lines without tables,
+  the recommended option is marked, the buttons and their texts, the
   50-media rule, the media-error resend, a replayed publication posts once,
   no destination posts nothing.
 - Runner: an owner request whose text is a copy line for a waiting round
