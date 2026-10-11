@@ -304,6 +304,11 @@ export function RuleSection({ kind, title, subtitle, scope, additionalScope, pic
 /** The rules window: the role, project and machine rules a new agent of the chosen role starts with, side by side on the desktop and stacked on the phone. */
 export function RulesWindow({ project, focusRule, onClose }: { project: string; focusRule?: string; onClose: () => void }) {
   const { t, locale } = useLocale();
+  const failures: Record<string, string> = {
+    "no-account": t("roleMemory.failure.noAccount"), "no-repository": t("roleMemory.failure.noRepository"),
+    "launch-refused": t("roleMemory.failure.launchRefused"), "launch-failed": t("roleMemory.failure.launchFailed"),
+    "turn-error": t("roleMemory.failure.turnError"), "timed-out": t("roleMemory.failure.timedOut"),
+  };
   const { view, failed, act } = useProjectRules(project);
   const [focus, setFocus] = useState({ prop: focusRule, rule: focusRule });
   const localFocus = focus.prop === focusRule ? focus.rule : focusRule;
@@ -372,7 +377,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         {view?.curation ? <details data-curation-history="" className="shrink-0 border-b border-border px-4 py-1.5 text-[11.5px] leading-4 text-secondary">
           <summary className="cursor-pointer">{t("roleMemory.curator")} · {t("roleMemory.lastRun", { at: view.curation.lastAt ? new Date(view.curation.lastAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US") : t("roleMemory.never") })} · {view.enabled ? t("roleMemory.nextRun", { at: view.curation.nextAt ? new Date(view.curation.nextAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US") : t("roleMemory.noActive") }) : t("roleMemory.off")}</summary>
           <ol className="m-0 max-h-32 list-none overflow-y-auto p-0">{view.curation.passes.map(pass => <li key={pass.id} data-curation-pass={pass.id} className="border-t border-border py-1">
-            {t("roleMemory.curator")} · {new Date(pass.claimedAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")} · {t(`roleMemory.pass.${pass.state}`)}{pass.failure ? ` · ${pass.failure}` : ""} · {t("roleMemory.pass.counts", pass.counts)}
+            {t("roleMemory.curator")} · {new Date(pass.claimedAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")} · {t(`roleMemory.pass.${pass.state}`)}{pass.failure ? ` · ${failures[pass.failure] ?? pass.failure}` : ""} · {t("roleMemory.pass.counts", pass.counts)}
             {pass.state === "succeeded" || pass.state === "failed" ? <button type="button" disabled={!!pass.revertedAt} data-curation-undo={pass.id} onClick={() => void act("revert-pass", pass.id)} className="min-h-9 px-2 font-semibold text-accent disabled:text-muted">{t(pass.revertedAt ? "roleMemory.pass.undone" : "roleMemory.pass.undo")}</button> : null}
             {pass.skipped?.length ? <span data-curation-skipped="">{t("roleMemory.pass.skipped", { count: pass.skipped.length })} · {pass.skipped.join(", ")}</span> : null}
           </li>)}</ol>

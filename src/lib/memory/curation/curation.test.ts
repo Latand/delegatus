@@ -184,6 +184,18 @@ test("operator-kept rules cannot be archived, split or merged away", () => {
   refusal(p, input({ [scope]: [two] }, { merge: [{ into: two, from: [one], rule: text, note: "One class covers both." }] }), "CURATE_KEPT");
   refusal(p, input({ [scope]: [one, two] }, { split: [{ id: one, note: "Two roles need different parts.", parts: [{ to: scope, rule: text }, { to: scope, rule: text }] }] }), "CURATE_KEPT");
 });
+test("large pass undo exceeds a small patch budget while preserving every rule and history", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 50 }, (_, n) => fixture(scope, { rule: `${text} Condition ${n}.` }));
+  const p = pass();
+  for (let n = 0; n < 50; n++) applyCuration(p, input({ [scope]: ids }), at(100 + n));
+  ended(p);
+  expect(revertCuratorPass(p.id, at(2000)).skipped).toEqual([]);
+  const held = roleMemoryCollection()!.get(`s:${scope}`);
+  expect(held?.kind === "scope" && held.active).toEqual(ids);
+  expect(held?.kind === "scope" && held.history.filter(h => h.pass === p.id).every(h => h.revertedAt === at(2000))).toBe(true);
+  expect(ids.every(id => row(id).state === "active" && !row(id).curatedAt)).toBe(true);
+}, 30_000);
 test("identifier text, invalid lengths, deleted restores and versions are refused", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), removed = fixture(scope, { state: "archived", reason: "deleted" }), p = pass();
   for (const rule of ["Read the guidance for PR " + 17 + " before editing.", "short", "x".repeat(301)]) refusal(p, input({ [scope]: [one] }, { rewrite: [{ id: one, rule, note: "Make its condition clear." }] }), rule.includes("PR") ? "LESSON_ABOUT_ONE_TASK" : "CURATE_INVALID");

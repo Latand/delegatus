@@ -7,7 +7,7 @@ import { lettersAndDigits, scopeChars } from "../roleConsolidate";
 import { taskIdentifier } from "../roleStage";
 import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, roleMemoryCollection, RoleMemoryRefusal, versionedRule } from "../roleStore";
 import { scopeKind, scopeProject, scopeRole, isCrossProjectRoleScope } from "../roleScopes";
-import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryScopeRow } from "../roleTypes";
+import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryRow, type RoleMemoryScopeRow } from "../roleTypes";
 import { patchPass, readPass, passIsLive, type CuratorPass } from "./store";
 
 export interface CurationApply {
@@ -200,13 +200,24 @@ export function revertCuratorPass(id: string, now = new Date().toISOString()) {
   if (!pass || passIsLive(pass)) refuse("CURATE_LIVE", "only a completed curator pass can be undone");
   if (pass.revertedAt) return { skipped: pass.skipped ?? [] };
   const held = roleMemoryCollection(true)!;
-  const allHistories = held.snapshot().flatMap(row => row.kind === "scope" ? row.history.filter(h => h.pass === id).map(h => ({ scope: row.scope, history: h })) : []);
-  const histories = allHistories.filter(h => !h.history.revertedAt).sort((a, b) => b.history.at.localeCompare(a.history.at));
-  if (!histories.length) {
-    const skipped = [...new Set(allHistories.flatMap(h => h.history.undoSkipped ?? []))];
-    patchPass(id, { revertedAt: now, skipped }); refreshLessonKnownValues(); return { skipped };
-  }
-  const result = held.boundedPatch(4096, tx => {
+  let result: { skipped: string[] } = { skipped: [] };
+  // A pass can contain many individually bounded calls. Prepare its whole undo
+  // under the collection lease, then persist every changed row atomically.
+  held.patchSync(() => {
+    const snapshot = held.snapshot();
+    const allHistories = snapshot.flatMap(row => row.kind === "scope" ? row.history.filter(h => h.pass === id).map(h => ({ scope: row.scope, history: h })) : []);
+    const histories = allHistories.filter(h => !h.history.revertedAt).sort((a, b) => b.history.at.localeCompare(a.history.at));
+    if (!histories.length) {
+      result = { skipped: [...new Set(allHistories.flatMap(h => h.history.undoSkipped ?? []))] };
+      return { records: [] };
+    }
+    const key = (row: RoleMemoryRow) => row.kind === "rule" ? `r:${row.id}` : row.kind === "scope" ? `s:${row.scope}` : `q:${row.pipelineId}:${row.stageId}:${row.attempt}`;
+    const rows = new Map(snapshot.map(row => [key(row), row]));
+    const changed = new Map<string, RoleMemoryRow>();
+    const tx = {
+      get: (key: string) => rows.get(key) ?? null,
+      put: (row: RoleMemoryRow) => { rows.set(key(row), row); changed.set(key(row), row); },
+    };
     const last = new Map<string, string>();
     for (const { history } of histories.slice().reverse()) for (const rule of [...(history.prior ?? []).map(p => p.id), ...(history.created ?? [])]) last.set(rule, history.at);
     const eligible = new Set([...last].filter(([rule, at]) => { const row = tx.get(`r:${rule}`); return row?.kind === "rule" && row.changedAt === at; }).map(([rule]) => rule));
@@ -233,7 +244,8 @@ export function revertCuratorPass(id: string, now = new Date().toISOString()) {
       const active = order.filter(id => { const r = tx.get(`r:${id}`); return r?.kind === "rule" && r.state === "active" && canonicalScope(r.scope) === scope; });
       tx.put({ ...row, active });
     }
-    return { skipped: [...last.keys()].filter(rule => !eligible.has(rule)) };
+    result = { skipped: [...last.keys()].filter(rule => !eligible.has(rule)) };
+    return { records: [...changed.values()] };
   });
   patchPass(id, { revertedAt: now, skipped: result.skipped }); refreshLessonKnownValues(); return result;
 }
