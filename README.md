@@ -831,6 +831,17 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 
 ### Agent memory
 
+Before a structured, terminal or headless agent launch, Delegatus requires
+at least 2 GiB of available RAM. This floor leaves 1 GiB of headroom above
+the exhaustion observed in [#1211](https://github.com/Latand/delegatus/issues/1211).
+The check uses reclaimable RAM (`MemAvailable` on Linux), independently of
+lane count, swap usage and the memory-limit mode, including `off`. An
+unavailable reading permits the launch. A refusal reports the measured RAM
+and required floor; structured and terminal launch receipts retain that reason
+as a failed launch, which the board and pipeline failure handling display.
+This is a point-in-time check: later tool allocations remain governed by
+memory ceilings and the shared gate runner.
+
 Each agent gets a ceiling computed at launch from RAM and the number of live
 hosts. Delegatus reserves at least 4 GiB (15% of RAM) for the core and OS;
 `delegatus-agents.slice` caps the combined agent budget. Supported systemd user
