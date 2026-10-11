@@ -2560,6 +2560,273 @@ describe("retained message notice over the composer", () => {
   }, 300_000);
 });
 
+describe("the transcript keeps 60% of its column beside the composer's own row", () => {
+  /*
+   * The operator's decision on the prototype review of 2026-10-11: whatever
+   * sits under the conversation — undelivered sends, the way back to the
+   * tail, a long draft, the agent's buttons — the transcript keeps at least
+   * 60% of the column it shares with the composer, on the seat, on the phone
+   * and in the agent window. Nothing is drawn above the input field at rest:
+   * «mine N/M», the undelivered chip and «⋯ More actions» end the composer's
+   * bottom row (on the phone, one row inside its box), Stop is its own button
+   * beside Send while the agent works, and «↓ N new» floats at the feed's
+   * bottom right over a faded edge.
+   *
+   * Over the fixture's `own-message-steps` case: the production BranchPane at
+   * the window's width and at 440 px (the agent window's pane), the
+   * orchestrator's conversation as the seat column holds it, and the phone,
+   * in both languages. Per moment: the feed's scrollport, what the operator
+   * reads, against its column ([data-conversation-body], or the orchestrator's
+   * conversation), what is drawn between the transcript and the field, where
+   * each control sits, whether «↓ N new» covers any of the feed's readable
+   * band (the faded edge excluded), whether any control of the composer lies
+   * over another, and sideways overflow.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "keeps 60% of its column"
+   *
+   * Frames go to `.artifacts/transcript-floor/` (not committed); the
+   * measurements to `evidence/transcript-floor/readings.json`.
+   */
+  const OUT = path.resolve(".artifacts/transcript-floor");
+  const EVIDENCE = path.resolve("evidence/transcript-floor");
+  const SURFACES = [
+    { name: "pane-1440", width: 1440, height: 900, phone: false, pane: 0, surface: "pane" },
+    { name: "agent-window-1440", width: 1440, height: 900, phone: false, pane: 560, surface: "pane" },
+    { name: "seat-1440", width: 1440, height: 900, phone: false, pane: 660, surface: "seat" },
+    { name: "pane-1000", width: 1000, height: 700, phone: false, pane: 0, surface: "pane" },
+    { name: "agent-window-1000", width: 1000, height: 700, phone: false, pane: 440, surface: "pane" },
+    { name: "seat-1000", width: 1000, height: 700, phone: false, pane: 440, surface: "seat" },
+    { name: "phone-390", width: 390, height: 844, phone: true, pane: 0, surface: "pane" },
+  ] as const;
+  const LANGS = ["uk", "en"] as const;
+  const FLOOR = 0.6;
+  const DRAFT = "one\ntwo\nthree\nfour\nfive\nsix";
+
+  type Box = [x: number, y: number, width: number, height: number];
+  interface Reading {
+    column: number; transcript: number;
+    share: number;
+    /** The feed's own scrollport, what the operator reads: the floor's measure. */
+    feedShare: number;
+    /** Anything drawn between the transcript and the field. */
+    aboveField: string[];
+    region: boolean;
+    chip: { text: string; box: Box; place: string } | null;
+    list: { box: Box; retryAll: string | null; aboveField: boolean } | null;
+    more: { box: Box; place: string } | null;
+    steps: { text: string; place: string } | null;
+    stop: { box: Box; beside: boolean; gap: number; label: string | null } | null;
+    send: { box: Box; slot: string | null };
+    pill: { text: string; box: Box; readableOverlap: number; faded: boolean } | null;
+    field: { lines: number; height: number; scrolls: boolean };
+    eyeChip: boolean;
+    strayStrip: boolean;
+    /** Controls of the composer's own rows that overlap, leave the form or are covered at their centre. */
+    collisions: string[];
+    overflowX: number;
+  }
+
+  const read = (page: import("playwright-core").Page) => page.evaluate((): Reading => {
+    const box = (element: Element): Box => {
+      const rect = element.getBoundingClientRect();
+      return [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10) as Box;
+    };
+    const shown = (element: Element | null): element is HTMLElement => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== "hidden" && !element.closest("[hidden]");
+    };
+    const place = (element: Element) => element.closest("[data-composer-row-controls]") ? "bottom-row"
+      : element.closest("[data-composer-status-line]") ? "phone-row"
+        : element.closest('[data-testid="composer-input-unit"]') ? "input-unit" : "elsewhere";
+    const column = (document.querySelector("[data-conversation-body]") ?? document.querySelector("[data-orchestrator-conversation]"))!;
+    const transcript = column.querySelector("[data-composer-yields]")!;
+    const scroller = column.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const form = column.querySelector("form")!;
+    const unit = form.querySelector('[data-testid="composer-input-unit"]')!;
+    const columnHeight = column.getBoundingClientRect().height;
+    const transcriptHeight = transcript.getBoundingClientRect().height;
+    /* Between the transcript's bottom and the field's top: every shown element
+       that is not the transcript, the form's own frame or the field's unit. */
+    const top = transcript.getBoundingClientRect().bottom;
+    const fieldTop = (unit.querySelector("[data-mobile2-composer]") ?? unit.querySelector("textarea")!.parentElement!).getBoundingClientRect().top;
+    /* The phone's one row inside the composer's box is the composer's own. */
+    const aboveField = [...column.querySelectorAll<HTMLElement>("button, summary, details, [data-own-steps], [data-agent-control-strip], [data-testid='composer-accessories'] > *")]
+      .filter((element) => shown(element) && !transcript.contains(element) && !element.closest("[data-composer-status-line]"))
+      .filter((element) => { const rect = element.getBoundingClientRect(); return rect.top >= top - 0.5 && rect.bottom <= fieldTop + 0.5; })
+      .map((element) => element.getAttribute("data-testid") ?? element.getAttribute("aria-label") ?? element.tagName.toLowerCase());
+    const chip = column.querySelector("[data-receipts-chip]");
+    const list = column.querySelector("[data-runtime-receipt-stack]");
+    const more = column.querySelector("[data-composer-more-actions]");
+    const steps = column.querySelector('[data-own-steps]');
+    const stop = column.querySelector("[data-composer-interrupt]");
+    const send = form.querySelector("button[type=submit], [data-mobile2-send]")!;
+    const pillButton = column.querySelector("[data-feed-jump-pill]")?.closest("button") ?? null;
+    const feed = scroller.getBoundingClientRect();
+    const faded = scroller.hasAttribute("data-feed-faded");
+    const readableBottom = feed.bottom - (faded ? 44 : 0);
+    const field = unit.querySelector("textarea")!;
+    const lineHeight = parseFloat(getComputedStyle(field).lineHeight) || 18;
+    /* Every control of the composer's unit — the field's row, the bottom row,
+       the phone's row — keeps its own box: inside the form, on top at its
+       centre, and clear of every other control. */
+    const formBox = form.getBoundingClientRect();
+    const controls = [...unit.querySelectorAll<HTMLElement>("button")].filter(shown);
+    const named = (element: HTMLElement) => element.getAttribute("aria-label") ?? (element.innerText.trim() || element.tagName.toLowerCase());
+    const collisions: string[] = [];
+    controls.forEach((control, index) => {
+      const a = control.getBoundingClientRect();
+      if (a.left < formBox.left - 0.5 || a.right > formBox.right + 0.5) collisions.push(`${named(control)} leaves the form`);
+      const hit = document.elementFromPoint(a.left + a.width / 2, a.top + a.height / 2);
+      if (!hit || !(hit === control || control.contains(hit))) collisions.push(`${named(control)} is covered at its centre`);
+      for (const other of controls.slice(index + 1)) {
+        if (other.contains(control) || control.contains(other)) continue;
+        const b = other.getBoundingClientRect();
+        const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        if (width > 0.5 && height > 0.5) collisions.push(`${named(control)} overlaps ${named(other)}`);
+      }
+    });
+    return {
+      column: Math.round(columnHeight), transcript: Math.round(transcriptHeight),
+      share: Math.round((transcriptHeight / columnHeight) * 1000) / 1000,
+      feedShare: Math.round((feed.height / columnHeight) * 1000) / 1000,
+      aboveField,
+      region: shown(form.querySelector('[data-testid="composer-accessories"]')),
+      chip: shown(chip) ? { text: chip.innerText.replace(/\s+/g, " ").trim(), box: box(chip), place: place(chip) } : null,
+      list: shown(list) ? {
+        box: box(list),
+        retryAll: list.querySelector("[data-receipts-retry-failed]")?.textContent ?? null,
+        /* Its visible part: the region it scrolls inside ends above the field. */
+        aboveField: Math.min(list.getBoundingClientRect().bottom, (list.closest('[data-testid="composer-accessories"]') ?? list).getBoundingClientRect().bottom) <= fieldTop + 0.5,
+      } : null,
+      more: shown(more) ? { box: box(more), place: place(more) } : null,
+      steps: shown(steps) ? { text: steps.innerText.replace(/\s+/g, " ").trim(), place: steps.getAttribute("data-own-steps") === "composer" ? place(steps) : "row-above-composer" } : null,
+      stop: shown(stop) ? (() => {
+        const a = stop.getBoundingClientRect();
+        const b = send.getBoundingClientRect();
+        const gap = Math.round((b.left - a.right) * 10) / 10;
+        return { box: box(stop), beside: gap >= 0 && gap <= 12 && Math.abs((a.top + a.height / 2) - (b.top + b.height / 2)) <= 2, gap, label: stop.getAttribute("aria-label") };
+      })() : null,
+      send: { box: box(send), slot: send.getAttribute("data-mobile2-send") },
+      pill: shown(pillButton) ? (() => {
+        const rect = pillButton.getBoundingClientRect();
+        const overlap = Math.max(0, Math.min(rect.bottom, readableBottom) - Math.max(rect.top, feed.top)) * Math.max(0, Math.min(rect.right, feed.right) - Math.max(rect.left, feed.left));
+        return { text: (pillButton.textContent ?? "").trim(), box: box(pillButton), readableOverlap: Math.round(overlap), faded };
+      })() : null,
+      field: { lines: field.value ? field.value.split("\n").length : 0, height: Math.round(field.getBoundingClientRect().height), scrolls: field.scrollHeight > field.clientHeight + 1 && Math.round(field.clientHeight / lineHeight) >= 1 },
+      eyeChip: Boolean(column.querySelector("[data-selected-context]")),
+      strayStrip: [...column.querySelectorAll("[data-agent-control-strip]")].some((element) => element.getAttribute("data-strip-layout") !== "composer" && shown(element)),
+      collisions,
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+    };
+  });
+
+  browserTest("rest, three undelivered, the list, «9 new», a six-line draft, the agent working and all at once keep the floor", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, Record<string, Reading>> = {};
+    try {
+      for (const surface of SURFACES) for (const lang of LANGS) {
+        const where = `${surface.name}-${lang}`;
+        const query = `case=own-message-steps&lang=${lang}${surface.pane ? `&pane=${surface.pane}` : ""}&surface=${surface.surface}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width: surface.width, height: surface.height }, "dark", lang, "reduce", surface.phone);
+        const fail = (moment: string, what: string) => failures.push(`${where} ${moment}: ${what}`);
+        const control = (script: string) => page.evaluate(script);
+        const record = async (moment: string): Promise<Reading> => {
+          await page.waitForTimeout(450);
+          const reading = await read(page);
+          (readings[where] ??= {})[moment] = reading;
+          await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+          /* What the operator reads keeps the floor: the feed's own scrollport. */
+          if (reading.feedShare < FLOOR - 0.002) fail(moment, `the transcript keeps ${Math.round(reading.feedShare * 1000) / 10}% of its column`);
+          if (reading.overflowX) fail(moment, `the page scrolls sideways by ${reading.overflowX}`);
+          if (reading.eyeChip) fail(moment, "the eye chip is drawn");
+          if (reading.strayStrip) fail(moment, "the agent's controls are a strip outside the composer");
+          for (const collision of reading.collisions) fail(moment, collision);
+          if (reading.steps && reading.steps.place !== (surface.phone ? "phone-row" : "bottom-row")) fail(moment, `«mine» sits in ${reading.steps.place}`);
+          if (!surface.phone && (!reading.more || reading.more.place !== "bottom-row")) fail(moment, "«⋯ More actions» is not at the end of the bottom row");
+          if (reading.chip && reading.chip.place !== (surface.phone ? "phone-row" : "bottom-row")) fail(moment, `the undelivered chip sits in ${reading.chip.place}`);
+          if (reading.pill && reading.pill.readableOverlap > 0) fail(moment, `«↓ new» covers ${reading.pill.readableOverlap} px² of the readable band`);
+          return reading;
+        };
+        try {
+          await page.locator("[data-own-message]").first().waitFor({ timeout: 20_000 });
+          await page.waitForTimeout(650);
+
+          const rest = await record("rest");
+          if (rest.region || rest.aboveField.length) fail("rest", `drawn above the field: ${rest.aboveField.join(", ") || "the region"}`);
+          if (rest.stop) fail("rest", "Stop shows with no turn running");
+
+          await control("window.ownSteps.undelivered(3)");
+          const undelivered = await record("three-undelivered");
+          if (!undelivered.chip?.text.includes("3")) fail("three-undelivered", `the chip reads ${JSON.stringify(undelivered.chip?.text)}`);
+          if (undelivered.list || undelivered.region) fail("three-undelivered", "the list is drawn before it is asked for");
+          if (undelivered.aboveField.length) fail("three-undelivered", `drawn above the field: ${undelivered.aboveField.join(", ")}`);
+
+          await page.locator("[data-receipts-chip]").click();
+          const open = await record("list-open");
+          if (!open.list?.aboveField) fail("list-open", "the list is not open above the field");
+          if (!open.list?.retryAll?.includes("2")) fail("list-open", `«Retry failed» reads ${JSON.stringify(open.list?.retryAll)}`);
+          /* The phone's list takes its row's place; the desktop's chip closes it again. */
+          /* Its chevron, at the header's start: the header's other end is «Retry failed». */
+          if (surface.phone) await page.locator("[data-runtime-receipt-stack] > summary").click({ position: { x: 10, y: 22 } });
+          else await page.locator("[data-receipts-chip]").click();
+
+          /* Away from the tail, nine rows arrive. */
+          await page.locator("[data-log-feed-scroller]").hover();
+          await page.mouse.wheel(0, -900);
+          await page.waitForTimeout(500);
+          await control("window.ownSteps.arrive('replies', 9)");
+          await page.locator("[data-feed-jump-pill]").waitFor({ timeout: 10_000 });
+          const fresh = await record("nine-new");
+          if (!fresh.pill?.text.includes("9")) fail("nine-new", `the way back reads ${JSON.stringify(fresh.pill?.text)}`);
+          if (fresh.pill && !fresh.pill.faded) fail("nine-new", "the feed's edge under the way back is not faded");
+
+          await page.locator("textarea").first().fill(DRAFT);
+          const draft = await record("six-line-draft");
+          if (draft.field.lines !== 6) fail("six-line-draft", `the field holds ${draft.field.lines} lines`);
+
+          await control("window.ownSteps.working(true)");
+          await page.locator("textarea").first().fill("");
+          const working = await record("working");
+          if (surface.phone) {
+            if (working.send.slot !== "stop") fail("working", `the phone's send slot is ${working.send.slot}`);
+          } else {
+            if (!working.stop?.beside) fail("working", `Stop is not beside Send (${JSON.stringify(working.stop)})`);
+          }
+
+          await page.locator("textarea").first().fill(DRAFT);
+          if (!surface.phone) await page.locator("[data-receipts-chip]").click();
+          const all = await record("all-at-once");
+          if (!surface.phone && !all.stop?.beside) fail("all-at-once", "Stop left Send's side with a draft typed");
+          if (!surface.phone && !all.list) fail("all-at-once", "the list did not open");
+
+          if (pageErrors.length) fail("page", pageErrors.join(" | "));
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      served.stop();
+    }
+    const shares = Object.values(readings).flatMap((moments) => Object.values(moments).map((reading) => reading.feedShare));
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({
+      floor: FLOOR,
+      surfaces: SURFACES,
+      lowestShare: Math.min(...shares),
+      failures,
+      readings,
+    }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 describe("own-message step row", () => {
   /*
    * The row that steps between the operator's own messages
@@ -2567,14 +2834,18 @@ describe("own-message step row", () => {
    * the composer. The fixture's `own-message-steps` case mounts the production
    * pane over an orchestrator's day, with the row (`row=1`) and without it
    * (`row=0`), and the two are driven side by side: every moment is measured
-   * in both, so whatever the row changed about the pane is on record.
+   * in both, so whatever the row changed about the pane is on record. Since
+   * the operator's decision of 2026-10-11 the navigator sits in the composer's
+   * own row — the desktop's bottom row, one line inside the composer box on
+   * the phone — and the way back to the tail floats at the feed's foot.
    *
    * Per control: a hit-test at its centre and four corners answers with the
    * control itself, its box intersects no other interactive element and no
    * part of the feed's viewport, it is inside the window, and on the phone a
    * button is at least 44 x 44. Per pane: against the pane without the row,
-   * only the feed's height and the place of the rows riding above the step
-   * row may differ, by the row's own height.
+   * the desktop's feed keeps its height and only the bottom row's other
+   * controls may narrow; the phone's feed gives up at most the navigator's
+   * line, and only what rides on the feed's foot moves with it.
    *
    * Frames go to `.artifacts/own-message-steps/` (not committed); the
    * measurements to `evidence/own-message-steps/row.json`.
@@ -2595,10 +2866,13 @@ describe("own-message step row", () => {
   const KEYBOARD_PX = 336;
   const LOADED_OWN = 7;
   const ALL_OWN = 9;
-  /** What the row costs the feed. */
-  const ROW_PX = { desktop: 37, phone: 45 } as const;
-  /** The feed's own way-back row, which the phone's step row takes in. */
-  const JUMP_PX = 44;
+  /** The navigator's height: the bottom row's 28 px on the desktop, a 44 px
+      target on the phone. */
+  const NAVIGATOR_PX = { desktop: 28, phone: 44 } as const;
+  /** What it costs the feed: nothing on the desktop, whose bottom row is
+      there anyway; its line inside the composer box and the 6 px gap under
+      it on the phone. */
+  const ROW_PX = { desktop: 0, phone: 50 } as const;
 
   type Box = [x: number, y: number, width: number, height: number];
   interface ControlReading {
@@ -2606,6 +2880,8 @@ describe("own-message step row", () => {
     box: Box;
     /** Centre and four corners all answer with the control itself. */
     hit: boolean;
+    /** The points that answered with something else, and what. */
+    missed: string[];
     /** Other interactive elements whose box intersects this one. */
     overlaps: string[];
     /** Any part of it lies inside the feed's viewport. */
@@ -2619,6 +2895,11 @@ describe("own-message step row", () => {
     /** The count as the row prints it; null without the row. */
     count: string | null;
     row: Box | null;
+    /** Where the navigator is drawn: the desktop's bottom row, the phone's
+        line in the composer box, or a row of its own. */
+    place: "bottom-row" | "phone-line" | "own-row" | null;
+    /** The way back lies over the feed and takes no row of its own. */
+    wayBackFloats: boolean | null;
     /** Own messages on the page, and how many of them start at or above the reading line. */
     own: number;
     machine: number;
@@ -2657,8 +2938,11 @@ describe("own-message step row", () => {
     const readings = controls.map((control) => {
       const rect = control.getBoundingClientRect();
       /* A rounded corner is not part of the control, so the corner points sit
-         just inside the rounding. */
-      const inset = Math.ceil((parseFloat(getComputedStyle(control).borderTopLeftRadius) || 0) * 0.3) + 1;
+         just inside the rounding: its own, or that of the navigator in the
+         composer's row, which clips its arrows' outer corners. */
+      const radius = Math.max(...[control, control.closest<HTMLElement>('[data-own-steps="composer"]')]
+        .map((element) => (element ? parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0 : 0)));
+      const inset = Math.ceil(radius * 0.3) + 1;
       const points = [
         [rect.left + rect.width / 2, rect.top + rect.height / 2],
         [rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
@@ -2668,6 +2952,10 @@ describe("own-message step row", () => {
         name: control.dataset.ownStepControl!,
         box: box(control),
         hit: points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && control.contains(at); }),
+        missed: points.flatMap(([x, y], index) => {
+          const at = document.elementFromPoint(x, y);
+          return at !== null && control.contains(at) ? [] : [`${["centre", "top-left", "top-right", "bottom-left", "bottom-right"][index]}: ${at ? name(at) : "nothing"}`];
+        }),
         /* A row scrolled out of the feed is clipped by it, so what counts
            of a control inside the feed is the part the feed shows. */
         overlaps: interactive
@@ -2703,7 +2991,8 @@ describe("own-message step row", () => {
     const seen = new Map<string, number>();
     for (const element of interactive) {
       if (scroller.contains(element) || element.closest("[data-own-steps]") || element.tagName === "TEXTAREA") continue;
-      const group = element.closest("[data-mobile2-tools]") ? "tools" : element.closest('[data-testid="composer-input-unit"]') ? "composer"
+      const group = element.closest("[data-mobile2-tools]") ? "tools" : element.closest('[data-testid="composer-options-row"]') ? "row"
+        : element.closest('[data-testid="composer-input-unit"]') ? "composer"
         : element.closest("[data-mobile2-bar], [data-link-path] > header") ? "header" : element.closest('[role="dialog"]') ? "sheet" : "control";
       const key = `${group}:${name(element)}`;
       const count = (seen.get(key) ?? 0) + 1;
@@ -2717,12 +3006,16 @@ describe("own-message step row", () => {
     while (reply && reply.getAttribute("data-feed-kind") !== "prose") reply = reply.nextElementSibling;
     const replyTop = reply?.getBoundingClientRect().top ?? Infinity;
     const row = document.querySelector("[data-own-steps]");
+    const strip = document.querySelector("[data-feed-jump-strip]");
+    const pill = strip?.querySelector("[data-feed-jump-pill]")?.getBoundingClientRect();
     return {
       controls: readings,
       probes,
       overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
       count: document.querySelector('[data-own-step-control="count"]')?.textContent ?? null,
       row: row ? box(row) : null,
+      place: !row ? null : row.closest("[data-composer-row-controls]") ? "bottom-row" : row.closest("[data-composer-status-line]") ? "phone-line" : "own-row",
+      wayBackFloats: strip && pill ? getComputedStyle(strip).position === "absolute" && cut(pill, feed) > 1 : null,
       own: rows.length,
       machine: scroller.querySelectorAll('[data-feed-kind="tmsg"]').length,
       landedAt: current ? Math.round(current.getBoundingClientRect().top - feed.top) : null,
@@ -2813,28 +3106,38 @@ describe("own-message step row", () => {
         const record = async (moment: string, fromEnd: number, shot: boolean): Promise<Reading> => {
           const reading = await measure(page, fromEnd);
           const baseline = await measure(base, fromEnd);
-          /* The pane without the row shows its way-back row exactly while the
+          /* The pane without the row shows its way back exactly while the
              reader is away from the tail. */
           const away = baseline.jumpStrips > 0;
-          /* What the row says it changes. The feed gives up the row's height;
-             on the phone, away from the tail, the feed's own way-back row is
-             a cell of the step row, so the feed gives up the difference. */
-          const feedCost = viewport.phone && away ? cost - JUMP_PX : cost;
+          /* What the navigator says it changes. On the desktop it takes its
+             room in the composer's bottom row from the controls beside it,
+             which may narrow but never move up or down, and the feed keeps
+             its height. On the phone its line in the composer box takes its
+             height from the feed, at most: the field is bounded by what is
+             left, so a grown draft or the keyboard gives some of it back.
+             What rides on the feed's foot moves with it; the composer's box
+             grows upward from a bottom edge that stays, and so does the field. */
           const changes = moved(baseline, reading);
+          const feedDelta = changes.find((change) => change.probe === "feed")?.delta ?? [0, 0, 0, 0];
           const undeclared = changes.filter(({ probe, delta }) => {
-            if (probe === "feed") return !(delta[0] === 0 && delta[1] === 0 && delta[2] === 0 && Math.abs(delta[3] + feedCost) <= 0.5);
-            if (viewport.phone) return !/^(jump-strip gone|jump-pill|control:button:.* gone)$/.test(probe);
-            return !(/^(jump-strip|jump-pill|turn-status|control:.*)$/.test(probe) && delta[0] === 0 && delta[2] === 0 && delta[3] === 0 && Math.abs(delta[1] + cost) <= 0.5);
+            if (probe === "feed") return !(viewport.phone && delta[0] === 0 && delta[1] === 0 && delta[2] === 0 && delta[3] < 0 && delta[3] >= -cost - 0.5);
+            if (probe.startsWith("row:")) return !(delta[1] === 0 && delta[3] === 0);
+            if (!viewport.phone) return true;
+            if (/^(jump-strip|jump-pill|turn-status|control:.*)$/.test(probe)) return !(delta[0] === 0 && delta[2] === 0 && delta[3] === 0 && Math.abs(delta[1] - feedDelta[3]) <= 0.5);
+            if (probe === "composer" || probe === "field") return !(delta[0] === 0 && delta[2] === 0 && Math.abs(delta[1] + delta[3]) <= 0.5);
+            return true;
           });
           for (const change of undeclared) fail(moment, `undeclared change to "${change.probe}" by ${JSON.stringify(change.delta)}`);
-          if (!changes.some((change) => change.probe === "feed")) fail(moment, "the feed did not give up the row's height");
-          if (!reading.row || Math.abs(reading.row[3] - cost) > 0.5) fail(moment, `the row is ${reading.row?.[3]} px tall, expected ${cost}`);
+          if (moment === "rest" && Math.abs(feedDelta[3] + cost) > 0.5) fail(moment, `the feed gave up ${-feedDelta[3]} px, expected ${cost}`);
+          const tall = viewport.phone ? NAVIGATOR_PX.phone : NAVIGATOR_PX.desktop;
+          if (!reading.row || Math.abs(reading.row[3] - tall) > 0.5) fail(moment, `the navigator is ${reading.row?.[3]} px tall, expected ${tall}`);
+          if (reading.place !== (viewport.phone ? "phone-line" : "bottom-row")) fail(moment, `the navigator is drawn in ${reading.place}`);
           if (baseline.row) fail(moment, "the pane without the row drew one");
           const buttons = reading.controls.filter((control) => control.name !== "count");
           if (buttons.length < 2 || !reading.controls.some((control) => control.name === "count")) fail(moment, "the row is missing a control");
           for (const control of reading.controls) {
             sum.readings += 1;
-            if (control.hit) sum.hitTestPasses += 1; else fail(moment, `${control.name} is not what a pointer meets at its centre and corners`);
+            if (control.hit) sum.hitTestPasses += 1; else fail(moment, `${control.name} is not what a pointer meets at its centre and corners (${control.missed.join("; ")})`);
             if (control.overlaps.length) { sum.intersections += control.overlaps.length; fail(moment, `${control.name} intersects ${control.overlaps.join(", ")}`); }
             if (control.overFeed) { sum.overFeed += 1; fail(moment, `${control.name} lies over the feed`); }
             if (!control.insideWindow) { sum.outsideWindow += 1; fail(moment, `${control.name} leaves the window`); }
@@ -2842,10 +3145,9 @@ describe("own-message step row", () => {
           }
           sum.undeclaredChanges += undeclared.length;
           if (reading.overflowX) fail(moment, `the page scrolls sideways by ${reading.overflowX}`);
-          if (viewport.phone && away && reading.jumpStrips) fail(moment, "the phone spends a second row on the way back");
-          if (viewport.phone && away && !reading.controls.some((control) => control.name === "latest")) fail(moment, "the way back is not in the step row");
-          if (!viewport.phone && away && reading.jumpStrips !== 1) fail(moment, "the desktop lost its way-back row");
-          (evidence[where] ??= {})[moment] = { count: reading.count, row: reading.row, controls: reading.controls, changedAgainstNoRow: changes };
+          if (away && reading.jumpStrips !== 1) fail(moment, "the way back is gone");
+          if (away && !reading.wayBackFloats) fail(moment, "the way back takes a row of its own");
+          (evidence[where] ??= {})[moment] = { count: reading.count, row: reading.row, place: reading.place, controls: reading.controls, changedAgainstNoRow: changes };
           if (shot) {
             await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
             await base.screenshot({ path: path.join(OUT, `${where}-${moment}-no-row.png`) });
@@ -2945,8 +3247,7 @@ describe("own-message step row", () => {
           if (oldest.landedAt === null || Math.abs(oldest.landedAt - lands) > 2) fail("oldest", `the message landed ${oldest.landedAt}px under the feed's top`);
           expect(await page.locator('[data-own-step-control="previous"]').isDisabled()).toBe(true);
 
-          /* The way back, from the step row on the phone and from the feed's
-             own row on the desktop, returns to the tail. */
+          /* The way back, floating at the feed's foot, returns to the tail. */
           await page.locator('button:has([data-feed-jump-pill])').click();
           await settled();
           const tail = await measure(page, 0);
@@ -3272,8 +3573,8 @@ describe("own-message step row", () => {
       }
 
       /* New rows while the reader is away from the tail, on the phone: the
-         way back is a 44 px cell of the step row, and it keeps its arrow
-         whole whatever the count of new rows is. */
+         way back floats at the feed's bottom right as a 44 px target, says
+         how many rows arrived, and keeps its arrow whole whatever the count. */
       for (const lang of LANGS) {
         const where = `phone-390-${lang}`;
         const { context, page, pageErrors } = await open("", { width: 390, height: 844 }, lang, true);
@@ -3291,34 +3592,49 @@ describe("own-message step row", () => {
             }
             const reading = await measure(page, 0);
             const cell = await page.evaluate(() => {
-              const pill = document.querySelector<HTMLElement>("[data-own-steps] [data-feed-jump-pill]");
-              if (!pill) return null;
+              const pill = document.querySelector<HTMLElement>("[data-feed-jump-strip] [data-feed-jump-pill]");
+              const button = pill?.closest("button");
+              if (!pill || !button) return null;
+              const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
               const round = (rect: DOMRect) => [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10);
+              const cut = (a: DOMRect, b: DOMRect) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
               const arrow = pill.querySelector("svg")!.getBoundingClientRect();
-              const count = pill.querySelector<HTMLElement>("[data-feed-jump-count]");
               const box = pill.getBoundingClientRect();
-              const text = count?.getBoundingClientRect() ?? null;
+              const target = button.getBoundingClientRect();
               const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5;
+              const points = [
+                [target.left + target.width / 2, target.top + target.height / 2],
+                [target.left + 2, target.top + 2], [target.right - 2, target.top + 2],
+                [target.left + 2, target.bottom - 2], [target.right - 2, target.bottom - 2],
+              ] as const;
+              /* What it may never lie over: the controls outside the feed it floats in. */
+              const others = Array.from(document.querySelectorAll<HTMLElement>('button, a[href], textarea, input, select, summary, [role="button"], [tabindex]:not([tabindex="-1"])'))
+                .filter((other) => other !== button && !button.contains(other) && !scroller.contains(other) && other.getBoundingClientRect().width > 0)
+                .filter((other) => cut(target, other.getBoundingClientRect()) > 1)
+                .map((other) => `${other.tagName.toLowerCase()}:${other.getAttribute("aria-label") ?? (other.textContent ?? "").trim().slice(0, 28)}`);
               return {
-                label: count?.textContent ?? "",
+                label: (pill.textContent ?? "").trim(),
                 pill: round(box),
+                target: round(target),
                 arrow: round(arrow),
                 arrowInside: inside(arrow),
-                textInside: text ? inside(text) && count!.scrollWidth <= count!.clientWidth + 1 : true,
-                arrowClearOfText: text ? arrow.bottom <= text.top + 0.5 || text.bottom <= arrow.top + 0.5 : true,
+                textFits: pill.scrollWidth <= pill.clientWidth + 1,
+                hit: points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && button.contains(at); }),
+                overlaps: others,
+                insideWindow: target.left >= 0 && target.top >= 0 && target.right <= innerWidth && target.bottom <= innerHeight,
               };
             });
-            const latest = reading.controls.find((control) => control.name === "latest");
             const moment = `new-rows-${wanted}`;
-            record[moment] = { cell, latest, overflowX: reading.overflowX, count: reading.count };
+            record[moment] = { cell, overflowX: reading.overflowX, count: reading.count };
             const fail = (what: string) => failures.push(`${where} ${moment}: ${what}`);
-            if (!cell || !latest) { fail("the way back is not in the step row"); continue; }
-            if (cell.label !== (wanted === 0 ? "" : wanted > 99 ? "99+" : String(wanted))) fail(`the cell says "${cell.label}"`);
-            if (Math.abs(cell.arrow[2]! - 14) > 0.5 || Math.abs(cell.arrow[3]! - 14) > 0.5 || !cell.arrowInside || !cell.arrowClearOfText) fail(`the arrow is ${cell.arrow[2]} x ${cell.arrow[3]}`);
-            if (!cell.textInside) fail("the count leaves the pill");
-            if (latest.box[2] < 44 || latest.box[3] < 44) fail(`the way back is ${latest.box[2]} x ${latest.box[3]}`);
-            if (!latest.hit) fail("the way back is not what a pointer meets");
-            if (latest.overlaps.length) fail(`the way back intersects ${latest.overlaps.join(", ")}`);
+            if (!cell) { fail("the way back is gone"); continue; }
+            if (wanted ? !cell.label.includes(String(wanted)) : /\d/.test(cell.label)) fail(`the way back says "${cell.label}"`);
+            if (Math.abs(cell.arrow[2]! - 14) > 0.5 || Math.abs(cell.arrow[3]! - 14) > 0.5 || !cell.arrowInside) fail(`the arrow is ${cell.arrow[2]} x ${cell.arrow[3]}`);
+            if (!cell.textFits) fail("the count leaves the pill");
+            if (cell.target[2]! < 44 || cell.target[3]! < 44) fail(`the way back is ${cell.target[2]} x ${cell.target[3]}`);
+            if (!cell.hit) fail("the way back is not what a pointer meets");
+            if (cell.overlaps.length) fail(`the way back intersects ${cell.overlaps.join(", ")}`);
+            if (!cell.insideWindow) fail("the way back leaves the window");
             for (const control of reading.controls) if (control.overlaps.length) fail(`${control.name} intersects ${control.overlaps.join(", ")}`);
             if (reading.overflowX) fail(`the page scrolls sideways by ${reading.overflowX}`);
             if (wanted === 12 || wanted === 1112) await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
@@ -3478,9 +3794,10 @@ describe("own-message step row", () => {
             const reading = await measure(page, 0);
             readings[moment] = reading;
             expect(reading.count?.split(" / ")[1]).toBe(String(days * ALL_OWN));
-            expect(reading.row?.[3]).toBe(ROW_PX.phone);
+            expect(reading.row?.[3]).toBe(NAVIGATOR_PX.phone);
+            expect(reading.place).toBe("phone-line");
             expect(reading.overflowX).toBe(0);
-            if (moment !== "rest") expect(reading.controls.some((control) => control.name === "latest")).toBe(true);
+            if (moment !== "rest") expect(reading.jumpStrips).toBe(1);
             for (const control of reading.controls) {
               expect(control.hit).toBe(true);
               expect(control.overlaps).toEqual([]);
@@ -3491,13 +3808,15 @@ describe("own-message step row", () => {
                 expect(control.box[3]).toBeGreaterThanOrEqual(44);
               }
             }
-            const labelsFit = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLButtonElement>('[data-own-step-control="previous"], [data-own-step-control="next"]')).every((button) => {
-              const text = button.lastElementChild as HTMLElement;
-              const inner = text.getBoundingClientRect();
-              const outer = button.getBoundingClientRect();
-              return inner.left >= outer.left && inner.right <= outer.right && inner.top >= outer.top && inner.bottom <= outer.bottom
-                && text.scrollWidth <= text.clientWidth + 1 && text.scrollHeight <= text.clientHeight + 1;
-            }));
+            /* The count and each arrow's glyph stay inside the navigator's own boxes. */
+            const labelsFit = await page.evaluate(() => {
+              const within = (inner: DOMRect, outer: DOMRect) => inner.left >= outer.left && inner.right <= outer.right && inner.top >= outer.top && inner.bottom <= outer.bottom;
+              const navigator = document.querySelector<HTMLElement>("[data-own-steps]")!;
+              const count = navigator.querySelector<HTMLElement>('[data-own-step-control="count"]')!;
+              return within(count.getBoundingClientRect(), navigator.getBoundingClientRect())
+                && Array.from(navigator.querySelectorAll<HTMLButtonElement>('[data-own-step-control="previous"], [data-own-step-control="next"]'))
+                  .every((button) => within(button.querySelector("svg")!.getBoundingClientRect(), button.getBoundingClientRect()));
+            });
             expect(labelsFit).toBe(true);
             if (moment === "stepped") await page.screenshot({ path: path.join(OUT, `long-count-phone-${days}-${lang}.png`) });
           }

@@ -44,7 +44,7 @@ import { chatStateBits, type StagePosition } from "./mobileChatState";
  * slot, which lane 5 owns.
  *
  * The actions themselves are not reimplemented here: Stop, Compact, Re-check
- * and Open in terminal come from `useAgentControlActions`, and Kill from
+ * and Copy terminal command come from `useAgentControlActions`, and Kill from
  * `useProcessKill`, the same hooks the desktop strip and the pane header read.
  */
 export function MobileConversationMenu({
@@ -374,7 +374,7 @@ export function MobileConversationMenu({
             {controls.terminal.state === "hidden" ? null : (
               <MobileSheetRow
                 icon={<SquareTerminal className="h-[18px] w-[18px]" aria-hidden />}
-                label={t("mobile2.chat.menuTerminal")}
+                label={t("attach.copyTerminalCommand")}
                 disabled={controls.terminal.state === "disabled"}
                 onSelect={actions.terminal}
                 attrs={{ "data-mobile2-menu-row": "terminal" }}

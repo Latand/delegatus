@@ -24,6 +24,8 @@ export interface SendMenuAction {
   description?: string;
   disabled?: boolean;
   tone?: "ok";
+  /** The row's glyph; an action without one shows the menu's play mark. */
+  icon?: LucideIcon;
   /** A setting rather than an action: rendered as a checkbox item, and choosing
       it leaves the menu open so the new state can be read. */
   checked?: boolean;
@@ -184,6 +186,24 @@ export interface ComposerBarProps {
   onParallelSubmit?: () => void;
   /** The glyph of the idle send control; `Play` when absent. */
   sendIcon?: LucideIcon;
+  /** The right end of the desktop's bottom row (operator, 2026-10-11): the
+      undelivered chip, the own-message navigator and «⋯ More actions» — so
+      nothing is drawn above the input field. The phone has no bottom row and
+      ignores it. */
+  rowControls?: ReactNode;
+  /** The receipts draw nothing in the region right now (the undelivered
+      list waiting behind its chip, 2026-10-11): they stay mounted, and the
+      region takes no room for them. */
+  receiptsHidden?: boolean;
+  /** The desktop's Stop, its own button beside Send (operator, 2026-10-11):
+      there while the agent works, so Send stays Send and a message typed
+      meanwhile still queues behind the turn. The phone's send slot is its
+      Stop already and ignores it. */
+  stopControl?: ReactNode;
+  /** The phone's one row above its composer box: the undelivered chip and the
+      own-message navigator. Part of the pinned input unit, so it stays with
+      the field. The desktop ignores it. */
+  statusLine?: ReactNode;
   /** `context` paints the input box as an injection target (dashed info
       border). Colour and border only, so a mode flip never moves geometry. */
   mode?: "context";
@@ -191,12 +211,15 @@ export interface ComposerBarProps {
 
 const NO_HISTORY: readonly string[] = [];
 
-function SendMenu({ label, actions, onClose, position, owner }: {
+/** The composer's menu of actions, rendered above the control that opened it:
+    Send's own menu, and the agent's «⋯ More actions» in the bottom row. */
+export function ComposerMenu({ label, actions, onClose, position, owner, testId = "composer-send-menu" }: {
   label: string;
   actions: SendMenuAction[];
   onClose: () => void;
   position: { bottom: number; right: number };
   owner: Document;
+  testId?: string;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -234,7 +257,7 @@ function SendMenu({ label, actions, onClose, position, owner }: {
       ref={rootRef}
       role="menu"
       aria-label={label}
-      data-testid="composer-send-menu"
+      data-testid={testId}
       /* BOUNDED, BECAUSE IT GROWS UPWARD. The menu is anchored by its bottom
          edge, so each action added pushes its head further toward the top of
          the viewport — with the injection action (#1560) a Codex conversation
@@ -269,7 +292,10 @@ function SendMenu({ label, actions, onClose, position, owner }: {
           }`}
         >
           {action.checked === undefined ? (
-            <Play className={`mt-[2px] h-3.5 w-3.5 shrink-0 ${action.tone === "ok" ? "text-success" : "text-muted"}`} aria-hidden />
+            (() => {
+              const Glyph = action.icon ?? Play;
+              return <Glyph className={`mt-[2px] h-3.5 w-3.5 shrink-0 ${action.tone === "ok" ? "text-success" : "text-muted"}`} aria-hidden />;
+            })()
           ) : (
             <span
               aria-hidden
@@ -322,6 +348,10 @@ export function ComposerBar({
   onParallelSubmit,
   sendIcon: SendIcon = Play,
   mode,
+  rowControls,
+  receiptsHidden = false,
+  stopControl,
+  statusLine,
 }: ComposerBarProps) {
   const {
     displayText,
@@ -355,7 +385,7 @@ export function ComposerBar({
      straight back out of recall so navigation never fights editing. */
   const [historyIndex, setHistoryIndex] = useState(-1);
   const optionsRowId = useId();
-  const hasSecondaryRow = Boolean(leftSlot) || showImage;
+  const hasSecondaryRow = Boolean(leftSlot) || showImage || Boolean(rowControls);
   /* The phone's composer unit (mobile v2 §2 rule 8, §3.4): the field on top and
      ONE tools row inside the same box — the model/reasoning chip, attach,
      dictate, and the send slot. What used to sit under the box (the #499 pill
@@ -505,7 +535,7 @@ export function ComposerBar({
         </button>
       ) : null}
       {sendMenuOpen && hasSendMenu && sendMenuLabel && sendMenuPosition && sendAnchorRef.current ? (
-        <SendMenu
+        <ComposerMenu
           label={sendMenuLabel}
           actions={sendMenuActions}
           onClose={() => setSendMenuOpen(false)}
@@ -550,6 +580,7 @@ export function ComposerBar({
           unresolved host): no affordance that records into a void. */}
       {voiceControl}
       {micControl}
+      {isMobile || dictationRecording ? null : stopControl}
       {sendControl}
     </>
   );
@@ -621,12 +652,13 @@ export function ComposerBar({
       </button>
     </div>
   ) : null;
-  const accessories = Boolean(micHintRow || voicePanel || queuePanel || deliveries || receipts || stagedStrip);
+  const regionShown = Boolean(micHintRow || voicePanel || queuePanel || deliveries || (receipts && !receiptsHidden) || stagedStrip);
   return (
     <>
-      {accessories ? (
+      {regionShown || receipts ? (
         <div
           data-testid="composer-accessories"
+          hidden={!regionShown}
           className="grid min-h-0 auto-rows-[minmax(0,max-content)] gap-1.5 overflow-y-auto overscroll-contain [&>*]:min-h-0"
         >
           {deliveries}
@@ -647,7 +679,7 @@ export function ComposerBar({
               region: a run of failed or uncertain deliveries wraps into rows of
               chips, and each chip carries the controls that settle it. */}
           {receipts ? (
-            <div data-testid="composer-receipts" className="flex flex-wrap gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
+            <div data-testid="composer-receipts" hidden={receiptsHidden} className="flex flex-wrap gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
           ) : null}
         </div>
       ) : null}
@@ -661,6 +693,7 @@ export function ComposerBar({
         data-testid="composer-input-unit"
         className={`flex shrink-0 flex-col gap-1.5 ${pinInput ? "sticky bottom-0 z-10 bg-card" : ""}`}
       >
+        {isMobile && statusLine ? statusLine : null}
         {/* The input is the anchor (design doc §3.5): a single sunken field that
             owns the mic and send controls. On the phone it is the composer UNIT —
             the field on top, one tools row under it, both inside the same box
@@ -809,9 +842,23 @@ export function ComposerBar({
             unit: these are the composer's own controls, so they stay with the
             field rather than scrolling away from it. */}
         {!isMobile && hasSecondaryRow ? (
-          <div id={optionsRowId} data-testid="composer-options-row" className="flex items-center justify-between gap-1.5">
-            <div className="flex min-w-0 items-center gap-1.5">{leftSlot}</div>
-            {picker}
+          <div id={optionsRowId} data-testid="composer-options-row" className={`flex items-center justify-between gap-1.5 ${rowControls ? "@container" : ""}`}>
+            {rowControls ? (
+              <>
+                {/* The picker joins the runtime pill on the left, so the right
+                    end is the agent's and the conversation's own controls.
+                    The row is their container: below 36rem the undelivered
+                    chip, «mine» and the Context toggle drop their words and
+                    the pill truncates, so no control ever lies over another. */}
+                <div className="flex min-w-0 items-center gap-1.5">{leftSlot}{picker}</div>
+                <div data-composer-row-controls className="flex min-w-0 shrink-0 items-center gap-1">{rowControls}</div>
+              </>
+            ) : (
+              <>
+                <div className="flex min-w-0 items-center gap-1.5">{leftSlot}</div>
+                {picker}
+              </>
+            )}
           </div>
         ) : null}
       </div>

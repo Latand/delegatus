@@ -8,6 +8,7 @@ import {
   clampHeight,
   COMPOSER_ACCESSORY_WINDOW_PX,
   COMPOSER_MAX_PX,
+  COMPOSER_REST_PX,
   keyboardInset,
   MOBILE_COMPOSER_CHROME_PX,
   MOBILE_COMPOSER_UNIT_CHROME_PX,
@@ -17,6 +18,7 @@ import {
   seatComposerBudget,
   seatGrowth,
   shouldPin,
+  TRANSCRIPT_FLOOR_SHARE,
   visibleViewportHeight,
 } from "./composerScroll";
 
@@ -225,11 +227,25 @@ describe("accessoryReserve — one rule for the room above the input (#1629)", (
   });
 });
 
-describe("cardComposerBudget — a share of the conversation, not of the screen (#1629)", () => {
-  test("the 60% share binds on a tall card and the transcript floor on a short one", () => {
-    expect(cardComposerBudget(1080)).toBe(648);
-    expect(cardComposerBudget(500)).toBe(260);
-    expect(cardComposerBudget(680)).toBe(408);
+describe("cardComposerBudget — the transcript keeps 60% of the conversation (2026-10-11)", () => {
+  test("the floor is the operator's 60%", () => {
+    expect(TRANSCRIPT_FLOOR_SHARE).toBe(0.6);
+  });
+
+  test("the composer and the rows beside it share the other 40%", () => {
+    expect(cardComposerBudget(1080)).toBe(432);
+    expect(cardComposerBudget(680)).toBe(272);
+    /* The rows that never yield come out of the same 40%, not out of the transcript. */
+    expect(cardComposerBudget(680, 36)).toBe(236);
+    expect(680 - cardComposerBudget(680, 36) - 36).toBeGreaterThanOrEqual(680 * TRANSCRIPT_FLOOR_SHARE);
+  });
+
+  test("a box too small for both keeps the composer at rest and the floor gives way", () => {
+    /* The field at one row with its controls never yields: 40% of 200 px is 80 px,
+       less than the input itself, so the transcript gets what is left. */
+    expect(cardComposerBudget(200)).toBe(COMPOSER_REST_PX);
+    expect(cardComposerBudget(250, 36)).toBe(COMPOSER_REST_PX);
+    expect(cardComposerBudget(80)).toBe(80);
   });
 });
 
@@ -239,10 +255,12 @@ describe("cardComposerCeiling — the card field yields to the region it shares 
     expect(cardComposerCeiling(1080, 0)).toBe(COMPOSER_MAX_PX);
   });
 
-  test("a roomy card keeps the whole cap even with the region full", () => {
-    /* 648px of budget: three windows and the composer's chrome fit inside it
+  test("a roomy card keeps the whole cap with a surface in the region", () => {
+    /* 432px of budget: one window and the composer's chrome fit inside it
        with the field at its cap, so nothing is taken from the draft. */
-    expect(cardComposerCeiling(1080, 3)).toBe(COMPOSER_MAX_PX);
+    expect(cardComposerCeiling(1080, 1)).toBe(COMPOSER_MAX_PX);
+    /* Three do not: the field gives the region its room instead of the transcript. */
+    expect(cardComposerCeiling(1080, 3)).toBeLessThan(COMPOSER_MAX_PX);
   });
 
   test("the 600x500 card that lost its receipts gives the region its room instead", () => {
@@ -250,10 +268,18 @@ describe("cardComposerCeiling — the card field yields to the region it shares 
        unresolved receipts under a twenty-line draft. The field stops short of
        the region's reserve, so the region has a window rather than 0px below
        the pane's bottom edge. */
-    const ceiling = cardComposerCeiling(500, 2);
+    const ceiling = cardComposerCeiling(680, 2);
     expect(ceiling).toBeLessThan(COMPOSER_MAX_PX);
-    expect(ceiling).toBe(cardComposerBudget(500) - 65 - accessoryReserve(2, cardComposerBudget(500)));
-    expect(cardComposerBudget(500) - ceiling).toBeGreaterThanOrEqual(accessoryReserve(2, cardComposerBudget(500)));
+    expect(ceiling).toBe(cardComposerBudget(680) - 65 - accessoryReserve(2, cardComposerBudget(680)));
+    expect(cardComposerBudget(680) - ceiling).toBeGreaterThanOrEqual(accessoryReserve(2, cardComposerBudget(680)));
+  });
+
+  test("a draft never takes the transcript below its floor", () => {
+    /* Six lines and more: the field stops where the composer's 40% does. */
+    for (const box of [560, 680, 760, 900]) {
+      const budget = cardComposerBudget(box, 0);
+      expect(cardComposerCeiling(box, 0, budget) + 65).toBeLessThanOrEqual(Math.floor(box * (1 - TRANSCRIPT_FLOOR_SHARE)));
+    }
   });
 
   test("a usable field outranks the reserve on a card too small for both", () => {
@@ -270,26 +296,29 @@ describe("cardComposerCeiling — the card field yields to the region it shares 
 
 describe("the orchestrator seat's own budget (#1734)", () => {
   /* Measured on the rendered seat: a 270 px seat leaves its conversation 165 px,
-     of which the control strip takes 37; a 675 px one leaves 570. */
-  test("the card budget is what left a compact seat two rows: it is negative there", () => {
-    expect(cardComposerBudget(165)).toBeLessThan(0);
-    expect(cardComposerCeiling(165, 0)).toBe(44);
+     of which the rows that never yield take 37; a 675 px one leaves 570. */
+  test("the card budget alone would leave a compact seat one row", () => {
+    expect(cardComposerBudget(165, 37)).toBe(COMPOSER_REST_PX);
+    expect(cardComposerCeiling(165, 0, cardComposerBudget(165, 37))).toBe(44);
   });
 
-  test("a compact seat that can grow gives the field its whole cap", () => {
+  test("a compact seat that can grow gives the field what the floor leaves at the grip's stop", () => {
     const budget = seatComposerBudget({ boxHeight: 165, room: 675 - 270, rows: 37 });
-    expect(budget).toBe(165 + 405 - 37 - SEAT_TRANSCRIPT_FLOOR_PX);
-    expect(cardComposerCeiling(165, 0, budget)).toBe(COMPOSER_MAX_PX);
+    expect(budget).toBe(Math.floor((165 + 405) * (1 - TRANSCRIPT_FLOOR_SHARE)) - 37);
+    expect(cardComposerCeiling(165, 0, budget)).toBe(budget - 65);
+    /* At the stop the transcript keeps its share. */
+    expect(165 + 405 - budget - 37).toBeGreaterThanOrEqual((165 + 405) * TRANSCRIPT_FLOOR_SHARE);
   });
 
-  test("a seat already at its grip's stop borrows from the transcript, down to its minimum", () => {
-    /* 1280 x 600: the default seat is 450 px, its conversation 345. */
-    const budget = seatComposerBudget({ boxHeight: 345, room: 0, rows: 37 });
-    expect(budget).toBe(236);
-    expect(cardComposerCeiling(345, 0, budget)).toBe(COMPOSER_MAX_PX);
-    /* A window too short for the cap: the field takes what is left over the minimum. */
-    const short = seatComposerBudget({ boxHeight: 240, room: 0, rows: 37 });
-    expect(cardComposerCeiling(240, 0, short)).toBe(240 - 37 - SEAT_TRANSCRIPT_FLOOR_PX - 65);
+  test("a seat already at its grip's stop keeps the transcript's floor", () => {
+    /* 1440 x 900: the default seat is 675 px, its conversation 570. */
+    const budget = seatComposerBudget({ boxHeight: 570, room: 0, rows: 0 });
+    expect(budget).toBe(228);
+    expect(cardComposerCeiling(570, 0, budget)).toBe(COMPOSER_MAX_PX);
+    /* 1280 x 600: the default seat is 450 px, its conversation 345: the field takes what the floor leaves. */
+    const short = seatComposerBudget({ boxHeight: 345, room: 0, rows: 0 });
+    expect(short).toBe(138);
+    expect(cardComposerCeiling(345, 0, short)).toBe(138 - 65);
   });
 
   test("the budget stands still while the seat grows: the box gains what the room loses", () => {
@@ -304,7 +333,11 @@ describe("the orchestrator seat's own budget (#1734)", () => {
   });
 
   test("negative room and negative rows count as none", () => {
-    expect(seatComposerBudget({ boxHeight: 300, room: -20, rows: -3 })).toBe(300 - SEAT_TRANSCRIPT_FLOOR_PX);
+    expect(seatComposerBudget({ boxHeight: 300, room: -20, rows: -3 })).toBe(cardComposerBudget(300));
+  });
+
+  test("a seat too short for the floor keeps the transcript's own minimum", () => {
+    expect(seatComposerBudget({ boxHeight: 150, room: 0, rows: 0 })).toBe(150 - SEAT_TRANSCRIPT_FLOOR_PX);
   });
 });
 
@@ -409,6 +442,26 @@ describe("mobileComposerCeiling — the field leaves the region its room (#1629)
        collapses to nothing for the sake of the region — the region scrolls
        itself instead. */
     expect(mobileComposerCeiling(280, 390, 1)).toBe(44);
+  });
+
+  test("the phone's conversation keeps its floor: the field stops at the composer's 40%", () => {
+    /* 390 x 844, keyboard down: the conversation under the 52 px bar is 792 px. */
+    const budget = cardComposerBudget(792);
+    const ceiling = mobileComposerCeiling(844, 844, 0, budget);
+    expect(ceiling + MOBILE_COMPOSER_UNIT_CHROME_PX).toBeLessThanOrEqual(budget);
+    expect(792 - ceiling - MOBILE_COMPOSER_UNIT_CHROME_PX).toBeGreaterThanOrEqual(792 * TRANSCRIPT_FLOOR_SHARE);
+  });
+
+  test("a row inside the phone's composer box comes off the field, not off the transcript", () => {
+    const budget = cardComposerBudget(792);
+    const bare = mobileComposerCeiling(844, 844, 0, budget);
+    expect(mobileComposerCeiling(844, 844, 0, budget, 50)).toBe(bare - 50);
+    /* And off the keyboard-open bound too: the row sits above the keyboard with the field. */
+    expect(mobileComposerCeiling(250, 844, 0, null, 50)).toBe(mobileComposerCeiling(250, 844) - 50);
+  });
+
+  test("with no measured box the phone keeps the viewport's own bounds", () => {
+    expect(mobileComposerCeiling(844, 844, 0, null)).toBe(mobileComposerCeiling(844, 844));
   });
 
   test("one window is a surface's frame, its header and a row readable inside it", () => {
