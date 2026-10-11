@@ -448,6 +448,27 @@ test.each(["read-only", "read-write"] as const)("a %s commit deadline retries ac
   expect(loadPipelines()[0]!.stateDetail).toBeNull();
 });
 
+test("a hook refusal after a controller timeout still requests file repair", async () => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.hookAnswers({ code: null, stdout: "", stderr: "command timed out after 900000ms: waiting" });
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  expect(h.requests).toHaveLength(0);
+  h.advance(TICK_MS);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  await tickPipelines([], h.ports);
+  expect(h.requests).toHaveLength(1);
+  expect(study().commitRepair?.detail).toContain(WHITESPACE_REFUSAL);
+  expect(study().verdict?.status).toBe("pass");
+  h.advance(TICK_MS); h.endTurn("Removed trailing whitespace.");
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  await tickPipelines([], h.ports);
+  expect(study().state).toBe("passed");
+  expect(study().stageCommitWait).toBeUndefined();
+  expect(h.requests).toHaveLength(1);
+});
+
 test("a controller deadline after file repair does not spend the repaired commit", async () => {
   const h = harness({ access: "read-only" });
   await runningStage(h, "read-only");

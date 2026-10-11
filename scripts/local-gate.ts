@@ -68,9 +68,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     steps.unshift({ name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"], capped: true });
   }
   const lintFiles = files.filter(lintable).map(file => `./${file}`);
-  // Staged-file lint is incremental and must not queue behind heavy work:
-  // a pressure hold there used to exhaust the controller's commit deadline.
-  if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: mode === "pre-push" });
+  if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: true });
   if (mode === "pre-commit") return steps;
   const touched = new Set(files.filter(isTest));
   for (const file of files.filter(lintable)) {

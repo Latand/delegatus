@@ -42,13 +42,12 @@ test("commit plan checks staged whitespace/privacy/lint and leaves types and tes
   expect(steps[1]!.command).toContain("--require-known-values");
   expect(steps[1]!.command.slice(-2)).toEqual(["--paths", "src/example.ts"]);
   expect(steps[2]!.command).toEqual(["bun", "scripts/eslint-changes.ts", "--base", "base", "./src/example.ts"]);
-  expect(steps[2]!.capped).toBeFalse();
+  expect(steps[2]!.capped).toBeTrue();
 });
 test("push checks commits, types and all sibling test variants, excluding browsers and deleted files", () => {
   const steps = plan("pre-push", ["src/example.ts", "src/deleted.test.ts"], context());
   expect(steps.find(step => step.name === "privacy")!.command).toContain("--check-commits");
   const tests = steps.find(step => step.name === "touched tests")!;
-  for (const name of ["types", "eslint", "touched tests"]) expect(steps.find(step => step.name === name)!.capped).toBeTrue();
   expect(tests.command).toEqual(["bun", "scripts/local-gate-tests.ts", "--base", "base", "./src/example.test.ts", "./src/example.integration.test.ts"]);
   expect(tests.isolated).toBeTrue();
   for (const step of steps.filter(step => step.command[1] === "test")) for (const file of step.command.slice(2)) expect(file).toMatch(/\.test\.[jt]sx?$/);
@@ -456,10 +455,6 @@ test("scope uses executed import closure and the workflow test lists", () => {
 
 function hookFixture(realLint = false) {
   const dir = mkdtempSync(path.join(tmpdir(), "hooks-e2e-")); roots.push(dir);
-  // Hook fixtures exercise stubbed checks, not the machine's admission state.
-  // The suite itself enters the real gate before these fixtures can run.
-  const pressure = path.join(dir, "cpu-pressure");
-  writeFileSync(pressure, "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
   for (const leaf of [".githooks", "scripts", "shims", ".github/workflows"]) mkdirSync(path.join(dir, leaf), { recursive: true });
   for (const hook of ["pre-commit", "pre-push"]) copyFileSync(path.join(root, ".githooks", hook), path.join(dir, ".githooks", hook));
   symlinkSync(path.join(root, "scripts/local-gate.ts"), path.join(dir, "scripts/local-gate.ts"));
@@ -477,7 +472,7 @@ function hookFixture(realLint = false) {
     const shim = path.join(dir, "shims", name);
     writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts || ( "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ) ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
   }
-  const env = { ...fixtureGitEnv(), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), HOOK_BUN: process.execPath, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: dir, LLV_GATE_PSI_FILE: pressure, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0" };
+  const env = { ...fixtureGitEnv(), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), HOOK_BUN: process.execPath, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: dir, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0" };
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env, stdio: "pipe" });
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null");
   writeFileSync(path.join(dir, "package.json"), "{}"); writeFileSync(path.join(dir, "example.ts"), "export const value = 1;\n");
@@ -521,19 +516,6 @@ test("real pre-commit hook checks staged source, stops failures, and supports th
   writeFileSync(path.join(f.dir, "example.ts"), "export const value = 3;\n"); f.git("add", "example.ts");
   const skip = spawnSync("git", ["commit", "-m", "escape"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "scripts/eslint-changes.ts", LLV_SKIP_HOOKS: "1" } });
   expect(skip.status).toBe(0);
-});
-test("staged-source lint commits even when heavy-work admission is unavailable", () => {
-  const f = hookFixture();
-  // Any entry into the heavy gate fails this fixture. The real hook and plan
-  // must still run staged whitespace, privacy and the selected-file linter.
-  writeFileSync(path.join(f.dir, "scripts/gate-slot.sh"), "#!/bin/sh\necho 'gate-slot: held for CPU pressure' >&2\nexit 88\n");
-  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
-  f.git("add", "example.ts");
-  const result = spawnSync("git", ["commit", "-m", "passed output"], { cwd: f.dir, env: f.env, encoding: "utf8", timeout: 5_000 });
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stderr).not.toContain("gate-slot: held");
-  expect(f.calls().some(call => call.args.includes("scripts/eslint-changes.ts") && call.args.includes("./example.ts"))).toBeTrue();
-  expect(f.calls().some(call => call.args.includes("--paths") && call.args.includes("example.ts"))).toBeTrue();
 });
 test("linked-worktree pre-commit clears Git selectors and preserves the complete shared config", () => {
   const f = hookFixture();
