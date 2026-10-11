@@ -703,12 +703,14 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     </div>
   ) : activeDeck ? (
     <div key={activeDeck.key} className="relative min-h-0 flex-1">
-      <RoundDeck
-        flow={activeDeck.flow}
-        rounds={activeDeck.rounds}
-        focusRound={null}
-        groupLabel={files.find((entry) => entry.path === activeDeck.flow.implementerPath)?.title}
-      />
+      <ConversationRoleScope value={frameRole}>
+        <RoundDeck
+          flow={activeDeck.flow}
+          rounds={activeDeck.rounds}
+          focusRound={null}
+          groupLabel={files.find((entry) => entry.path === activeDeck.flow.implementerPath)?.title}
+        />
+      </ConversationRoleScope>
     </div>
   ) : activeDraft ? (
     isWorkflowDraftId(activeDraft.id) ? (
