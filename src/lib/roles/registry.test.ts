@@ -245,7 +245,7 @@ test("spawn role resolution enumerates the selected engine catalog for an invali
     model: "mythos-1",
   })).toEqual({
     ok: false,
-    error: "invalid claude model id \"mythos-1\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku",
+    error: "invalid claude model id \"mythos-1\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5",
   });
 });
 

@@ -7,11 +7,12 @@ import { readCodexShellPolicy } from "@/lib/git/codexShellPolicy";
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import { codexSubagentArgs } from "./codexSpawnPolicy";
+import { codexProcessCleanupArgs } from "./processCleanupPolicy";
 import fs from "node:fs";
 import path from "node:path";
 
 import { resolveBinary, resolveHostBinary } from "@/lib/agent/cli";
-import { claudeManagedEnvironment, claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath } from "@/lib/accounts/claude";
+import { claudeManagedEnvironment, claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, legacyClaudeHome } from "@/lib/accounts/claude";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt } from "@/lib/agent/spawnPolicy";
 import { procBackend } from "@/lib/proc";
@@ -338,18 +339,13 @@ export function reviewerCommand(
     if (provider) args.push("--model", role.model === "haiku" && provider.smallFastModel ? provider.smallFastModel : provider.model);
     else if (role.model) args.push("--model", role.model);
     if (role.effort) args.push("--effort", role.effort);
-    const settings = claudeAccount
-      ? applyClaudeSpawnPolicy(claudeAccount.home, {
-        providerAccount: Boolean(provider),
-        baseSettingsPath: claudeAccount.managed ? claudeSettingsPath() : null,
-        profileId: `headless-${sessionId}`,
-        cleanMemory: HEADLESS_CLEAN_MEMORY,
-      }).settingsPath
-      : null;
-    args.push("--settings", settings ?? JSON.stringify({
-      ...(HEADLESS_CLEAN_MEMORY ? { autoMemoryEnabled: false } : {}),
-      env: { ...agentPublicationIdentityEnv(process.env), ...(HEADLESS_CLEAN_MEMORY ? CLAUDE_CLEAN_MEMORY_ENV : {}) },
-    }));
+    const settings = applyClaudeSpawnPolicy(claudeAccount?.home ?? legacyClaudeHome(), {
+      providerAccount: Boolean(provider),
+      baseSettingsPath: claudeAccount?.managed ? claudeSettingsPath() : null,
+      profileId: `headless-${sessionId}`,
+      cleanMemory: HEADLESS_CLEAN_MEMORY,
+    }).settingsPath;
+    args.push("--settings", settings);
     const baseEnv = claudeAccount?.managed ? claudeManagedEnvironment(claudeAccount.home) : process.env;
     return { ...claudeProviderCommand(claudeAccount?.home ?? "", provider, args),
       env: { ...reviewerEnvironment(baseEnv, spawnCapability), ...(HEADLESS_CLEAN_MEMORY ? CLAUDE_CLEAN_MEMORY_ENV : {}) }, stdin: null, outputPath: null, sessionId,
@@ -365,6 +361,7 @@ export function reviewerCommand(
     ...(options.sandbox === "read-only" ? ["-s", "read-only", "--skip-git-repo-check"] : ["--dangerously-bypass-approvals-and-sandbox"])];
   const baseEnv = codexAccount?.home
     ? { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: codexAccount.home } : process.env;
+  args.push(...codexProcessCleanupArgs(codexAccount?.home));
   args.push(...agentCodexPublicationArgs({}, baseEnv));
   if (codexAccount?.managed) args.push("-c", "cli_auth_credentials_store=file");
   if (role.model) args.push("-m", role.model);
