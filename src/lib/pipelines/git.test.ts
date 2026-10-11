@@ -1041,6 +1041,37 @@ test.each([false, true])("controller settlement refuses a stale main snapshot an
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test("controller settlement validates the pinned tree when the shared index temporarily changes", async () => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo; subject.baseBranch = "main";
+    subject.baseRef = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    await box.run("add", "source.ts");
+    expect((await box.exec("git", ["commit", "-m", "new main content"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const accepted = await box.run("rev-parse", "HEAD"); subject.lastPassedCommit = accepted;
+    await box.run("update-ref", "refs/remotes/origin/main", accepted);
+    await box.run("restore", `--source=${subject.baseRef}`, "--staged", "--worktree", "--", "source.ts");
+    fs.writeFileSync(path.join(box.repo, "report.md"), "stage output\n");
+    let swapped = false;
+    const exec: ExecPort = async (command, args, cwd, env) => {
+      const result = await box.exec(command, args, cwd, env);
+      if (args[0] === "write-tree" && !swapped) {
+        swapped = true;
+        await box.run("restore", "--source=HEAD", "--staged", "--", "source.ts");
+      } else if (args[0] === "diff" && args.includes("--raw")) {
+        await box.run("restore", `--source=${subject.baseRef}`, "--staged", "--", "source.ts");
+      }
+      return result;
+    };
+    expect(await commitPipelineStage(subject, "build", true, exec))
+      .toMatchObject({ ok: false, commitRefusal: { paths: ["source.ts"] } });
+    expect(await box.run("rev-parse", "HEAD")).toBe(accepted);
+    expect(await box.run("show", ":source.ts")).toBe("export const value = 1;");
+    expect(fs.readFileSync(path.join(box.repo, "report.md"), "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test.each(["index", "head"])("stage index custody defers a concurrent %s change and revalidates on retry", async (change) => {
   const box = await isolatedIdentityRepo();
   try {

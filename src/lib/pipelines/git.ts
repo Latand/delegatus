@@ -588,11 +588,11 @@ function rawTreeChanges(output: string): RawTreeChange[] {
     newer main was accepted. Revalidate against main's retired file versions
     at every settlement, using the lane's fixed base rather than a later pass.
     Ambiguous reversions stay intact and return to the stage's repair path. */
-async function staleStageIndex(pipeline: Pipeline, head: string, exec: ExecPort): Promise<PipelineGitResult | null> {
+async function staleStageIndex(pipeline: Pipeline, head: string, tree: string, exec: ExecPort): Promise<PipelineGitResult | null> {
   exec = withLiteralGitObjects(exec);
   const cwd = pipeline.worktreeDir;
   const diff = ["--raw", "--no-abbrev", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "-z"];
-  const staged = await exec("git", ["diff", "--cached", ...diff, head, "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd);
+  const staged = await exec("git", ["diff", ...diff, head, tree, "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd);
   if (staged.code !== 0) return failure("revalidating stage index custody", staged);
   try {
     const changes = rawTreeChanges(staged.stdout);
@@ -831,7 +831,7 @@ export async function commitPipelineStage(
   if (tree.code !== 0 || !/^[0-9a-f]{40}$/i.test(tree.stdout.trim())) return failure("pinning stage index custody", tree);
   const custodyTree = tree.stdout.trim();
   if (/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) {
-    const stale = await staleStageIndex(pipeline, sha, exec);
+    const stale = await staleStageIndex(pipeline, sha, custodyTree, exec);
     if (stale) return stale;
   }
   let receipt: StageCommitReceipt | undefined;

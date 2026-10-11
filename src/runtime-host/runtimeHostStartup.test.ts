@@ -149,6 +149,9 @@ test("issue 1268: a staged real runtime host proves hand-over readiness from iso
   fs.mkdirSync(path.join(directory, "tmp"), { recursive: true });
   fs.cpSync(path.join(repositoryRoot, "src"), path.join(releaseRoot, "src"), { recursive: true });
   fs.cpSync(path.join(repositoryRoot, "bin"), path.join(releaseRoot, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(releaseRoot, "scripts"));
+  fs.copyFileSync(path.join(repositoryRoot, "scripts", "privacy-known-value-fingerprints.json"),
+    path.join(releaseRoot, "scripts", "privacy-known-value-fingerprints.json"));
   fs.copyFileSync(path.join(repositoryRoot, "tsconfig.json"), path.join(releaseRoot, "tsconfig.json"));
   fs.copyFileSync(path.join(repositoryRoot, "package.json"), path.join(releaseRoot, "package.json"));
   fs.symlinkSync(path.join(repositoryRoot, "node_modules"), path.join(releaseRoot, "node_modules"), "dir");
