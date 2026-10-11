@@ -4093,7 +4093,8 @@ async function stageCommitRepairSettled(
   // The intent checkpoint can outlive final settlement. Replay its rejection
   // before considering settledAt permission to try the commit again.
   if (repair.outcome?.status === "rejected") {
-    park(pipeline, `${repair.detail}\n${repair.outcome.reason}`, attempt);
+    const reason = repair.outcome.reason;
+    park(pipeline, reason.includes(repair.detail) ? reason : `${repair.detail}\n${reason}`, attempt);
     return false;
   }
   if (repair.settledAt) return true;
@@ -4150,12 +4151,20 @@ async function commitPassedStage(
   const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
+  const repair = attempt.commitRepair;
+  const commitControl = repair ? {
+    recoveryHead: repair.recommit?.head,
+    beforeCommit: async (head: string) => {
+      repair.recommit = { at: ports.now(), head };
+      await persist();
+    },
+  } : undefined;
   let result = allowCommit
     ? await commitAndAdoptStageBranch(pipeline, stage.id, ports.exec, loadPipelines, attempt.branchAdoption, async (intent) => {
       attempt.branchAdoption = intent;
       await persist();
-    }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile)
-    : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile);
+    }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl)
+    : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
     if (result.deferred) {
       // Keep the durable committing cursor. The next tick repeats the forge
@@ -4164,6 +4173,10 @@ async function commitPassedStage(
       return;
     }
     if (await requestStageCommitRepair(pipeline, stage, attempt, result, ports, persist)) return;
+    if (attempt.commitRepair) {
+      attempt.commitRepair.outcome = { status: "rejected", reason: afterCommitRepair(attempt, result.error) };
+      await persist();
+    }
     parkStage(result.error);
     return;
   }
