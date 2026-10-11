@@ -486,7 +486,11 @@ export type PipelineStageAttempt = {
       activation may run. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
-  controllerWait?: PipelineBoundedWait;
+  controllerWait?: PipelineBoundedWait & {
+    /** Cut whose chain owns an incomplete-history confirmation wait, before
+        providerWait can open. The reader must prove closure before clearing it. */
+    providerCutAt?: number;
+  };
   outOfMemory?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit">;
   memoryWait?: PipelineBoundedWait;
   /** Bounded wait for the remote pipeline branch after an approved review
@@ -590,6 +594,24 @@ export type PipelineStageAttempt = {
     /** Consumes the one recommit before Git runs. Recovery must advance from
         this head; a refused recommit checkpoints a rejected outcome. */
     recommit?: { at: string; head: string };
+  };
+  /** One post-accept publication repair, delivered to the recorded producer. The
+      refused SHA remains accepted until committedSha is adopted. baseSha
+      fences history repair to the unpublished suffix. A changed reviewed
+      tree returns to its gate with the original budget activation. */
+  publicationRepair?: NonNullable<PipelineStageAttempt["commitRepair"]> & {
+    sha: string;
+    baseSha: string;
+    operationId: string;
+    stageId: string;
+    attempt: number;
+    commitStartedHead?: string;
+    committedSha?: string;
+    republishQueued?: true;
+    reviewRequired?: boolean;
+    /** The park the refusal would have caused (its cause and action on the
+        first line). Every park after the repair starts with that line. */
+    parkDetail?: string;
   };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
@@ -1110,9 +1132,10 @@ export type PipelineMerge = {
   state: PipelineMergeState;
   /** Who merged it: the runner, or anyone else (the PR was seen merged). */
   by: "auto-merge" | "outside" | null;
-  /** `<owner>/<repo>`, lower-cased, and the pull request's number. */
+  /** `<owner>/<repo>`, lower-cased, and the pull request's number.
+      A missing PR stays null while blocked or retrying its resolution. */
   repository: string;
-  prNumber: number;
+  prNumber: number | null;
   /** The setting's `changedAt` the lane was queued under. */
   policyChangedAt: string;
   /** The head the lane finished on (its `lastPassedCommit`). */

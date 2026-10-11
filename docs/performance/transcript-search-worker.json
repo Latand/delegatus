@@ -1,0 +1,1400 @@
+{
+  "baselineCommit": "e5cd0ff3d7e5d2c58225f908ad5c0bb475d2ccd2",
+  "bun": "1.4.0",
+  "next": "16.3.8",
+  "repeat": 5,
+  "before": {
+    "corpus": {
+      "conversations": 6729,
+      "messages": 250000,
+      "seed": 1429
+    },
+    "cheapIdleMedianMs": 4.79,
+    "coldSearchMs": 10.223,
+    "measurements": [
+      {
+        "order": "newest",
+        "query": "heliotrope",
+        "speaker": "user",
+        "total": 1,
+        "searchMs": [
+          6.211,
+          6.008,
+          10.731,
+          5.303,
+          7.959
+        ],
+        "cheapMs": [
+          4.887,
+          6.758,
+          11.074,
+          3.824,
+          7.568
+        ],
+        "delayMs": [
+          5.478,
+          5.746,
+          10.165,
+          5.36,
+          7.422
+        ],
+        "searchMedianMs": 6.211,
+        "cheapMedianMs": 6.758,
+        "delayMedianMs": 5.746
+      },
+      {
+        "order": "newest",
+        "query": "heliotrope",
+        "speaker": "all",
+        "total": 3,
+        "searchMs": [
+          5.539,
+          7.698,
+          6.875,
+          4.855,
+          6.889
+        ],
+        "cheapMs": [
+          3.335,
+          7.582,
+          5.262,
+          3.835,
+          5.858
+        ],
+        "delayMs": [
+          4.891,
+          7.52,
+          6.576,
+          4.322,
+          6.463
+        ],
+        "searchMedianMs": 6.875,
+        "cheapMedianMs": 5.262,
+        "delayMedianMs": 6.463
+      },
+      {
+        "order": "newest",
+        "query": "harbor granite",
+        "speaker": "user",
+        "total": 4665,
+        "searchMs": [
+          82.844,
+          76.576,
+          61.391,
+          56.244,
+          57.507
+        ],
+        "cheapMs": [
+          82.453,
+          78.283,
+          70.629,
+          53.149,
+          58.387
+        ],
+        "delayMs": [
+          81.643,
+          75.894,
+          60.785,
+          55.721,
+          58.599
+        ],
+        "searchMedianMs": 61.391,
+        "cheapMedianMs": 70.629,
+        "delayMedianMs": 60.785
+      },
+      {
+        "order": "newest",
+        "query": "harbor granite",
+        "speaker": "all",
+        "total": 17996,
+        "searchMs": [
+          107.269,
+          72.753,
+          95.967,
+          74.826,
+          96.996
+        ],
+        "cheapMs": [
+          107.416,
+          70.312,
+          96.006,
+          80.836,
+          95.625
+        ],
+        "delayMs": [
+          116.342,
+          72.523,
+          95.581,
+          76.943,
+          95.883
+        ],
+        "searchMedianMs": 95.967,
+        "cheapMedianMs": 95.625,
+        "delayMedianMs": 95.581
+      },
+      {
+        "order": "newest",
+        "query": "ledger",
+        "speaker": "user",
+        "total": 23557,
+        "searchMs": [
+          129.204,
+          131.913,
+          132.193,
+          154.559,
+          123.059
+        ],
+        "cheapMs": [
+          127.886,
+          129.695,
+          130.59,
+          162.985,
+          121.203
+        ],
+        "delayMs": [
+          129.166,
+          131.118,
+          131.859,
+          163.921,
+          123.126
+        ],
+        "searchMedianMs": 131.913,
+        "cheapMedianMs": 129.695,
+        "delayMedianMs": 131.118
+      },
+      {
+        "order": "newest",
+        "query": "ledger",
+        "speaker": "all",
+        "total": 89228,
+        "searchMs": [
+          309.552,
+          244.418,
+          296.375,
+          296.033,
+          269.693
+        ],
+        "cheapMs": [
+          316.637,
+          243.468,
+          304.072,
+          300.882,
+          271.532
+        ],
+        "delayMs": [
+          314.351,
+          244.075,
+          305.378,
+          299.667,
+          269.04
+        ],
+        "searchMedianMs": 296.033,
+        "cheapMedianMs": 300.882,
+        "delayMedianMs": 299.667
+      },
+      {
+        "order": "relevance",
+        "query": "heliotrope",
+        "speaker": "user",
+        "total": 1,
+        "searchMs": [
+          12.004,
+          15.197,
+          16.022,
+          15.057,
+          15.121
+        ],
+        "cheapMs": [
+          9.124,
+          14.701,
+          15.429,
+          14.818,
+          23.0
+        ],
+        "delayMs": [
+          11.228,
+          14.474,
+          15.591,
+          14.559,
+          24.243
+        ],
+        "searchMedianMs": 15.121,
+        "cheapMedianMs": 14.818,
+        "delayMedianMs": 14.559
+      },
+      {
+        "order": "relevance",
+        "query": "heliotrope",
+        "speaker": "all",
+        "total": 4,
+        "searchMs": [
+          26.013,
+          16.18,
+          18.242,
+          16.329,
+          15.817
+        ],
+        "cheapMs": [
+          23.012,
+          13.403,
+          22.954,
+          15.124,
+          14.242
+        ],
+        "delayMs": [
+          25.294,
+          11.803,
+          17.773,
+          15.147,
+          14.758
+        ],
+        "searchMedianMs": 16.329,
+        "cheapMedianMs": 15.124,
+        "delayMedianMs": 15.147
+      },
+      {
+        "order": "relevance",
+        "query": "harbor granite",
+        "speaker": "user",
+        "total": 4810,
+        "searchMs": [
+          197.417,
+          133.486,
+          159.999,
+          136.978,
+          170.697
+        ],
+        "cheapMs": [
+          194.795,
+          131.906,
+          162.021,
+          139.814,
+          167.673
+        ],
+        "delayMs": [
+          199.77,
+          132.716,
+          159.714,
+          140.781,
+          170.103
+        ],
+        "searchMedianMs": 159.999,
+        "cheapMedianMs": 162.021,
+        "delayMedianMs": 159.714
+      },
+      {
+        "order": "relevance",
+        "query": "harbor granite",
+        "speaker": "all",
+        "total": 6583,
+        "searchMs": [
+          203.228,
+          210.517,
+          317.077,
+          280.141,
+          316.034
+        ],
+        "cheapMs": [
+          200.56,
+          219.605,
+          326.578,
+          295.393,
+          318.546
+        ],
+        "delayMs": [
+          202.221,
+          220.565,
+          325.504,
+          288.579,
+          318.08
+        ],
+        "searchMedianMs": 280.141,
+        "cheapMedianMs": 295.393,
+        "delayMedianMs": 288.579
+      },
+      {
+        "order": "relevance",
+        "query": "ledger",
+        "speaker": "user",
+        "total": 6642,
+        "searchMs": [
+          420.218,
+          420.52,
+          465.511,
+          438.595,
+          408.019
+        ],
+        "cheapMs": [
+          432.828,
+          419.98,
+          481.433,
+          441.462,
+          417.915
+        ],
+        "delayMs": [
+          416.235,
+          418.949,
+          480.303,
+          438.308,
+          416.172
+        ],
+        "searchMedianMs": 420.52,
+        "cheapMedianMs": 432.828,
+        "delayMedianMs": 418.949
+      },
+      {
+        "order": "relevance",
+        "query": "ledger",
+        "speaker": "all",
+        "total": 6729,
+        "searchMs": [
+          590.179,
+          608.881,
+          739.567,
+          656.169,
+          579.014
+        ],
+        "cheapMs": [
+          597.22,
+          627.608,
+          756.511,
+          669.528,
+          593.159
+        ],
+        "delayMs": [
+          590.005,
+          617.77,
+          747.538,
+          664.821,
+          585.571
+        ],
+        "searchMedianMs": 608.881,
+        "cheapMedianMs": 627.608,
+        "delayMedianMs": 617.77
+      }
+    ],
+    "mcp": [
+      {
+        "surface": "mcp",
+        "order": "newest",
+        "query": "heliotrope",
+        "speaker": "all",
+        "runs": [
+          33.45,
+          17.003,
+          16.143,
+          15.33,
+          19.607
+        ],
+        "median": 17.003,
+        "total": 3
+      },
+      {
+        "surface": "mcp",
+        "order": "relevance",
+        "query": "heliotrope",
+        "speaker": "all",
+        "runs": [
+          31.206,
+          29.466,
+          30.517,
+          23.522,
+          21.336
+        ],
+        "median": 29.466,
+        "total": 4
+      },
+      {
+        "surface": "mcp",
+        "order": "newest",
+        "query": "harbor granite",
+        "speaker": "all",
+        "runs": [
+          118.191,
+          113.801,
+          150.335,
+          116.328,
+          97.822
+        ],
+        "median": 116.328,
+        "total": 17996
+      },
+      {
+        "surface": "mcp",
+        "order": "relevance",
+        "query": "harbor granite",
+        "speaker": "all",
+        "runs": [
+          291.12,
+          418.333,
+          361.833,
+          396.948,
+          362.976
+        ],
+        "median": 362.976,
+        "total": 6583
+      },
+      {
+        "surface": "mcp",
+        "order": "newest",
+        "query": "ledger",
+        "speaker": "all",
+        "runs": [
+          262.973,
+          285.986,
+          386.413,
+          343.436,
+          327.387
+        ],
+        "median": 327.387,
+        "total": 89228
+      },
+      {
+        "surface": "mcp",
+        "order": "relevance",
+        "query": "ledger",
+        "speaker": "all",
+        "runs": [
+          602.743,
+          669.693,
+          630.238,
+          473.126,
+          444.76
+        ],
+        "median": 602.743,
+        "total": 6729
+      }
+    ]
+  },
+  "after": {
+    "corpus": {
+      "conversations": 6729,
+      "messages": 250000,
+      "seed": 1429
+    },
+    "cheapIdleMedianMs": 3.576,
+    "coldSearchMs": 88.021,
+    "measurements": [
+      {
+        "order": "newest",
+        "query": "heliotrope",
+        "speaker": "user",
+        "total": 1,
+        "searchMs": [
+          12.814,
+          11.455,
+          10.065,
+          5.147,
+          13.445
+        ],
+        "cheapMs": [
+          7.491,
+          4.718,
+          4.013,
+          3.353,
+          6.586
+        ],
+        "delayMs": [
+          5.326,
+          4.268,
+          3.51,
+          2.757,
+          5.712
+        ],
+        "searchMedianMs": 11.455,
+        "cheapMedianMs": 4.718,
+        "delayMedianMs": 4.268
+      },
+      {
+        "order": "newest",
+        "query": "heliotrope",
+        "speaker": "all",
+        "total": 3,
+        "searchMs": [
+          12.752,
+          12.268,
+          10.737,
+          11.553,
+          15.385
+        ],
+        "cheapMs": [
+          5.86,
+          5.461,
+          4.373,
+          4.819,
+          8.07
+        ],
+        "delayMs": [
+          5.025,
+          6.025,
+          3.996,
+          4.964,
+          8.013
+        ],
+        "searchMedianMs": 12.268,
+        "cheapMedianMs": 5.461,
+        "delayMedianMs": 5.025
+      },
+      {
+        "order": "newest",
+        "query": "harbor granite",
+        "speaker": "user",
+        "total": 4665,
+        "searchMs": [
+          64.874,
+          48.915,
+          53.064,
+          59.742,
+          55.767
+        ],
+        "cheapMs": [
+          4.211,
+          6.154,
+          5.455,
+          4.003,
+          4.152
+        ],
+        "delayMs": [
+          3.819,
+          5.327,
+          4.672,
+          3.706,
+          3.401
+        ],
+        "searchMedianMs": 55.767,
+        "cheapMedianMs": 4.211,
+        "delayMedianMs": 3.819
+      },
+      {
+        "order": "newest",
+        "query": "harbor granite",
+        "speaker": "all",
+        "total": 17996,
+        "searchMs": [
+          77.731,
+          105.475,
+          85.791,
+          83.991,
+          92.67
+        ],
+        "cheapMs": [
+          3.271,
+          3.055,
+          5.43,
+          4.397,
+          8.086
+        ],
+        "delayMs": [
+          3.017,
+          2.622,
+          5.244,
+          4.047,
+          8.591
+        ],
+        "searchMedianMs": 85.791,
+        "cheapMedianMs": 4.397,
+        "delayMedianMs": 4.047
+      },
+      {
+        "order": "newest",
+        "query": "ledger",
+        "speaker": "user",
+        "total": 23557,
+        "searchMs": [
+          215.79,
+          170.713,
+          172.704,
+          186.964,
+          129.889
+        ],
+        "cheapMs": [
+          6.944,
+          9.075,
+          16.194,
+          3.614,
+          3.558
+        ],
+        "delayMs": [
+          7.554,
+          7.487,
+          13.432,
+          3.384,
+          2.725
+        ],
+        "searchMedianMs": 172.704,
+        "cheapMedianMs": 6.944,
+        "delayMedianMs": 7.487
+      },
+      {
+        "order": "newest",
+        "query": "ledger",
+        "speaker": "all",
+        "total": 89228,
+        "searchMs": [
+          234.891,
+          270.593,
+          244.866,
+          363.388,
+          407.93
+        ],
+        "cheapMs": [
+          3.601,
+          4.067,
+          3.127,
+          7.189,
+          4.02
+        ],
+        "delayMs": [
+          3.141,
+          6.101,
+          3.292,
+          5.436,
+          3.963
+        ],
+        "searchMedianMs": 270.593,
+        "cheapMedianMs": 4.02,
+        "delayMedianMs": 3.963
+      },
+      {
+        "order": "relevance",
+        "query": "heliotrope",
+        "speaker": "user",
+        "total": 1,
+        "searchMs": [
+          24.181,
+          27.515,
+          36.393,
+          24.412,
+          23.449
+        ],
+        "cheapMs": [
+          4.801,
+          6.977,
+          7.71,
+          8.492,
+          5.458
+        ],
+        "delayMs": [
+          3.748,
+          5.65,
+          9.936,
+          8.651,
+          5.036
+        ],
+        "searchMedianMs": 24.412,
+        "cheapMedianMs": 6.977,
+        "delayMedianMs": 5.65
+      },
+      {
+        "order": "relevance",
+        "query": "heliotrope",
+        "speaker": "all",
+        "total": 4,
+        "searchMs": [
+          30.883,
+          24.215,
+          29.293,
+          26.375,
+          37.574
+        ],
+        "cheapMs": [
+          7.218,
+          6.316,
+          10.038,
+          7.169,
+          4.709
+        ],
+        "delayMs": [
+          14.047,
+          4.464,
+          8.141,
+          6.582,
+          5.947
+        ],
+        "searchMedianMs": 29.293,
+        "cheapMedianMs": 7.169,
+        "delayMedianMs": 6.582
+      },
+      {
+        "order": "relevance",
+        "query": "harbor granite",
+        "speaker": "user",
+        "total": 4810,
+        "searchMs": [
+          239.122,
+          192.356,
+          214.089,
+          235.563,
+          259.343
+        ],
+        "cheapMs": [
+          4.055,
+          5.947,
+          8.582,
+          3.698,
+          6.789
+        ],
+        "delayMs": [
+          18.081,
+          6.004,
+          6.331,
+          3.458,
+          6.885
+        ],
+        "searchMedianMs": 235.563,
+        "cheapMedianMs": 5.947,
+        "delayMedianMs": 6.331
+      },
+      {
+        "order": "relevance",
+        "query": "harbor granite",
+        "speaker": "all",
+        "total": 6583,
+        "searchMs": [
+          328.882,
+          280.016,
+          317.362,
+          285.12,
+          278.631
+        ],
+        "cheapMs": [
+          3.102,
+          5.457,
+          3.463,
+          7.417,
+          4.188
+        ],
+        "delayMs": [
+          7.159,
+          6.272,
+          3.569,
+          5.94,
+          4.529
+        ],
+        "searchMedianMs": 285.12,
+        "cheapMedianMs": 4.188,
+        "delayMedianMs": 5.94
+      },
+      {
+        "order": "relevance",
+        "query": "ledger",
+        "speaker": "user",
+        "total": 6642,
+        "searchMs": [
+          348.528,
+          396.371,
+          392.148,
+          383.42,
+          419.07
+        ],
+        "cheapMs": [
+          9.599,
+          5.452,
+          11.238,
+          3.83,
+          3.722
+        ],
+        "delayMs": [
+          10.35,
+          7.147,
+          8.304,
+          3.734,
+          3.118
+        ],
+        "searchMedianMs": 392.148,
+        "cheapMedianMs": 5.452,
+        "delayMedianMs": 7.147
+      },
+      {
+        "order": "relevance",
+        "query": "ledger",
+        "speaker": "all",
+        "total": 6729,
+        "searchMs": [
+          595.44,
+          528.318,
+          473.677,
+          448.479,
+          338.613
+        ],
+        "cheapMs": [
+          2.26,
+          5.56,
+          4.746,
+          3.873,
+          3.952
+        ],
+        "delayMs": [
+          6.939,
+          4.796,
+          6.345,
+          3.505,
+          3.769
+        ],
+        "searchMedianMs": 473.677,
+        "cheapMedianMs": 3.952,
+        "delayMedianMs": 4.796
+      }
+    ],
+    "mcp": [
+      {
+        "surface": "mcp",
+        "order": "newest",
+        "query": "heliotrope",
+        "speaker": "all",
+        "runs": [
+          23.362,
+          11.977,
+          11.785,
+          9.337,
+          9.57
+        ],
+        "median": 11.785,
+        "total": 3
+      },
+      {
+        "surface": "mcp",
+        "order": "relevance",
+        "query": "heliotrope",
+        "speaker": "all",
+        "runs": [
+          15.483,
+          18.557,
+          16.507,
+          17.081,
+          15.099
+        ],
+        "median": 16.507,
+        "total": 4
+      },
+      {
+        "surface": "mcp",
+        "order": "newest",
+        "query": "harbor granite",
+        "speaker": "all",
+        "runs": [
+          83.541,
+          81.753,
+          96.806,
+          84.631,
+          90.848
+        ],
+        "median": 84.631,
+        "total": 17996
+      },
+      {
+        "surface": "mcp",
+        "order": "relevance",
+        "query": "harbor granite",
+        "speaker": "all",
+        "runs": [
+          247.476,
+          192.746,
+          205.319,
+          240.927,
+          216.383
+        ],
+        "median": 216.383,
+        "total": 6583
+      },
+      {
+        "surface": "mcp",
+        "order": "newest",
+        "query": "ledger",
+        "speaker": "all",
+        "runs": [
+          247.731,
+          239.73,
+          257.639,
+          247.561,
+          259.028
+        ],
+        "median": 247.731,
+        "total": 89228
+      },
+      {
+        "surface": "mcp",
+        "order": "relevance",
+        "query": "ledger",
+        "speaker": "all",
+        "runs": [
+          533.592,
+          461.062,
+          473.849,
+          494.936,
+          376.221
+        ],
+        "median": 473.849,
+        "total": 6729
+      }
+    ]
+  },
+  "recheck": {
+    "buildCommit": "f2672a9ab28f1bc2f1e9f00c228d043ee0ca72da",
+    "mainCommit": "2fa6519f486d85c973f71a2a2ea2514b9890ccac",
+    "measuredAt": "2026-10-11T04:29:39.450748+00:00",
+    "result": {
+      "corpus": {
+        "conversations": 6729,
+        "messages": 250000,
+        "seed": 1429
+      },
+      "cheapIdleMedianMs": 2.7012459999968996,
+      "coldSearchMs": 76.68983200000002,
+      "measurements": [
+        {
+          "order": "newest",
+          "query": "heliotrope",
+          "speaker": "user",
+          "total": 1,
+          "searchMs": [
+            12.73976699999912,
+            6.060686000000715,
+            13.321144000001368,
+            10.70206600000165,
+            12.899402999999438
+          ],
+          "cheapMs": [
+            5.517119000000093,
+            4.863283999999112,
+            6.739096000001155,
+            4.323575000002165,
+            5.75324399999954
+          ],
+          "delayMs": [
+            4.834483,
+            2.856946,
+            6.76395,
+            4.219602,
+            4.766024
+          ],
+          "searchMedianMs": 12.73976699999912,
+          "cheapMedianMs": 5.517119000000093,
+          "delayMedianMs": 4.766024
+        },
+        {
+          "order": "newest",
+          "query": "heliotrope",
+          "speaker": "all",
+          "total": 3,
+          "searchMs": [
+            9.807426999999734,
+            5.521359000002121,
+            9.433610000000044,
+            6.4937319999989995,
+            11.667813000000024
+          ],
+          "cheapMs": [
+            4.594508999998652,
+            3.9972950000010314,
+            3.3066429999998945,
+            5.567362999998295,
+            5.113887999999861
+          ],
+          "delayMs": [
+            2.719728,
+            2.682093,
+            2.85734,
+            3.106036,
+            4.340223
+          ],
+          "searchMedianMs": 9.433610000000044,
+          "cheapMedianMs": 4.594508999998652,
+          "delayMedianMs": 2.85734
+        },
+        {
+          "order": "newest",
+          "query": "harbor granite",
+          "speaker": "user",
+          "total": 4665,
+          "searchMs": [
+            77.4163320000007,
+            81.03376600000047,
+            74.72825400000147,
+            61.10640699999931,
+            68.4097099999999
+          ],
+          "cheapMs": [
+            3.5228919999972277,
+            11.888287000001583,
+            7.181730000000243,
+            5.451915999998164,
+            3.7316780000001017
+          ],
+          "delayMs": [
+            3.429072,
+            7.638349,
+            5.682476,
+            5.362747,
+            2.875545
+          ],
+          "searchMedianMs": 74.72825400000147,
+          "cheapMedianMs": 5.451915999998164,
+          "delayMedianMs": 5.362747
+        },
+        {
+          "order": "newest",
+          "query": "harbor granite",
+          "speaker": "all",
+          "total": 17996,
+          "searchMs": [
+            84.12850099999923,
+            82.20554699999775,
+            76.55924199999936,
+            96.57672099999763,
+            96.17399400000068
+          ],
+          "cheapMs": [
+            3.93537600000127,
+            3.961962000001222,
+            3.1189760000015667,
+            4.102726000000985,
+            5.208813999997801
+          ],
+          "delayMs": [
+            3.374585,
+            6.409527,
+            3.213808,
+            4.247096,
+            4.671358
+          ],
+          "searchMedianMs": 84.12850099999923,
+          "cheapMedianMs": 3.961962000001222,
+          "delayMedianMs": 4.247096
+        },
+        {
+          "order": "newest",
+          "query": "ledger",
+          "speaker": "user",
+          "total": 23557,
+          "searchMs": [
+            179.53599700000268,
+            146.72671399999672,
+            155.3267190000006,
+            157.62881600000037,
+            172.32962500000212
+          ],
+          "cheapMs": [
+            3.5299400000003516,
+            4.600299999998242,
+            3.1402610000004643,
+            3.87575900000229,
+            3.585116999998718
+          ],
+          "delayMs": [
+            6.13716,
+            4.279687,
+            3.058558,
+            8.87797,
+            2.860732
+          ],
+          "searchMedianMs": 157.62881600000037,
+          "cheapMedianMs": 3.585116999998718,
+          "delayMedianMs": 4.279687
+        },
+        {
+          "order": "newest",
+          "query": "ledger",
+          "speaker": "all",
+          "total": 89228,
+          "searchMs": [
+            308.3186900000037,
+            262.5241479999968,
+            272.26321999999345,
+            321.9302700000044,
+            312.53973699999915
+          ],
+          "cheapMs": [
+            4.818065999999817,
+            5.057505999997375,
+            3.871172999999544,
+            4.698365000003832,
+            4.220980999998574
+          ],
+          "delayMs": [
+            4.365994,
+            8.057321,
+            3.368596,
+            4.609254,
+            6.002782
+          ],
+          "searchMedianMs": 308.3186900000037,
+          "cheapMedianMs": 4.698365000003832,
+          "delayMedianMs": 4.609254
+        },
+        {
+          "order": "relevance",
+          "query": "heliotrope",
+          "speaker": "user",
+          "total": 1,
+          "searchMs": [
+            14.45330400000239,
+            13.170625999999174,
+            13.756118999997852,
+            16.819842000004428,
+            15.2468219999937
+          ],
+          "cheapMs": [
+            4.082701999999699,
+            3.570514999999432,
+            3.3812620000026072,
+            3.34098300000187,
+            4.395148999996309
+          ],
+          "delayMs": [
+            4.015906,
+            2.841471,
+            2.790542,
+            2.803357,
+            4.408388
+          ],
+          "searchMedianMs": 14.45330400000239,
+          "cheapMedianMs": 3.570514999999432,
+          "delayMedianMs": 2.841471
+        },
+        {
+          "order": "relevance",
+          "query": "heliotrope",
+          "speaker": "all",
+          "total": 4,
+          "searchMs": [
+            16.20247499999823,
+            16.185708000004524,
+            12.27740499999345,
+            13.13853100000415,
+            15.821470000002591
+          ],
+          "cheapMs": [
+            4.154468000000634,
+            4.325622000003932,
+            3.6877349999995204,
+            3.547956999995222,
+            3.4098880000019562
+          ],
+          "delayMs": [
+            3.693916,
+            3.865226,
+            3.308596,
+            2.752121,
+            2.827378
+          ],
+          "searchMedianMs": 15.821470000002591,
+          "cheapMedianMs": 3.6877349999995204,
+          "delayMedianMs": 3.308596
+        },
+        {
+          "order": "relevance",
+          "query": "harbor granite",
+          "speaker": "user",
+          "total": 4810,
+          "searchMs": [
+            221.59836099999666,
+            224.50602100000106,
+            196.84209399999963,
+            205.9375480000017,
+            192.5505520000006
+          ],
+          "cheapMs": [
+            5.974865999996837,
+            9.194101999994018,
+            12.517784000003303,
+            3.896924000000581,
+            2.8253609999956097
+          ],
+          "delayMs": [
+            6.388407,
+            6.690251,
+            10.602804,
+            3.622801,
+            2.496794
+          ],
+          "searchMedianMs": 205.9375480000017,
+          "cheapMedianMs": 5.974865999996837,
+          "delayMedianMs": 6.388407
+        },
+        {
+          "order": "relevance",
+          "query": "harbor granite",
+          "speaker": "all",
+          "total": 6583,
+          "searchMs": [
+            300.3710009999995,
+            282.1321490000046,
+            262.71127200000046,
+            290.46128700000554,
+            287.6101540000018
+          ],
+          "cheapMs": [
+            4.933774000004632,
+            2.6244240000014543,
+            2.684300999993866,
+            4.438792999993893,
+            6.972990000002028
+          ],
+          "delayMs": [
+            6.159411,
+            2.237559,
+            1.986774,
+            4.377001,
+            6.895181
+          ],
+          "searchMedianMs": 287.6101540000018,
+          "cheapMedianMs": 4.438792999993893,
+          "delayMedianMs": 4.377001
+        },
+        {
+          "order": "relevance",
+          "query": "ledger",
+          "speaker": "user",
+          "total": 6642,
+          "searchMs": [
+            383.771209999999,
+            302.0126040000032,
+            301.07243000000017,
+            297.64605799999845,
+            265.05131999999867
+          ],
+          "cheapMs": [
+            6.835531999997329,
+            2.888864000000467,
+            3.3112199999959557,
+            2.406793000001926,
+            3.5377430000007735
+          ],
+          "delayMs": [
+            6.620337,
+            4.694864,
+            3.824877,
+            2.565181,
+            4.906454
+          ],
+          "searchMedianMs": 301.07243000000017,
+          "cheapMedianMs": 3.3112199999959557,
+          "delayMedianMs": 4.694864
+        },
+        {
+          "order": "relevance",
+          "query": "ledger",
+          "speaker": "all",
+          "total": 6729,
+          "searchMs": [
+            492.35677399999986,
+            495.9223970000021,
+            436.48153199999797,
+            480.91151199999877,
+            395.4973739999987
+          ],
+          "cheapMs": [
+            5.0809080000035465,
+            3.6343960000012885,
+            2.924288999995042,
+            3.4497120000014547,
+            3.6980100000000675
+          ],
+          "delayMs": [
+            4.712804,
+            3.038059,
+            4.788362,
+            2.492782,
+            2.886815
+          ],
+          "searchMedianMs": 480.91151199999877,
+          "cheapMedianMs": 3.6343960000012885,
+          "delayMedianMs": 3.038059
+        }
+      ],
+      "mcp": [
+        {
+          "surface": "mcp",
+          "order": "newest",
+          "query": "heliotrope",
+          "speaker": "all",
+          "runs": [
+            29.465930999998818,
+            13.165493000000424,
+            10.312459999993735,
+            9.807850000004692,
+            9.629154000002018
+          ],
+          "median": 10.312459999993735,
+          "total": 3
+        },
+        {
+          "surface": "mcp",
+          "order": "relevance",
+          "query": "heliotrope",
+          "speaker": "all",
+          "runs": [
+            17.377605000001495,
+            20.110397000004014,
+            16.992785000002186,
+            23.590062999996007,
+            22.245258999995713
+          ],
+          "median": 20.110397000004014,
+          "total": 4
+        },
+        {
+          "surface": "mcp",
+          "order": "newest",
+          "query": "harbor granite",
+          "speaker": "all",
+          "runs": [
+            112.40142999999807,
+            96.29395800000202,
+            121.29321700000582,
+            94.90211900000577,
+            92.59662300000491
+          ],
+          "median": 96.29395800000202,
+          "total": 17996
+        },
+        {
+          "surface": "mcp",
+          "order": "relevance",
+          "query": "harbor granite",
+          "speaker": "all",
+          "runs": [
+            252.953168,
+            247.92740900000354,
+            252.54868400000123,
+            248.55178799999703,
+            271.84089900000254
+          ],
+          "median": 252.54868400000123,
+          "total": 6583
+        },
+        {
+          "surface": "mcp",
+          "order": "newest",
+          "query": "ledger",
+          "speaker": "all",
+          "runs": [
+            237.8664790000039,
+            324.7169770000037,
+            334.65229399999953,
+            253.42063900000358,
+            317.6178310000032
+          ],
+          "median": 317.6178310000032,
+          "total": 89228
+        },
+        {
+          "surface": "mcp",
+          "order": "relevance",
+          "query": "ledger",
+          "speaker": "all",
+          "runs": [
+            493.2421299999987,
+            434.51598899999954,
+            484.94722999999794,
+            475.9078689999951,
+            423.9531849999985
+          ],
+          "median": 475.9078689999951,
+          "total": 6729
+        }
+      ]
+    }
+  }
+}

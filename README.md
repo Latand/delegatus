@@ -324,11 +324,18 @@ finished lanes four days after they settle when every commit is on the
 remote. It skips any worktree that is still in use or holds unpublished
 work.
 
-When a stage reports, its agent can leave one to three short rules for the
-next agent of its role, for every role in the project or for every project
-on the machine, and those agents start with them. Review and verification
-stages get none and leave none. **Learned rules** on the board's ⋯ menu
-shows the three groups and removes a rule with ×.
+When a stage reports, its agent gives one answer about learned rules, and
+the default is none. It can instead rewrite a rule it was given, by its id,
+with sharper or more general text; the rule keeps its id and level, and the
+earlier text is kept as a version that can be restored. Or it can leave one
+new rule, when that rule would change what an agent does on a different
+task, at the narrowest level that holds: the agents of its role, every role
+in the project, or every project on the machine. A rule that names a pull
+request, an issue, a commit or another id of one task is refused, and that
+detail belongs in the stage report. Agents of that level read the rules in
+their engine instructions at every start. Review and verification stages get
+none and leave none. **Learned rules** on the board's ⋯ menu shows the three
+groups and removes a rule with ×.
 
 On the task's card a pipeline takes one row: its stages as a chain, its
 state, its pull request and the issues that pull request closes. When it
@@ -693,7 +700,7 @@ The tools, by area:
 - **pipelines:** `create_pipeline`, `list_pipelines`, `get_pipeline`,
   `pipeline_action`, `link_task_to_pipeline`, `stage_report`, which a
   stage agent calls to report its verdict, and `leave_lesson`, which stores
-  the rules it leaves for the next agents;
+  the rule it leaves for the next agents or rewrites one it was given;
 - **review flows:** `list_flows`, `get_flow`, `flow_action`;
 - **the orchestrator seat:** `create_orchestrator`, `get_orchestrator`,
   `rotate_orchestrator`, `send_message_to_orchestrator`,

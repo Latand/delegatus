@@ -92,6 +92,8 @@ export type RuntimeEvent =
   | { kind: "turn-started"; turnId: string; seq: number }
   | { kind: "delta"; turnId: string; text: string; seq: number }
   | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
+    /** Raw live user-echo observation, retained through event replay. */
+    deliveryEcho?: { operationId: string; at: string };
     /** Original native activity observation time; null for history whose time needs transcript evidence. */
     activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }

@@ -34,6 +34,8 @@ export interface CodexAppServerClock {
 
 export interface CodexAppServerOptions {
   home: string;
+  /** Complete argv for a specialised app-server consumer. */
+  args?: readonly string[];
   spawn?: CodexAppServerSpawn;
   clock?: CodexAppServerClock;
   requestTimeoutMs?: number;
@@ -41,9 +43,9 @@ export interface CodexAppServerOptions {
   maxStdoutBufferBytes?: number;
   signalProcess?: ProcessSignal;
   readProtocolVersion?: typeof installedCodexVersion;
-  /** Thread migration needs experimental path-based resume. Status/sign-in
-      clients stay on the stable surface. */
-  protocolProfile?: "account" | "thread-control";
+  /** Thread migration and voice declare the methods and fields they need.
+      Status/sign-in clients stay on the stable surface. */
+  protocolProfile?: "account" | "thread-control" | "voice";
 }
 
 export interface DeviceCodeChallenge {
@@ -286,9 +288,11 @@ export class CodexAppServerClient {
     const protocol = new CodexPinnedProtocol((options.readProtocolVersion ?? installedCodexVersion)(codexAccountBinary(), process.env));
     const capabilities = options.protocolProfile === "thread-control"
       ? protocol.initializeCapabilities(["thread/fork", "thread/resume", "thread/read", "thread/name/set", "thread/goal/set"], [{ method: "thread/resume", field: "path" }])
+      : options.protocolProfile === "voice"
+      ? protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "thread/start", "thread/realtime/start", "thread/realtime/appendSpeech", "thread/realtime/stop"])
       : protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "account/login/start"]);
     const client = new CodexAppServerClient(
-      (options.spawn ?? spawnCodexAppServer)(options.home, CODEX_ACCOUNT_APP_SERVER_ARGS),
+      (options.spawn ?? spawnCodexAppServer)(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS),
       options.clock ?? defaultClock,
       options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS,
       options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS,
@@ -478,7 +482,7 @@ export class CodexAppServerClient {
     this.write({ jsonrpc: "2.0", method, ...(params ? { params } : {}) });
   }
 
-  private request(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  request(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (this.closed) return Promise.reject(new CodexAppServerError("Codex app-server client is closed"));
     try { this.protocol.assertRequest(method, params ?? {}, this.experimentalApi); } catch (error) { return Promise.reject(error); }
     const id = this.nextId++;
@@ -504,6 +508,8 @@ export class CodexAppServerClient {
   }
 
   private write(message: Record<string, unknown>): void {
+    // An asynchronous server tool may settle after close ended stdin.
+    if (this.closed) return;
     try {
       this.child.stdin.write(JSON.stringify(message) + "\n");
     } catch (error) {

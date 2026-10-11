@@ -2444,7 +2444,7 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lessons: args.lessons, none: args.none });
+    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none });
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
@@ -5161,7 +5161,7 @@ function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; bridgeR
 /** #2187 §4.1: whether the lane's project merges when the review passes, and
     where the lane's own merge stands when the runner took it. #2146: whether
     the project's bridge reports are on. */
-function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number } } {
+function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number | null } } {
   const merge = pipeline.merge;
   return {
     mergeOnReview: mergeOnReviewEnabled(pipeline.project),
