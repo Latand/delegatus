@@ -485,6 +485,16 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(h.merges()).toHaveLength(1);
   });
 
+  test("UNSTABLE with green required contexts merges while an optional job is pending", async () => {
+    const required = ["privacy-publication", "privacy-tracker-audit"];
+    const h = harness({ required, lanes: [lane("L1")], prs: [openPr(11, {
+      checks: [...required.map(green), pending("Docker")], mergeStateStatus: "UNSTABLE",
+    })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merge("L1")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+  });
+
   test("BEHIND updates the branch with the chain tip as expected_head_sha, then merges the update's head", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
     h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });

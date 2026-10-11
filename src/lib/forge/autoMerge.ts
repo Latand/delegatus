@@ -357,12 +357,13 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
     if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
     return { kind: "wait", state: "waiting-checks", reason: missing.length ? `waiting for ${missing.join(", ")}` : null };
   }
-  if ((view.mergeStateStatus === "CLEAN" || view.mergeStateStatus === "HAS_HOOKS") && view.mergeable === "MERGEABLE") return { kind: "merge" };
+  // UNSTABLE is mergeable once required contexts pass and reported failures are ruled out above.
+  if ((view.mergeStateStatus === "CLEAN" || view.mergeStateStatus === "HAS_HOOKS" || view.mergeStateStatus === "UNSTABLE") && view.mergeable === "MERGEABLE") return { kind: "merge" };
   if (view.mergeStateStatus === "BLOCKED") {
     const review = view.reviewDecision === "REVIEW_REQUIRED" || view.reviewDecision === "CHANGES_REQUESTED";
     return { kind: "block", reason: review ? MERGE_REASONS.reviewRequired : MERGE_REASONS.protection };
   }
-  /* UNKNOWN, a null or UNKNOWN `mergeable`, UNSTABLE: GitHub is still
+  /* UNKNOWN, a null or UNKNOWN `mergeable`: GitHub is still
      computing; read again, inside the same bound. */
   if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
   return { kind: "wait", state: "checking", reason: null };

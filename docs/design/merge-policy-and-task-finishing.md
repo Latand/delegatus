@@ -387,7 +387,7 @@ Per eligible lane, a small state machine stored on the pipeline as
 `merge: PipelineMerge`:
 
 ```
-queued → checking ─┬─ head in chain, CLEAN or HAS_HOOKS, checks settled + green ─→ merging → merged
+queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required checks settled + green, no red ─→ merging → merged
                    ├─ checks not settled, UNKNOWN, mergeable null/UNKNOWN,
                    │  BLOCKED while a required check is pending ─→ waiting-checks (60 s, ≤ 90 min) → checking
                    ├─ BEHIND ─→ updating (update-branch) → waiting-checks
@@ -400,8 +400,10 @@ queued → checking ─┬─ head in chain, CLEAN or HAS_HOOKS, checks settled 
    `mergeStateStatus: UNKNOWN` or `mergeable: UNKNOWN`/null is routine right
    after a push or an update, while GitHub computes mergeability. It means
    "read again next poll", inside the same 90-minute bound, and never blocks
-   by itself. `UNSTABLE` (a non-required check failed) is caught by the green
-   rule. `BLOCKED` after the checks have settled green means protection wants
+   by itself. `UNSTABLE` is mergeable with non-passing commit status: after
+   required checks settle green, the runner can merge it with optional jobs
+   still pending. A reported failure remains caught by the green rule.
+   `BLOCKED` after the checks have settled green means protection wants
    something the runner cannot give (an approving review, a signed commit),
    and blocks with GitHub's reason.
 2. **Head fence, as a chain.** The runner keeps `merge.chain`: the lane's
