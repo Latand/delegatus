@@ -127,7 +127,14 @@ describe("memory profile", () => {
     const service = createProfileService({ rules: () => structuredClone(rules), read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: "haiku", prepare: async () => async (_, locale) => {
       calls++;
       const answer = sampleAnswer(locale === "uk");
-      answer.topics[0]!.title = locale === "uk" ? "Перевірка кольорів дуже довгих і незручних зразків" : "Checking colors of particularly long and awkward samples";
+      const character = locale === "uk" ? "Ж" : "W";
+      const unbroken = (length: number) => character.repeat(length);
+      answer.headline = unbroken(80);
+      answer.text = unbroken(80);
+      for (const topic of answer.topics) {
+        topic.title = unbroken(35);
+        if (topic.text) topic.text = unbroken(100);
+      }
       return answer;
     } });
     let state: "none" | "ready" | "running" | "error" | "stale" | "empty" = "none";
@@ -157,16 +164,23 @@ describe("memory profile", () => {
           await page.locator("[data-memory-profile]").waitFor();
           expect(calls).toBe(before);
           await page.locator("[data-profile-summarize]").click();
-          await page.getByText(sampleAnswer(lang === "uk").headline, { exact: true }).first().waitFor();
+          const headline = lang === "uk" ? "Ж".repeat(80) : "W".repeat(80);
+          await page.getByText(headline, { exact: true }).first().waitFor();
           await page.screenshot({ path: path.join(out, `ready-${width}-${scheme}-${lang}.png`) });
           const geometry = await page.evaluate(() => {
             const profile = document.querySelector<HTMLElement>("[data-memory-profile]")!;
             const window = document.querySelector<HTMLElement>("[data-rules-window]")!;
+            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] > div h3")!;
+            const summarize = profile.querySelector<HTMLElement>("[data-profile-summarize]")!;
+            const headlineRect = headline.getBoundingClientRect();
+            const summarizeRect = summarize.getBoundingClientRect();
             const pills = [...profile.querySelectorAll<HTMLElement>("button.truncate")];
             return { overflow: profile.scrollWidth - profile.clientWidth, left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
+              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top,
               truncatedPills: pills.filter(pill => pill.scrollWidth > pill.clientWidth).length, pills: pills.map(pill => ({ width: pill.getBoundingClientRect().width, maxWidth: getComputedStyle(pill).maxWidth })) };
           });
           expect(geometry.overflow).toBeLessThanOrEqual(1); expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.headlineButtonOverlap).toBe(false);
           expect(geometry.truncatedPills).toBeGreaterThan(0);
           readings.push({ width, scheme, lang, geometry });
           await page.locator("[data-profile-slice] button").last().scrollIntoViewIfNeeded();

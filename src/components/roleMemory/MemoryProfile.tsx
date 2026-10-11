@@ -29,8 +29,8 @@ export function MemoryProfile({ rules, renderRules }: { rules: RoleMemoryProject
       <h4 className="m-0 text-[12px] font-semibold text-secondary">{t("memoryProfile.encountered")}</h4>
       <div className="mt-2 grid items-start gap-2 md:grid-cols-3">
         {part.answer.topics.map((topic, index) => <button key={index} type="button" disabled={!topic.ruleIds.length} onClick={() => openRules(topic.ruleIds)} className="min-w-0 rounded-lg border border-border bg-canvas p-3 text-left hover:bg-sunken disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-          <span className="block text-[12.5px] font-semibold">{topic.title}</span>
-          <span className="mt-1 block text-[12px] leading-[18px] text-secondary">{topic.text}</span>
+          <span className="block text-[12.5px] font-semibold [overflow-wrap:anywhere]">{topic.title}</span>
+          <span className="mt-1 block text-[12px] leading-[18px] text-secondary [overflow-wrap:anywhere]">{topic.text}</span>
           <span className="mt-2 block text-[11px] text-accent">{t("memoryProfile.rules", { count: topic.ruleIds.length })} →</span>
         </button>)}
       </div>
@@ -53,8 +53,8 @@ export function MemoryProfile({ rules, renderRules }: { rules: RoleMemoryProject
     <section data-profile-ready={overall ? "" : undefined} className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <h3 className="m-0 text-[16px] font-semibold">{overall?.answer.headline ?? t(count ? "memoryProfile.noneTitle" : "memoryProfile.emptyTitle")}</h3>
-          <p className="mb-0 mt-2 text-[13px] leading-5 text-secondary">{overall?.answer.text ?? t(count ? "memoryProfile.noneText" : "memoryProfile.emptyText")}</p>
+          <h3 className="m-0 text-[16px] font-semibold [overflow-wrap:anywhere]">{overall?.answer.headline ?? t(count ? "memoryProfile.noneTitle" : "memoryProfile.emptyTitle")}</h3>
+          <p className="mb-0 mt-2 text-[13px] leading-5 text-secondary [overflow-wrap:anywhere]">{overall?.answer.text ?? t(count ? "memoryProfile.noneText" : "memoryProfile.emptyText")}</p>
         </div>
         {count > 0 && rules.enabled ? <button data-profile-summarize="" type="button" disabled={running} onClick={() => void summarize()} className={`${BUTTON} shrink-0 bg-accent text-white disabled:opacity-60`}>
           {t(running ? "memoryProfile.summarizing" : code ? "memoryProfile.retry" : hasParts ? "memoryProfile.refresh" : "memoryProfile.summarize")}
@@ -75,8 +75,8 @@ export function MemoryProfile({ rules, renderRules }: { rules: RoleMemoryProject
           const summary = view?.slices.find(slice => slice.scope === scope.scope)?.summary;
           return <section key={scope.scope} data-profile-slice={scope.kind} data-profile-ready={summary ? "" : undefined} className={`min-w-0 rounded-xl border border-border border-t-[3px] bg-card p-3 ${TONE[scope.kind]}`}>
             <p className="m-0 text-[11px] font-semibold text-muted">{label(scope)}</p>
-            <h4 className="mb-0 mt-2 text-[14px] font-semibold">{summary?.answer.headline ?? label(scope)}</h4>
-            {summary ? <><p className="mb-0 mt-1 text-[12.5px] leading-[19px] text-secondary">{summary.answer.text}</p>{topics(summary)}</> : <p className="mb-0 mt-2 text-[12px] text-muted">{t(running ? "memoryProfile.summarizing" : "memoryProfile.sliceEmpty")}</p>}
+            <h4 className="mb-0 mt-2 text-[14px] font-semibold [overflow-wrap:anywhere]">{summary?.answer.headline ?? label(scope)}</h4>
+            {summary ? <><p className="mb-0 mt-1 text-[12.5px] leading-[19px] text-secondary [overflow-wrap:anywhere]">{summary.answer.text}</p>{topics(summary)}</> : <p className="mb-0 mt-2 text-[12px] text-muted">{t(running ? "memoryProfile.summarizing" : "memoryProfile.sliceEmpty")}</p>}
             <button type="button" onClick={() => setSelection({ scopes: [scope] })} className={`${BUTTON} mt-3 border border-border text-accent hover:bg-sunken`}>{t("memoryProfile.rules", { count: scope.active.length })} →</button>
           </section>;
         })}
