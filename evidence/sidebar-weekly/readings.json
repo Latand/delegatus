@@ -1,0 +1,166 @@
+[
+  {
+    "shot": "sidebar-1440-en",
+    "lines": [
+      {
+        "engine": "claude",
+        "id": "default",
+        "text": "Main left 77%",
+        "value": "left 77%",
+        "bar": "77",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "work",
+        "text": "Work left 41%",
+        "value": "left 41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "night",
+        "text": "Night no weekly data",
+        "value": "no weekly data",
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "default",
+        "text": "Personal left 78%",
+        "value": "left 78%",
+        "bar": "78",
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "review",
+        "text": "Review left 23%",
+        "value": "left 23%",
+        "bar": "23",
+        "overflow": false
+      }
+    ],
+    "allWindows": {
+      "line": "left 77%",
+      "windows": [
+        "5h left 36% reset in 3h · 19:38",
+        "Week left 77% reset in 3d · Oct 14 15:58"
+      ]
+    }
+  },
+  {
+    "shot": "accounts-390-en",
+    "cards": [
+      {
+        "id": "default",
+        "corner": "77% left Week",
+        "inside": true
+      },
+      {
+        "id": "work",
+        "corner": "41% left Week",
+        "inside": true
+      },
+      {
+        "id": "night",
+        "corner": "no weekly data",
+        "inside": true
+      },
+      {
+        "id": "default",
+        "corner": "78% left Week",
+        "inside": true
+      },
+      {
+        "id": "review",
+        "corner": "23% left Week",
+        "inside": true
+      }
+    ]
+  },
+  {
+    "shot": "sidebar-1440-uk",
+    "lines": [
+      {
+        "engine": "claude",
+        "id": "default",
+        "text": "Main лишилось 77%",
+        "value": "лишилось 77%",
+        "bar": "77",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "work",
+        "text": "Work лишилось 41%",
+        "value": "лишилось 41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "engine": "claude",
+        "id": "night",
+        "text": "Night немає тижневих даних",
+        "value": "немає тижневих даних",
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "default",
+        "text": "Personal лишилось 78%",
+        "value": "лишилось 78%",
+        "bar": "78",
+        "overflow": false
+      },
+      {
+        "engine": "codex",
+        "id": "review",
+        "text": "Review лишилось 23%",
+        "value": "лишилось 23%",
+        "bar": "23",
+        "overflow": false
+      }
+    ],
+    "allWindows": {
+      "line": "лишилось 77%",
+      "windows": [
+        "5 год лишилось 36% скид через 3 год · 19:38",
+        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 15:58"
+      ]
+    }
+  },
+  {
+    "shot": "accounts-390-uk",
+    "cards": [
+      {
+        "id": "default",
+        "corner": "77% лишилось Тиждень",
+        "inside": true
+      },
+      {
+        "id": "work",
+        "corner": "41% лишилось Тиждень",
+        "inside": true
+      },
+      {
+        "id": "night",
+        "corner": "немає тижневих даних",
+        "inside": true
+      },
+      {
+        "id": "default",
+        "corner": "78% лишилось Тиждень",
+        "inside": true
+      },
+      {
+        "id": "review",
+        "corner": "23% лишилось Тиждень",
+        "inside": true
+      }
+    ]
+  }
+]
