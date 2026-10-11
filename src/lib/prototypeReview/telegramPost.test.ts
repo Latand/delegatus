@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import sharp from "sharp";
-import * as settings from "@/lib/projects/settings";
+import { updateRelayStore } from "@/lib/externalRelay/store";
+import { destinationRelay } from "@/lib/externalRelay/ownerDestination.fixture";
 import * as bot from "@/lib/telegram/bot/service";
 import { TelegramBotStore } from "@/lib/telegram/bot/store";
 import { FakeBotTransport, fakeBotToken, ok, refused, unreachable } from "@/lib/telegram/bot/fakeTransport";
@@ -37,10 +38,9 @@ async function connected() {
   transport.script("getUpdates", ok([{ update_id: 1, message: { message_id: 1, date: 1, text: "Fixture", chat: { id: -42, type: "group", title: "Reports" } } }]));
   await service.pollOnce(new AbortController().signal);
   service.setChat("-42", "reports", true);
-  const destination = spyOn(settings, "effectiveReportTelegram").mockReturnValue({ chat: "reports", name: "Fixture", source: "chosen", topicId: 7 });
   const factory = spyOn(bot, "telegramBotService").mockReturnValue(service);
-  restores.push(() => destination.mockRestore(), () => factory.mockRestore());
-  return { service, transport, destination, store };
+  restores.push(() => factory.mockRestore());
+  return { service, transport, store };
 }
 
 test("rich rendering labels slides, recommendations and bounded copy buttons and escapes input", () => {
@@ -136,8 +136,10 @@ test("only definite media errors resend without slides; uncertain sends and malf
   expect(transport.callsOf("sendRichMessage")).toHaveLength(5);
 });
 
-test("publication calls the post path, replay posts once, and a project without a destination posts nothing", async () => {
-  const { transport, destination } = await connected();
+test("publication posts to the paired owner's private chat once and an unpaired install posts nothing", async () => {
+  const { transport } = await connected();
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
   saveTasks([telegramTask([])]);
   transport.script("sendRichMessage", ok({ message_id: 10, date: 1 }));
   const publish = (key = "publication") => publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" },
@@ -147,15 +149,38 @@ test("publication calls the post path, replay posts once, and a project without 
   expect((await publish()).status).toBe(200);
   await Bun.sleep(30);
   expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
+  expect(transport.callsOf("sendRichMessage")[0]!.params.chat_id).toBe(41);
   transport.script("sendRichMessage", ok({ message_id: 11, date: 2 }));
   expect((await publish("next-publication")).status).toBe(200);
   for (let n = 0; n < 100 && transport.callsOf("sendRichMessage").length < 2; n++) await Bun.sleep(10);
   expect((await publish("next-publication")).status).toBe(200);
   await Bun.sleep(30);
   expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
-  destination.mockReturnValue(null);
+  updateRelayStore(s => ({ ...s, relays: [] }));
   await postPrototypeReviewToTelegram(telegramRound("no-destination"));
   expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
+});
+
+test("owner review sends nothing with no target, a paused relay or a changed destination during lookup", async () => {
+  const { service, transport, store } = await connected();
+  const input = { clientRequestId: "owner-review", message: renderPrototypeTelegram(telegramRound(), []) };
+  for (const relay of [destinationRelay([]), { ...destinationRelay(), paused: true }]) {
+    updateRelayStore(s => ({ ...s, relays: [relay] }));
+    expect(await service.sendOwnerReview(input)).toBeNull();
+  }
+  expect(transport.callsOf("getChat")).toHaveLength(0);
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => {
+    updateRelayStore(s => ({ ...s, relays: [{ ...destinationRelay(), paused: true }] }));
+    return ok({ id: 41, type: "private", first_name: "Owner" });
+  };
+  await expect(service.sendOwnerReview(input)).rejects.toMatchObject({ code: "chat_not_allowed" });
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
+  expect(store.chat("41")).toBeNull();
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => ok({ id: 77, type: "private" });
+  await expect(service.sendOwnerReview(input)).rejects.toMatchObject({ code: "chat_not_allowed" });
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
 });
 
 test("rich sends follow chat migrations within the same journal claim", async () => {

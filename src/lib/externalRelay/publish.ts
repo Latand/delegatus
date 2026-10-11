@@ -69,7 +69,7 @@ export async function publishRelayMessage(relay: Pick<PairedRelay, "api_base" | 
 }
 
 export type RelayPublishTarget = { relay: PairedRelay; targetId: string };
-/** The resolver must prove the Telegram bot's target; names are not identities. */
+/** Resolve the operator's target policy again before each queued publication. */
 export function createRelayPublisher(resolve: (botId: string) => RelayPublishTarget | null,
   runtime: Runtime & { now?: () => number } = {}) {
   const queues = new Map<string, Promise<unknown>>();

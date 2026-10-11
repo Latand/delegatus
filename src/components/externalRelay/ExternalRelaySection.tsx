@@ -17,6 +17,7 @@ import { effortScale } from "@/lib/agent/efforts";
 import { defaultModelFor, ENGINE_MODELS } from "@/lib/agent/models";
 import { KNOWN_RELAYS, verifyUrlAllowed, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
 import { RELAY_MEMBER_ANSWERS_PER_HOUR } from "@/lib/externalRelay/profile";
+import { selectOwnerDestination } from "@/lib/externalRelay/ownerDestination";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 /**
@@ -675,6 +676,13 @@ export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, 
     <div data-external-relay-section="" className="flex flex-col gap-4 [&>[data-external-relay]~[data-external-relay]]:border-t [&>[data-external-relay]~[data-external-relay]]:border-border [&>[data-external-relay]~[data-external-relay]]:pt-4">
       {error && !state ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null}
       {!state && !error ? <p className="text-ui text-muted">{t("common.loading")}</p> : null}
+      {state ? (() => {
+        const selected = selectOwnerDestination(state.relays);
+        return <p data-external-relay-review-destination={selected.reason ?? "ready"} className="text-caption leading-4 text-muted">
+          {selected.reason ? t(`externalRelay.review.${selected.reason}`)
+            : t("externalRelay.review.ready", { target: selected.relay.targets.find(target => target.id === selected.targetId)!.name })}
+        </p>;
+      })() : null}
       {state ? (() => {
         const connected = state.relays.map((relay) => relay.origin);
         const cards = state.relays.map((relay) => (

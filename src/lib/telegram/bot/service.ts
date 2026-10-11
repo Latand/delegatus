@@ -3,6 +3,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { decodeHTML } from "entities";
 import type { TelegramPublishReceipt } from "@/lib/externalRelay/publish";
+import { ownerReviewDestination, publishConfirmedTelegramMessage } from "@/lib/externalRelay/telegramPublication";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { stateDir } from "@/lib/configDir";
@@ -941,14 +942,49 @@ export class TelegramBotService {
     };
   }
 
+  /** The pairing's confirmed Telegram owner is the only automatic review
+   * recipient. This grants no general agent posting permission to that chat. */
+  async sendOwnerReview(input: {
+    clientRequestId: string; message: TelegramRichMessage;
+    fallbackMarkdown?: string; fallbackPlainText?: string;
+  }): Promise<TelegramBotSendAnswer | null> {
+    const selected = ownerReviewDestination();
+    if (selected.reason) return null;
+    const store = this.connectedStore();
+    const transport = this.transport();
+    const botId = this.storedBotId();
+    if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
+    const found = await transport.call<TgChat>("getChat", { chat_id: Number(selected.chatId) });
+    if (!found.ok) throw lookupFailure(found);
+    if (!found.result || found.result.type !== "private" || String(found.result.id) !== selected.chatId)
+      throw new TelegramBotError("chat_not_allowed", "the paired owner's private chat could not be confirmed");
+    const authorize = () => {
+      const current = ownerReviewDestination();
+      if (this.storedBotId() !== botId || current.reason || current.relay.id !== selected.relay.id || current.targetId !== selected.targetId
+        || current.chatId !== selected.chatId || current.relay.credential !== selected.relay.credential)
+        throw new TelegramBotError("chat_not_allowed", "review delivery is paused or its destination changed");
+    };
+    authorize();
+    store.recordLookedUpChat(found.result, null, this.deps.now());
+    return this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
+  }
+
   /** One prototype message under a durable claim; ambiguous sends retain it. */
   async sendRichMessage(input: {
     clientRequestId: string; chat: string; topicId?: number;
     message: TelegramRichMessage; fallbackMarkdown?: string; fallbackPlainText?: string;
   }): Promise<TelegramBotSendAnswer> {
+    return this.sendRich(input);
+  }
+
+  private async sendRich(input: {
+    clientRequestId: string; chat: string; topicId?: number;
+    message: TelegramRichMessage; fallbackMarkdown?: string; fallbackPlainText?: string;
+  }, owner?: { authorize: () => void; chat: ChatRow }): Promise<TelegramBotSendAnswer> {
     const store = this.connectedStore();
-    const chat = this.resolveChat(store, input.chat);
-    const refusal = postRefusal(chat);
+    owner?.authorize();
+    const chat = owner?.chat ?? this.resolveChat(store, input.chat);
+    const refusal = owner ? null : postRefusal(chat);
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
     if (!input.clientRequestId.trim() || !input.message.markdown || input.message.markdown.length > 32768
       || input.message.images.length > 50 || input.message.images.some(i => !/^[A-Za-z0-9_-]{1,64}$/.test(i.id)
@@ -979,8 +1015,9 @@ export class TelegramBotService {
       ...Object.fromEntries(input.message.images.map(i => [i.id, i.blob])),
     };
     const call = async (body: Record<string, unknown>) => {
+      owner?.authorize();
       let result = await transport.call<TgSent>("sendRichMessage", { ...body, chat_id: Number(chatId) });
-      if (!result.ok && result.migrateToChatId) {
+      if (!owner && !result.ok && result.migrateToChatId) {
         store.migrateChat(chatId, result.migrateToChatId);
         chatId = result.migrateToChatId;
         result = await transport.call<TgSent>("sendRichMessage", { ...body, chat_id: Number(chatId) });
@@ -1204,6 +1241,7 @@ const STORE_FILE = "bot.sqlite";
     the sleep, and keep the rest. */
 export function productionTelegramBotDependencies(): TelegramBotDependencies {
   return {
+    publishMessage: publishConfirmedTelegramMessage,
     transportFor: (token) => createBotApiTransport(token),
     openStore: () => {
       const directory = ensureTelegramStateDir(true)!;

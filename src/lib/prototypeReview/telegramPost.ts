@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import sharp from "sharp";
 import { loadTasks } from "@/lib/tasks/store";
-import { effectiveReportTelegram } from "@/lib/projects/settings";
 import { telegramBotService, TelegramBotError, type TelegramRichMessage } from "@/lib/telegram/bot/service";
 import { prototypeRoot, storedMediaPath } from "./store";
 import { prototypeCopyLine, prototypeReference } from "./telegramAnswer";
@@ -84,12 +83,10 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
 
 export async function postPrototypeReviewToTelegram(round: PrototypeReviewRound): Promise<void> {
   try {
-    const destination = effectiveReportTelegram(round.project);
-    if (!destination) return;
     const task = loadTasks().find(t => t.id === round.taskId);
     const slides = await prototypeSlides(round);
     const fallback = renderPrototypeTelegram(round, [], task?.text);
-    await telegramBotService().sendRichMessage({ clientRequestId: round.id, chat: destination.chat, topicId: destination.topicId,
+    await telegramBotService().sendOwnerReview({ clientRequestId: round.id,
       message: renderPrototypeTelegram(round, slides, task?.text), fallbackMarkdown: fallback.markdown, fallbackPlainText: fallback.plainText });
   } catch (error) {
     // Never log a task title, Telegram description, path or destination.

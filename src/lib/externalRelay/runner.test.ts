@@ -97,14 +97,14 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
-test("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing", async () => {
+test.each([true, false])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (owner tier %s)", async ownerTier => {
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/complete")) completions.push(body);
     return { body: { status: "ok" } };
   });
-  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = ownerTier;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   let selections = 0, launches = 0;
   const previous = accountManager.resolveHeadlessSpawn;
@@ -134,13 +134,14 @@ test("prototype owner control records the web decision without capacity or an ag
   } finally { accountManager.resolveHeadlessSpawn = previous; await server.close(); }
 });
 
-for (const scenario of ["invalid", "lease-lost", "revoked"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
+for (const scenario of ["invalid", "lease-lost", "revoked", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
   const round = telegramRound(); saveTasks([telegramTask([round])]);
-  const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = true;
+  const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = scenario !== "disabled";
   const server = await startTestRelay((req) => {
     if (req.url?.endsWith("/heartbeat")) {
       if (scenario === "lease-lost") return { status: 409, body: { error: { code: "lease_lost", message: "gone" } } };
       if (scenario === "revoked") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
+      if (scenario === "disabled") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, enabled: false }] }] }));
     }
     return { body: { status: "ok" } };
   });
@@ -160,16 +161,16 @@ for (const scenario of ["invalid", "lease-lost", "revoked"] as const) test(`prot
   } finally { await server.close(); }
 });
 
-for (const scenario of ["member", "owner-off", "unknown", "decided", "superseded"] as const) test(`prototype ${scenario} text follows the ordinary relay path`, async () => {
+for (const scenario of ["member", "owner-off-unknown", "unknown", "decided", "superseded"] as const) test(`prototype ${scenario} text follows the ordinary relay path`, async () => {
   const round = telegramRound();
   const held = telegramTask([round]);
   if (scenario === "decided") round.decision = { chosen: [1], comment: "Earlier", at: round.createdAt,
     delivery: { state: "no-orchestrator", conversationId: null, clientMessageId: "decision", text: "decision" } };
   if (scenario === "superseded") held.prototypeReviews!.push(telegramRound("next"));
-  saveTasks(scenario === "unknown" ? [] : [held]);
+  saveTasks(scenario === "unknown" || scenario === "owner-off-unknown" ? [] : [held]);
   const before = JSON.stringify(loadTasks());
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
-  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = scenario !== "owner-off";
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = scenario !== "owner-off-unknown";
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   let launches = 0;
   const text = prototypeCopyLine(round, 2);
@@ -182,7 +183,7 @@ for (const scenario of ["member", "owner-off", "unknown", "decided", "superseded
         observe: async () => ({ state: "ended", finalText: "Normal" }), stop: async () => {}, pollMs: 5 },
     });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Normal" } });
-    expect(launches).toBe(scenario === "member" || scenario === "owner-off" ? 0 : 1);
+    expect(launches).toBe(scenario === "member" || scenario === "owner-off-unknown" ? 0 : 1);
     expect(JSON.stringify(loadTasks())).toBe(before);
   } finally { await server.close(); }
 });

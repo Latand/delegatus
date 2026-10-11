@@ -280,11 +280,12 @@ export async function runClaimedRequest(
       );
   }
   const profile = answerProfileFor(requester);
-  const owner = ownerTierFor(target, request);
-  const previousAnswer = owner ? readAnswerRecord(relay.id, target.id, requestId) : null;
+  const ownerMessage = ownerTierFor({ ownerTier: true }, request);
+  const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
   const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
     && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
-  const prototype = owner ? matchPrototypeAnswer(owner.text, undefined, replayReviewId) : null;
+  const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId) : null;
+  const owner = prototype ? ownerMessage : ownerTierFor(target, request);
   if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
   if (activeDrain()) return finish(declined(leaseId, "busy"));
   let conversation: RelayConversation | null = null;
@@ -305,7 +306,8 @@ export async function runClaimedRequest(
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
-      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}` } } : {}),
+      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } } : {}),
       requestId,
       leaseId,
       relayId: relay.id,
