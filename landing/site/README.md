@@ -207,7 +207,9 @@ stage is that short so the request being typed, the steps and their caption
 all sit on a 1440×900 first screen under the headline; on a computer the bird
 perches on the install box to leave that room. A card is as tall as its whole
 title, and the three land in Inbox overlapping, each title showing above the
-next, before two of them move on.
+next, before two of them move on. A card is opaque from its first frame and
+grows from its top edge, and only its title and body fade in, so a card that
+lands never lets the one under it show through.
 
 The flow is one timeline of 24 s. Every element that moves gets one Web
 Animation of that length, on `transform` and `opacity` only, repeating forever,
