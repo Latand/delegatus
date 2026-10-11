@@ -81,6 +81,12 @@ function stubFetch(responses: Response[]): () => number {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const READ_FAILURES = ["503", "network rejection", "malformed JSON"] as const;
+async function failedRead(failure: typeof READ_FAILURES[number]) {
+  if (failure === "network rejection") throw new TypeError("network unavailable");
+  return new globalThis.Response(failure === "503" ? "unavailable" : "{broken", { status: failure === "503" ? 503 : 200 });
+}
+
 function probeText(container: ReturnType<typeof dom.document.createElement>): string | null {
   return container.querySelector("#probe")?.textContent ?? null;
 }
@@ -93,6 +99,10 @@ async function mount(items: readonly FeedEntry[], probe: Item) {
   });
   return {
     text: () => probeText(container),
+    pending: () => container.querySelector("#probe")?.getAttribute("data-message-pending"),
+    render: async (path: string, nextItems = items, nextProbe = probe) => {
+      await act(async () => root.render(<Probe path={path} items={nextItems} probe={nextProbe} />));
+    },
     unmount: async () => {
       await act(async () => {
         root.unmount();
@@ -121,6 +131,178 @@ test("an unresolved delivered id revalidates until the ledger answers, without a
   expect(calls()).toBe(settled);
   await probe.unmount();
 });
+
+for (const failure of READ_FAILURES) {
+  test(`a failed provenance read retries after ${failure} and resolves the mounted native id`, async () => {
+    setMessageProvenanceRetryScheduleForTests([10, 10]);
+    let calls = 0;
+    globalThis.fetch = (async () => ++calls === 1
+      ? failedRead(failure)
+      : globalThis.Response.json({ messages: { [ENGINE_MESSAGE_ID]: { origin: "operator" } } })) as unknown as typeof fetch;
+    const probe = await mount([deliveredEntry], deliveredEntry.item);
+    try {
+      expect(probe.text()).toBe("unresolved");
+      expect(probe.pending()).toBe("true");
+      await act(async () => { await sleep(80); });
+      expect(probe.text()).toBe("operator");
+      expect(probe.pending()).toBe("false");
+      expect(calls).toBe(2);
+      await act(async () => { await sleep(40); });
+      expect(calls).toBe(2);
+    } finally { await probe.unmount(); }
+  });
+
+  test(`persistent ${failure} stops at the bounded schedule without inventing evidence`, async () => {
+    setMessageProvenanceRetryScheduleForTests([10, 10]);
+    let calls = 0;
+    globalThis.fetch = (async () => { calls += 1; return failedRead(failure); }) as unknown as typeof fetch;
+    const probe = await mount([deliveredEntry], deliveredEntry.item);
+    try {
+      await act(async () => { await sleep(80); });
+      expect(calls).toBe(3);
+      expect(probe.text()).toBe("unresolved");
+      expect(probe.pending()).toBe("false");
+      await act(async () => { await sleep(40); });
+      expect(calls).toBe(3);
+    } finally { await probe.unmount(); }
+  });
+
+  test(`a later revalidation recovers after ${failure}`, async () => {
+    setMessageProvenanceRetryScheduleForTests([10, 10]);
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls === 1) return globalThis.Response.json({ messages: {} });
+      if (calls === 2) return failedRead(failure);
+      return globalThis.Response.json({ messages: { [ENGINE_MESSAGE_ID]: { origin: "operator" } } });
+    }) as unknown as typeof fetch;
+    const probe = await mount([deliveredEntry], deliveredEntry.item);
+    try {
+      await act(async () => { await sleep(80); });
+      expect(calls).toBe(3);
+      expect(probe.text()).toBe("operator");
+    } finally { await probe.unmount(); }
+  });
+}
+
+test("a failed read followed by a different native id never attributes this row", async () => {
+  setMessageProvenanceRetryScheduleForTests([10, 10]);
+  let calls = 0;
+  globalThis.fetch = (async () => ++calls === 1
+    ? failedRead("503")
+    : globalThis.Response.json({ messages: { "other-native-id": { origin: "operator" } } })) as unknown as typeof fetch;
+  const probe = await mount([deliveredEntry], deliveredEntry.item);
+  try {
+    await act(async () => { await sleep(80); });
+    expect(calls).toBe(3);
+    expect(probe.text()).toBe("unresolved");
+  } finally { await probe.unmount(); }
+});
+
+for (const origin of ["operator", "agent"] as const) {
+  test(`a failed read adopts ${origin} evidence resolved by another mounted reader`, async () => {
+    setMessageProvenanceRetryScheduleForTests([10, 10]);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      if (++calls === 1) { await gate; return failedRead("503"); }
+      return globalThis.Response.json({ messages: { [ENGINE_MESSAGE_ID]: { origin } } });
+    }) as unknown as typeof fetch;
+    const first = await mount([deliveredEntry], deliveredEntry.item);
+    let second: Awaited<ReturnType<typeof mount>> | undefined;
+    try {
+      expect(first.text()).toBe("unresolved");
+      second = await mount([deliveredEntry], deliveredEntry.item);
+      expect(second.text()).toBe(origin);
+      await act(async () => { release(); });
+      expect(first.text()).toBe(origin);
+      expect(first.pending()).toBe("false");
+      await act(async () => { await sleep(50); });
+      expect(calls).toBe(2);
+    } finally {
+      release();
+      await first.unmount();
+      await second?.unmount();
+    }
+  });
+
+  test(`cached ${origin} evidence survives failed revalidation of another row`, async () => {
+    setMessageProvenanceRetryScheduleForTests([10, 10]);
+    const other: FeedEntry = { ...deliveredEntry, key: "other-row", item: { ...deliveredEntry.item, deliveredMessage: { engineMessageId: "unresolved-native-id" } } as Item };
+    let calls = 0;
+    globalThis.fetch = (async () => ++calls === 1
+      ? globalThis.Response.json({ messages: { [ENGINE_MESSAGE_ID]: { origin } } })
+      : failedRead("503")) as unknown as typeof fetch;
+    const probe = await mount([deliveredEntry, other], deliveredEntry.item);
+    try {
+      expect(probe.text()).toBe(origin);
+      await act(async () => { await sleep(80); });
+      expect(calls).toBe(3);
+      expect(probe.text()).toBe(origin);
+      await probe.render(TRANSCRIPT_PATH, [deliveredEntry]);
+      expect(probe.text()).toBe(origin);
+      expect(calls).toBe(3);
+    } finally { await probe.unmount(); }
+  });
+}
+
+test("unmount cancels the retry scheduled after a failure", async () => {
+  setMessageProvenanceRetryScheduleForTests([50, 50]);
+  let calls = 0;
+  globalThis.fetch = (async () => { calls += 1; return failedRead("503"); }) as unknown as typeof fetch;
+  const probe = await mount([deliveredEntry], deliveredEntry.item);
+  expect(calls).toBe(1);
+  await probe.unmount();
+  await act(async () => { await sleep(150); });
+  expect(calls).toBe(1);
+});
+
+test("a conversation change cancels the failed path's scheduled retry", async () => {
+  setMessageProvenanceRetryScheduleForTests([50, 50]);
+  const reads: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://localhost").searchParams.get("path")!;
+    reads.push(path);
+    return path === TRANSCRIPT_PATH ? failedRead("503")
+      : globalThis.Response.json({ messages: { [ENGINE_MESSAGE_ID]: { origin: "agent" } } });
+  }) as unknown as typeof fetch;
+  const probe = await mount([deliveredEntry], deliveredEntry.item);
+  try {
+    await probe.render("/sessions/next-provenance.jsonl");
+    await act(async () => { await sleep(150); });
+    expect(reads).toEqual([TRANSCRIPT_PATH, "/sessions/next-provenance.jsonl"]);
+    expect(probe.text()).toBe("agent");
+  } finally { await probe.unmount(); }
+});
+
+for (const cleanup of ["unmount", "conversation change"] as const) {
+  test(`an in-flight answer after ${cleanup} cannot seed stale provenance on reopen`, async () => {
+    setMessageProvenanceRetryScheduleForTests([]);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      if (++calls !== 1) return globalThis.Response.json({ messages: {} });
+      return { ok: true, json: async () => { await gate; return { messages: { [ENGINE_MESSAGE_ID]: { origin: "operator" } } }; } };
+    }) as unknown as typeof fetch;
+    const probe = await mount([deliveredEntry], deliveredEntry.item);
+    let reopened: Awaited<ReturnType<typeof mount>> | undefined;
+    try {
+      if (cleanup === "unmount") await probe.unmount();
+      else await probe.render("/sessions/next-provenance.jsonl");
+      await act(async () => { release(); });
+      if (cleanup === "unmount") reopened = await mount([deliveredEntry], deliveredEntry.item);
+      else await probe.render(TRANSCRIPT_PATH);
+      expect((reopened ?? probe).text()).toBe("unresolved");
+      expect(calls).toBe(cleanup === "unmount" ? 2 : 3);
+    } finally {
+      release();
+      if (cleanup === "conversation change") await probe.unmount();
+      await reopened?.unmount();
+    }
+  });
+}
 
 test("an id with no evidence stops at the bounded schedule instead of polling forever", async () => {
   setMessageProvenanceRetryScheduleForTests([10, 10]);
@@ -225,6 +407,25 @@ test("a fresh legacy row revalidates until its receipt settles; a historical one
   expect(historicalCalls()).toBe(1);
   expect(historical.text()).toBe("unresolved");
   await historical.unmount();
+});
+
+test("a failed legacy read retries only while the row can still race its receipt", async () => {
+  setMessageProvenanceRetryScheduleForTests([10, 10]);
+  for (const fresh of [true, false]) {
+    resetMessageProvenanceCacheForTests();
+    const timestamp = fresh ? new Date().toISOString() : "2026-01-01T00:00:00.000Z";
+    const row: FeedEntry = { anchorKey: null, key: "legacy-failed-read", item: { kind: "user", ts: timestamp, text: TEXT } };
+    let calls = 0;
+    globalThis.fetch = (async () => ++calls === 1 ? failedRead("503") : globalThis.Response.json({
+      occurrences: [{ origin: "agent", textDigest: messageTextDigest(TEXT), deliveredAt: timestamp }],
+    })) as unknown as typeof fetch;
+    const probe = await mount([row], row.item);
+    try {
+      await act(async () => { await sleep(80); });
+      expect(calls).toBe(fresh ? 2 : 1);
+      expect(probe.text()).toBe(fresh ? "agent" : "unresolved");
+    } finally { await probe.unmount(); }
+  }
 });
 
 test("a cached admission join still reads delayed memory for the compact operator turn", async () => {

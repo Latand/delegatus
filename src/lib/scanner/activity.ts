@@ -227,24 +227,21 @@ export function cachedTranscriptTurn(
   return null;
 }
 
-/** A persisted scan snapshot carries the projected turn but not the records
-    behind it, so it cannot carry `recoveryReleased`. A terminal authoritative
-    Claude turn is exactly the shape whose release may hinge on that flag, and
-    a primed cache entry is served for as long as size/mtime stay stable — a
-    false prime would silently disable the live-host fence across a restart.
-    Those transcripts stay unprimed so the first read rebuilds the evidence
-    from the actual tail; every other shape primes as before. */
+/** A complete snapshot can prime an ordinary settled Claude turn when it
+    explicitly records that recovery bookkeeping did not release it. Recovery
+    releases and older snapshots lacking that distinction rebuild from the
+    actual tail so the migration coordinator keeps its live-host fence. */
 export function primeTranscriptTurnEvidence(
   pathname: string,
   size: number,
   mtimeMs: number,
   engine: TranscriptEngine,
   turn: TurnState,
-  options: { authoritative?: boolean; composerReleased?: boolean } = {},
+  options: { authoritative?: boolean; composerReleased?: boolean; recoveryReleased?: boolean } = {},
 ): void {
   const authoritative = options.authoritative ?? true;
   const composerReleased = options.composerReleased ?? false;
-  if (engine === "claude" && authoritative && turn.state === "terminal") return;
+  if (engine === "claude" && authoritative && turn.state === "terminal" && options.recoveryReleased !== false) return;
   storeTurnEvidence(pathname, {
     size,
     mtimeMs,

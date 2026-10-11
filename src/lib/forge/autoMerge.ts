@@ -21,11 +21,11 @@ import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
  *
  * A completed lane of a project that turned the setting on, whose reviews
  * passed (§4.2), is queued here and merged through GitHub with `gh`, one lane
- * at a time per repository, once its PR's checks have arrived, settled and are
- * green (§4.3). Scheduled beside the forge sweep from the controller cycle and,
- * like it, run outside every pipeline lease: the `gh` calls happen with no
- * lock held, and each result is written under the pipeline lock against the
- * record read again inside it.
+ * at a time per repository, once its PR's required checks have arrived, settled
+ * and are green, with no reported failure (§4.3). Scheduled beside the forge
+ * sweep from the controller cycle and, like it, run outside every pipeline
+ * lease: the `gh` calls happen with no lock held, and each result is written
+ * under the pipeline lock against the record read again inside it.
  *
  * Nothing here resolves a conflict, pushes, posts a comment or adds a trailer.
  * What cannot be settled by waiting blocks with one plain sentence and goes to
@@ -218,7 +218,7 @@ export function resetAutoMergeForTests(): void {
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
-function newMerge(pipeline: Pipeline, pr: { repository: string; number: number }, setting: MergeOnReviewSetting, now: number): PipelineMerge {
+function newMerge(pipeline: Pipeline, pr: { repository: string; number: number | null }, setting: MergeOnReviewSetting, now: number): PipelineMerge {
   return {
     state: "queued",
     by: null,
@@ -346,21 +346,24 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
     return merge.updates.length >= MERGE_MAX_UPDATES * (merge.attempts + 1) ? { kind: "block", reason: MERGE_REASONS.mainMoving } : { kind: "update" };
   }
   const present = new Set(names);
-  const missing = [...new Set([...required, ...merge.seenChecks])].filter((name) => !present.has(name));
+  const requiredNames = new Set(required);
+  // Only required contexts hold the merge while checks register or run.
+  const missing = [...new Set([...required, ...merge.seenChecks])].filter((name) => requiredNames.has(name) && !present.has(name));
   const grew = previous !== null && names.some((name) => !previous.includes(name));
-  const pending = view.checks.some((check) => check.verdict !== "green");
+  const pending = view.checks.some((check) => requiredNames.has(check.name) && check.verdict !== "green");
   const settled = names.length > 0 && missing.length === 0 && age >= MERGE_SETTLE_MS && previous !== null && !grew && !pending;
   if (!settled) {
-    if (names.length === 0 && age >= MERGE_SETTLE_MS) return { kind: "block", reason: MERGE_REASONS.noChecks };
+    if (names.length === 0 && missing.length === 0 && age >= MERGE_SETTLE_MS) return { kind: "block", reason: MERGE_REASONS.noChecks };
     if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
     return { kind: "wait", state: "waiting-checks", reason: missing.length ? `waiting for ${missing.join(", ")}` : null };
   }
-  if ((view.mergeStateStatus === "CLEAN" || view.mergeStateStatus === "HAS_HOOKS") && view.mergeable === "MERGEABLE") return { kind: "merge" };
+  // UNSTABLE is mergeable once required contexts pass and reported failures are ruled out above.
+  if ((view.mergeStateStatus === "CLEAN" || view.mergeStateStatus === "HAS_HOOKS" || view.mergeStateStatus === "UNSTABLE") && view.mergeable === "MERGEABLE") return { kind: "merge" };
   if (view.mergeStateStatus === "BLOCKED") {
     const review = view.reviewDecision === "REVIEW_REQUIRED" || view.reviewDecision === "CHANGES_REQUESTED";
     return { kind: "block", reason: review ? MERGE_REASONS.reviewRequired : MERGE_REASONS.protection };
   }
-  /* UNKNOWN, a null or UNKNOWN `mergeable`, UNSTABLE: GitHub is still
+  /* UNKNOWN, a null or UNKNOWN `mergeable`: GitHub is still
      computing; read again, inside the same bound. */
   if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
   return { kind: "wait", state: "checking", reason: null };
@@ -404,6 +407,17 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
   const now = ports.now();
   const merge = structuredClone(read.merge!);
   const setting = ports.setting(read.project);
+  if (merge.prNumber === null) {
+    /* A retry resolves the PR before any GitHub command can name it. */
+    const pr = ports.pullRequestOf(read);
+    await commit(ports, read, (live) => {
+      if (!pr) { block(live, MERGE_REASONS.noPr, now); return; }
+      live.repository = pr.repository;
+      live.prNumber = pr.number;
+      live.reason = null;
+    });
+    return;
+  }
   let view: PullRequestView | null = null;
   let required: string[] = [];
   try {
@@ -570,10 +584,13 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       if (!setting.enabled || !setting.changedAt || !(Date.parse(pipeline.closedAt ?? "") >= Date.parse(setting.changedAt))) continue;
       if (!pipeline.lastPassedCommit || !mergeEligible(pipeline)) continue;
       const pr = ports.pullRequestOf(pipeline);
-      if (!pr) continue;
+      if (!pr && (laneHasNoCommits(pipeline) || pipeline.delivery?.disposition === "comparison")) continue;
+      const repository = pr?.repository ?? pipelineRepository(pipeline);
+      if (!repository) continue;
       await ports.mutate(pipeline.id, (live) => {
         if (live.state !== "completed" || live.merge) return false;
-        live.merge = newMerge(live, pr, setting, now);
+        live.merge = newMerge(live, { repository, number: pr?.number ?? null }, setting, now);
+        if (!pr) block(live.merge, MERGE_REASONS.noPr, now);
         return true;
       });
       continue;
@@ -582,8 +599,11 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       await commit(ports, pipeline, (live) => { live.state = "cancelled"; live.reason = MERGE_REASONS.settingOff; live.nextReadAt = null; });
       continue;
     }
-    if ((merge.state === "blocked" || merge.state === "cancelled") && ports.cachedState(merge.repository, merge.prNumber) === "merged") {
+    const pr = merge.prNumber === null ? ports.pullRequestOf(pipeline) : { repository: merge.repository, number: merge.prNumber };
+    if ((merge.state === "blocked" || merge.state === "cancelled") && pr && ports.cachedState(pr.repository, pr.number) === "merged") {
       await commit(ports, pipeline, (live) => {
+        live.repository = pr.repository;
+        live.prNumber = pr.number;
         live.state = "merged";
         live.by = "outside";
         live.reason = null;
@@ -615,17 +635,26 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
 
 /* ── A pipeline that finishes its task (#2187 §5) ───────────────────────── */
 
+/** Exact base/head equality proves a lane has nothing to merge. Legacy
+    symbolic or missing bases provide no such evidence. */
+function laneHasNoCommits(pipeline: Pipeline): boolean {
+  return /^[0-9a-f]{40}$/i.test(pipeline.baseRef ?? "") && pipeline.lastPassedCommit === pipeline.baseRef;
+}
+
 /**
  * Whether a marked lane has finished its tasks (§5.2): it completed, and when
- * its project merges automatically and the lane has a pull request, that pull
- * request merged, by the runner or by anyone. The setting is read now.
+ * its project merges automatically, its pull request merged, by the runner
+ * or by anyone. A lane proved unchanged has nothing to merge. The setting
+ * is read now.
  */
 export function laneFinishedForTasks(pipeline: Pipeline, ports: Pick<AutoMergePorts, "setting" | "pullRequestOf" | "cachedState">): boolean {
   if (pipeline.state !== "completed") return false;
   if (!ports.setting(pipeline.project).enabled) return true;
-  const pr = ports.pullRequestOf(pipeline);
-  if (!pr) return true;
-  return pipeline.merge?.state === "merged" || ports.cachedState(pr.repository, pr.number) === "merged";
+  if (pipeline.merge?.state === "merged") return true;
+  const pr = ports.pullRequestOf(pipeline)
+    ?? (pipeline.merge?.prNumber ? { repository: pipeline.merge.repository, number: pipeline.merge.prNumber } : null);
+  if (!pr) return laneHasNoCommits(pipeline);
+  return ports.cachedState(pr.repository, pr.number) === "merged";
 }
 
 /** The marked tasks a pipeline has not finished yet. */

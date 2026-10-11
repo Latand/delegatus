@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 
 import { tickFlows } from "@/lib/flows/engine";
 import { listFiles } from "@/lib/scanner";
-import { tickTaskInbox } from "@/lib/tasks/inboxScanner";
 import { LegacyRuntimeScheduler } from "@/lib/runtime/legacyScheduler";
 import { tickWorkflows } from "@/lib/workflows/engine";
 
@@ -31,7 +30,6 @@ export function createLegacyRuntimeScheduler(journal: RuntimeJournal): LegacyRun
     scan: listFiles,
     tickFlows,
     tickWorkflows,
-    tickTaskInbox,
     publishFiles(entries) {
       const evidence = filesEvidence(entries);
       if (evidence === previousEvidence) return;
