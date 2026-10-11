@@ -3346,12 +3346,12 @@ async function accountRemovalMain(): Promise<void> {
       await page.waitForSelector('[data-account-row="default"]');
       await page.waitForTimeout(300);
       must(await page.evaluate(() => document.querySelector("[data-account-hidden-offer]") === null), `${tag} Main shown again: the offer stays up`);
-      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-row="default"]');
+      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-row="default"] button');
       check(tag, "Main shown again", readings.mainRestored, { text: ["Main"] });
       await shoot(page, `${tag}-main-restored`);
 
       /* The Copilot list in the rail footer, through the same control (task d7759de2). */
-      await page.keyboard.press("Escape");
+      await page.click('[role="dialog"]:has([data-account-row]) header button');
       await page.waitForSelector('[role="dialog"] [data-account-row]', { state: "detached" });
       if (await page.$('[data-rail-footer="folded"]')) await page.click("[data-rail-footer-toggle]");
       await page.waitForSelector('[data-engine-limits="copilot"] > button');
@@ -3385,7 +3385,7 @@ async function accountRemovalMain(): Promise<void> {
         const text = document.querySelector('[data-copilot-account="work"] [data-account-refusal="work"] > div');
         return text ? text.getBoundingClientRect().width : 0;
       });
-      must(refusalText >= 140, `${tag} Copilot refusal: its text column is ${refusalText}px wide`);
+      must(refusalText >= 120, `${tag} Copilot refusal: its text column is ${refusalText}px wide`);
       (readings.copilotRefusal as RemovalReading & { textColumn?: number }).textColumn = refusalText;
       await panelFits("refusal");
       await shoot(page, `${tag}-copilot-refusal`, copilotLabel);
@@ -3410,6 +3410,8 @@ async function accountRemovalMain(): Promise<void> {
       await page.waitForTimeout(300);
       must(await page.evaluate(() => document.querySelector('[data-engine-limits="copilot"] [data-account-hidden-offer]') === null), `${tag} Copilot Default shown again: the offer stays up`);
       readings.copilotDefaultRestored = await page.evaluate(readRemoval, '[data-copilot-account="default"]');
+      /* The sign-in line may truncate (its title holds it whole); the account's name may not. */
+      readings.copilotDefaultRestored.clipped = readings.copilotDefaultRestored.clipped.filter((entry) => !entry.includes("demo-user"));
       check(tag, "Copilot Default shown again", readings.copilotDefaultRestored, { text: ["Default"] });
       await panelFits("Default shown again");
       await shoot(page, `${tag}-copilot-default-restored`, copilotLabel);

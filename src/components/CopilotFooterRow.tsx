@@ -156,10 +156,12 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
       {body.accounts.map((account) => (
         <div key={account.id} data-copilot-account={account.id} className="flex flex-col gap-1 rounded-md border border-border bg-card px-2 py-1.5">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate font-semibold text-primary">{account.label}</span>
-            <span className="shrink-0 text-[10px] text-muted">
-              {account.auth === "signed_in" ? t("copilot.accounts.signedIn", { user: account.user ?? "" }) : account.auth === "signed_out" ? t("copilot.accounts.signedOut") : t("copilot.accounts.unknown")}
-            </span>
+            {/* The name keeps its width; a long sign-in line gives way and truncates (its full text in the title). */}
+            <span className="min-w-0 max-w-[60%] shrink-0 truncate font-semibold text-primary" title={account.label}>{account.label}</span>
+            {(() => {
+              const status = account.auth === "signed_in" ? t("copilot.accounts.signedIn", { user: account.user ?? "" }) : account.auth === "signed_out" ? t("copilot.accounts.signedOut") : t("copilot.accounts.unknown");
+              return <span data-copilot-account-status="" className="min-w-0 flex-1 truncate text-right text-[10px] text-muted" title={status}>{status}</span>;
+            })()}
             {account.active ? (
               <span className="shrink-0 text-[10px] font-semibold text-muted">{t("copilot.accounts.active")}</span>
             ) : (
