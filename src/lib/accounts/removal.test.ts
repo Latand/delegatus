@@ -340,8 +340,7 @@ test("an unresolved live launch blocks removal of every managed account for its 
   expect(accountRemovalBlockers("claude", "work")).toEqual([]);
 });
 
-for (const engine of ["claude", "codex"] as const) test(`an aged queued ${engine} pin blocks only its named account until its receipt settles (issue #1600)`, () => {
-  const store = registry();
+function queuedPin(store: Registry, engine: "claude" | "codex") {
   const begun = beginLegacySpawnFixture(store, {
     engine,
     cwd: "/repo",
@@ -363,6 +362,22 @@ for (const engine of ["claude", "codex"] as const) test(`an aged queued ${engine
     pipelineSourceConversationId: null,
   }, "queued for account capacity");
   store.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner!);
+  return begun.receipt.launchId;
+}
+
+/* The former "blocks every account" assertion used a receipt and a durable
+   queue naming work. queuePinnedSpawn atomically publishes the queue on that
+   receipt and requires matching account IDs; queuedPinnedSpawnForReceipt
+   checks the same match at recovery. Its target is already known even days
+   before execution (#1600).
+   Unresolved receipt ownership keeps its wider safety fence below. */
+for (const engine of ["claude", "codex"] as const) test(`an aged queued ${engine} pin blocks only its named account until its receipt settles (issue #1600)`, () => {
+  const store = registry();
+  const launchId = queuedPin(store, engine);
+  expect(store.readOnlySnapshot().receipts[launchId]).toMatchObject({
+    accountId: "work",
+    queuedPinnedSpawn: { accountId: "work" },
+  });
 
   /* The dialog names a queued pin apart from a running agent (#1857). */
   expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual(["queued_pin"]);
@@ -377,7 +392,29 @@ for (const engine of ["claude", "codex"] as const) test(`an aged queued ${engine
 
   expect(store.failSpawn(running.receipt.launchId, "launch ended")).toBe(true);
   expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual(["queued_pin"]);
-  expect(store.failSpawn(begun.receipt.launchId, "queued launch cancelled")).toBe(true);
+  expect(store.failSpawn(launchId, "queued launch cancelled")).toBe(true);
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual([]);
+  expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual([]);
+});
+
+for (const engine of ["claude", "codex"] as const) test(`an aged queued ${engine} pin with unresolved receipt ownership blocks every account until settlement`, () => {
+  /* Admission refuses an unresolved account. A legacy/imported receipt can
+     still have missing ownership: removal must stay conservative for it. */
+  const filename = path.join(process.env.LLV_STATE_DIR!, "unresolved-pin.json");
+  const store = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(store);
+  const launchId = queuedPin(store, engine);
+  const snapshot = store.snapshot();
+  snapshot.receipts[launchId].accountId = null;
+  fs.writeFileSync(filename, JSON.stringify(snapshot));
+  expect(() => store.queuePinnedSpawn(launchId, snapshot.receipts[launchId].queuedPinnedSpawn!, "queued for account capacity"))
+    .toThrow("queued pinned spawn payload conflicts with its durable receipt");
+
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers(engine === "claude" ? "codex" : "claude", "work", DAYS_LATER)).toEqual([]);
+
+  expect(store.failSpawn(launchId, "unresolved queued launch cancelled")).toBe(true);
   expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual([]);
   expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual([]);
 });
