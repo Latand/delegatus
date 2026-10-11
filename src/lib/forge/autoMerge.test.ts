@@ -459,6 +459,42 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.noChecks });
   });
 
+  test("required green checks merge after settling while Docker remains pending", async () => {
+    const required = ["privacy-publication", "privacy-tracker-audit"];
+    const h = harness({ required, lanes: [lane("L1")], prs: [openPr(11, {
+      checks: [...required.map(green), pending("Docker")],
+    })] });
+    await h.run(MERGE_SETTLE_MS - MERGE_POLL_MS);
+    expect(h.merges()).toEqual([]);
+    await h.run(MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merge("L1")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+    expect(h.prs.get(11)!.checks.at(-1)).toEqual(pending("Docker"));
+  });
+
+  test("a pending required context holds a CLEAN PR until it turns green", async () => {
+    const required = ["privacy-publication", "privacy-tracker-audit"];
+    const h = harness({ required, lanes: [lane("L1")], prs: [openPr(11, {
+      checks: [green(required[0]!), pending(required[1]!), pending("Docker")],
+    })] });
+    await h.run(MERGE_SETTLE_MS * 4);
+    expect(h.merges()).toEqual([]);
+    expect(h.merge("L1")?.state).toBe("waiting-checks");
+    h.prs.get(11)!.checks = [...required.map(green), pending("Docker")];
+    await h.run(MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merges()).toHaveLength(1);
+  });
+
+  test("UNSTABLE with green required contexts merges while an optional job is pending", async () => {
+    const required = ["privacy-publication", "privacy-tracker-audit"];
+    const h = harness({ required, lanes: [lane("L1")], prs: [openPr(11, {
+      checks: [...required.map(green), pending("Docker")], mergeStateStatus: "UNSTABLE",
+    })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merge("L1")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+  });
+
   test("BEHIND updates the branch with the chain tip as expected_head_sha, then merges the update's head", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
     h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
@@ -477,7 +513,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
   });
 
   test("a partial rollup right after update-branch (fewer names than the previous head) does not merge", async () => {
-    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { checks: [green("ci"), green("lint")], mergeStateStatus: "BEHIND" })] });
+    const h = harness({ required: ["ci", "lint"], lanes: [lane("L1")], prs: [openPr(11, { checks: [green("ci"), green("lint")], mergeStateStatus: "BEHIND" })] });
     h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
     h.onUpdate((pr) => Object.assign(pr, { head: HEAD_B, mergeStateStatus: "CLEAN", checks: [green("ci")] }));
     await h.sweep();
@@ -490,12 +526,37 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(h.merges()).toHaveLength(1);
   });
 
+  test("an optional check seen before update-branch need not report on the new head", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, {
+      checks: [green("ci"), green("Docker")], mergeStateStatus: "BEHIND",
+    })] });
+    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
+    h.onUpdate((pr) => Object.assign(pr, { head: HEAD_B, mergeStateStatus: "CLEAN", checks: [green("ci")] }));
+    await h.sweep();
+    expect(h.merge("L1")?.seenChecks).toContain("Docker");
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A, HEAD_B], mergedHead: HEAD_B });
+    expect(h.updates()).toHaveLength(1);
+    expect(h.merges()).toHaveLength(1);
+  });
+
   test("a rollup missing a required context waits until it arrives", async () => {
     const h = harness({ required: ["privacy-publication"], lanes: [lane("L1")], prs: [openPr(11)] });
     await h.run(MERGE_SETTLE_MS * 4);
     expect(h.merges()).toEqual([]);
     expect(h.merge("L1")).toMatchObject({ state: "waiting-checks", reason: "waiting for privacy-publication" });
     h.prs.get(11)!.checks = [green("ci"), green("privacy-publication")];
+    await h.run(MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merges()).toHaveLength(1);
+  });
+
+  test("an empty rollup waits for required contexts until they report", async () => {
+    const required = ["privacy-publication", "privacy-tracker-audit"];
+    const h = harness({ required, lanes: [lane("L1")], prs: [openPr(11, { checks: [] })] });
+    await h.run(MERGE_SETTLE_MS * 4);
+    expect(h.merges()).toEqual([]);
+    expect(h.merge("L1")).toMatchObject({ state: "waiting-checks", reason: `waiting for ${required.join(", ")}` });
+    h.prs.get(11)!.checks = required.map(green);
     await h.run(MERGE_POLL_MS * 2, () => h.merges().length > 0);
     expect(h.merges()).toHaveLength(1);
   });
@@ -560,8 +621,8 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
   });
 
-  test("pending checks time out at 90 min, and not before", async () => {
-    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { checks: [green("ci"), pending("e2e")], mergeStateStatus: "UNSTABLE" })] });
+  test("pending required checks time out at 90 min, and not before", async () => {
+    const h = harness({ required: ["e2e"], lanes: [lane("L1")], prs: [openPr(11, { checks: [green("ci"), pending("e2e")], mergeStateStatus: "UNSTABLE" })] });
     await h.run(MERGE_WAIT_LIMIT_MS - MERGE_POLL_MS);
     expect(h.merge("L1")?.state).toBe("waiting-checks");
     await h.run(MERGE_POLL_MS * 2);
