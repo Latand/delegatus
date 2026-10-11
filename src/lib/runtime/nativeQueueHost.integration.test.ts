@@ -272,7 +272,7 @@ plugins = false
         hostClaim: async () => "fixture-owner:1",
         transition: async (id, status, details) => { journal.transitionOperation(id, status, details); },
       }, () => host!);
-      const ports = { now,
+      const ports: Partial<PipelinePorts> = { now,
         runtimeSwitchControl: async (_id, _path, action) => {
           if (action === "reconfigure") return "already-current";
           await host!.interrupt((await host!.health()).activeTurnRef!);
@@ -290,8 +290,8 @@ plugins = false
         },
         conversationGeneration: () => ({ ...seat, sessionId: threadId, agentPath: host!.identity.path! }),
         durableTurnEvidence: async () => ({ turn: "busy", message: null, turnStartedAt: Date.now() }),
-      } as PipelinePorts;
-      const drive = () => driveRuntimeSwitch(pipeline, {} as PipelineStage, attempt, ports, () => {}, async () => { throw new Error("no handoff expected"); });
+      };
+      const drive = () => driveRuntimeSwitch(pipeline, {} as PipelineStage, attempt, ports as PipelinePorts, () => {}, async () => { throw new Error("no handoff expected"); });
       await drive();
       const key = switchOperationKey(record, "continue");
       await until(async () => {
