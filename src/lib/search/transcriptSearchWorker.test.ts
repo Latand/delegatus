@@ -108,7 +108,7 @@ test.skipIf(!powershell)("Windows retirement rejects a stale descendant row afte
   // a stale CIM row: the new process has another parent, within the same ms.
   const template = fs.readFileSync(path.resolve("bin/helper-lease.mjs"), "utf8").match(/const script = `([\s\S]*?)`;/)?.[1];
   expect(template).toBeDefined();
-  const rootTime = BigInt(Date.UTC(2026, 0, 1)) * 10_000n + 116_444_736_000_000_000n;
+  const rootTime = BigInt(Date.UTC(2026, 0, 1)) * BigInt(10_000) + BigInt("116444736000000000");
   const script = template!.replaceAll("${group}", "10").replaceAll("${process.pid}", "99")
     .replaceAll("${windowsIdentity}", `10:${rootTime}`).replaceAll("System.Diagnostics.Process", "LeaseOwnershipProbe.Process");
   const log = path.join(root, "terminated");
