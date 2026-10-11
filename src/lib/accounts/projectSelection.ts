@@ -122,6 +122,8 @@ export interface ProjectAccountSelectionInput {
   bindings: readonly AccountProjectBinding[];
   /** The account the launch named, if it named one. */
   requestedId?: string | null;
+  /** Re-admit an automatic recovery target through capacity selection, retaining its identity. */
+  requireCapacity?: boolean;
   /**
    * WHAT `requestedId` IS, and the reason the binding does not veto every one
    * of them (operator directive, 2026-09-10).
@@ -140,8 +142,8 @@ export interface ProjectAccountSelectionInput {
    *   — which prefills the INCUMBENT's account — could not rotate a seat that
    *   was already running outside the pool.
    *
-   * Nothing else is relaxed. Capacity is not consulted for a named account and
-   * never was; authentication is decided further in, by the engine's own health
+   * Capacity is consulted for an automatic recovery target with `requireCapacity`;
+   * other named choices preserve their historical admission; authentication is decided further in, by the engine's own health
    * pass; and an id nobody named still draws from the pool only.
    */
   requestedChoice?: "explicit" | "fenced";
@@ -196,15 +198,15 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
     if (input.requestedChoice === "explicit") return { kind: "available", accountId: requestedId };
     return { kind: "not_allowed", accountId: requestedId, allowedAccountIds: allowed };
   }
-  if (requestedId) return { kind: "available", accountId: requestedId };
+  if (requestedId && !input.requireCapacity) return { kind: "available", accountId: requestedId };
   const unavailable = new Set(input.unavailableIds ?? []);
-  if (allowed === null && unavailable.size === 0 && (input.unbound ?? "engine-default") === "engine-default") {
+  if (!requestedId && allowed === null && unavailable.size === 0 && (input.unbound ?? "engine-default") === "engine-default") {
     return { kind: "available", accountId: input.preferredId?.trim() || null };
   }
   const permitted = allowed === null
     ? [...input.accounts]
     : input.accounts.filter((account) => allowed.includes(account.id));
-  const candidates = permitted.filter((account) => !unavailable.has(account.id));
+  const candidates = permitted.filter((account) => !unavailable.has(account.id) && (!requestedId || account.id === requestedId));
   /* A preference outside the allowed set only orders candidates, so dropping it
      changes the order and never the set — the set is the fence. */
   const preferred = allowed === null || (input.preferredId && allowed.includes(input.preferredId))
@@ -219,7 +221,7 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
     input.model,
   );
   if (selected.kind === "available") return selected;
-  const consulted = allowed ?? permitted.map((account) => account.id);
+  const consulted = requestedId ? [requestedId] : allowed ?? permitted.map((account) => account.id);
   return selected.kind === "exhausted"
     ? { kind: "exhausted", resetsAt: selected.resetsAt, allowedAccountIds: consulted }
     : { kind: "unavailable", allowedAccountIds: consulted };

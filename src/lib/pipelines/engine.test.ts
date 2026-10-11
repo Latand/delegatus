@@ -19889,7 +19889,8 @@ async function parkedAccountHarness(engine: "claude" | "codex", kind: "usage_lim
   f.h.ports.resolveProjectSpawn = (_engine, input) => {
     const selection = selectProjectAccount({ project: loadPipelines()[0]!.project, engine, accounts, observations,
       bindings: allowed.map(accountId => ({ project: loadPipelines()[0]!.project, engine, accountId, createdAt: f.h.ports.now() })),
-      unavailableIds: input.unavailableIds, requestedId: input.requestedId, now: f.now(), model: input.model });
+      unavailableIds: input.unavailableIds, requestedId: input.requestedId, now: f.now(), model: input.model,
+      ...{ requireCapacity: input.requireCapacity } });
     return selection.kind === "available" ? { kind: "available", account: {
       engine, accountId: selection.accountId!, kind: "managed", home: process.env.LLV_STATE_DIR!,
       transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selection;
@@ -25497,4 +25498,102 @@ test.each([false, true])("pre-publication replacement persists one new activatio
   expect(h.spawnInputs.at(-1)!.clientAttemptId).toStartWith("handshake_retry_1_");
   expect(persistedActivations).toBe(1);
   expect(box.order).toEqual(publication);
+});
+
+
+test.each(parkedAccountCases)("recovery admission: target quota changes after selection for $engine $kind", async ({ engine, kind }) => {
+  const f = await parkedAccountHarness(engine, kind);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  let usedPercent = 100;
+  const spawn = f.h.ports.spawnAgent;
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    // A concurrent lane consumes the target's last subscription capacity
+    // after controller selection and before the actual spawn admission.
+    f.observations.push({ ...f.observations[0]!, accountId: SPARE_ACCOUNT, authenticated: true,
+      observedAt: f.h.ports.now(), authCheckedAt: f.h.ports.now(),
+      limits: { session: { usedPercent, resetsAt: f.resetsAt }, weekly: null, plan: "pro", capturedAt: f.now() } });
+    const selected = f.h.ports.resolveProjectSpawn!(engine, { project: loadPipelines()[0]!.project, model: input.role.model,
+      requestedId: input.requestedAccountId, unavailableIds: input.unavailableAccountIds,
+      ...{ requireCapacity: input.requireAccountCapacity } });
+    // This is the same requested-id admission used by spawnPipelineAgent.
+    if (selected.kind !== "available") throw new ProjectAccountRefusedError(selected, engine, loadPipelines()[0]!.project);
+    return spawn({ ...input, requestedAccountId: selected.account.accountId }, reserved);
+  };
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.launchId).toBeNull();
+  usedPercent = 25;
+  f.advance(1000);
+  f.observations[1]!.limits!.session!.usedPercent = usedPercent;
+  f.h.ports.accountRecovered = (_engine, id) => id === SPARE_ACCOUNT;
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
+});
+
+
+test.each((["claude", "codex"] as const).flatMap(engine => (["headroom", "reset"] as const).map(event => ({ engine, event }))))
+("recovery admission: $engine exhausted target stays fenced across later signout until $event", async ({ engine, event }) => {
+  const f = await parkedAccountHarness(engine, "usage_limit");
+  await tickPipelines([], f.h.ports);
+  const targetReset = f.resetsAt! - 3600;
+  const spawn = f.h.ports.spawnAgent;
+  let refused = false;
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    if (input.requestedAccountId === SPARE_ACCOUNT && !refused) {
+      refused = true;
+      f.observations.push({ ...f.observations[0]!, accountId: SPARE_ACCOUNT, authenticated: true });
+      throw new ProjectAccountRefusedError({ kind: "exhausted", resetsAt: targetReset,
+        allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] }, engine, loadPipelines()[0]!.project);
+    }
+    return spawn(input, reserved);
+  };
+  f.advance(1000);
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT]);
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  f.accounts.push({ id: "account-c", authPresent: true });
+  f.allow([LIMITED_ACCOUNT, SPARE_ACCOUNT, "account-c"]);
+  f.h.ports.engineReadiness = () => {
+    if (loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait?.switchedAccountId === "account-c") {
+      f.accounts[2]!.authPresent = false;
+      return "signed-out";
+    }
+    return "connected";
+  };
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait!.condition.kind).toBe("auth_required");
+  f.advance(1000);
+  f.observations[1]!.limits = null;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `review-real-recovery-${crypto.randomUUID()}.json`));
+  setAgentRegistryForTests(registry);
+  const clock = spyOn(Date, "now").mockImplementation(f.now);
+  try {
+    registry.recordQuotaObservation({ ...f.observations[1]!, authenticated: true,
+      observedAt: f.h.ports.now(), authCheckedAt: f.h.ports.now(),
+      provenance: { source: "unavailable", reason: null, staleSince: null } });
+    f.h.ports.accountRecovered = defaultPipelinePorts().accountRecovered;
+    for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(1);
+    const limited = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.usageLimitedAccounts!
+      .find(item => item.accountId === SPARE_ACCOUNT)!;
+    expect(limited.engine).toBe(engine);
+    expect(limited.limitedAt).toBeGreaterThan(0);
+    expect(limited.resetsAt).toBe(targetReset);
+    if (event === "headroom") {
+      f.advance(1000);
+      f.observations[1]!.limits = { session: { usedPercent: 25, resetsAt: targetReset },
+        weekly: null, plan: "pro", capturedAt: f.now() };
+      registry.recordQuotaObservation({ ...f.observations[1]!, authenticated: true,
+        observedAt: f.h.ports.now(), authCheckedAt: f.h.ports.now(),
+        provenance: { source: "live", reason: null, staleSince: null } });
+    } else f.advance(targetReset * 1000 + 60_000 - f.now());
+    for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
+  } finally { clock.mockRestore(); setAgentRegistryForTests(null); }
 });

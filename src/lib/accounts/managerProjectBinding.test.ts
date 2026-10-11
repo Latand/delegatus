@@ -715,3 +715,27 @@ test("a required tier never widens a bound pool to its offering account", async 
   tierCatalogs(); registryWith(spare, [observation(reserved, 0), observation(spare, 0)]); bind(reserved);
   await expect(resolveHealthySpawnAccount("codex", undefined, ATLAS, "gpt-6-astra", { id: "ultrafast", model: "gpt-6-astra", required: true })).rejects.toThrow("no account in this project's pool offers");
 });
+
+
+test.each(["claude", "codex"] as const)("automatic %s recovery admission checks its target's latest quota", async engine => {
+  const target = engine === "codex" ? reserved : claudeReserved;
+  const other = engine === "codex" ? spare : claudeSpare;
+  const registry = new AgentRegistry(path.join(SANDBOX, "recovery-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(registry);
+  registry.recordQuotaObservation({ ...observation(target, 100), engine });
+  registry.recordQuotaObservation({ ...observation(other, 5), engine });
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1,
+    bindings: [target, other].map(accountId => ({ engine, accountId, project: ATLAS, createdAt: new Date(NOW).toISOString() })) });
+  const request = { project: ATLAS, requestedId: target, requireCapacity: true };
+  const provider = providerStub(() => new Error("fresh exhaustion must not ask the provider"));
+  const refused = await resolveProjectSpawnAfterLiveRead(engine, request, { probe: provider.port });
+  expect(refused.kind).toBe("exhausted");
+  if (refused.kind !== "exhausted") return;
+  expect(refused.resetsAt).toBe(Math.floor(NOW / 1000) + 3600);
+  expect(refused.allowedAccountIds).toEqual([target]);
+  expect(provider.reads).toBe(0);
+  expect(accountManager.resolveProjectSpawn(engine, { ...request, requireCapacity: false }).kind).toBe("available");
+  registry.recordQuotaObservation({ ...observation(target, 25), engine, observedAt: new Date(NOW).toISOString() });
+  const recovered = await resolveProjectSpawnAfterLiveRead(engine, request, { probe: provider.port });
+  expect(recovered.kind === "available" && recovered.account.accountId).toBe(target);
+});

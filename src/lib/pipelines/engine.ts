@@ -14,6 +14,7 @@ import { withConversationActuation } from "@/lib/deliveryActuation";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
+import type { ProjectSpawnResolution } from "@/lib/accounts/contracts";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import {
@@ -243,6 +244,8 @@ export interface PipelinePorts {
     project: string;
     /** The account the stage named, if it named one. */
     requestedAccountId: string | null;
+    /** Recovery chose this target automatically; recheck its capacity before reservation. */
+    requireAccountCapacity?: boolean;
     /** Accounts proven unavailable by earlier attempts of this same activation. */
     unavailableAccountIds?: string[];
     title: string;
@@ -643,6 +646,7 @@ async function spawnPipelineAgent(
   }
   const request = {
     project: input.project, requestedId: input.requestedAccountId, model: input.role.model,
+    requireCapacity: input.requireAccountCapacity,
     ...((input.unavailableAccountIds?.length || (serviceTier && offers?.lacking.length))
       ? { unavailableIds: [...input.unavailableAccountIds ?? [], ...(serviceTier ? offers?.lacking ?? [] : [])] } : {}),
   };
@@ -2129,6 +2133,19 @@ function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt
   pipeline.stateDetail = detail;
 }
 
+/** Every exhausted preflight retains its own quota evidence across later target failures. */
+function recordProviderTargetExhaustion(attempt: PipelineStageAttempt, accountId: string,
+  exhausted: Extract<ProjectSpawnResolution, { kind: "exhausted" }>, ports: PipelinePorts): void {
+  const engine = attempt.effectiveRole.engine;
+  const limitedAt = unixMs(ports.now());
+  attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []).filter(item =>
+    item.accountId !== accountId || (item.engine ?? engine) !== engine),
+    { engine, accountId, limitedAt, resetsAt: exhausted.resetsAt, turnId: String(limitedAt) }];
+  const wait = attempt.providerWait!;
+  const budget = attempt.providerRecoveryBudget ??= { tries: wait.tries, startedAt: wait.startedAt, engine };
+  budget.triedAccounts = [...new Set([...providerTriedAccountsOn(attempt, engine), accountId])];
+}
+
 /** Admission before reservation owns the next cut. Quota refusals keep a
     usage fence that successful authentication alone cannot clear. */
 function parkProviderTarget(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string,
@@ -2143,11 +2160,7 @@ function parkProviderTarget(pipeline: Pipeline, attempt: PipelineStageAttempt, d
   wait.resetsAt = exhausted?.resetsAt ?? null;
   if (exhausted) {
     wait.condition = { kind: "usage_limit", scope: "usage", resetLabel: null, label: `${engine} usage limit` };
-    attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []).filter(item =>
-      item.accountId !== wait.accountId || (item.engine ?? engine) !== engine),
-      { engine, accountId: wait.accountId, limitedAt: wait.turnTs, resetsAt: wait.resetsAt, turnId: String(wait.turnTs) }];
-    const budget = attempt.providerRecoveryBudget ??= { tries: wait.tries, startedAt: wait.startedAt, engine };
-    budget.triedAccounts = [...new Set([...(budget.triedAccounts ?? []), wait.accountId])];
+    recordProviderTargetExhaustion(attempt, wait.accountId, exhausted, ports);
   } else {
     wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
     wait.condition = classifyProviderCondition(engine, "unauthorized", "Authentication required");
@@ -5776,15 +5789,17 @@ async function spawnRunStage(
         parkProviderUsageLimit(pipeline, attempt, `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`, ports);
         return;
       }
-      wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.switchedAccountId])];
       const engine = attempt.effectiveRole.engine;
+      if (error instanceof ProjectAccountRefusedError && error.resolution.kind === "exhausted")
+        recordProviderTargetExhaustion(attempt, wait.switchedAccountId, error.resolution, ports);
+      else wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.switchedAccountId])];
       attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: wait.tries,
         startedAt: providerBackoffStartedAt(attempt, ports.now()), engine,
-        failedAccounts: [...new Set([...providerFailedAccountsOn(attempt, engine), ...wait.failedAccounts])] };
+        failedAccounts: [...new Set([...providerFailedAccountsOn(attempt, engine), ...(wait.failedAccounts ?? [])])] };
       if (!attemptStage(stage, attempt).account) {
         const unavailableIds = usageLimitsOn(attempt, engine)
           .filter(item => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
-          .map(item => item.accountId).concat(providerSpentAccountsOn(pipeline, attempt, engine, ports), wait.failedAccounts);
+          .map(item => item.accountId).concat(providerSpentAccountsOn(pipeline, attempt, engine, ports), wait.failedAccounts ?? []);
         try {
           const request = { project: pipeline.project, model: attempt.effectiveRole.model, unavailableIds };
           const resolution = ports.resolveProjectSpawn?.(engine, request) ?? accountManager.resolveProjectSpawn(engine, request);
@@ -6217,6 +6232,7 @@ async function tickRunStage(
         cwd: pipeline.worktreeDir,
         project: pipeline.project,
         requestedAccountId: bound.account ?? providerTargetAccountOn(attempt, attempt.effectiveRole.engine) ?? null,
+        requireAccountCapacity: Boolean(providerTargetAccountOn(attempt, attempt.effectiveRole.engine)),
         unavailableAccountIds: [...new Set(usageLimitsOn(attempt, attempt.effectiveRole.engine)
           .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
           .map((limited) => limited.accountId).concat(((attempt.providerRecoveryBudget?.engine ?? attempt.effectiveRole.engine) === attempt.effectiveRole.engine
@@ -7947,8 +7963,9 @@ function availableProviderRetryAccount(pipeline: Pipeline, stage: PipelineStage,
   try {
     const recovered = (id: string) => {
       const limit = usageLimitsOn(attempt, engine).find(item => item.accountId === id);
-      return ports.accountRecovered?.(engine, id, Math.max(wait.turnTs, limit?.limitedAt ?? 0),
-        attempt.effectiveRole.model, limit ? "usage_limit" : condition) === true;
+      return limit
+        ? providerAccountRecovered(pipeline, attempt, id, limit.limitedAt ?? null, limit.resetsAt, ports)
+        : ports.accountRecovered?.(engine, id, wait.turnTs, attempt.effectiveRole.model, condition) === true;
     };
     const unavailableIds = [...new Set([
       ...usageLimitsOn(attempt, engine).filter(item => !providerAccountRecovered(pipeline, attempt,
