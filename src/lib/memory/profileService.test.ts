@@ -35,6 +35,7 @@ describe("explicit parallel profile generation", () => {
     h.rules.scopes[0]!.active[0]!.rule = "Check the new sample shape before saving.";
     h.rules.scopes[0]!.active[0]!.changedAt = "2026-01-02";
     expect(h.service.read("garden", "en").stale).toBe(true);
+    expect(h.service.read("garden", "en").changes).toEqual({ added: 0, rewritten: 1, removed: 0 });
     await h.service.start("garden", "en").done;
     expect(scopes).toEqual(["overall", "role:garden:builder"]);
     expect(h.service.read("garden", "en").stale).toBe(false);
@@ -69,6 +70,28 @@ describe("explicit parallel profile generation", () => {
     h.ports.prepare = async () => async () => sampleAnswer();
     await h.service.start("garden", "en").done;
     expect(h.service.read("garden", "en").stale).toBe(false);
+  });
+  test("a fresh overall retains changed-rule counts for a failed slice", async () => {
+    const h = harness(); await h.service.start("garden", "en").done;
+    const scope = h.rules.scopes[0]!;
+    scope.active[0]!.rule = "Check the new sample shape before saving.";
+    scope.active[0]!.changedAt = "2026-01-02";
+    scope.active.pop();
+    scope.active.push({ ...scope.active[0]!, id: "six", rule: "Keep preview labels readable." });
+    h.ports.prepare = async () => async input => {
+      if (input.scope === scope.scope) throw new MemoryProfileError("invalid");
+      return sampleAnswer();
+    };
+    await h.service.start("garden", "en").done;
+    const view = h.service.read("garden", "en");
+    expect(view.overall!.stale).toBe(false);
+    expect(view.stale).toBe(true);
+    expect(view.changes).toEqual({ added: 1, rewritten: 1, removed: 1 });
+    h.ports.prepare = async () => async () => sampleAnswer();
+    await h.service.start("garden", "en").done;
+    const refreshed = h.service.read("garden", "en");
+    expect(refreshed.stale).toBe(false);
+    expect(refreshed.changes).toEqual({ added: 0, rewritten: 0, removed: 0 });
   });
   test("empty and disabled memory make no model calls; restart reports interruption", async () => {
     const h = harness(); h.rules.enabled = false;

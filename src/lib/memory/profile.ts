@@ -81,9 +81,19 @@ export function basisChanges(before: ProfileBasis, after: ProfileBasis) {
 export function profileView(view: RoleMemoryProjectView, locale: Locale, model: string, row: ProfileRow | null): MemoryProfileView {
   const active = new Set(view.scopes.flatMap(scope => scope.active.map(rule => rule.id)));
   const currentBasis = view.scopes.filter(scope => scope.active.length).flatMap(scope => scope.active.map(({ id, changedAt }) => ({ id, changedAt })));
-  const oldOverall = row?.parts.find(part => part.scope === OVERALL_SCOPE);
-  const coveredBasis = view.scopes.filter(scope => row?.parts.some(part => part.scope === scope.scope)).flatMap(scope => scope.active.map(({ id, changedAt }) => ({ id, changedAt })));
-  const changes = basisChanges(oldOverall?.basis ?? row?.parts.flatMap(part => part.basis) ?? [], oldOverall ? currentBasis : coveredBasis);
+  const changed = { added: new Set<string>(), rewritten: new Set<string>(), removed: new Set<string>() };
+  // Each displayed summary has its own basis. A fresh overall cannot conceal a failed old slice.
+  for (const part of row?.parts ?? []) {
+    const basis = part.scope === OVERALL_SCOPE ? currentBasis : view.scopes.find(scope => scope.scope === part.scope)?.active.map(({ id, changedAt }) => ({ id, changedAt })) ?? [];
+    const prior = new Map(part.basis.map(rule => [rule.id, rule.changedAt]));
+    const current = new Map(basis.map(rule => [rule.id, rule.changedAt]));
+    for (const rule of basis) {
+      if (!prior.has(rule.id)) changed.added.add(rule.id);
+      else if (prior.get(rule.id) !== rule.changedAt) changed.rewritten.add(rule.id);
+    }
+    for (const rule of part.basis) if (!current.has(rule.id)) changed.removed.add(rule.id);
+  }
+  const changes = { added: changed.added.size, rewritten: changed.rewritten.size, removed: changed.removed.size };
   const partView = (part: ProfilePart | undefined, basis: ProfileBasis) => {
     if (!part) return null;
     const delta = basisChanges(part.basis, basis);

@@ -36,7 +36,7 @@ slices return immediately on Refresh; only changed slices and the overall
 regenerate. A failed part retains its previous summary and can be retried.
 
 One model constant selects the catalogue’s Claude Haiku 5.5 entry when present;
-until then it selects `haiku`. The Messages API requires a concrete model id,
+until then it selects `haiku`. The Messages API rejected the bare `haiku` alias,
 so that alias maps to the verified Haiku 4.5 API target. A project Claude account
 is selected through the existing account admission policy. Its current OAuth
 credential stays inside the direct caller. Provider accounts and expired
@@ -76,8 +76,9 @@ why lines, refuse generation and retain readable raw rules.
 remains unchanged. One row per canonical project and locale stores parts
 (scope, content hash, rule ids with changedAt, model, prompt version, answer,
 createdAt and duration) and run state. A part retains its own model and prompt
-version so a failed upgrade cannot mark old results fresh. The overall basis
-supports added, rewritten and removed counts. Removed rules disappear from
+version so a failed upgrade cannot mark old results fresh. Changed-rule counts
+use each part's basis and count each rule once per change kind. A fresh overall
+keeps the counts of a slice whose refresh failed. Removed rules disappear from
 topic links immediately, while the old prose stays until Refresh.
 
 GET `/api/role-memory/profile?project=&locale=` only reads. POST with

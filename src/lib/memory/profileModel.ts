@@ -7,7 +7,7 @@ import type { Locale } from "@/lib/i18n/core";
 
 // The catalogue lane owns the new model. This feature never changes that catalogue.
 export const MEMORY_PROFILE_MODEL = ENGINE_MODELS.claude.find(model => model.id === "claude-haiku-5-5")?.id ?? "haiku";
-// Messages does not accept CLI aliases (verified by a 404); this is the current haiku alias target.
+// Messages rejected the bare `haiku` alias with a 404; use the verified concrete target.
 const HAIKU_ALIAS_TARGET = "claude-haiku-4-5-20251001";
 export type ProfileCaller = (input: ProfileInput, locale: Locale) => Promise<unknown>;
 export type ProfileFetch = (url: string, init: RequestInit) => Promise<Response>;
