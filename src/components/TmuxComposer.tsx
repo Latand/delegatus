@@ -402,6 +402,7 @@ export function RuntimeComposerReceipts({
   nowMs,
   session = null,
   onRetry,
+  onRetryAll,
   onEdit,
   onDismiss,
   onDiscard,
@@ -428,6 +429,10 @@ export function RuntimeComposerReceipts({
       message that never arrived. */
   session?: { host: HostAxis; turn: TurnAxis } | null;
   onRetry: (receipt: RuntimeReceipt, mode?: "uncertain") => void;
+  /** «Retry failed (N)»: the settled failures, oldest first. The composer
+      sends them one after another so they arrive in the order they were
+      typed; absent, each goes to `onRetry` in that order. */
+  onRetryAll?: (receipts: RuntimeReceipt[]) => void;
   onEdit: (receipt: RuntimeReceipt) => void;
   /** Persists a dismissal — receives every settled operation id of the row. */
   onDismiss?: (operationIds: string[]) => void;
@@ -853,7 +858,11 @@ export function RuntimeComposerReceipts({
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    for (const receipt of retryAll) onRetry(receipt);
+                    /* Oldest first, the order the operator typed them. */
+                    const ordered = [...retryAll].sort((left, right) =>
+                      Date.parse(left.admittedAt ?? left.at) - Date.parse(right.admittedAt ?? right.at));
+                    if (onRetryAll) onRetryAll(ordered);
+                    else for (const receipt of ordered) onRetry(receipt);
                   }}
                 >
                   {t("bulk.retryFailed", { count: retryAll.length })}
@@ -4353,6 +4362,33 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     }
     setBusy(true);
     setStatus(null);
+    try {
+      await postRuntimeRetry(receipt, mode);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /* «Retry failed (N)» (review P2): each retry is re-admitted only after the
+     one before it answered, so the messages keep the order they were typed,
+     and the composer stays busy for the whole run. A retry that is refused
+     stops the run: sending the later ones would put them ahead of it. */
+  const retryRuntimeReceiptsInOrder = async (receipts: RuntimeReceipt[]) => {
+    if (busy || voiceSending || reconcilingSend) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      for (const receipt of receipts) {
+        if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) break;
+        if (!await postRuntimeRetry(receipt, receipt.resend === "verify-first" ? "uncertain" : undefined)) break;
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** One retry on the wire; true when the server accepted it. */
+  const postRuntimeRetry = async (receipt: RuntimeReceipt, mode?: "uncertain"): Promise<boolean> => {
     if (mode !== "uncertain" && !receiptHasAbsorbingOutcome(receipt)) {
       // Starting an authorized later attempt consumes the old safe proof before
       // dispatch. A lost response must survive remount as unknown.
@@ -4370,12 +4406,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const accepted = body.receipt && rememberRuntimeReceipt(body.receipt, receipt, mode !== "uncertain", body.operationId);
       if (!response.ok || !accepted) {
         setStatus({ kind: "err", text: t("composer.deliveryRetryFailed") });
-        return;
+        return false;
       }
+      return true;
     } catch {
       setStatus({ kind: "err", text: t("common.serverUnavailable") });
-    } finally {
-      setBusy(false);
+      return false;
     }
   };
 
@@ -5716,6 +5752,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
                 ? { host: structuredSession.session.host, turn: structuredSession.session.turn }
                 : null}
               onRetry={(receipt, mode) => void retryRuntimeReceipt(receipt, mode)}
+              onRetryAll={(receipts) => void retryRuntimeReceiptsInOrder(receipts)}
               onEdit={editRuntimeReceipt}
               onDismiss={dismissReceipts}
               onDiscard={(receipt) => void discardRuntimeReceipt(receipt)}

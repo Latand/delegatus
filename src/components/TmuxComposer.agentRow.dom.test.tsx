@@ -325,10 +325,78 @@ test("«Retry failed» sends the settled failures again and skips the send whose
     const retryAll = host.querySelector<HTMLButtonElement>("[data-receipts-retry-failed]")!;
     expect(retryAll.textContent).toBe(translate("en", "bulk.retryFailed", { count: 2 }));
     await settle(() => retryAll.click());
-    expect(retried.sort()).toEqual(["failed-one", "failed-two"]);
+    /* Oldest first, the order they were typed. */
+    expect(retried).toEqual(["failed-one", "failed-two"]);
     /* The unconfirmed send keeps its own Check delivery and Discard. */
     const unconfirmed = host.querySelector('[data-operation="unconfirmed"]');
     expect(unconfirmed?.querySelector("[data-receipt-discard]")).not.toBeNull();
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
+
+test("«Retry failed» in the composer sends one retry at a time, oldest first, and holds the composer busy until the last answers", async () => {
+  /* The newest failure first in the list, so the order is the composer's own. */
+  const failures = [
+    receipt({ operationId: "failed-late", status: "failed", reason: "dead-host", text: "typed second", at: "2026-10-11T10:05:00.000Z" }),
+    receipt({ operationId: "failed-early", status: "failed", reason: "dead-host", text: "typed first", at: "2026-10-11T10:00:00.000Z" }),
+    receipt({ operationId: "unconfirmed", status: "uncertain", text: "third words", at: "2026-10-11T10:06:00.000Z" }),
+  ];
+  const posted: string[] = [];
+  const answers: (() => void)[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const match = /\/api\/runtime\/operations\/([^/?]+)$/.exec(url);
+    if (!match || init?.method !== "POST") return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+    const operationId = decodeURIComponent(match[1]!);
+    posted.push(operationId);
+    const original = failures.find((candidate) => candidate.operationId === operationId)!;
+    await new Promise<void>((resolve) => answers.push(resolve));
+    return { ok: true, status: 200, json: async () => ({ operationId, receipt: { ...original, status: "queued", revision: 2 } }) } as Response;
+  }) as typeof fetch;
+  const { host, root } = await mount({ receipts: failures });
+  try {
+    await settle(() => rowControls(host)!.querySelector<HTMLButtonElement>("[data-receipts-chip]")!.click());
+    const retryAll = host.querySelector<HTMLButtonElement>("[data-receipts-retry-failed]")!;
+    expect(retryAll.textContent).toBe(translate("en", "bulk.retryFailed", { count: 2 }));
+    await settle(() => retryAll.click());
+    /* The oldest goes first, and nothing else is on the wire until it answers. */
+    expect(posted).toEqual(["failed-early"]);
+    /* The later message's own Retry waits for the run. */
+    const lateRetry = () => [...host.querySelectorAll<HTMLButtonElement>('[data-runtime-receipt-stack] [data-operation="failed-late"] button')]
+      .find((button) => button.textContent === translate("en", "runtime.receipt.retry"));
+    expect(lateRetry()?.disabled).toBe(true);
+    await settle(() => answers.shift()!());
+    expect(posted).toEqual(["failed-early", "failed-late"]);
+    /* Still busy between the first answer and the last. */
+    expect(host.querySelector<HTMLButtonElement>('[data-runtime-receipt-stack] [data-operation="failed-early"] [data-receipt-uncertain-retry]')?.disabled).toBe(true);
+    await settle(() => answers.shift()!());
+    /* The send whose delivery is unconfirmed is never retried. */
+    expect(posted).toEqual(["failed-early", "failed-late"]);
+    expect(answers).toHaveLength(0);
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
+
+test("«Retry failed» stops at a refused retry, so a later message never goes ahead of an earlier one", async () => {
+  const failures = [
+    receipt({ operationId: "failed-early", status: "failed", reason: "dead-host", text: "typed first", at: "2026-10-11T10:00:00.000Z" }),
+    receipt({ operationId: "failed-late", status: "failed", reason: "dead-host", text: "typed second", at: "2026-10-11T10:05:00.000Z" }),
+  ];
+  const posted: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const match = /\/api\/runtime\/operations\/([^/?]+)$/.exec(String(input));
+    if (!match || init?.method !== "POST") return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+    posted.push(decodeURIComponent(match[1]!));
+    return { ok: false, status: 409, json: async () => ({ error: "refused" }) } as Response;
+  }) as typeof fetch;
+  const { host, root } = await mount({ receipts: failures });
+  try {
+    await settle(() => rowControls(host)!.querySelector<HTMLButtonElement>("[data-receipts-chip]")!.click());
+    await settle(() => host.querySelector<HTMLButtonElement>("[data-receipts-retry-failed]")!.click());
+    expect(posted).toEqual(["failed-early"]);
+    expect(host.textContent).toContain(translate("en", "composer.deliveryRetryFailed"));
   } finally {
     flushSync(() => root.unmount());
   }
