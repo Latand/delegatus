@@ -339,25 +339,28 @@ So the runner merges a head only when its checks are **settled and green**:
      --jq .protection.required_status_checks.contexts`, which works with read
      access (checked 2026-09-25: `privacy-publication`,
      `privacy-tracker-audit`). An unprotected branch has none;
-   - every check name the runner recorded on an **earlier head of this PR**
-     (`merge.seenChecks`, a union of names, written at each read) is present.
+   - every required check name the runner recorded on an **earlier head of this
+     PR** (`merge.seenChecks`, a union of names, written at each read) is present.
      That covers the partial rollup right after `update-branch`: the update
      commit merges the base into the branch, the PR diff against the base is
-     unchanged, and the same workflows run again;
+     unchanged, and the required workflows run again. Optional names recorded
+     on an earlier head do not hold the merge;
    - at least **3 minutes** have passed since the runner first saw this head
      (`merge.headSeenAt`);
    - the set of names did not grow between the last two reads (60 s apart).
      A workflow that registers late shows up as growth and restarts the wait;
-   - every check has finished (`status: COMPLETED`, or a status context not
-     `PENDING`).
+   - every required check has finished (`status: COMPLETED`, or a status
+     context not `PENDING`). Pending optional checks can continue.
 2. **Green.** No check concluded `FAILURE`, `CANCELLED`, `TIMED_OUT`,
    `ACTION_REQUIRED`, `STARTUP_FAILURE` or (status context) `ERROR`.
    `SUCCESS`, `NEUTRAL` and `SKIPPED` pass. A red check that branch protection
    does not require still blocks.
 
-A head that still has **no check at all** once the 3 minutes have passed is
-blocked: "no checks reported on this head". A repository without CI therefore
-never merges automatically (§9). A main-wide red check stops merges until
+A head that still has **no check at all** once the 3 minutes have passed, on a
+base with no required contexts, is blocked: "no checks reported on this head".
+Missing required contexts wait within the 90-minute bound, even with an empty
+rollup. A repository without CI therefore never merges automatically (§9).
+A main-wide red check stops merges until
 someone fixes main, as the expired audit allowlist did on 2026-09-25 (#2188).
 That stop shows in Needs you and is never silent.
 
@@ -384,7 +387,7 @@ Per eligible lane, a small state machine stored on the pipeline as
 `merge: PipelineMerge`:
 
 ```
-queued → checking ─┬─ head in chain, CLEAN or HAS_HOOKS, checks settled + green ─→ merging → merged
+queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required checks settled + green, no red ─→ merging → merged
                    ├─ checks not settled, UNKNOWN, mergeable null/UNKNOWN,
                    │  BLOCKED while a required check is pending ─→ waiting-checks (60 s, ≤ 90 min) → checking
                    ├─ BEHIND ─→ updating (update-branch) → waiting-checks
@@ -397,8 +400,10 @@ queued → checking ─┬─ head in chain, CLEAN or HAS_HOOKS, checks settled 
    `mergeStateStatus: UNKNOWN` or `mergeable: UNKNOWN`/null is routine right
    after a push or an update, while GitHub computes mergeability. It means
    "read again next poll", inside the same 90-minute bound, and never blocks
-   by itself. `UNSTABLE` (a non-required check failed) is caught by the green
-   rule. `BLOCKED` after the checks have settled green means protection wants
+   by itself. `UNSTABLE` is mergeable with non-passing commit status: after
+   required checks settle green, the runner can merge it with optional jobs
+   still pending. A reported failure remains caught by the green rule.
+   `BLOCKED` after the checks have settled green means protection wants
    something the runner cannot give (an approving review, a signed commit),
    and blocks with GitHub's reason.
 2. **Head fence, as a chain.** The runner keeps `merge.chain`: the lane's
