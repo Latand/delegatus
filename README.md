@@ -922,8 +922,9 @@ messages never wait on it.
 
 To give the service itself `CPUWeight=1000` beside the agents, run
 `node bin/install-cpu-placement.mjs`. It writes three files under
-`$HOME/.config/systemd/user` and prints the reload and restart that apply them;
-restart at a quiet moment. Dedicated CPUs for production need root; see
+`$HOME/.config/systemd/user` and prints the reload, stop and start that apply
+them; run them at a quiet moment. A plain restart can leave the service in its
+old cgroup. Dedicated CPUs for production need root; see
 [the design](docs/design/cpu-placement.md).
 
 ## Platform support
