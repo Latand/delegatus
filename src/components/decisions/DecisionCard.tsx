@@ -3,9 +3,11 @@
 import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, RotateCw, ZoomIn } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
+import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
 import { ChevronDown } from "@/components/icons";
 import { MicButtonView } from "@/components/MicButton";
 import { DecisionQuestions, selectPrototypeAnswer } from "@/components/prototypeReview/DecisionQuestions";
+import { roundGallery } from "@/components/prototypeReview/PrototypeReview";
 import { useDictation } from "@/hooks/useDictation";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -35,20 +37,30 @@ function source(t: TFunction, decision: OperatorDecisionView): string {
   return decision.variants.length ? `${where} · ${t("decisions.variants", { count: decision.variants.length })}` : where;
 }
 
-function openWindow(decision: OperatorDecisionView): void {
-  if (decision.taskId !== null) openPrototypeReview({ kind: "prototype-review", taskId: decision.taskId, reviewId: decision.id, from: "notice" });
-}
-
-/** The first frame of each variant, numbered; a press opens the review window. */
+/** The first frame of each variant, numbered; a press opens the review
+    window, or for a seat's round, which has no window, the full-screen viewer
+    over the round's frames. The form stays open under it with its draft. */
 function Thumbs({ decision, small }: { decision: OperatorDecisionView; small: boolean }) {
   const { t } = useLocale();
+  const [viewer, setViewer] = useState<{ image: GalleryImage; gallery: GalleryImage[] } | null>(null);
   const w = small ? 150 : 176;
   const h = Math.round(w * 0.6);
-  const opens = decision.taskId !== null;
+  const open = (number?: number) => {
+    if (decision.taskId !== null) {
+      openPrototypeReview({ kind: "prototype-review", taskId: decision.taskId, reviewId: decision.id, from: "notice" });
+      return;
+    }
+    const gallery = roundGallery(t, decision);
+    const first = decision.variants.find((variant) => variant.number === number)?.frames.find((entry) => entry.image.available && entry.image.url)?.image.url;
+    const image = gallery.find((entry) => entry.src === first) ?? gallery[0];
+    if (image) setViewer({ image, gallery });
+  };
+  const opens = decision.taskId !== null || decision.variants.some((variant) => variant.frames.some((entry) => entry.image.available && entry.image.url));
   return (
     <div data-decision-thumbs="" className="flex min-w-0 flex-wrap items-end gap-2">
       {decision.variants.map((variant) => {
         const frame = variant.frames.find((entry) => entry.image.available && entry.image.url);
+        const zooms = decision.taskId !== null || Boolean(frame);
         const picture = (
           <span className="relative block overflow-hidden rounded-control border border-border bg-sunken" style={{ width: w, height: h }}>
             {frame?.image.url ? (
@@ -56,13 +68,13 @@ function Thumbs({ decision, small }: { decision: OperatorDecisionView; small: bo
               <img data-decision-thumb={variant.number} src={frame.image.url} alt="" style={{ width: w, height: h, maxWidth: "none" }} className="block object-cover object-top" />
             ) : null}
             <span className="absolute left-1 top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-accent px-1 text-caption font-bold text-white">{variant.number}</span>
-            {opens ? <ZoomIn aria-hidden className="absolute bottom-1 right-1 h-4 w-4 rounded-sm bg-card/90 p-0.5 text-secondary" /> : null}
+            {zooms ? <ZoomIn aria-hidden className="absolute bottom-1 right-1 h-4 w-4 rounded-sm bg-card/90 p-0.5 text-secondary" /> : null}
           </span>
         );
         return (
           <figure key={variant.number} className="m-0 flex shrink-0 flex-col gap-1">
-            {opens ? (
-              <button type="button" className="rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label={t("decisions.thumbAria", { n: variant.number, name: variant.name })} onClick={() => openWindow(decision)}>
+            {zooms ? (
+              <button type="button" data-decision-thumb-open={variant.number} className="rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label={t("decisions.thumbAria", { n: variant.number, name: variant.name })} onClick={() => open(variant.number)}>
                 {picture}
               </button>
             ) : picture}
@@ -71,9 +83,14 @@ function Thumbs({ decision, small }: { decision: OperatorDecisionView; small: bo
         );
       })}
       {opens && !small ? (
-        <button type="button" data-decision-open-prototypes="" className={`${SECONDARY} mb-5 ml-1`} onClick={() => openWindow(decision)}>
+        <button type="button" data-decision-open-prototypes="" className={`${SECONDARY} mb-5 ml-1`} onClick={() => open()}>
           <GalleryHorizontalEnd className="h-3.5 w-3.5" aria-hidden />{t("decisions.openPrototypes")}
         </button>
+      ) : null}
+      {viewer ? (
+        <ImageGalleryProvider value={() => viewer.gallery}>
+          <Lightbox src={viewer.image.src} alt={viewer.image.alt} caption={viewer.image.caption} detail={viewer.image.detail} onClose={() => setViewer(null)} />
+        </ImageGalleryProvider>
       ) : null}
     </div>
   );

@@ -304,6 +304,15 @@ adds its fingerprint. A decision that needs an action outside Delegatus (run a
 command on another machine, sign in) stays a bridge `decision` item: a click
 cannot settle it.
 
+As built, three more lines follow decisions 3 and 5 so no paragraph asks a
+decision a second way: the reply-drafts paragraph names a plan the seat wants
+a yes to, and a stage's question it cannot settle, as decisions and drops the
+yes-shaped draft examples; «Human in the loop» asks a parked stage's question
+in a form instead of in chat with drafts; and the bridge line says a report
+only points to a decision's form, keeping question and blocked reports for an
+ask a click cannot settle. The personality line stops proposing next work
+"with suggested replies". The edits pay for themselves in bytes.
+
 ## 3. Variants
 
 Three placements of the same card. Frames: desktop 1440 × 900 and phone

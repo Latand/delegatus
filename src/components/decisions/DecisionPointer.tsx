@@ -31,9 +31,18 @@ export function decisionPointerOf(event: ToolEvent): DecisionPointerTarget | nul
   return { reviewId, project, title: typeof title === "string" ? title : typeof mcp.args.title === "string" ? mcp.args.title : "" };
 }
 
-/** A recorded answer is read again while its message is still on its way. */
-const RECORD_POLL_MS = 4000;
-const RECORD_POLLS = 30;
+/* A recorded answer is read again while its message is on its way: pending,
+   or uncertain until the receipt settles it. A read the server could not
+   answer (busy, down, offline) is tried again on the same pace. The first
+   reads follow closely; past them the record keeps checking, slower. */
+const recordPoll = { ms: 4000, slowMs: 30_000, fast: 30 };
+const UNSETTLED = new Set(["pending", "uncertain"]);
+const transientRead = (status: number) => status === 409 || status === 429 || status >= 500;
+
+export function setDecisionRecordPollForTests(ms: number | null): void {
+  recordPoll.ms = ms ?? 4000;
+  recordPoll.slowMs = ms ?? 30_000;
+}
 
 export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
   const { t } = useLocale();
@@ -64,15 +73,21 @@ export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
     let alive = true;
     let polls = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const again = () => {
+      if (!alive) return;
+      polls += 1;
+      timer = setTimeout(() => void read(), polls < recordPoll.fast ? recordPoll.ms : recordPoll.slowMs);
+    };
     const read = async () => {
       try {
         const response = await fetch(decisionsUrl(target.project, target.reviewId), { cache: "no-store" });
-        if (!response.ok) return;
+        if (!alive) return;
+        if (!response.ok) { if (transientRead(response.status)) again(); return; }
         const body = await response.json() as OperatorDecisionsRead;
         if (!alive) return;
         setRecord(body.round ?? null);
-        if (body.round?.decision?.delivery.state === "pending" && ++polls < RECORD_POLLS) timer = setTimeout(() => void read(), RECORD_POLL_MS);
-      } catch { /* the pointer stays; the column still answers */ }
+        if (UNSETTLED.has(body.round?.decision?.delivery.state ?? "")) again();
+      } catch { again(); }
     };
     void read();
     return () => { alive = false; if (timer) clearTimeout(timer); };

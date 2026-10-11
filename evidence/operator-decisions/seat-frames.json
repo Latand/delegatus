@@ -1,0 +1,310 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": {
+    "seat-frames-1440-uk-light-form": {
+      "card": {
+        "x": 1016,
+        "y": 287,
+        "w": 335,
+        "h": 334
+      },
+      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": 2,
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "all": 0
+    },
+    "seat-frames-1440-uk-light-viewer": {
+      "label": "2 · Розподіл за рушієм — Ніч",
+      "position": "2 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 960,
+      "horizontalOverflow": false
+    },
+    "seat-frames-1440-uk-light-viewer-first": {
+      "label": "1 · Акаунт A на всі лейни — Ніч",
+      "position": "1 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 960,
+      "horizontalOverflow": false
+    },
+    "seat-frames-1440-uk-light-after": {
+      "open": 1,
+      "chosen": "true"
+    },
+    "seat-frames-1440-uk-dark-form": {
+      "card": {
+        "x": 1016,
+        "y": 287,
+        "w": 335,
+        "h": 334
+      },
+      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": 2,
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "all": 0
+    },
+    "seat-frames-1440-uk-dark-viewer": {
+      "label": "2 · Розподіл за рушієм — Ніч",
+      "position": "2 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 960,
+      "horizontalOverflow": false
+    },
+    "seat-frames-1440-uk-dark-viewer-first": {
+      "label": "1 · Акаунт A на всі лейни — Ніч",
+      "position": "1 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 960,
+      "horizontalOverflow": false
+    },
+    "seat-frames-1440-uk-dark-after": {
+      "open": 1,
+      "chosen": "true"
+    },
+    "seat-frames-1440-en-light-form": {
+      "card": {
+        "x": 1016,
+        "y": 287,
+        "w": 335,
+        "h": 334
+      },
+      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": 2,
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "all": 0
+    },
+    "seat-frames-1440-en-light-viewer": {
+      "label": "2 · Split by engine — Night",
+      "position": "2 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 960,
+      "horizontalOverflow": false
+    },
+    "seat-frames-1440-en-light-viewer-first": {
+      "label": "1 · Account A for every lane — Night",
+      "position": "1 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 960,
+      "horizontalOverflow": false
+    },
+    "seat-frames-1440-en-light-after": {
+      "open": 1,
+      "chosen": "true"
+    },
+    "seat-frames-1440-en-dark-form": {
+      "card": {
+        "x": 1016,
+        "y": 287,
+        "w": 335,
+        "h": 334
+      },
+      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": 2,
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "all": 0
+    },
+    "seat-frames-1440-en-dark-viewer": {
+      "label": "2 · Split by engine — Night",
+      "position": "2 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 960,
+      "horizontalOverflow": false
+    },
+    "seat-frames-1440-en-dark-viewer-first": {
+      "label": "1 · Account A for every lane — Night",
+      "position": "1 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 960,
+      "horizontalOverflow": false
+    },
+    "seat-frames-1440-en-dark-after": {
+      "open": 1,
+      "chosen": "true"
+    },
+    "seat-frames-390-uk-light-form": {
+      "card": {
+        "x": 12,
+        "y": 459,
+        "w": 366,
+        "h": 360
+      },
+      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": 2,
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "all": 0
+    },
+    "seat-frames-390-uk-light-viewer": {
+      "label": "2 · Розподіл за рушієм — Ніч",
+      "position": "2 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 390,
+      "horizontalOverflow": false
+    },
+    "seat-frames-390-uk-light-viewer-first": {
+      "label": "1 · Акаунт A на всі лейни — Ніч",
+      "position": "1 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 390,
+      "horizontalOverflow": false
+    },
+    "seat-frames-390-uk-light-after": {
+      "open": 1,
+      "chosen": "true"
+    },
+    "seat-frames-390-uk-dark-form": {
+      "card": {
+        "x": 12,
+        "y": 459,
+        "w": 366,
+        "h": 360
+      },
+      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": 2,
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "all": 0
+    },
+    "seat-frames-390-uk-dark-viewer": {
+      "label": "2 · Розподіл за рушієм — Ніч",
+      "position": "2 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 390,
+      "horizontalOverflow": false
+    },
+    "seat-frames-390-uk-dark-viewer-first": {
+      "label": "1 · Акаунт A на всі лейни — Ніч",
+      "position": "1 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 390,
+      "horizontalOverflow": false
+    },
+    "seat-frames-390-uk-dark-after": {
+      "open": 1,
+      "chosen": "true"
+    },
+    "seat-frames-390-en-light-form": {
+      "card": {
+        "x": 12,
+        "y": 459,
+        "w": 366,
+        "h": 360
+      },
+      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": 2,
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "all": 0
+    },
+    "seat-frames-390-en-light-viewer": {
+      "label": "2 · Split by engine — Night",
+      "position": "2 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 390,
+      "horizontalOverflow": false
+    },
+    "seat-frames-390-en-light-viewer-first": {
+      "label": "1 · Account A for every lane — Night",
+      "position": "1 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 390,
+      "horizontalOverflow": false
+    },
+    "seat-frames-390-en-light-after": {
+      "open": 1,
+      "chosen": "true"
+    },
+    "seat-frames-390-en-dark-form": {
+      "card": {
+        "x": 12,
+        "y": 459,
+        "w": 366,
+        "h": 360
+      },
+      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": 2,
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "all": 0
+    },
+    "seat-frames-390-en-dark-viewer": {
+      "label": "2 · Split by engine — Night",
+      "position": "2 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 390,
+      "horizontalOverflow": false
+    },
+    "seat-frames-390-en-dark-viewer-first": {
+      "label": "1 · Account A for every lane — Night",
+      "position": "1 / 2",
+      "loaded": true,
+      "naturalWidth": 960,
+      "drawnWidth": 390,
+      "horizontalOverflow": false
+    },
+    "seat-frames-390-en-dark-after": {
+      "open": 1,
+      "chosen": "true"
+    }
+  },
+  "failures": []
+}

@@ -28173,6 +28173,87 @@ describe("operator decision forms: the «Рішення» column beside the seat
     fs.writeFileSync("evidence/operator-decisions/mirror.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
+
+  /*
+   * A seat's taskless round with frames (`&decisions=seat-frames`) has no
+   * review window: a thumbnail opens its frames in the full-screen viewer over
+   * the form, at 1440 in the column and at 390 in the sheet, uk and en, light
+   * and dark. Each frame reads the viewer's picture drawn wider than the
+   * thumbnail, the viewer stepping to the other variant, and after Escape the
+   * same form still open with the answer chosen before. Readings go to
+   * `evidence/operator-decisions/seat-frames.json`.
+   */
+  browserTest("a seat's round with frames opens them full screen from its thumbnails at 1440 and 390, and the form keeps its answer", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    /* The viewer is the dialog with the counter; the phone's sheet is a dialog too. */
+    const viewerReading = (page: Page) => page.evaluate(() => {
+      const dialog = document.querySelector("[data-lightbox-position]")?.closest<HTMLElement>('[role="dialog"]') ?? null;
+      const picture = [...dialog?.querySelectorAll<HTMLImageElement>("img") ?? []].find((image) => { const rect = image.getBoundingClientRect(); return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth; }) ?? null;
+      const rect = picture?.getBoundingClientRect();
+      return { label: dialog?.getAttribute("aria-label") ?? null, position: dialog?.querySelector("[data-lightbox-position]")?.textContent?.trim() ?? null, loaded: Boolean(picture?.complete && picture.naturalWidth > 0), naturalWidth: picture?.naturalWidth ?? 0, drawnWidth: rect ? Math.round(rect.width) : 0, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+    });
+    try {
+      for (const width of [1440, 390] as const) for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const label = `seat-frames-${width}-${lang}-${scheme}`;
+        const fail = (text: string) => failures.push(`${label}: ${text}`);
+        const scope = phone ? '[data-mobile2-sheet="decisions"]' : "[data-decision-column]";
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=seat-frames`, phone ? { width: 390, height: 844 } : VIEWPORT, scheme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.click("[data-mobile2-seat-open]", { timeout: 30_000 });
+            await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
+          }
+          await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
+          await page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`).click();
+          const card = `${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`;
+          await page.waitForSelector(card, { timeout: 10_000 });
+          await page.locator(`${card} [data-prototype-option="account:1"]`).click();
+          await page.waitForTimeout(400);
+          const form = await readForm(page, scope);
+          const buttons = { thumbs: await page.locator(`${card} [data-decision-thumb-open]`).count(), all: await page.locator(`${card} [data-decision-open-prototypes]`).count() };
+          readings[`${label}-form`] = { ...form, ...buttons };
+          await page.screenshot({ path: path.join(OUT, `${label}-form.png`) });
+          if (buttons.thumbs !== 2 || form.thumbsOverlap || !form.sendReachable || form.horizontalOverflow) fail(`the form reads ${JSON.stringify({ ...form, ...buttons })}`);
+          await page.locator(`${card} [data-decision-thumb-open="2"]`).click();
+          await page.waitForFunction(() => [...document.querySelector("[data-lightbox-position]")?.closest('[role="dialog"]')?.querySelectorAll<HTMLImageElement>("img") ?? []].some((image) => image.complete && image.naturalWidth > 0), undefined, { timeout: 10_000 });
+          await page.waitForTimeout(400);
+          const second = await viewerReading(page);
+          readings[`${label}-viewer`] = second;
+          await page.screenshot({ path: path.join(OUT, `${label}-viewer.png`) });
+          const name = lang === "uk" ? "2 · Розподіл за рушієм — Ніч" : "2 · Split by engine — Night";
+          const thumbWidth = form.thumbs[1]?.w ?? 0;
+          if (second.label !== name || second.position !== "2 / 2" || !second.loaded || second.naturalWidth !== 960 || second.drawnWidth <= thumbWidth * 1.5 || second.horizontalOverflow) fail(`the viewer reads ${JSON.stringify({ ...second, thumbWidth })}`);
+          await page.keyboard.press("ArrowLeft");
+          await page.waitForTimeout(300);
+          const first = await viewerReading(page);
+          readings[`${label}-viewer-first`] = first;
+          if (first.label !== (lang === "uk" ? "1 · Акаунт A на всі лейни — Ніч" : "1 · Account A for every lane — Night") || first.position !== "1 / 2") fail(`the viewer stepped to ${JSON.stringify(first)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-lightbox-position]", { state: "detached", timeout: 5_000 });
+          await page.waitForTimeout(300);
+          const after = { open: await page.locator(card).count(), chosen: await page.locator(`${card} [data-prototype-option="account:1"]`).getAttribute("aria-checked") };
+          readings[`${label}-after`] = after;
+          await page.screenshot({ path: path.join(OUT, `${label}-after.png`) });
+          if (after.open !== 1 || after.chosen !== "true") fail(`after the viewer the form reads ${JSON.stringify(after)}`);
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await page.screenshot({ path: path.join(OUT, `${label}-failed.png`) }).catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/operator-decisions", { recursive: true });
+    fs.writeFileSync("evidence/operator-decisions/seat-frames.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
 });
 
 describe("account chips with the weekly limit left: the launch chooser and the runtime pill's account menu", () => {

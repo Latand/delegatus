@@ -81,6 +81,12 @@ function galleryOf(t: TFunction, round: PrototypeRoundView, slides: readonly Sli
   });
 }
 
+/** Every frame of a round, for a surface that shows its pictures without the
+    review window (a seat's taskless round in the «Рішення» column). The viewer
+    steps across the variants, so it counts the round's frames itself. */
+export const roundGallery = (t: TFunction, round: PrototypeRoundView): GalleryImage[] =>
+  galleryOf(t, round, slidesOf(round), new Set()).map(({ place: _place, ...image }) => image);
+
 const typing = (target: EventTarget | null) => {
   const element = target as HTMLElement | null;
   return Boolean(element && (["INPUT", "TEXTAREA", "SELECT", "VIDEO"].includes(element.tagName) || element.isContentEditable));

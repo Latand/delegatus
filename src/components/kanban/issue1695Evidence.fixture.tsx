@@ -2836,7 +2836,9 @@ if (PROTO) {
    feed, and a lane's prototype round waits on the search task with two numbered
    frames and two questions. `GET /api/projects/decisions` answers the column
    the way the Viewer does, and `POST` records an answer. `&decisions=answered`
-   is the same board after the seat's question in the feed was answered. */
+   is the same board after the seat's question in the feed was answered;
+   `&decisions=seat-frames` gives the seat's second question two numbered
+   frames, a taskless round with no review window to open them in. */
 const DECISIONS = params.get("decisions");
 const decisionPosts: unknown[] = [];
 const seatRounds: PrototypeRoundView[] = [];
@@ -2863,6 +2865,10 @@ if (DECISIONS) {
       { id: "variant", text: L("Which variant do we build?", "Який варіант будуємо?"), options: [{ label: L("1 — List by project", "1 — Список за проєктами"), recommended: true }, { label: L("2 — Summary and «Show»", "2 — Підсумок і «Показати»") }] },
       { id: "phone", text: L("On the phone: a bottom sheet or a centred window?", "На телефоні: шторка знизу чи вікно по центру?"), options: [{ label: L("Bottom sheet", "Шторка знизу"), recommended: true }, { label: L("Centred window", "Вікно по центру") }] },
     ] }];
+  if (DECISIONS === "seat-frames") seatRounds[1]!.variants = [
+    { number: 1, name: L("Account A for every lane", "Акаунт A на всі лейни"), description: "", videos: [], frames: [{ image: frame(265, "account A · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
+    { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
+  ];
   if (DECISIONS === "answered") {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };

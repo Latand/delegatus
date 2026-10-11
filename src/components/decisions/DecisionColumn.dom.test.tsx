@@ -29,7 +29,7 @@ Object.assign(globalThis, {
 });
 
 const { DecisionList, DecisionStripLine } = await import("./DecisionColumn");
-const { DecisionPointer, decisionPointerOf } = await import("./DecisionPointer");
+const { DecisionPointer, decisionPointerOf, setDecisionRecordPollForTests } = await import("./DecisionPointer");
 const { openOperatorDecisions, resetDecisionSurfacesForTests, useDecisionSheet, useDecisionSurface } = await import("./decisionSurface");
 const { resetDecisionDraftsForTests } = await import("./useOperatorDecisions");
 const { publishPrototypeNotices, resetPrototypeReviewStoreForTests } = await import("@/components/prototypeReview/prototypeReviewStore");
@@ -60,6 +60,7 @@ afterEach(async () => {
   resetDecisionSurfacesForTests();
   resetDecisionDraftsForTests();
   resetPrototypeReviewStoreForTests();
+  setDecisionRecordPollForTests(null);
   dom.document.body.innerHTML = "";
 });
 async function render(node: React.ReactNode) {
@@ -93,6 +94,33 @@ test("one decision stands open as its form with the recommended answers chosen; 
   expect(next.querySelector('[data-decision-thumb="1"]')).not.toBeNull();
   expect(next.querySelectorAll("[data-decision-thumbs] figure")).toHaveLength(2);
 });
+
+for (const touch of [false, true]) {
+  test(`a seat's round with prototypes opens its full frames in the viewer over the form, and the form keeps its draft${touch ? " (phone)" : ""}`, async () => {
+    const seatRound = seatDecision({ variants: taskDecision().variants.map((variant, at) => ({ ...variant, frames: [{ image: media(String(at + 1), `/api/image?prototype=seat&media=${at + 1}`), caption: "Wide" }] })) });
+    const host = await render(<DecisionList project="project-a" initial={[seatRound]} touch={touch} />);
+    const card = host.querySelector(`[data-decision-card="open"][data-decision-review="${SEAT}"]`)!;
+    expect(card.querySelectorAll("[data-decision-thumb-open]")).toHaveLength(2);
+    expect(card.querySelectorAll("[data-decision-open-prototypes]")).toHaveLength(touch ? 0 : 1);
+    await click(card.querySelector('[data-prototype-option="when:1"]'));
+    await click(card.querySelector('[data-decision-thumb-open="2"]'));
+    const viewer = host.ownerDocument.body.querySelector('[role="dialog"][aria-modal="true"]')!;
+    expect(viewer).not.toBeNull();
+    expect(viewer.getAttribute("aria-label")).toBe("2 · Summary — Wide");
+    expect(viewer.querySelector('img[src="/api/image?prototype=seat&media=2"]')).not.toBeNull();
+    expect(viewer.querySelector("[data-lightbox-position]")?.textContent).toBe("2 / 2");
+    await click(viewer.querySelector('[data-lightbox-step="previous"]'));
+    expect(host.ownerDocument.body.querySelector('[role="dialog"][aria-modal="true"]')!.getAttribute("aria-label")).toBe("1 · List — Wide");
+    await click(host.ownerDocument.body.querySelector(`[role="dialog"][aria-modal="true"] button[aria-label="Close"]`));
+    expect(host.ownerDocument.body.querySelector('[role="dialog"][aria-modal="true"]')).toBeNull();
+    const form = host.querySelector(`[data-decision-card="open"][data-decision-review="${SEAT}"]`)!;
+    expect(form.querySelector('[data-prototype-option="when:1"]')!.getAttribute("aria-checked")).toBe("true");
+    if (!touch) {
+      await click(form.querySelector("[data-decision-open-prototypes]"));
+      expect(host.ownerDocument.body.querySelector('[role="dialog"][aria-modal="true"]')!.getAttribute("aria-label")).toBe("1 · List — Wide");
+    }
+  });
+}
 
 test("«Інше» asks for the comment before the answer can go, and a refusal brings the form back with the reason", async () => {
   globalThis.fetch = (async () => new Response(JSON.stringify({ error: "the seat is busy" }), { status: 409 })) as unknown as typeof fetch;
@@ -246,6 +274,55 @@ for (const state of ["failed", "uncertain", "no-orchestrator"] as const) {
     expect(host.querySelector("[data-decision-retry]")).toBeNull();
   });
 }
+
+const settle = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+const recordAt = (state: "pending" | "uncertain" | "sent") => seatDecision({ decision: { chosen: [], answers: [{ questionId: "when", options: [0] }, { questionId: "why", options: [0] }], comment: "", at: "2026-10-11T14:46:00.000Z", delivery: { state, retryable: state !== "sent" } } });
+
+for (const [name, answers] of [
+  ["a pending answer that turns uncertain", [{ state: "pending" }, { state: "uncertain" }, { state: "sent" }]],
+  ["a read the server could not answer, or one that never arrived,", [{ status: 503 }, { thrown: true }, { status: 409 }, { state: "sent" }]],
+] as const) {
+  test(`${name} keeps the record reading until the receipt says sent, and the retry leaves without a second send`, async () => {
+    setDecisionRecordPollForTests(1);
+    const calls: Array<{ method: string }> = [];
+    let at = 0;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? "GET" });
+      const answer: { state?: "pending" | "uncertain" | "sent"; status?: number; thrown?: true } = answers[Math.min(at++, answers.length - 1)]!;
+      if (answer.thrown) throw new TypeError("offline");
+      if (answer.status) return new Response(JSON.stringify({ error: "prototype decision is busy" }), { status: answer.status });
+      return new Response(JSON.stringify({ project: "project-a", decisions: [], round: recordAt(answer.state!) }), { status: 200 });
+    }) as typeof fetch;
+    const host = await render(<DecisionPointer target={{ reviewId: SEAT, project: "project-a", title: "Deploy tonight?" }} />);
+    for (let wait = 0; wait < 40 && !host.querySelector('[data-decision-delivery="sent"]'); wait++) await settle(5);
+    expect(host.querySelector('[data-decision-delivery="sent"]')).not.toBeNull();
+    expect(host.querySelector("[data-decision-retry]")).toBeNull();
+    expect(calls.every((call) => call.method === "GET")).toBe(true);
+    expect(calls).toHaveLength(answers.length);
+    await settle(20);
+    expect(calls).toHaveLength(answers.length);
+  });
+}
+
+test("an uncertain answer offers the retry while the record keeps reading", async () => {
+  setDecisionRecordPollForTests(1);
+  let reads = 0;
+  globalThis.fetch = (async () => { reads++; return new Response(JSON.stringify({ project: "project-a", decisions: [], round: recordAt("uncertain") }), { status: 200 }); }) as unknown as typeof fetch;
+  const host = await render(<DecisionPointer target={{ reviewId: SEAT, project: "project-a", title: "Deploy tonight?" }} />);
+  await settle(30);
+  expect(host.querySelector('[data-decision-delivery="uncertain"]')).not.toBeNull();
+  expect(host.querySelector("[data-decision-retry]")).not.toBeNull();
+  expect(reads).toBeGreaterThan(2);
+});
+
+test("a read refused for good stops reading", async () => {
+  setDecisionRecordPollForTests(1);
+  let reads = 0;
+  globalThis.fetch = (async () => { reads++; return new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }); }) as unknown as typeof fetch;
+  await render(<DecisionPointer target={{ reviewId: SEAT, project: "project-a", title: "Deploy tonight?" }} />);
+  await settle(30);
+  expect(reads).toBe(1);
+});
 
 test("a refused retry says why and keeps the action", async () => {
   const round = seatDecision({ decision: { chosen: [], answers: [{ questionId: "when", options: [0] }, { questionId: "why", options: [0] }], comment: "", at: "2026-10-11T14:46:00.000Z", delivery: { state: "failed", retryable: true } } });

@@ -182,7 +182,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
   44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
   45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
-  46: "367a25cb04dc30f0befc8c704f5b58c77d8eb2eedd53f29e86b5d2186a184571",
+  46: "d630d0891c8256105403f48aa850778fda0726f39b26a527e1586b84dc68f7a7",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -953,6 +953,14 @@ test("the mandate asks every decision as a form", () => {
     expect(mandate.split("Prototype review:")).toHaveLength(2);
   }
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Decisions go to the form; drafts are for replies that are not a choice.");
+  /* A plan's yes and a parked stage's question are decisions; the pills and
+     the reports never ask them a second time (decisions 3 and 5). */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A plan you want a yes to, and a stage's question you cannot settle, are decisions.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("When a stage parks on such a question, ask the operator at once in a form.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report.");
+  for (const contradiction of ["proposes a plan you want a yes to", "with suggested replies", "Every ask to the operator is also a question or blocked report", "the plain yes"]) {
+    expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(contradiction);
+  }
 });
 
 
