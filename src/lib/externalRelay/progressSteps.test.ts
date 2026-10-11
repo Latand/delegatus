@@ -52,7 +52,8 @@ test("every generated progress is in the closed set and contains no observed hos
   const observations = [{}, { currentTool: "mcp__viewer__get_task" }, { currentTool: forbidden }, { writingAnswer: true }, {}];
   const beats = [steps.beat(1, 0, false)];
   for (const [i, observation] of observations.entries()) {
-    steps.observe({ ...observation, path: forbidden, text: forbidden } as typeof observation);
+    const withHostData = { ...observation, path: forbidden, text: forbidden };
+    steps.observe(withHostData);
     beats.push(steps.beat(i + 2, (i + 1) * 3000, true));
   }
   expect(beats.map(p => p?.label)).toEqual(["accepted", "thinking", "reading_board", "working", "writing_answer", "thinking"]);

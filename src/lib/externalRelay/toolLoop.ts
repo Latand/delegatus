@@ -223,8 +223,8 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           }
           onToolState?.(true);
           if (!tool.audience) onProgress?.(call.tool, false, false);
-          const sent = send(body, call.tool);
-          return onToolState ? sent.finally(() => onToolState(false)) : sent;
+          const response = send(body, call.tool);
+          return onToolState ? response.finally(() => onToolState(false)) : response;
         })().then((value) => {
           if (!tool.audience && (!value.result || !value.result.audience)) onProgress?.(call.tool, true, value.result?.status !== "ok");
           return value;
