@@ -169,18 +169,25 @@ test("what the display leaves out stays in the complete copy, in order, with the
   expect(JSON.stringify(complete)).not.toContain("/srv/build");
 });
 
-test("the complete copy of a report the size budget cut keeps every item, and past its own bound counts what it left out", () => {
+test("the complete copy of a report the size budget cut keeps every item; one past its own bound is flagged too large and kept nowhere", () => {
   const filler = (prefix: string) => Array.from({ length: 6 }, (_, index) => `${prefix} ${index}: ${"довгий опис роботи ".repeat(9).trim()}`.slice(0, 199));
   const sections = { prod: filler("прод"), merged: filler("змерджено"), inProgress: filler("в роботі"), queued: filler("далі").slice(0, 4), decision: ["рішення"] };
-  const { cut, complete } = render({ locale: "uk", class: "blocked", summary: "Потрібне рішення.", sections });
+  const { cut, complete, tooLarge } = render({ locale: "uk", class: "blocked", summary: "Потрібне рішення.", sections });
   expect(Buffer.byteLength(renderPlain(cut), "utf8")).toBeLessThanOrEqual(REPORT_PLAIN_BUDGET_BYTES);
+  expect(tooLarge).toBe(false);
   expect(complete!.sections.flatMap((section) => section.items)).toEqual([...sections.prod, ...sections.merged, ...sections.inProgress, ...sections.queued, ...sections.decision]);
-  expect(complete!.omitted).toBeUndefined();
 
-  const many = Array.from({ length: 32 }, (_, index) => `${index}: ${"я".repeat(190)}`);
-  const bounded = render({ locale: "uk", summary: "Багато пунктів.", sections: { inProgress: many, queued: many } }).complete!;
-  const kept = bounded.sections.flatMap((section) => section.items);
-  expect(Buffer.byteLength([bounded.summary, ...bounded.sections.flatMap((section) => [section.heading, ...section.items])].join("\n"), "utf8")).toBeLessThanOrEqual(8_192);
-  expect(kept).toEqual([...many, ...many].slice(0, kept.length));
-  expect(bounded.omitted).toBe(64 - kept.length);
+  // Sixty distinct Cyrillic items of 199 characters: no copy may silently drop the last ones.
+  const many = Array.from({ length: 60 }, (_, index) => `пункт ${index + 1}: ${"я".repeat(190)}`.slice(0, 199));
+  const over = render({ locale: "uk", summary: "Багато пунктів.", sections: { inProgress: many } });
+  expect(over.tooLarge).toBe(true);
+  expect(over.complete).toBeNull();
+});
+
+test("an older caller's long body line is cut for display only: the complete copy keeps its tail fact", () => {
+  const legacyBody = `${"The first fact. ".repeat(20)}TAIL_FACT: deployment is waiting.`;
+  const { cut, complete, tooLarge } = render({ summary: "Report.", legacyBody });
+  expect(renderPlain(cut)).not.toContain("TAIL_FACT");
+  expect(tooLarge).toBe(false);
+  expect(complete).toEqual({ summary: "Report.", sections: [{ heading: "In progress", items: [legacyBody.trim()] }] });
 });

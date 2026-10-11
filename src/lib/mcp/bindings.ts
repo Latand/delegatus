@@ -89,8 +89,8 @@ import { isLifecycleEventType } from "@/lib/lifecycle/vocabulary";
 import { recordBridgeDirectiveAnswer, recordBridgeDirectivePendingAnswer, recordManagerReport } from "@/lib/bridge/service";
 import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/lib/bridge/directive";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
-import { isBridgeReportClass, type BridgeReportCompleteV1, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
-import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
+import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, type BridgeReportCompleteV1, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
+import { bridgeReportComplete, findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { issueReportApproval, issueReportApprovalDrafts, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
@@ -3521,6 +3521,14 @@ async function bridgeReport(
         { code: "report_empty_after_scrub", retryable: false, warnings: rendered.warnings },
       );
     }
+    /* The voice relays a report whole or not at all: one past its bound is
+       refused before anything is stored, never shortened. */
+    if (rendered.tooLarge || (rendered.complete && !bridgeReportComplete(rendered.complete))) {
+      throw new McpToolRefusal(
+        `The report is longer than ${BRIDGE_REPORT_COMPLETE_MAX_BYTES} bytes as a whole, so it cannot be relayed without leaving items out. Nothing was recorded. Split it into several reports, each with its own key, or shorten the items.`,
+        { code: "report_too_large", retryable: false, warnings: rendered.warnings },
+      );
+    }
     warnings.push(...rendered.warnings);
     const language = languageMismatchWarning("report", [summary, ...Object.values(sections).flat(), hasSections ? "" : body].join("\n"), locale);
     if (language) warnings.push(language);
@@ -3548,6 +3556,7 @@ async function bridgeReport(
     body: storedBody,
     complete,
     correlatesDirective: text(args.correlatesDirective) || null,
+    ...(typeof args.answersDirective === "boolean" ? { answersDirective: args.answersDirective } : {}),
     covers,
     coversOwed,
     telegram: telegramCopy,
@@ -3569,13 +3578,15 @@ async function bridgeReport(
   };
 }
 
+/* Every item reaches the renderer: the display counts what it does not show,
+   and the whole report's byte bound refuses one too large to relay whole. */
 function reportSectionsArg(value: unknown): Record<SeatSectionId, string[]> {
   const sections = {} as Record<SeatSectionId, string[]>;
   const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   for (const id of SEAT_SECTION_IDS) {
     const items = record[id];
     sections[id] = Array.isArray(items)
-      ? items.filter((item): item is string => typeof item === "string" && item.trim() !== "").slice(0, 32)
+      ? items.filter((item): item is string => typeof item === "string" && item.trim() !== "")
       : [];
   }
   return sections;

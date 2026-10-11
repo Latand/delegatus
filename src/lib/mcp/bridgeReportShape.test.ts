@@ -183,6 +183,46 @@ test("a voice-correlated report whose items the display copy drops or counts kee
   expect(readBridgeReportLog().reports[1]!.complete).toBeUndefined();
 });
 
+test("a report too large to relay whole is refused with a request to split it: nothing is stored, posted or shortened", async () => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  const many = Array.from({ length: 60 }, (_, index) => `пункт ${index + 1}: ${"я".repeat(190)}`.slice(0, 199));
+  const answer = await file({ key: "too-large", class: "completed", correlatesDirective: "voice-fixture", summary: "Багато пунктів.", sections: { inProgress: many } });
+  expect(answer.ok).toBe(false);
+  expect(answer.code).toBe("report_too_large");
+  expect(answer.error).toContain("Split it into several reports");
+  expect(readBridgeReportLog().reports).toEqual([]);
+  expect(transport.callsOf("sendMessage")).toHaveLength(0);
+  // Split in four, each part is relayed whole, the last item included.
+  for (const [index, half] of [0, 15, 30, 45].map((from) => many.slice(from, from + 15)).entries())
+    expect((await file({ key: `split-${index}`, class: "completed", correlatesDirective: "voice-fixture", summary: `Частина ${index + 1}.`, sections: { inProgress: half } })).recorded).toBe(true);
+  const { voiceReportText } = await import("@/lib/voiceCompanion/reportSpeech");
+  const spoken = readBridgeReportLog().reports.map((row) => voiceReportText(row)).join("\n");
+  for (const item of many) expect(spoken).toContain(item);
+});
+
+test("an older caller's long body line keeps its tail fact through the store, the voice admission and its speech", async () => {
+  const legacyBody = `${"The first fact. ".repeat(20)}TAIL_FACT: deployment is waiting.`;
+  const answer = await file({ key: "legacy-tail", class: "completed", correlatesDirective: "voice-fixture", summary: "Report.", body: legacyBody });
+  expect(answer.recorded).toBe(true);
+  const row = readBridgeReportLog().reports[0]!;
+  expect(row.body).not.toContain("TAIL_FACT");
+  expect(row.complete!.sections.flatMap((section) => section.items).join("\n")).toContain("TAIL_FACT: deployment is waiting.");
+  const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+  const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
+  const { speechParts } = await import("@/lib/voiceCompanion/reportSpeech");
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => null, send: async () => ({ status: "failed", operationId: null }),
+    reports: () => readBridgeReportLog().reports });
+  const session = admission.create({ project: PROJECT, locale: "en", authority: "live-model" });
+  // A report arriving after the call began is relayed with its tail.
+  const later = await file({ key: "legacy-tail-later", class: "completed", summary: "Report.", body: legacyBody });
+  expect(later.recorded).toBe(true);
+  const relayed = admission.pollReports(session.id).find((row) => row.type === "orchestrator.report");
+  expect(relayed && relayed.type === "orchestrator.report" ? relayed.text : "").toContain("TAIL_FACT: deployment is waiting.");
+  const parts = speechParts("Report:", relayed && relayed.type === "orchestrator.report" ? relayed.text : "", "", 500);
+  expect(parts.join("\n")).toContain("TAIL_FACT: deployment is waiting.");
+});
+
 test("an older caller's body is filed as in-progress items, with a warning to use summary and sections", async () => {
   const answer = await file({ key: "legacy-1", body: "deploy 1c41d361 passed\nprod answers 200" });
   expect(answer.recorded).toBe(true);

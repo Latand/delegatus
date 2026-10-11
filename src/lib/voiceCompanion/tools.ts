@@ -42,20 +42,23 @@ function spoken(outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) {
     return { status: "sent", delivery: outcome.status, speech: SENT[outcome.status] };
   }
   if (outcome.state === "awaiting_report") return { status: "awaiting_report", request: outcome.request.handle, sentMinutesAgo: outcome.request.sentMinutesAgo,
-    progressReports: outcome.request.progressReports,
-    speech: "Nothing new was sent: the orchestrator already has this question and its report has not arrived yet. Tell the operator in one short sentence that the answer is on its way. For news now, read orchestrator_messages." };
+    progressReports: outcome.request.progressReports, ...(outcome.report ? { latestReport: outcome.report } : {}),
+    speech: `${outcome.request.askedBack ? "Nothing new was sent: the orchestrator asked back about this request and waits for the operator. Relay its question from latestReport in its words; the operator's answer is a new ask."
+      : "Nothing new was sent: the orchestrator already has this question and its answer has not arrived yet. Tell the operator in one short sentence that the answer is on its way. For news now, read orchestrator_messages."} If the operator's latest turn also asked something new, send only that new part as its own short ask with pending_request null.` };
   if (outcome.state === "answered") return { status: "answered", request: outcome.request.handle, ...(outcome.report ? { report: outcome.report } : {}),
     speech: outcome.report ? "Nothing was sent: the orchestrator already answered this. Answer from its report, keeping each fact with its own subject, in its words."
       : "Nothing was sent: the orchestrator already answered this. Read orchestrator_reports for its answer." };
   if (outcome.state === "awaiting") return { status: "awaiting_confirmation", reason: outcome.proposal.confirmation?.reason ?? "",
     speech: "Nothing has been sent. Tell the operator in one sentence what would be sent and why you ask, and ask whether to send it. Their spoken yes or no comes back through resolve_orchestrator_confirmation; the card's buttons answer it too." };
   const reason = DELEGATION_REASONS[outcome.code];
+  if (outcome.code === "request_other_project") return { status: "refused", code: outcome.code, reason,
+    speech: "Nothing was sent. The handle names a request to another project. If the operator asks this project something new, call again with pending_request null; if they repeat the other project's request, pass that project by name." };
   return { status: "refused", code: outcome.code, reason, speech: `Nothing was sent. Tell the operator this reason in plain words and add none: ${reason}` };
 }
 
 /** A waiting request as the backend sees it: its handle, its words and how long it has waited. */
 export const waitingRequest = (request: CallRequest) => ({ request: request.handle, ask: request.instruction,
-  sentMinutesAgo: request.sentMinutesAgo, progressReports: request.progressReports });
+  sentMinutesAgo: request.sentMinutesAgo, progressReports: request.progressReports, ...(request.askedBack ? { orchestratorAskedBack: true } : {}) });
 
 const READ_CAPABILITIES: Record<typeof READ_TOOL_NAMES[number], { capability: string; description: string }> = {
   list_tasks: { capability: "Board tasks: the project's tasks by status, newest first.", description: "Read the project's tasks by status, newest first." },
@@ -87,7 +90,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       return { ...read, speech: `${read.requests.length} request(s) sent in this call, ${waiting} still waiting for the orchestrator's report; ${read.reports.length} other report(s) shown.` };
     } },
   { name: "request_orchestrator_delegation", capability: "Send to the orchestrator: sends the operator's request to the project's orchestrator at once; its answer comes back to you as a report.", class: "delegation",
-    description: `Send one short ask to the project's orchestrator when the operator explicitly asks to send work or a question to it, and the board, its messages and its reports cannot answer it. The instruction is the operator's latest request in their own words and language, at most ${VOICE_ASK_MAX_CHARS} characters: never translated, expanded, or bundled with earlier questions. It is delivered at once, with no confirmation. Asking first is the exception and your own judgment: set confirmation_reason to one short sentence only when the action is critical or hard to undo, or when you are unsure you understood the request; then nothing is sent until the operator answers. In every other case pass null. When the ask repeats or rephrases a request whose report has not arrived, pass its handle in pending_request: nothing is sent and the operator hears that the answer is on its way. Words that match a request already raised in an earlier turn are a repeat and send nothing, unless the operator asked again and you set asked_again; asked_again never resends a request still waiting for its report. Input transcripts are optional context.`,
+    description: `Send one short ask to the project's orchestrator when the operator explicitly asks to send work or a question to it, and the board, its messages and its reports cannot answer it. The instruction is the operator's latest request in their own words and language, at most ${VOICE_ASK_MAX_CHARS} characters: never translated, expanded, or bundled with earlier questions. It is delivered at once, with no confirmation. Asking first is the exception and your own judgment: set confirmation_reason to one short sentence only when the action is critical or hard to undo, or when you are unsure you understood the request; then nothing is sent until the operator answers. In every other case pass null. When the ask repeats or rephrases a request whose report has not arrived, pass its handle in pending_request: nothing is sent and the operator hears that the answer is on its way. When one turn repeats a waiting request and also asks something new, pass the repeat with its handle and send the new part as its own ask. Words that match a request already raised in an earlier turn are a repeat and send nothing, unless the operator explicitly asked to send it once more and you set asked_again: then it is sent again, also while its report is pending. Input transcripts are optional context.`,
     // The schema keeps the old envelope, so an overlong ask reaches the handler and is recomposed rather than failing validation.
     parameters: schema({ project: { ...READ_SCHEMAS.list_tasks.project, description: "null sends to the project currently in view. A name only when the operator named another project; never guess one." },
       instruction: { type: "string", minLength: 1, maxLength: 2_000, description: `One short ask, at most ${VOICE_ASK_MAX_CHARS} characters, in the operator's words and language.` },
@@ -99,8 +102,9 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       if ([...instruction.trim()].length > VOICE_ASK_MAX_CHARS) return { status: "too_long", speech: `Nothing was sent. The ask is longer than ${VOICE_ASK_MAX_CHARS} characters. Recompose it as one short ask in the operator's own words and language, with only their latest request, and call again.` };
       const project = context.reads.resolveProject(context.project,typeof args.project === "string" ? args.project : undefined);
       const pendingRequest = typeof args.pending_request === "string" && args.pending_request.trim() ? args.pending_request.trim() : undefined;
+      const askedAgain = typeof args.asked_again === "string" && !!args.asked_again.trim();
       // Before a new send, the backend sees what already waits for a report, once per delegation.
-      const unseen = pendingRequest ? [] : context.admission.unseenAwaiting(context.sessionId, context.delegationId, project);
+      const unseen = pendingRequest || askedAgain ? [] : context.admission.unseenAwaiting(context.sessionId, context.delegationId, project);
       // The same words as a waiting request need no check: admission answers them as waiting.
       if (unseen.length && !unseen.some(request => requestText(request.instruction) === requestText(instruction))) {
         context.admission.showAwaiting(context.sessionId, context.delegationId, unseen.map(request => request.proposalId));
@@ -109,7 +113,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       }
       const before = new Set(context.admission.awaitingReports(context.sessionId).map(request => request.proposalId));
       const outcome = await context.admission.delegate(context.sessionId, context.callId, context.delegationId, instruction,
-        { project, sourceTurn: context.sourceTurn, ...(pendingRequest ? { pendingRequest } : {}), ...(typeof args.asked_again === "string" && args.asked_again.trim() ? { renewed: true } : {}), ...(typeof args.confirmation_reason === "string" && args.confirmation_reason.trim() ? { confirmation: args.confirmation_reason } : {}) });
+        { project, sourceTurn: context.sourceTurn, ...(pendingRequest ? { pendingRequest } : {}), ...(askedAgain ? { renewed: true } : {}), ...(typeof args.confirmation_reason === "string" && args.confirmation_reason.trim() ? { confirmation: args.confirmation_reason } : {}) });
       // A request this delegation sent is known to it.
       context.admission.showAwaiting(context.sessionId, context.delegationId,
         context.admission.awaitingReports(context.sessionId).map(request => request.proposalId).filter(proposalId => !before.has(proposalId)));

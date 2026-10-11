@@ -10,7 +10,7 @@ import {
   type ReportSectionId,
   type SeatSectionId,
 } from "./reportWords";
-import { boundComplete } from "./reportComplete";
+import { completeFits } from "./reportComplete";
 import type { BridgeReportClass, BridgeReportCompleteV1 } from "./types";
 
 /*
@@ -103,6 +103,8 @@ export interface RenderReportResult {
   dropped: Partial<Record<PrivateClass, number>>;
   /** Every scrubbed item uncut, when the cut report shows less than the seat filed. */
   complete: BridgeReportCompleteV1 | null;
+  /** The whole report passes its byte bound: it cannot be relayed whole and is refused. */
+  tooLarge: boolean;
 }
 
 function oneLine(text: string): string {
@@ -133,40 +135,45 @@ export function renderReport(input: RenderReportInput): RenderReportResult {
     for (const found of classes) dropped[found] = (dropped[found] ?? 0) + 1;
   };
 
-  /* The seat's sections, or an older caller's body. */
+  /* The seat's sections, or an older caller's body. An older body's lines are
+     cut for display only; the voice keeps each line as written. */
   const raw: Partial<Record<SeatSectionId, string[]>> = {};
+  let legacy = false;
   const given = input.sections ?? {};
   const hasSections = SEAT_SECTION_IDS.some((id) => (given[id]?.length ?? 0) > 0);
   if (hasSections) {
     for (const id of SEAT_SECTION_IDS) raw[id] = [...(given[id] ?? [])].map((item) => oneLine(String(item))).filter(Boolean);
   } else if (input.legacyBody?.trim()) {
-    const lines = input.legacyBody.split(/\r?\n/).map((line) => oneLine(line.replace(/^[-•*]\s+/, ""))).filter(Boolean);
-    raw.inProgress = lines.map((line) => cutAtWord(line, REPORT_ITEM_MAX_CHARS));
+    raw.inProgress = input.legacyBody.split(/\r?\n/).map((line) => oneLine(line.replace(/^[-•*]\s+/, ""))).filter(Boolean);
+    legacy = true;
     warnings.push("Use summary and sections: a free body is filed as one \"in progress\" item per line.");
   }
 
   /* The scrub first, then the length rule, then the limits. */
   let tooLong = 0;
+  let legacyCut = 0;
   let machineIds = 0;
   const kept: Partial<Record<SeatSectionId, string[]>> = {};
   /* The voice relays what the length rule and the limits leave out. */
   const whole: Partial<Record<SeatSectionId, string[]>> = {};
   for (const id of SEAT_SECTION_IDS) {
     whole[id] = [];
-    kept[id] = (raw[id] ?? []).filter((item) => {
+    kept[id] = [];
+    for (const item of raw[id] ?? []) {
       const found = privateClasses(item, deny);
       if (found.length > 0) {
         countDrop(found);
-        return false;
+        continue;
       }
       whole[id]!.push(item);
-      if (item.length > REPORT_ITEM_MAX_CHARS) {
+      if (item.length > REPORT_ITEM_MAX_CHARS && !legacy) {
         tooLong += 1;
-        return false;
+        continue;
       }
+      if (item.length > REPORT_ITEM_MAX_CHARS) legacyCut += 1;
       if (MACHINE_ID.test(item)) machineIds += 1;
-      return true;
-    });
+      kept[id]!.push(cutAtWord(item, REPORT_ITEM_MAX_CHARS));
+    }
   }
 
   let summary = oneLine(input.summary ?? "");
@@ -212,8 +219,10 @@ export function renderReport(input: RenderReportInput): RenderReportResult {
     sections,
   };
   const budgetCut = fitBudget(cut);
-  const complete = tooLong > 0 || limited > 0 || budgetCut > 0 || wholeSummary.length > REPORT_SUMMARY_MAX_CHARS
+  const filed = tooLong > 0 || legacyCut > 0 || limited > 0 || budgetCut > 0 || wholeSummary.length > REPORT_SUMMARY_MAX_CHARS
     ? completeReport(wholeSummary, whole, input, deny, words) : null;
+  const tooLarge = !!filed && !completeFits(filed);
+  const complete = tooLarge ? null : filed;
 
   for (const [found, count] of Object.entries(dropped) as [PrivateClass, number][]) {
     warnings.push(`${count} item(s) dropped: ${count === 1 ? "it" : "they"} named ${privateClassLabel(found)}. Reports can be public; leave that out.`);
@@ -225,11 +234,10 @@ export function renderReport(input: RenderReportInput): RenderReportResult {
     warnings.push("A blocked or question report puts the ask in the decision section.");
   }
   if (machineIds > 0) warnings.push(`${machineIds} item(s) carry machine ids; name work by its title and #PR, a deploy by its 8-character sha.`);
-  return { cut, warnings, empty, dropped, complete };
+  return { cut, warnings, empty, dropped, complete, tooLarge };
 }
 
-/** The report as filed, in display order, held under its byte bound by
-    leaving whole items out from the end and counting them. */
+/** The report as filed, every item in display order. */
 function completeReport(
   summary: string,
   whole: Partial<Record<SeatSectionId, string[]>>,
@@ -245,7 +253,7 @@ function completeReport(
       if (tasks) sections.push({ heading: sectionHeading(tasks, input.locale), items: sectionLines(tasks, input.locale) });
     }
   }
-  return boundComplete({ summary, sections });
+  return { summary, sections };
 }
 
 function taskSection(

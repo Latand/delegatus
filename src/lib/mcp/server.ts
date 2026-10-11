@@ -4222,6 +4222,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     coversOwed: z.boolean().optional().describe("true settles every outcome the seat tick owed whose wake reached you before this report."),
     body: z.string().optional().describe("Older free-text form, filed as one in-progress item per line. Prefer summary and sections."),
     correlatesDirective: z.string().optional().describe("clientRequestId of the directive this answers."),
+    answersDirective: z.boolean().optional().describe("With correlatesDirective: true when this report answers that request in full, false for progress, a partial answer or a question back."),
   }).passthrough(),
   bridge_directive: z.object({
     clientRequestId: clientRequestIdSchema,

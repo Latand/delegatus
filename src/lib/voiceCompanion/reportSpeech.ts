@@ -5,8 +5,7 @@ import type { BridgeReportV1 } from "@/lib/bridge/types";
  * names the project, kind and time the voice states itself. */
 export function voiceReportText(report: Pick<BridgeReportV1, "body" | "complete" | "origin">): string {
   const complete = report.complete;
-  if (complete) return [complete.summary, ...complete.sections.flatMap(section => [`${section.heading}:`, ...section.items.map(item => `- ${item}`)]),
-    ...(complete.omitted ? [`(${complete.omitted} more item(s) only in the report log.)`] : [])].filter(Boolean).join("\n");
+  if (complete) return [complete.summary, ...complete.sections.flatMap(section => [`${section.heading}:`, ...section.items.map(item => `- ${item}`)])].filter(Boolean).join("\n");
   const lines = report.body.split("\n").map(line => line.trim()).filter(Boolean);
   return (report.origin?.kind === "manager" && lines.length > 1 && lines[0]!.includes(" · ") ? lines.slice(1) : lines).join("\n");
 }

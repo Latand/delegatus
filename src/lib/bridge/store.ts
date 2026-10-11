@@ -31,7 +31,7 @@ import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { isDismissedBy, type DismissedBy } from "@/lib/attention/dismissalTypes";
-import { boundComplete } from "./reportComplete";
+import { completeFits } from "./reportComplete";
 
 import {
   BRIDGE_ANSWERED_REF_CAPACITY,
@@ -168,11 +168,12 @@ export function bridgeReportBody(value: string | null | undefined): string {
 }
 
 /**
- * The uncut report the voice relays, redacted like a body. Its byte bound is
- * kept by leaving whole items out from the end, counted; malformed input
- * yields none.
+ * The uncut report the voice relays, redacted like a body; malformed input
+ * yields none. Nothing here leaves an item out: a report past its byte bound
+ * is refused at write (the binding refuses it before, asking the seat to
+ * split it) and dropped at read.
  */
-export function bridgeReportComplete(value: unknown): BridgeReportCompleteV1 | undefined {
+export function bridgeReportComplete(value: unknown, write = false): BridgeReportCompleteV1 | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Partial<BridgeReportCompleteV1>;
   if (typeof raw.summary !== "string" || !Array.isArray(raw.sections)) return undefined;
@@ -180,8 +181,11 @@ export function bridgeReportComplete(value: unknown): BridgeReportCompleteV1 | u
   const sections = raw.sections.flatMap((section) => section && typeof section === "object" && typeof section.heading === "string" && Array.isArray(section.items)
     ? [{ heading: line(section.heading), items: section.items.filter((item): item is string => typeof item === "string").map(line).filter(Boolean) }]
     : []).filter((section) => section.items.length > 0);
-  const omitted = Number.isSafeInteger(raw.omitted) && (raw.omitted as number) > 0 ? raw.omitted as number : 0;
-  const complete = boundComplete({ summary: line(raw.summary), sections, ...(omitted ? { omitted } : {}) });
+  const complete = { summary: line(raw.summary), sections };
+  if (!completeFits(complete)) {
+    if (write) throw new Error("BRIDGE_REPORT_COMPLETE_TOO_LARGE");
+    return undefined;
+  }
   return complete.summary || complete.sections.length ? complete : undefined;
 }
 
@@ -260,6 +264,7 @@ function normalizeReport(value: unknown): BridgeReportV1 | null {
     ...(project !== undefined ? { project } : {}),
     ...(targetSeatConversationId !== undefined ? { targetSeatConversationId } : {}),
     ...(typeof candidate.correlatesDirective === "string" ? { correlatesDirective: candidate.correlatesDirective } : {}),
+    ...(typeof candidate.answersDirective === "boolean" ? { answersDirective: candidate.answersDirective } : {}),
     ...(Array.isArray(candidate.covers) ? { covers: candidate.covers.filter((id): id is string => typeof id === "string") } : {}),
     ...(typeof candidate.coversOwedAt === "string" ? { coversOwedAt: candidate.coversOwedAt } : {}),
     ...(normalizeTelegram(candidate.telegram) ? { telegram: normalizeTelegram(candidate.telegram) } : {}),
@@ -856,6 +861,8 @@ export function appendBridgeReports(
   inputs: readonly BridgeReportInput[],
 ): { appended: BridgeReportV1[]; skipped: number } {
   if (inputs.length === 0) return { appended: [], skipped: 0 };
+  /* Refused before the transaction: a complete copy past its bound is never cut. */
+  for (const input of inputs) bridgeReportComplete(input.complete, true);
   return mutateLog((file) => {
     const known = new Set<string>([...file.reports.map((report) => report.id), ...file.retired]);
     const appended: BridgeReportV1[] = [];
@@ -892,6 +899,7 @@ export function appendBridgeReports(
           }
           : {}),
         ...(input.correlatesDirective ? { correlatesDirective: input.correlatesDirective } : {}),
+        ...(input.correlatesDirective && typeof input.answersDirective === "boolean" ? { answersDirective: input.answersDirective } : {}),
         ...(input.covers?.length ? { covers: [...new Set(input.covers.map((key) => scopedReportId(project, key)))] } : {}),
         ...(input.coversOwed ? { coversOwedAt: input.at } : {}),
         ...(input.telegram

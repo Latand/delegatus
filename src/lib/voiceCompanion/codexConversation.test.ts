@@ -8,6 +8,7 @@ import { CompanionStorage } from "./storage";
 import { CompanionAdmission, type CompanionDeliveryPaths } from "./admission";
 import { CompanionLiveSessions } from "./liveSession";
 import type { BridgeReportV1 } from "@/lib/bridge/types";
+import { speechParts, voiceReportText } from "./reportSpeech";
 
 const roots: string[] = [];
 const originalState = process.env.LLV_STATE_DIR;
@@ -244,3 +245,64 @@ test("a steered handoff preserves its backing turn's project and confirmation, w
     expect(f.deliveries[0].delivery.recipient.project).toBe("fixture");
   } finally { await f.close(); }
 });
+
+/* The lean-delegation sequence on the real adapter and its native stub. The words are written for this test. */
+const LEAN = {
+  en: { first: "Ask the orchestrator to review the plan", again: "So what about the plan review?", resend: "Send the plan review to the orchestrator again",
+    items: ["The review lane passed both rounds", "The deploy lane still waits for the operator", "The plan has two open notes"] },
+  uk: { first: "Попроси оркестратора переглянути план", again: "То що там з переглядом плану?", resend: "Надішли оркестратору перегляд плану ще раз",
+    items: ["Лінія ревʼю пройшла обидва раунди", "Лінія деплою досі чекає на оператора", "У плані дві відкриті примітки"] },
+};
+for (const [locale, words] of Object.entries(LEAN) as Array<["en" | "uk", typeof LEAN.en]>) test(`${locale}: on the real Codex adapter a new ask is sent, an unmarked rewording sends nothing, an explicit ask to send again goes once more, and the answer is voiced whole and in order`, async () => {
+  const f = await fixture();
+  const send = (id: string, turnId: string, instruction: string, pending: string | null, again: string | null = null) =>
+    tool(id, turnId, "request_orchestrator_delegation", { project: null, instruction, pending_request: pending, confirmation_reason: null, asked_again: again });
+  const answered = async (id: string) => JSON.parse((await f.reply(id)).contentItems[0].text);
+  try {
+    f.replay(delta("user", words.first), done("user", words.first), handoff("first", words.first), turn("first"), send("send-first", "first", words.first, null));
+    expect(await answered("send-first")).toMatchObject({ status: "sent" });
+    f.replay(note("turn/completed", { turn: { id: "first", status: "completed" } }), delta("assistant", "Sent."), done("assistant", "Sent."),
+      delta("user", words.again), done("user", words.again), handoff("again", words.again), turn("again"), send("send-again", "again", words.again, null));
+    expect(await answered("send-again")).toMatchObject({ status: "check_waiting", waiting: [{ request: "r1", ask: words.first }] });
+    f.replay(send("send-again-named", "again", words.again, "r1"));
+    expect(await answered("send-again-named")).toMatchObject({ status: "awaiting_report", request: "r1" });
+    // The same call replayed adds nothing.
+    f.replay(send("send-again-named", "again", words.again, "r1"));
+    await until(() => f.wire().filter(row => row.id === "send-again-named" && row.result).length === 2);
+    expect(f.deliveries).toHaveLength(1);
+    f.replay(note("turn/completed", { turn: { id: "again", status: "completed" } }), delta("assistant", "On its way."), done("assistant", "On its way."),
+      delta("user", words.resend), done("user", words.resend), handoff("resend", words.resend), turn("resend"), send("send-resend", "resend", words.first, "r1", words.resend));
+    expect(await answered("send-resend")).toMatchObject({ status: "sent" });
+    f.replay(send("send-resend-twice", "resend", words.resend, "r1", words.resend));
+    expect(await answered("send-resend-twice")).toMatchObject({ status: "sent" });
+    expect(f.deliveries.map(row => row.text.split("\n")[0])).toEqual([words.first, words.first]);
+    expect(new Set(f.deliveries.map(row => row.delivery.clientMessageId)).size).toBe(2);
+    f.replay(note("turn/completed", { turn: { id: "resend", status: "completed" } }), delta("assistant", "Sent again."), done("assistant", "Sent again."));
+    // The answer: longer than one append, every item spoken as written and in order, through native appendSpeech.
+    const items = words.items.map((item, index) => `${item}. ${(locale === "uk" ? "Деталі перевірки. " : "Check details. ").repeat(index === 1 ? 24 : 4).trim()}`);
+    const report: BridgeReportV1 = { id: "answer", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "short display copy", correlatesDirective: f.deliveries[0]!.delivery.clientMessageId,
+      complete: { summary: "SUMMARY", sections: [{ heading: "Done", items }] }, origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } };
+    f.reports.push(report);
+    await f.service.events(f.session.sessionId, 0);
+    const expected = speechParts('The orchestrator for project "fixture" reports result.', voiceReportText(report), "", 500);
+    expect(expected.length).toBeGreaterThan(1);
+    // Each part waits for the previous one to be voiced.
+    const speech = () => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").map(row => row.params.text as string);
+    for (const [index, part] of expected.entries()) {
+      await until(() => speech().length === index + 1);
+      await Bun.sleep(30);
+      expect(speech()).toHaveLength(index + 1);
+      f.replay(delta("assistant", part), done("assistant", part));
+    }
+    const parts = speech();
+    expect(parts).toEqual(expected);
+    for (const part of parts) expect(Buffer.byteLength(part)).toBeLessThanOrEqual(500);
+    expect(parts[0]!.startsWith('The orchestrator for project "fixture" reports result.\n')).toBe(true);
+    expect(parts.join("\n")).not.toMatch(/Report data|read the lines|continues|left out/);
+    expect(parts.join("\n").split("\n").slice(1).join("").replace(/\s+/gu, "")).toBe(["SUMMARY", "Done:", ...items.map(item => `- ${item}`)].join("").replace(/\s+/gu, ""));
+    // Asked about once more without an explicit resend, the answer comes from the report and nothing is sent.
+    f.replay(delta("user", words.again), done("user", words.again), handoff("later", words.again), turn("later"), send("send-later", "later", words.again, "r1"));
+    expect(await answered("send-later")).toMatchObject({ status: "answered", request: "r1", report: { status: "result" } });
+    expect(f.deliveries).toHaveLength(2);
+  } finally { await f.close(); }
+}, 20_000);

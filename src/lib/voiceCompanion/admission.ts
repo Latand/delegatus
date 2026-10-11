@@ -9,7 +9,7 @@ import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction
 import { DELEGATION_REASONS, deliveryFailureReason, type DelegationCode } from "./delegationOutcome";
 import { CompanionTranscriptRecords, type TranscriptEntry } from "./transcriptRecord";
 import { LIVE_VOICE } from "./sessionConfig";
-import { CompanionStorage, type SessionStarter, type StoredProposal, type StoredSession } from "./storage";
+import { CompanionStorage, type ReportSpeech, type SessionStarter, type StoredProposal, type StoredSession } from "./storage";
 import { voiceReportText } from "./reportSpeech";
 
 export interface CompanionDeliveryPaths {
@@ -35,10 +35,20 @@ const CONFIRMATION_MS = 120_000;
 const awaitingReport = (row: StoredProposal) => row.state === "admitted" && !!row.delivery && row.status !== "failed" && !row.answered;
 /** Short handles the backend names this call's requests by, in the order they were raised. */
 const requestHandles = (session: StoredSession) => new Map(Object.keys(session.proposals).map((id, index) => [id, `r${index + 1}`]));
-export interface CallRequest { handle: string; proposalId: string; project: string; instruction: string; sentMinutesAgo: number; progressReports: number }
+export interface CallRequest { handle: string; proposalId: string; project: string; instruction: string; sentMinutesAgo: number; progressReports: number;
+  /** The orchestrator asked back or named a blocker about this request, and has not answered it. */
+  askedBack: boolean }
 const callRequest = (session: StoredSession, row: StoredProposal, now: number): CallRequest => ({ handle: requestHandles(session).get(row.proposal.proposalId)!,
   proposalId: row.proposal.proposalId, project: canonicalProject(row.proposal.recipient.project), instruction: row.proposal.instruction,
-  sentMinutesAgo: Math.max(0, Math.floor((now - row.expiresAt + CONFIRMATION_MS) / 60_000)), progressReports: row.reports.filter(id => id !== row.answered).length });
+  sentMinutesAgo: Math.max(0, Math.floor((now - row.expiresAt + CONFIRMATION_MS) / 60_000)), progressReports: row.reports.filter(id => id !== row.answered).length,
+  askedBack: !row.answered && !!row.askedBack });
+/** What a request carries to the orchestrator: the operator's ask and how to report back on it. */
+const directiveText = (instruction: string, key: string) => `${instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${key}. Set answersDirective true on the report that answers this request in full, and false on progress, a partial answer or a question back. Keep the report tied to this request.]`;
+/** The text of a report this session relayed, by its id. */
+const reportText = (session: StoredSession, reportId: string | undefined) => {
+  const event = reportId ? session.events.find(row => (row.type === "orchestrator.answer" || row.type === "orchestrator.report") && row.reportId === reportId) : undefined;
+  return event?.type === "orchestrator.answer" || event?.type === "orchestrator.report" ? { status: event.status, text: event.text } : null;
+};
 const sameRecipient = (left: Recipient | null, right: Recipient) => !!left && canonicalProject(left.project) === canonicalProject(right.project)
   && left.conversationId === right.conversationId && left.seatEpoch === right.seatEpoch && left.engine === right.engine;
 const reportStatus = (report: BridgeReportV1): "progress" | "result" | "question" | "blocked" | null => {
@@ -50,6 +60,12 @@ const reportStatus = (report: BridgeReportV1): "progress" | "result" | "question
     default: return null;
   }
 };
+/** Whether a correlated report answers its request. The seat says so with
+ * answersDirective; without it, a result or a failure answers, while progress,
+ * a question back and a blocker leave the request waiting. */
+const answersRequest = (report: BridgeReportV1) => report.answersDirective ?? (report.class === "completed" || report.class === "review_verdict" || report.class === "failed");
+/** Reports owed to the voice kept per session; the transcript and orchestrator_reports keep every report besides. */
+const REPORT_SPEECH_CAPACITY = 64;
 
 function appendEvent(session: StoredSession, payload: Payload, now: number, clean: (text: string) => string): CompanionEvent {
   const event = { ...cleanStrings(payload, clean), version: 1 as const, sessionId: session.id, generation: session.generation,
@@ -81,7 +97,7 @@ export function admittedVoiceBinding(input: { sessionId: string; proposalId: str
 export type DelegationOutcome =
   | { state: "awaiting"; proposal: Proposal }
   /** Nothing sent: the orchestrator already has this ask and its report has not arrived. */
-  | { state: "awaiting_report"; request: CallRequest }
+  | { state: "awaiting_report"; request: CallRequest; report: { status: string; text: string } | null }
   /** Nothing sent: the orchestrator already answered this ask. */
   | { state: "answered"; request: CallRequest; report: { status: string; text: string } | null }
   | { state: "sent"; status: "delivered" | "queued" | "unknown" | "failed"; failureCode?: string }
@@ -244,21 +260,26 @@ export class CompanionAdmission {
       }
       return this.outcome(id, duplicate.proposal.proposalId);
     }
-    // An ask the orchestrator already has is never sent again while its report
+    // An ask the orchestrator already has is not sent again while its report
     // is on the way: the backend names it, or it repeats one in the same words.
-    // A renewal does not bypass this; a new question goes on to admission.
+    // A handle names a request to the project this ask goes to, never another.
+    const sameWords = Object.values(session.proposals).filter(row => requestText(row.proposal.instruction) === requestText(logicalInstruction)
+      && !!project && canonicalProject(row.proposal.recipient.project) === canonicalProject(project));
     const held = options.pendingRequest !== undefined
       ? Object.values(session.proposals).find(row => requestHandles(session).get(row.proposal.proposalId) === options.pendingRequest)
-      : Object.values(session.proposals).find(row => awaitingReport(row) && requestText(row.proposal.instruction) === requestText(logicalInstruction)
-        && !!project && canonicalProject(row.proposal.recipient.project) === canonicalProject(project));
-    if (held && awaitingReport(held)) return { state: "awaiting_report", request: callRequest(session, held, this.now()) };
-    if (held?.answered) {
-      const event = session.events.find(row => (row.type === "orchestrator.answer" || row.type === "orchestrator.report") && row.reportId === held.answered);
-      return { state: "answered", request: callRequest(session, held, this.now()),
-        report: event?.type === "orchestrator.answer" || event?.type === "orchestrator.report" ? { status: event.status, text: event.text } : null };
-    }
-    if (options.pendingRequest !== undefined) return { state: "refused", code: "request_not_waiting" };
-    const proposal = this.propose(id, callId, sourceItemId, instruction, { ...options, autosend: !options.confirmation?.trim() });
+      : sameWords.find(awaitingReport) ?? sameWords.findLast(row => !!row.answered);
+    if (held && options.pendingRequest !== undefined && project && canonicalProject(held.proposal.recipient.project) !== canonicalProject(project))
+      return { state: "refused", code: "request_other_project" };
+    if (held && !options.renewed && awaitingReport(held))
+      return { state: "awaiting_report", request: callRequest(session, held, this.now()), report: reportText(session, held.askedBack ?? held.reports.at(-1)) };
+    if (held?.answered && !options.renewed) return { state: "answered", request: callRequest(session, held, this.now()), report: reportText(session, held.answered) };
+    if (options.pendingRequest !== undefined && !options.renewed) return { state: "refused", code: "request_not_waiting" };
+    // The operator explicitly asked to send it once more: it goes again under its
+    // own delivery key, once per operator turn whatever the model's wording.
+    const renews = held && options.renewed && (awaitingReport(held) || held.answered) ? held.proposal.proposalId : undefined;
+    const resent = renews ? Object.values(session.proposals).find(row => row.renews === renews && (options.sourceTurn === undefined || row.sourceTurn === options.sourceTurn)) : undefined;
+    if (resent) return this.outcome(id, resent.proposal.proposalId);
+    const proposal = this.propose(id, callId, sourceItemId, instruction, { ...options, autosend: !options.confirmation?.trim(), ...(renews ? { renews } : {}) });
     const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === clean(callId)
       || sameRequest(held, clean(sourceItemId), logicalInstruction, options.sourceTurn, project));
     if (!row) {
@@ -313,12 +334,13 @@ export class CompanionAdmission {
     const requests = Object.values(session.proposals).filter(row => row.state === "admitted" && row.delivery).map(row => {
       const request = callRequest(session, row, this.now());
       const answer = row.answered ? reported.find(event => event.reportId === row.answered) : undefined;
+      const asked = !answer && row.askedBack ? reported.find(event => event.reportId === row.askedBack) : undefined;
       return { request: request.handle, project: label(request.project), ask: request.instruction, sentMinutesAgo: request.sentMinutesAgo,
-        state: row.status === "failed" ? "delivery_failed" : row.answered ? "answered" : "waiting_for_report", progressReports: request.progressReports,
-        ...(answer ? { answer: { status: answer.status, text: answer.text } } : {}) };
+        state: row.status === "failed" ? "delivery_failed" : row.answered ? "answered" : asked ? "orchestrator_asked_back" : "waiting_for_report", progressReports: request.progressReports,
+        ...(answer ? { answer: { status: answer.status, text: answer.text } } : {}), ...(asked ? { askedBack: { status: asked.status, text: asked.text } } : {}) };
     });
-    // Answers already travel with their requests; the latest other reports follow, whole, within a bound.
-    const answering = new Set(Object.values(session.proposals).map(row => row.answered).filter(Boolean));
+    // Answers and questions back travel with their requests; the latest other reports follow, whole, within a bound.
+    const answering = new Set(Object.values(session.proposals).flatMap(row => [row.answered, row.answered ? undefined : row.askedBack]).filter(Boolean));
     const reports: Array<Record<string, unknown>> = [];
     let size = JSON.stringify(requests).length;
     const others = reported.filter(event => !answering.has(event.reportId)).reverse();
@@ -333,7 +355,7 @@ export class CompanionAdmission {
     return { requests, reports, more: others.length - reports.length };
   }
   /** `sourceTurn` binds this model request to the operator's Live turn. */
-  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string; autosend?: boolean; renewed?: boolean; project?: string } = {}): Proposal | null {
+  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string; autosend?: boolean; renewed?: boolean; project?: string; renews?: string } = {}): Proposal | null {
     const { sourceTurn } = options;
     const [callId, sourceItemId, instruction, asked] = [rawCallId, rawSourceItemId, rawInstruction, options.confirmation?.trim().slice(0, 240) ?? ""].map(this.cleaner());
     const existing = Object.values(this.session(id).proposals).find(row => row.proposal.callId === callId);
@@ -357,14 +379,15 @@ export class CompanionAdmission {
       const proposal: Proposal = { proposalId: randomUUID(), callId, sourceItemId, instruction: instruction.trim(), recipient,
         ...(session.authority ? { authority: session.authority } : {}), ...(asked ? { confirmation: { reason: asked } } : {}) };
       const row: StoredProposal = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + CONFIRMATION_MS,
-        state: options.autosend && !asked ? "admitted" : "pending", reports: [], ...(sourceTurn !== undefined ? { sourceTurn } : {}), ...(options.renewed ? { renewed: true } : {}) };
+        state: options.autosend && !asked ? "admitted" : "pending", reports: [], ...(sourceTurn !== undefined ? { sourceTurn } : {}), ...(options.renewed ? { renewed: true } : {}),
+        ...(options.renews ? { renews: options.renews } : {}) };
       if (options.autosend && !asked) {
         // Commit the proposal, admission decision and retry identity together.
         row.via = "auto";
         row.status = "unknown";
         row.delivery = { proposalId: proposal.proposalId, callId: proposal.callId,
           clientMessageId: `voice-${randomUUID()}`, operationId: null, recipient: proposal.recipient };
-        row.text = `${proposal.instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${row.delivery.clientMessageId}. Keep the report tied to this request.]`;
+        row.text = directiveText(proposal.instruction, row.delivery.clientMessageId);
       }
       session.proposals[proposal.proposalId] = row;
       // The projection's first card event shares the admission commit. A
@@ -414,7 +437,7 @@ export class CompanionAdmission {
       row.status = "unknown";
       row.delivery = { proposalId: row.proposal.proposalId, callId: row.proposal.callId,
         clientMessageId: `voice-${randomUUID()}`, operationId: null, recipient: row.proposal.recipient };
-      row.text = `${row.proposal.instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${row.delivery.clientMessageId}. Keep the report tied to this request.]`;
+      row.text = directiveText(row.proposal.instruction, row.delivery.clientMessageId);
       return row;
     });
     if (!binding) {
@@ -455,7 +478,7 @@ export class CompanionAdmission {
         held.retargetCount = (held.retargetCount ?? 0) + 1;
         held.proposal.recipient = recipient;
         held.delivery = { ...held.delivery!, recipient, clientMessageId: `voice-${randomUUID()}`, operationId: null };
-        held.text = `${held.proposal.instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${held.delivery.clientMessageId}. Keep the report tied to this request.]`;
+        held.text = directiveText(held.proposal.instruction, held.delivery.clientMessageId);
         delete held.failureCode;
         this.append(session, { type: "delegation.retargeted", proposalId, recipient }, this.now(), this.cleaner());
         return held;
@@ -562,8 +585,13 @@ export class CompanionAdmission {
         const text = withoutLocalPaths(clean(voiceReportText(report)));
         const row = rowFor(report);
         if (row) row.reports.push(report.id);
-        // Progress keeps the request waiting; any other correlated report answers it.
-        if (row && status !== "progress") row.answered ??= report.id;
+        // Only a report that answers closes its request; progress, a question back and a blocker leave it waiting.
+        if (row && !row.answered) {
+          if (answersRequest(report)) { row.answered = report.id; delete row.askedBack; }
+          else if (status === "question" || status === "blocked") row.askedBack = report.id;
+        }
+        // Owed to the voice in the same commit that moves the scan past it.
+        if (!session.closed) (session.reportSpeech ??= []).push({ reportId: report.id, project, status, text, handed: 0 });
         // A card can join only a receipt already published to the client. A
         // report arriving during a send or after a lost transport reply still
         // gets its own visible card, without inventing an operation identity.
@@ -580,7 +608,22 @@ export class CompanionAdmission {
       // unrelated reports. First visits in current calls only set a baseline.
       for (const [project, seq] of baselines) marks[project] = Math.max(marks[project], seq);
       session.spokenReports = spoken.slice(-256);
+      if (session.reportSpeech) session.reportSpeech = session.reportSpeech.slice(-REPORT_SPEECH_CAPACITY);
       return events;
+    });
+  }
+  /** Reports owed to the voice, oldest first, each with the parts already handed to the provider. */
+  reportSpeech(id: string): ReportSpeech[] { return this.session(id).reportSpeech ?? []; }
+  /** Records how many parts of a report the provider took. Its parts are fixed
+   * at the first hand-off; a report is dropped once all of them are handed. */
+  speechHanded(id: string, reportId: string, parts: readonly string[], handed: number): void {
+    this.storage.change(document => {
+      const session = document.sessions[id];
+      const entry = session?.reportSpeech?.find(row => row.reportId === reportId);
+      if (!entry) return;
+      entry.parts ??= [...parts];
+      entry.handed = Math.max(entry.handed, handed);
+      if (entry.handed >= entry.parts.length) session.reportSpeech = session.reportSpeech!.filter(row => row !== entry);
     });
   }
   /** Compatibility for callers that still consume only correlated answers. */
@@ -590,6 +633,8 @@ export class CompanionAdmission {
       const session = document.sessions[id];
       if (!session) return;
       session.closed = true;
+      // Nobody is left to hear them; the transcript keeps every report.
+      delete session.reportSpeech;
       for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }
     });
     for (const key of this.shown.keys()) if (key.startsWith(`${id}\0`)) this.shown.delete(key);

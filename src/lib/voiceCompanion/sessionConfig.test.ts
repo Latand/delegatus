@@ -59,13 +59,15 @@ test("the backend answers from reads, sends one short ask in the operator's word
   expect(BACKEND_INSTRUCTIONS).toContain(`Compose one short ask, at most ${VOICE_ASK_MAX_CHARS} characters, in the operator's words and language, from their latest turn alone`);
   expect(BACKEND_INSTRUCTIONS).toContain("never translate it, expand it or bundle earlier questions into it");
   expect(BACKEND_INSTRUCTIONS).toContain("passes its handle as pending_request and nothing is sent");
-  expect(BACKEND_INSTRUCTIONS).toContain("A request still waiting for its report is never sent again");
+  expect(BACKEND_INSTRUCTIONS).toContain("a request still waiting for its report is not sent again");
+  expect(BACKEND_INSTRUCTIONS).toContain("set asked_again, and it is sent again even while its report is pending");
+  expect(BACKEND_INSTRUCTIONS).toContain("pass the repeat with its handle and send only the new part as its own ask");
   expect(BACKEND_INSTRUCTIONS).toContain("Pass project only when the operator named another project; never invent one");
   expect(BACKEND_INSTRUCTIONS).toContain("keep each fact with its own subject and in the report's words");
   for (const locale of ["en", "uk"] as const) {
     const instructions = liveSessionConfiguration(locale).instructions;
     expect(instructions).toContain("answer from this list in plain words; that needs no delegation");
-    expect(instructions).toContain("the backend says whether its answer is still on the way, and nothing is sent twice");
+    expect(instructions).toContain("the backend says whether its answer is still on the way, and sends it again only when they explicitly ask to send it once more");
     expect(instructions).toContain("read its lines as written, in order, in every part");
     expect(instructions).toContain("never merge, reorder, swap or add facts");
   }

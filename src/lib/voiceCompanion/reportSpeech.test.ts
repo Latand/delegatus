@@ -10,8 +10,8 @@ test("the voice reads the uncut copy when there is one, and the display body wit
   expect(voiceReportText({ origin: MANAGER, body: "✅ Fixture · completed · 11/10, 14:00\nThe plan was reviewed.\n\n🔀 Merged\n• the first fix", }))
     .toBe("The plan was reviewed.\n🔀 Merged\n• the first fix");
   expect(voiceReportText({ origin: MANAGER, body: "short", complete: { summary: "Відповідь для голосу.",
-    sections: [{ heading: "В роботі", items: ["перший пункт", "другий пункт"] }, { heading: "Далі", items: ["третій"] }], omitted: 2 } }))
-    .toBe("Відповідь для голосу.\nВ роботі:\n- перший пункт\n- другий пункт\nДалі:\n- третій\n(2 more item(s) only in the report log.)");
+    sections: [{ heading: "В роботі", items: ["перший пункт", "другий пункт"] }, { heading: "Далі", items: ["третій"] }] } }))
+    .toBe("Відповідь для голосу.\nВ роботі:\n- перший пункт\n- другий пункт\nДалі:\n- третій");
   expect(voiceReportText({ origin: { kind: "agent", conversationId: null, role: "builder" }, body: "[builder — not the manager] one · two" })).toBe("[builder — not the manager] one · two");
 });
 

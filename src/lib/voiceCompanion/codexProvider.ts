@@ -240,7 +240,11 @@ export class CodexLiveProvider implements LiveProvider {
       if (command.type === "session.close") void this.hangup(id, "").then(() => event({ type: "session.closed" }), lost);
       else if (["session.commentary.append", "session.instructions.append"].includes(command.type) && typeof command.content === "string") {
         const text = command.content;
-        if (command.type === "session.commentary.append") this.queueSpeech(call, text);
+        if (command.type === "session.commentary.append") {
+          // A call that has failed or is stopping cannot voice it: refuse, so the caller keeps it owed.
+          if (call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");
+          this.queueSpeech(call, text);
+        }
         else call.writing = call.writing.then(async () => {
           if (call.stopping || call.failed) return;
           await call.client.request("thread/inject_items", codexVoiceContext(id, text));

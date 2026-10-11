@@ -36,13 +36,6 @@ function fixture(key = "synthetic-credential") {
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => key, closeTimeoutMs: 20, timers: false });
   return { storage, admission, provider, reads, service, reports, sends: () => sends };
 }
-/** The orchestrator answers every request still waiting for its report, and the voice polls. */
-async function answerWaiting(f: ReturnType<typeof fixture>, sessionId: string) {
-  for (const row of Object.values(f.admission.session(sessionId).proposals)) if (row.state === "admitted" && row.delivery && !row.answered)
-    f.reports.push({ id: `answer-${f.reports.length + 1}`, seq: f.reports.length + 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed",
-      body: "Done.", correlatesDirective: row.delivery.clientMessageId, origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
-  await f.service.events(sessionId, 0);
-}
 /** Answers a first round with the given calls and every later round with speech. */
 const calling = (...calls: Array<ReturnType<typeof functionCall>>) => (request: BackendRequest, index: number) =>
   request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Here is what I found.")]) : backendResponse(`resp_${index}`, calls);
@@ -950,14 +943,9 @@ test("one completed request reaches the orchestrator once whatever Live delegati
       send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] });
     expect(await again.delegate(s.sessionId, "call-after-restart", "delegation-after-restart", "Review the plan", { sourceTurn: rows[0].sourceTurn })).toEqual({ state: "sent", status: "queued" });
     expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.delivery?.clientMessageId)).toEqual([key]);
-    // The operator saying it again in a completed turn of their own waits for the first report; the model alone repeating one sends nothing either.
+    // The operator saying it again in a completed turn of their own is a new request, also while the first waits for its report; the model alone repeating one is not.
     askedAgain = "Asks to send the review request again.";
     f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 3_000), delegationCreated("new-turn", 3_500));
-    await f.service.drain(s.sessionId);
-    expect([parallel, f.sends()]).toEqual([parallel, 1]);
-    // Once its report answered it, asking again is a new request.
-    await answerWaiting(f, s.sessionId);
-    f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 5_000), delegationCreated("after-answer", 5_500));
     await f.service.drain(s.sessionId);
     expect([parallel, f.sends()]).toEqual([parallel, 2]);
     await f.service.close(s.sessionId);
@@ -1027,18 +1015,9 @@ test("the model's judgment renews a request: natural wordings in three languages
       expect([c.locale, cancelled, quiet, f.sends()]).toEqual([c.locale, cancelled, quiet, baseline]);
       at += 5_000;
     }
-    // Asked again while the first still waits for its report: nothing is sent twice.
-    if (!cancelled) {
-      askedAgain = `Asks again: ${c.again[0]}`;
-      f.provider.replay(s.providerId, said("Done.", at, "output"), said(c.again[0]!, at + 2_000), delegationCreated(`waiting-${at}`, at + 2_600));
-      await f.service.drain(s.sessionId);
-      expect([c.locale, f.sends()]).toEqual([c.locale, baseline]);
-      at += 5_000;
-    }
-    // The model judges that the operator asked again after the answer came: each wording sends once more.
+    // The model judges that the operator asked again, also while the first still waits for its report: each wording sends once more.
     let expected = baseline;
     for (const again of c.again) {
-      await answerWaiting(f, s.sessionId);
       askedAgain = `Asks again: ${again}`;
       f.provider.replay(s.providerId, said("Done.", at, "output"), said(again, at + 2_000), delegationCreated(`again-${at}`, at + 2_600));
       await f.service.drain(s.sessionId);
@@ -1537,8 +1516,8 @@ test("the backend turn sees the operator's latest turn and what waits for a repo
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
     const first = locale === "uk" ? "Спитай оркестратора, що з ревʼю голосу." : "Ask the orchestrator how the voice review is going.";
-    const again = locale === "uk" ? ["Ну то що з ревʼю?", "Спитай ще раз про ревʼю і про деплой.", "Перевір ревʼю голосу.", "Ревʼю вже готове?"]
-      : ["So what about the review?", "Ask again about the review and the deploy.", "Check the voice review.", "Is the review done yet?"];
+    const again = locale === "uk" ? ["Ну то що з ревʼю?", "А ревʼю як?", "Перевір ревʼю голосу.", "Ревʼю вже готове?"]
+      : ["So what about the review?", "And the review?", "Check the voice review.", "Is the review done yet?"];
     const fresh = locale === "uk" ? "Спитай, яку модель обрати для голосу." : "Ask which model the voice should use.";
     let next: Record<string, unknown> = { instruction: first, pending_request: null };
     f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
@@ -1602,62 +1581,64 @@ test("after four tool rounds the backend answers once more with tools off, so wh
   await f.service.close(s.sessionId);
 });
 
-/** Codex owns its backing turn and calls the registry through the session's tool handler. */
-class FakeCodexProvider extends FakeLiveProvider {
-  readonly backend = "codex" as const;
-  tool?: import("./provider").LiveToolHandler;
-  override async attach(id: string, key: string, event: (value: unknown) => void, lost: () => void, tool?: import("./provider").LiveToolHandler) {
-    this.tool = tool;
-    return super.attach(id, key, event, lost);
-  }
-}
-
-test("on Codex the same handler holds a rephrased ask while its report is pending, sends a new question, and voices the report whole in words for the operator", async () => {
+test("a report hand-off that fails part-way resumes at the failed part on the next poll: every fact once, in order, and a later report waits behind it", async () => {
   for (const locale of ["uk", "en"] as const) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
-    const storage = new CompanionStorage();
-    storage.updateSettings({ enabled: true });
-    const sent: Array<{ text: string; key: string }> = [];
-    const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
-    const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "codex" }), reports: () => reports,
-      send: async ({ text, delivery }) => { sent.push({ text: text.split("\n")[0]!, key: delivery.clientMessageId }); return { status: "queued", operationId: `operation-${sent.length}` }; } });
-    const provider = new FakeCodexProvider();
-    const service = new CompanionLiveSessions(storage, admission, noReads(), provider, { closeTimeoutMs: 20, timers: false });
-    const s = await service.start({ project: "fixture", locale, sdp: "v=0" });
-    const first = locale === "uk" ? "Що з ревʼю голосу?" : "How is the voice review going?";
-    const again = locale === "uk" ? "Спитай ще раз про ревʼю голосу і про деплой." : "Ask again about the voice review and the deploy.";
-    const fresh = locale === "uk" ? "Яку модель обрати для голосу?" : "Which model should the voice use?";
-    const send = (callId: string, turnId: string, instruction: string, pending: string | null = null) =>
-      provider.tool!("request_orchestrator_delegation", { project: null, instruction, pending_request: pending, confirmation_reason: null, asked_again: null }, callId, turnId);
-    provider.replay(s.providerId, said(first, 0), delegationCreated("handoff-1", 600));
-    await service.drain(s.sessionId);
-    expect(await send("call-1", "turn-1", first)).toMatchObject({ status: "sent" });
-    provider.replay(s.providerId, said(again, 2_000), delegationCreated("handoff-2", 2_600));
-    await service.drain(s.sessionId);
-    // The turn is shown what already waits, names it, and nothing is sent.
-    expect(await send("call-2", "turn-2", again)).toMatchObject({ status: "check_waiting", waiting: [{ request: "r1", ask: first }] });
-    expect(await send("call-3", "turn-2", again, "r1")).toMatchObject({ status: "awaiting_report", request: "r1" });
-    expect(await provider.tool!("orchestrator_reports", {}, "call-4", "turn-2")).toMatchObject({ requests: [{ request: "r1", state: "waiting_for_report" }] });
-    provider.replay(s.providerId, said(fresh, 5_000), delegationCreated("handoff-3", 5_600));
-    await service.drain(s.sessionId);
-    // A new turn is shown the waiting request once too; a new question then passes null and goes through.
-    expect(await send("call-5", "turn-3", fresh)).toMatchObject({ status: "check_waiting", waiting: [{ request: "r1" }] });
-    expect(await send("call-6", "turn-3", fresh)).toMatchObject({ status: "sent" });
-    expect(sent.map(row => row.text)).toEqual([first, fresh]);
-    // The answer arrives longer than one append: every line, in order, with no instruction spoken aloud.
-    const items = Array.from({ length: 6 }, (_, index) => `${index % 2 ? "ревʼю пройшло обидва раунди" : "деплой чекає на рішення"} ${index + 1}, ${"деталі перевірки ".repeat(index === 2 ? 16 : 3).trim()}`);
-    reports.push({ id: "answer-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "short display copy", correlatesDirective: sent[0]!.key,
-      complete: { summary: "Два факти, кожен зі своїм субʼєктом.", sections: [{ heading: "Готово", items }] }, origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
-    await service.events(s.sessionId, 0);
-    const parts = provider.commands.filter(row => row.type === "session.commentary.append").map(row => String(row.content));
-    expect(parts.length).toBeGreaterThan(1);
-    expect(parts[0]!.startsWith('The orchestrator for project "fixture" reports result.\n')).toBe(true);
-    for (const part of parts) expect(Buffer.byteLength(part)).toBeLessThanOrEqual(500);
-    expect(parts.join("\n")).not.toMatch(/Report data|read the lines|continues|left out/);
-    expect(parts.join("\n").split("\n").slice(1).join("").replace(/\s+/gu, ""))
-      .toBe(["Два факти, кожен зі своїм субʼєктом.", "Готово:", ...items.map(item => `- ${item}`)].join("").replace(/\s+/gu, ""));
-    expect(await send("call-7", "turn-3", again, "r1")).toMatchObject({ status: "answered", request: "r1" });
-    expect(sent).toHaveLength(2);
-    await service.close(s.sessionId);
+    const f = fixture();
+    const attach = f.provider.attach.bind(f.provider);
+    let appends = 0;
+    // The transport refuses the second report append once, then takes every send.
+    f.provider.attach = async (...args: Parameters<typeof attach>) => {
+      const connection = await attach(...args);
+      return { ...connection, send: command => {
+        if (command.type === "session.commentary.append" && ++appends === 2) throw new Error("PROVIDER_ERROR");
+        connection.send(command);
+      } };
+    };
+    const s = await f.service.start({ project: "fixture", locale, sdp: "v=0" });
+    const items = Array.from({ length: 6 }, (_, index) => `${locale === "uk" ? "пункт" : "item"} ${index + 1}: ${(locale === "uk" ? "перевірка звіту пройшла, деталі " : "the report check passed, details ").repeat(index === 2 ? 12 : 3).trim()}`);
+    const manager = { kind: "manager" as const, conversationId: "conversation_fixture", role: "orchestrator" };
+    f.reports.push({ id: "whole-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "short display copy",
+      complete: { summary: "FIRST_REPORT", sections: [{ heading: "Done", items }] }, origin: manager });
+    await f.service.events(s.sessionId, 0);
+    const first = spoken(f).map(row => String(row.content));
+    expect([locale, first.length]).toEqual([locale, 1]);
+    // The failed part and everything after it are still owed; a second report is filed meanwhile.
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ reportId: "whole-1", handed: 1 }]);
+    f.reports.push({ id: "whole-2", seq: 2, project: "fixture", at: "2026-10-11T12:01:00Z", class: "completed", body: "SECOND_REPORT", origin: manager });
+    await f.service.events(s.sessionId, 0);
+    await f.service.events(s.sessionId, 0);
+    const parts = spoken(f).map(row => String(row.content));
+    expect(parts.length).toBeGreaterThan(2);
+    expect(new Set(parts).size).toBe(parts.length);
+    const text = parts.join("\n");
+    expect(text.indexOf("FIRST_REPORT")).toBeLessThan(text.indexOf("SECOND_REPORT"));
+    const body = parts.slice(0, -1).map(part => part.split("\n").slice(1).join("\n")).join("\n").replace(/\s+/gu, "");
+    expect(body).toBe(["FIRST_REPORT", "Done:", ...items.map(item => `- ${item}`)].join("").replace(/\s+/gu, ""));
+    expect(parts.at(-1)).toContain("SECOND_REPORT");
+    expect(f.admission.reportSpeech(s.sessionId)).toEqual([]);
+    expect(f.service.transcriptRecord(s.sessionId).entries.filter(entry => entry.kind === "handoff").map(entry => entry.data.text)).toEqual(parts);
+    await f.service.close(s.sessionId);
   }
+});
+
+test("a restart keeps a report owed until it is handed: the next service hands every part once, and a closed call owes nothing", async () => {
+  const f = fixture();
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.reports.push({ id: "owed-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "OWED_FACT",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  // The scan finds the report in the same commit that records it as owed; nothing has been handed yet.
+  f.admission.pollReports(s.sessionId);
+  expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ reportId: "owed-1", handed: 0 }]);
+  expect(new CompanionAdmission(f.storage, { recipient: () => null, send: async () => ({ status: "failed", operationId: null }), reports: () => [] })
+    .reportSpeech(s.sessionId)).toMatchObject([{ reportId: "owed-1", handed: 0 }]);
+  await f.service.events(s.sessionId, 0);
+  await f.service.events(s.sessionId, 0);
+  expect(spoken(f).filter(row => String(row.content).includes("OWED_FACT"))).toHaveLength(1);
+  f.reports.push({ id: "owed-2", seq: 2, project: "fixture", at: "2026-10-11T12:01:00Z", class: "completed", body: "UNSAID_FACT",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  f.admission.pollReports(s.sessionId);
+  await f.service.close(s.sessionId);
+  expect(f.admission.reportSpeech(s.sessionId)).toEqual([]);
+  expect(f.service.transcriptRecord(s.sessionId).entries.find(entry => entry.kind === "report" && String(entry.data.text).includes("UNSAID_FACT"))).toBeDefined();
 });
