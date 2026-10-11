@@ -1,4 +1,4 @@
-import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor, type AgentEngine } from "@/lib/agent/cli";
@@ -691,7 +691,7 @@ export interface ConversationMessage {
   clientMessageId?: string | null;
   reservedDeliveryId?: string | null;
   /** In-process fence checked after waits before a fresh local reservation. */
-  admissionGuard?: () => void;
+  admissionGuard?: DeliveryAdmissionGuard;
   /** Recheck autonomous seat authority while its replacement host is publishing. */
   recoveryAuthorityGuard?: () => void;
   text: string;

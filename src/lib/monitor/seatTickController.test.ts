@@ -706,7 +706,7 @@ test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick 
   expect(rig.written.at(-1)?.lastWakeAt).toBe(OVERDUE.lastWakeAt);
 });
 
-test("a deploy-settled wake runs shared composer recovery and records a fresh stdio receipt", async () => {
+test.each(["cleared", "retained dead claim", "terminal failure", "unsettled failure", "composer after cleanup", "rotation after cleanup"] as const)("a deploy-settled wake runs shared composer recovery with %s", async scenario => {
   const { recoverDeadStructuredConversation } = await import("@/lib/runtime/structuredRecovery");
   const f = childFixture("composer-deploy-recovery", false, "off");
   setAgentRegistryForTests(f.registry);
@@ -720,19 +720,32 @@ test("a deploy-settled wake runs shared composer recovery and records a fresh st
     spawnCapabilityDigest: "a".repeat(64) });
   f.registry.completeSpawn(old.receipt.launchId, entry);
   f.registry.setReceiptViewerMcpTransport(old.receipt.launchId, "stdio");
+  const retainedClaim = scenario === "retained dead claim" || scenario === "composer after cleanup" || scenario === "rotation after cleanup";
+  if (retainedClaim) f.registry.upsert({ ...entry, status: "idle", claimOwner: "structured-host:predecessor",
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:predecessor", process: { pid: 2_000_000_000, startIdentity: "gone" },
+      eventCursor: 0, protocolVersion: "v1", writerClaimEpoch: entry.claimEpoch, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
   const oldDigest = f.registry.seatMcpReceipt(f.seat.conversationId)!.spawnCapabilityDigest;
   f.seed();
   let spawns = 0;
+  const deliveredKeys: string[] = [];
   const rig = childRig(f, { seatDeployments: [{ conversationId: f.seat.conversationId, deploymentId: "composer-deploy" }],
     deployments: { "composer-deploy": { phase: "succeeded", terminal: true, revision: "abcdef1234" } },
     seatActivity: { conversationId: f.seat.conversationId, host: { state: "gone", kind: "structured", pid: null }, lifecycle: "gone", reason: "host_gone_turn_settled" },
     deliverWith: message => deliverConversationMessage(message, {
       recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: {} as RuntimeHostClient,
         transport: () => "structured", park: () => null,
-        resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy", home: f.dir, transcriptRoot: f.dir, env: { NODE_ENV: "test" } }),
+        resolveAccount: () => {
+          if (scenario === "composer after cleanup") f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
+          if (scenario === "rotation after cleanup") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+          return { engine: "claude", accountId: "default", kind: "legacy", home: f.dir, transcriptRoot: f.dir, env: { NODE_ENV: "test" } };
+        },
         spawn: async input => {
           expect(f.row().outstandingWake?.clientMessageId).toBe(message.clientMessageId ?? undefined);
           spawns += 1;
+          if (scenario === "terminal failure" || scenario === "unsettled failure") {
+            if (scenario === "terminal failure") f.registry.failSpawn(input.receipt.launchId, "No conversation found with session ID");
+            throw new Error("No conversation found with session ID");
+          }
           f.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
           f.registry.setReceiptViewerMcpTransport(input.receipt.launchId, "stdio");
           f.registry.completeSpawn(input.receipt.launchId, entry);
@@ -742,6 +755,8 @@ test("a deploy-settled wake runs shared composer recovery and records a fresh st
       }),
       enqueueStructured: async request => {
         request.admissionGuard?.();
+        expect(request.clientMessageId).toBe(message.clientMessageId);
+        deliveredKeys.push(request.clientMessageId!);
         const held = f.registry.holdDelivery(f.seat.conversationId as never, request.text, request.clientMessageId!);
         f.registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
         return { ok: true, structured: true, target: f.seat.conversationId, outcome: "delivered", operationId: held.command.operationId,
@@ -756,6 +771,37 @@ test("a deploy-settled wake runs shared composer recovery and records a fresh st
     terminal: true, revision: "abcdef1234", error: null, updatedAt: ago(f, 2) } }) as never;
   rig.deps.mcpHealth = () => f.registry.seatMcpReceipt(f.seat.conversationId)?.spawnCapabilityDigest === oldDigest
     ? { status: "dead", detail: "predecessor MCP absent" } : { status: "untracked", detail: "fresh stdio MCP starting" };
+  let rotations = 0;
+  rig.deps.seatRecovery = { rotate: async body => {
+    expect(body.expectedIncumbentSeatEpoch).toBe(f.seat.seatEpoch);
+    rotations += 1;
+    return { status: 503, body: { error: "replacement unavailable" } };
+  } };
+  if (retainedClaim) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process?.pid).toBe(2_000_000_000);
+  if (scenario === "composer after cleanup" || scenario === "rotation after cleanup") {
+    await runSeatTickCheck(f.project, rig.deps);
+    expect(spawns).toBe(0);
+    expect(rotations).toBe(0);
+    expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(1);
+    expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
+    return;
+  }
+  if (scenario === "terminal failure" || scenario === "unsettled failure") {
+    await runSeatTickCheck(f.project, rig.deps);
+    const owed = f.row().outstandingWake?.clientMessageId;
+    expect(spawns).toBe(1);
+    expect(rotations).toBe(scenario === "terminal failure" ? 1 : 0);
+    expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
+    expect(owed).toBeTruthy();
+    if (scenario === "terminal failure") {
+      expect(f.row().hostRecovery?.state).toBe("failed");
+      expect(rig.cards.filter(({ card }) => card.ref === "seat-host-recovery" && card.state === "open")).toHaveLength(1);
+      await runSeatTickCheck(f.project, rig.deps);
+      expect(rotations).toBe(1);
+      expect(f.row().outstandingWake?.clientMessageId).toBe(owed);
+    } else expect(f.row().hostRecovery).toBeFalsy();
+    return;
+  }
   expect((await runSeatTickCheck(f.project, rig.deps))?.delivery?.outcome).toBe("delivered");
   expect(spawns).toBe(1);
   expect(f.registry.seatMcpReceipt(f.seat.conversationId)?.spawnCapabilityDigest).not.toBe(oldDigest);
@@ -764,6 +810,8 @@ test("a deploy-settled wake runs shared composer recovery and records a fresh st
   expect(f.row().announcedDeploys).toEqual(["composer-deploy"]);
   await runSeatTickCheck(f.project, rig.deps);
   expect(spawns).toBe(1);
+  expect(rotations).toBe(0);
+  expect(deliveredKeys).toHaveLength(1);
 });
 
 test.each(["rotated", "failed"] as const)("a definitively failed dead-seat revival rotates once and leaves a durable %s notice", async state => {

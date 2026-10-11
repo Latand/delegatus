@@ -1,5 +1,5 @@
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
-import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
 
@@ -59,7 +59,7 @@ import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./reco
 
 export interface StructuredMessageRequest {
   /** Live authorization at fresh reservation, after runtime and lock waits. */
-  admissionGuard?: () => void;
+  admissionGuard?: DeliveryAdmissionGuard;
   /** The autonomous caller's authority fence during replacement host publication. */
   recoveryAuthorityGuard?: () => void;
   path: string;

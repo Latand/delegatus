@@ -1,5 +1,5 @@
 import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
-import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
 import { seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
@@ -1412,17 +1412,27 @@ async function check(
   };
   // A missing MCP heartbeat cannot distinguish a finished dead host from a
   // live host with a broken pipe. Only the liveness plane can admit recovery.
-  const recoveryIdentity = (conversationId: string): string | null => {
+  const recoveryIdentity = (conversationId: string) => {
     try {
       const registry = sources.registry();
       const snapshot = registry.conversationDeliverySnapshot?.({ conversationId });
-      return JSON.stringify([snapshot ? Object.values(snapshot.entries).map(entry => [entry.key, entry.status,
-        entry.claimEpoch, entry.claimOwner, entry.host, entry.structuredHost, entry.pendingAction]) : null,
-        registry.seatMcpReceipt?.(conversationId) ?? null]);
+      const entries = snapshot ? Object.values(snapshot.entries) : null;
+      const rows = entries?.map(entry => [entry.key, entry.status,
+        entry.claimEpoch, entry.claimOwner, entry.host, entry.structuredHost, entry.pendingAction]) ?? null;
+      const receipt = registry.seatMcpReceipt?.(conversationId) ?? null;
+      const identity = JSON.stringify([rows, receipt]);
+      const cleanups = new Map<string, string>();
+      for (const [index, entry] of entries?.entries() ?? []) {
+        if (entry.host || !entry.structuredHost?.process) continue;
+        cleanups.set(`${entry.key.engine}:${entry.key.sessionId}`, JSON.stringify([rows!.map((row, i) => i === index
+          ? [entry.key, "dead", entry.claimEpoch, null, null, null, null] : row), receipt]));
+      }
+      return { identity, cleanups };
     } catch { return null; } // Unreadable ownership cannot license recovery.
   };
   const admissionFor = async (seat: { conversationId: string; seatEpoch: number; designatedAt?: string | null }, requireDeadHost = false) => {
-    const identity = recoveryIdentity(seat.conversationId);
+    const observed = recoveryIdentity(seat.conversationId);
+    let identity = observed?.identity ?? null;
     let deadHost = false;
     if (requireDeadHost || mcpHealthFor(seat, sources.now()).status === "dead") {
       try {
@@ -1438,10 +1448,19 @@ async function check(
         throw new DeliveryAdmissionRefusedError("seat-rotated");
       return current;
     };
-    const guard = () => {
+    const guard: DeliveryAdmissionGuard = reconciledDeadHost => {
       const current = currentSeat();
+      if (reconciledDeadHost) {
+        // Accept only this recovery's verified cleanup. A new epoch, receipt
+        // or composer claim cannot become the evidence for this admission.
+        const cleaned = observed?.cleanups.get(`${reconciledDeadHost.engine}:${reconciledDeadHost.sessionId}`);
+        if (!deadHost || !cleaned || identity !== observed?.identity
+          || recoveryIdentity(seat.conversationId)?.identity !== cleaned)
+          throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
+        identity = cleaned;
+      }
       if ((requireDeadHost || mcpHealthFor(current, sources.now()).status === "dead")
-        && (!deadHost || identity === null || recoveryIdentity(seat.conversationId) !== identity))
+        && (!deadHost || identity === null || recoveryIdentity(seat.conversationId)?.identity !== identity))
         throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
     };
     try { guard(); return { guard, authorityGuard: () => { currentSeat(); } }; } catch { return null; }

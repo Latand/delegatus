@@ -13,7 +13,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { UNKNOWN_RESET_RECHECK_MS } from "./accountPark";
 import type { RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
-import { recoverDeadStructuredConversation } from "./structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./structuredRecovery";
 import { structuredResumeSessionId } from "./structuredSpawn";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 
@@ -23,6 +23,40 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"
    write the state directory the running viewer owns. */
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+test.each(["settled", "unsettled", "retained host", "authority refusal"] as const)("an immediate resume error with %s evidence retains its recovery meaning", async evidence => {
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `terminal-resume-${sessionId}`);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true }); fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  const entry = { key: { engine: "codex" as const, sessionId }, artifactPath, cwd, accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd }), status: "dead" as const, host: null, structuredHost: null,
+    claimEpoch: 1, claimOwner: null, pendingAction: null };
+  registry.upsert(entry);
+  const original = evidence === "authority refusal" ? new DeliveryAdmissionRefusedError("seat-rotated")
+    : new Error("No conversation found with session ID");
+  let attempts = 0;
+  const error = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+    registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+    spawn: async input => {
+      attempts += 1;
+      if (evidence !== "unsettled") registry.failSpawn(input.receipt.launchId, original.message);
+      if (evidence === "retained host") registry.upsert({ ...entry, status: "idle", claimOwner: "structured-host:retained",
+        structuredHost: { kind: "codex-app-server", endpoint: "stdio:retained", process: { pid: process.pid, startIdentity: null },
+          eventCursor: 0, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+      throw original;
+    }, requestDeliveryDrain: () => {},
+  }).then(() => null, (error: unknown) => error);
+  expect(attempts).toBe(1);
+  if (evidence === "settled") {
+    expect(error).toBeInstanceOf(StructuredResumeUnpublishedError);
+    expect((error as Error).message).toBe(original.message);
+  } else expect(error).toBe(original);
+  registry.close();
+});
 
 test.each(["account resolution", "spawn reservation"] as const)("a seat admission revoked during %s spawns no recovery host", async phase => {
   const sessionId = crypto.randomUUID();
