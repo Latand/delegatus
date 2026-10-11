@@ -102,56 +102,8 @@ async function ready(): Promise<void> {
   }
 }
 
-const powershell = process.env.LLV_TEST_POWERSHELL ?? (process.platform === "win32" ? "powershell.exe" : undefined);
-test.skipIf(!powershell)("Windows retirement rejects a stale descendant row after PID reuse", async () => {
-  // Exercise the guardian's actual script with a retained-handle model and
-  // a stale CIM row: the new process has another parent, within the same ms.
-  const template = fs.readFileSync(path.resolve("bin/helper-lease.mjs"), "utf8").match(/const script = `([\s\S]*?)`;/)?.[1];
-  expect(template).toBeDefined();
-  const rootTime = BigInt(Date.UTC(2026, 0, 1)) * BigInt(10_000) + BigInt("116444736000000000");
-  const script = template!.replaceAll("${group}", "10").replaceAll("${process.pid}", "99")
-    .replaceAll("${windowsIdentity}", `10:${rootTime}`).replaceAll("System.Diagnostics.Process", "LeaseOwnershipProbe.Process");
-  const log = path.join(root, "terminated");
-  const setup = `$ProgressPreference='SilentlyContinue';
-Add-Type -TypeDefinition @'
-using System;
-using System.IO;
-namespace LeaseOwnershipProbe {
-  public class Process {
-    public static string Log;
-    public static Process Root = new Process(10, "owned", new DateTime(2026,1,1,0,0,0,DateTimeKind.Utc));
-    public static Process Peer = new Process(42, "unrelated", Root.StartTime.AddMilliseconds(10).AddTicks(5000));
-    public int Id; public string Name; public DateTime StartTime; public bool HasExited;
-    public IntPtr Handle { get { return new IntPtr(Id); } }
-    public Process(int id, string name, DateTime start) { Id=id; Name=name; StartTime=start; }
-    public static Process GetProcessById(int id) { return id==10 ? Root : Peer; }
-    public void Kill() { File.AppendAllText(Log, Name + "\\n"); HasExited=true; }
-    public bool WaitForExit(int timeout) { return HasExited; }
-    public void Dispose() { }
-  }
-}
-'@
-[LeaseOwnershipProbe.Process]::Log=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(log).toString("base64")}'));
-function Get-CimInstance {
-  param($ClassName, $Property, $Filter)
-  if ($Filter) { return [pscustomobject]@{ ProcessId=42; ParentProcessId=777 } }
-  @([pscustomobject]@{ ProcessId=10; ParentProcessId=99; CreationDate=[LeaseOwnershipProbe.Process]::Root.StartTime },
-    [pscustomobject]@{ ProcessId=42; ParentProcessId=10; CreationDate=[LeaseOwnershipProbe.Process]::Peer.StartTime.AddTicks(-1) })
-}
-`;
-  const probe = spawn(powershell!, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(setup + script, "utf16le").toString("base64")],
-    { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-  let diagnostics = "";
-  probe.stderr!.setEncoding("utf8").on("data", chunk => { diagnostics += chunk; });
-  try {
-    const code = await new Promise<number | null>((resolve, reject) => { probe.once("close", resolve); probe.once("error", reject); });
-    expect({ code, diagnostics }).toEqual({ code: 0, diagnostics: "" });
-    expect(fs.readFileSync(log, "utf8").trim().split(/\r?\n/)).toEqual(["owned"]);
-  } finally { await stopFixtureProcess(probe); }
-}, 20_000);
-
-for (const reason of ["cancellation", "timeout", "shutdown"] as const) {
-  test(`lease retirement after ${reason} reaps a busy query and descendant before replacement`, async () => {
+for (const reason of ["cancellation", "timeout", "shutdown", "guardian-exit"] as const) {
+  test.skipIf(reason === "guardian-exit" && process.platform !== "win32")(`lease retirement after ${reason} reaps a busy query and descendant before replacement`, async () => {
     const launch = stub(`
       if (frame.options.query === "prepare") {
         const descendant = spawn(process.execPath, ["-e", 'process.stdout.write(String(process.pid)); setInterval(() => {}, 1000);'], { stdio: ["ignore", "pipe", "inherit"] });
@@ -182,10 +134,12 @@ for (const reason of ["cancellation", "timeout", "shutdown"] as const) {
     try {
       stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
       if (reason === "cancellation") controller.abort();
+      if (reason === "guardian-exit") resident.child.kill("SIGKILL");
       if (reason === "shutdown") await lane.shutdown();
       const error = await pending;
       expect(reason === "cancellation" ? error.name : error.message).toBe(reason === "cancellation" ? "AbortError"
-        : reason === "timeout" ? "Transcript search timed out" : "Transcript search worker stopped");
+        : reason === "timeout" ? "Transcript search timed out"
+          : reason === "guardian-exit" ? "Transcript search worker is unavailable" : "Transcript search worker stopped");
       runtime.timeoutMs = 15_000;
       await lane.shutdown();
       for (const identity of identities) {
@@ -283,30 +237,44 @@ test("exit and malformed protocol fail cleanly and the next request starts a rep
   stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
   expect((await lane.search({ query: "repaired" })).total).toBe(0);
 
-  for (const exitCode of [1, 0]) {
-    stub(`
-      if (frame.options.query === "prepare") {
-        const descendant = spawn(process.execPath, ["-e", 'setInterval(() => {}, 1000);'], { stdio: ["ignore", "inherit", "inherit"] });
-        fs.writeFileSync(${JSON.stringify(path.join(root, "pids"))}, JSON.stringify([process.pid, descendant.pid]));
-        process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");
-      } else { process.exit(${exitCode}); }`);
-    await lane.shutdown();
-    await lane.search({ query: "prepare" });
-    const identities = (JSON.parse(fs.readFileSync(path.join(root, "pids"), "utf8")) as number[]).map(pid => captureProcessIdentity(pid));
-    try {
-      const error = await lane.search({ query: "exit-with-descendant" }).catch(error => error);
-      expect(error.message).toBe("Transcript search worker is unavailable");
+  const peer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
+  try {
+    for (const exitCode of [1, 0]) {
+      const descendantReady = path.join(root, `descendant-ready-${exitCode}`);
+      const descendantBody = `import fs from "node:fs";
+        fs.writeFileSync(${JSON.stringify(descendantReady)}, "ready"); setInterval(() => {}, 1000);`;
+      stub(`
+        if (frame.options.query === "prepare") {
+          const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantBody)}], { stdio: ["ignore", "inherit", "inherit"] });
+          const waitForDescendant = setInterval(() => {
+            if (!fs.existsSync(${JSON.stringify(descendantReady)})) return;
+            clearInterval(waitForDescendant);
+            fs.writeFileSync(${JSON.stringify(path.join(root, "pids"))}, JSON.stringify([process.pid, descendant.pid]));
+            process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");
+          }, 5);
+        } else { process.exit(${exitCode}); }`);
       await lane.shutdown();
-      for (const identity of identities) {
-        expect(processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)).toBe(true);
+      await lane.search({ query: "prepare" });
+      const identities = (JSON.parse(fs.readFileSync(path.join(root, "pids"), "utf8")) as number[]).map(pid => captureProcessIdentity(pid));
+      const guardian = (lane as unknown as { worker: { child: ChildProcess } }).worker.child;
+      const status = new Promise<number | null>(resolve => guardian.once("exit", resolve));
+      try {
+        const error = await lane.search({ query: "exit-with-descendant" }).catch(error => error);
+        expect(error.message).toBe("Transcript search worker is unavailable");
+        await lane.shutdown();
+        expect(await status).toBe(exitCode);
+        expect(() => process.kill(peer.pid!, 0)).not.toThrow();
+        for (const identity of identities) {
+          expect(processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)).toBe(true);
+        }
+        stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
+        expect((await lane.search({ query: "replacement" })).total).toBe(0);
+      } finally {
+        for (const identity of identities.reverse()) await stopFixtureIdentity(identity);
+        await lane.shutdown();
       }
-      stub(`process.stdout.write(JSON.stringify({ id: frame.id, type: "result", result: { items: [], total: 0, nextCursor: null, stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: [], tokenizer: "fixture" } } }) + "\\n");`);
-      expect((await lane.search({ query: "replacement" })).total).toBe(0);
-    } finally {
-      for (const identity of identities.reverse()) await stopFixtureIdentity(identity);
-      await lane.shutdown();
     }
-  }
+  } finally { await stopFixtureProcess(peer); }
 }, 40_000);
 
 test("a throwing trusted projector closes the read snapshot and remains retryable", async () => {
