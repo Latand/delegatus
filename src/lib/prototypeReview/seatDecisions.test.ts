@@ -140,3 +140,66 @@ test("a task-bound decision message stays byte for byte", () => {
   const text = prototypeDecisionText({ id: "task-review", text: "Review layout\nDetails" }, round, { chosen: [], answers: [{ questionId: "deploy", options: [0] }], comment: "Go" });
   expect(text).toBe("Prototype review decision\nTask: task-review — Review layout\nRound: Before work\n\nAnswers:\n1. Deploy now?\n   a) Now (recommended)\n\nComment:\nGo\n\nEnd of prototype review decision.");
 });
+
+test("an answered seat question's record takes the receipt's word on every read, and no read sends again", async () => {
+  const seatId = (await (await publishAs(seat, { clientRequestId: "seat-q", title: "Deploy now?", questions: one })).json()).reviewId as string;
+  let sends = 0;
+  let recovers = 0;
+  let receipt: { state: "pending" | "sent" | "failed" | "uncertain"; operationId: string } = { state: "pending", operationId: "operation-1" };
+  const delivery = {
+    recover: async () => { recovers++; return recovers === 1 ? null : receipt; },
+    send: async () => { sends++; return { state: "pending" as const, operationId: "operation-1" }; },
+    retry: async () => { throw new Error("a read never retries"); },
+  };
+  const answers = [{ questionId: "deploy", options: [1] }];
+  expect((await decisionsPOST(request("/api/projects/decisions", { project: "project-a", reviewId: seatId, chosen: [], comment: "", answers }), operator, delivery)).status).toBe(200);
+  expect(loadSeatRounds("project-a")[0]!.decision!.delivery).toMatchObject({ state: "pending", operationId: "operation-1" });
+  const record = async () => (await (await decisionsGET(request("/api/projects/decisions"), "project-a", operator, seatId, delivery)).json() as OperatorDecisionsRead).round!.decision!.delivery;
+  const seatRead = async () => (await (await reviewReadPOST(request("/api/prototype-reviews/read", {}), seat, delivery)).json() as PrototypeReviewRead).rounds[0]!.decision!.delivery;
+  for (const state of ["uncertain", "failed", "sent"] as const) {
+    receipt = { state, operationId: "operation-1" };
+    expect(await record()).toEqual({ state, retryable: state !== "sent" });
+    expect(await seatRead()).toEqual({ state, retryable: state !== "sent" });
+  }
+  const afterSent = recovers;
+  expect(await record()).toEqual({ state: "sent", retryable: false });
+  expect(recovers).toBe(afterSent);
+  expect(sends).toBe(1);
+});
+
+test("a seat question whose answer did not reach the seat is sent again from its record, once, with the saved message", async () => {
+  const seatId = (await (await publishAs(seat, { clientRequestId: "seat-q", title: "Deploy now?", questions: one })).json()).reviewId as string;
+  const sent: string[] = [];
+  let fail = true;
+  const delivery = {
+    recover: async () => null,
+    send: async (_request: NextRequest, decision: PrototypeDecision) => {
+      if (fail) throw new Error("the host went away");
+      sent.push(decision.delivery.text);
+      return { state: "sent" as const, operationId: "operation-2" };
+    },
+    retry: async () => { throw new Error("nothing was admitted to retry"); },
+  };
+  const answers = [{ questionId: "deploy", options: [1] }];
+  await decisionsPOST(request("/api/projects/decisions", { project: "project-a", reviewId: seatId, chosen: [], comment: "Later", answers }), operator, delivery);
+  const saved = loadSeatRounds("project-a")[0]!.decision!;
+  expect(saved.delivery.state).toBe("uncertain");
+  fail = false;
+  for (let press = 0; press < 2; press++) {
+    expect((await decisionsPOST(request("/api/projects/decisions", { project: "project-a", reviewId: seatId, retry: true }), operator, delivery)).status).toBe(200);
+  }
+  expect(sent).toEqual([saved.delivery.text]);
+  expect(loadSeatRounds("project-a")[0]!.decision).toMatchObject({ comment: "Later", answers, delivery: { state: "sent", operationId: "operation-2" } });
+});
+
+test("an answer saved while the project had no seat is sent from its record once a seat stands", async () => {
+  const seatId = (await (await publishAs(seat, { clientRequestId: "seat-q", title: "Deploy now?", questions: one })).json()).reviewId as string;
+  const { sent, delivery } = recorder();
+  const vacant: PrototypeWorld = { ...prototypeWorld, orchestrator: () => null };
+  await decisionsPOST(request("/api/projects/decisions", { project: "project-a", reviewId: seatId, chosen: [], comment: "", answers: [{ questionId: "deploy", options: [0] }] }), vacant, delivery);
+  expect((await (await decisionsGET(request("/api/projects/decisions"), "project-a", vacant, seatId, delivery)).json() as OperatorDecisionsRead).round!.decision!.delivery).toEqual({ state: "no-orchestrator", retryable: true });
+  expect(sent).toEqual([]);
+  await decisionsPOST(request("/api/projects/decisions", { project: "project-a", reviewId: seatId, retry: true }), operator, delivery);
+  expect(sent).toHaveLength(1);
+  expect(loadSeatRounds("project-a")[0]!.decision!.delivery).toMatchObject({ state: "sent", conversationId: "conversation_seat" });
+});

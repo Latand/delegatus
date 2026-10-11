@@ -39,6 +39,26 @@ export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
   const { t } = useLocale();
   const waiting = usePrototypeNoticesFor(target.project).some((notice) => notice.reviewId === target.reviewId);
   const [record, setRecord] = useState<OperatorDecisionView | null>(null);
+  /* Each retry reads the record again and polls it while the message travels. */
+  const [reads, setReads] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const retry = async () => {
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const response = await fetch("/api/projects/decisions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ project: target.project, reviewId: target.reviewId, retry: true }),
+      });
+      if (!response.ok) setRetryError(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? String(response.status));
+    } catch (failure) {
+      setRetryError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setRetrying(false);
+      setReads((held) => held + 1);
+    }
+  };
   useEffect(() => {
     if (waiting) return;
     let alive = true;
@@ -56,9 +76,13 @@ export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
     };
     void read();
     return () => { alive = false; if (timer) clearTimeout(timer); };
-  }, [waiting, target.project, target.reviewId]);
+  }, [waiting, target.project, target.reviewId, reads]);
   if (!waiting && record?.decision) {
-    return <div data-decision-pointer={target.reviewId} className="my-1 ml-9 max-w-[640px] max-[480px]:ml-0"><DecisionRecord decision={record} /></div>;
+    return (
+      <div data-decision-pointer={target.reviewId} className="my-1 ml-9 max-w-[640px] max-[480px]:ml-0">
+        <DecisionRecord decision={record} onRetry={() => void retry()} retrying={retrying} retryError={retryError} />
+      </div>
+    );
   }
   return (
     <div data-decision-pointer={target.reviewId} className="my-1 ml-9 flex max-[480px]:ml-0">

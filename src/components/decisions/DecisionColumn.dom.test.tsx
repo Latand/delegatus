@@ -31,6 +31,7 @@ Object.assign(globalThis, {
 const { DecisionList, DecisionStripLine } = await import("./DecisionColumn");
 const { DecisionPointer, decisionPointerOf } = await import("./DecisionPointer");
 const { openOperatorDecisions, resetDecisionSurfacesForTests, useDecisionSheet, useDecisionSurface } = await import("./decisionSurface");
+const { resetDecisionDraftsForTests } = await import("./useOperatorDecisions");
 const { publishPrototypeNotices, resetPrototypeReviewStoreForTests } = await import("@/components/prototypeReview/prototypeReviewStore");
 
 const SEAT = `pr_${"a".repeat(32)}`;
@@ -57,6 +58,7 @@ afterEach(async () => {
   root = null;
   globalThis.fetch = realFetch;
   resetDecisionSurfacesForTests();
+  resetDecisionDraftsForTests();
   resetPrototypeReviewStoreForTests();
   dom.document.body.innerHTML = "";
 });
@@ -108,6 +110,51 @@ test("«Інше» asks for the comment before the answer can go, and a refusal 
   expect(host.querySelector(`[data-decision-review="${SEAT}"]`)).not.toBeNull();
   expect(host.querySelector("[data-decision-error]")?.textContent).toContain("the seat is busy");
 });
+
+/** What the operator typed into the comment, through the field's own change handler. */
+async function typeComment(host: HTMLElement, value: string) {
+  const field = host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!;
+  const props = (field as unknown as Record<string, { onChange: (event: { target: { value: string } }) => void }>)[Object.keys(field).find((key) => key.startsWith("__reactProps$"))!]!;
+  await act(async () => { props.onChange({ target: { value } }); });
+}
+const checked = (host: HTMLElement, selector: string) => host.querySelector(selector)?.getAttribute("aria-checked");
+
+for (const refusal of ["409", "network"] as const) {
+  test(`a ${refusal} refusal that lands after the form left brings it back as the operator left it, and the second press sends the same answer`, async () => {
+    const posts: unknown[] = [];
+    let release: (() => void) | null = null;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      posts.push(JSON.parse(String(init?.body)));
+      /* The refusal waits past React's next render, so the form is gone when it lands. */
+      await new Promise<void>((resolve) => { release = resolve; });
+      if (refusal === "network") throw new TypeError("network down");
+      return new Response(JSON.stringify({ error: "the seat is busy" }), { status: 409 });
+    }) as typeof fetch;
+    const host = await render(<DecisionList project="project-a" initial={[seatDecision()]} />);
+    await click(host.querySelector('[data-prototype-option="when:1"]'));
+    await click(host.querySelector('[data-prototype-other="why"]'));
+    await typeComment(host, "After the batch");
+    await click(host.querySelector("[data-decision-send]"));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(host.querySelector(`[data-decision-review="${SEAT}"]`)).toBeNull();
+    await act(async () => { release!(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(host.querySelector(`[data-decision-card="open"][data-decision-review="${SEAT}"]`)).not.toBeNull();
+    expect(checked(host, '[data-prototype-option="when:1"]')).toBe("true");
+    expect(checked(host, '[data-prototype-option="when:0"]')).toBe("false");
+    expect(checked(host, '[data-prototype-other="why"]')).toBe("true");
+    expect(host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!.value).toBe("After the batch");
+    expect(host.querySelector("[data-decision-error]")?.textContent).toContain(refusal === "network" ? "network down" : "the seat is busy");
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      posts.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ project: "project-a", decisions: [] }), { status: 200 });
+    }) as typeof fetch;
+    await click(host.querySelector("[data-decision-send]"));
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual(posts[0]);
+    expect(posts[0]).toEqual({ project: "project-a", reviewId: SEAT, chosen: [], comment: "After the batch", answers: [{ questionId: "when", options: [1] }, { questionId: "why", options: [], other: true }] });
+    expect(host.querySelector("[data-decision-list-empty]")).not.toBeNull();
+  });
+}
 
 test("an empty column says nothing waits", async () => {
   const host = await render(<DecisionList project="project-a" initial={[]} />);
@@ -171,4 +218,44 @@ test("the pointer points at the column while the decision waits, and becomes the
   expect(record.querySelector('[data-decision-delivery="sent"]')).not.toBeNull();
   expect(record.textContent).toContain("Tonight");
   expect(record.querySelector("[data-decision-record-comment]")?.textContent).toBe("After the batch");
+});
+
+for (const state of ["failed", "uncertain", "no-orchestrator"] as const) {
+  test(`a ${state} answer's record sends the saved answer again from the feed, once, and the action leaves once it is delivered`, async () => {
+    const answered = (delivery: { state: "sent" | typeof state; retryable: boolean }) => seatDecision({ decision: { chosen: [], answers: [{ questionId: "when", options: [1] }, { questionId: "why", options: [0] }], comment: "", at: "2026-10-11T14:46:00.000Z", delivery } });
+    let round = answered({ state, retryable: true });
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      if (init?.method === "POST") {
+        round = answered({ state: "sent", retryable: false });
+        return new Response(JSON.stringify({ project: "project-a", decisions: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ project: "project-a", decisions: [], round }), { status: 200 });
+    }) as typeof fetch;
+    const host = await render(<DecisionPointer target={{ reviewId: SEAT, project: "project-a", title: "Deploy tonight?" }} />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(host.querySelector(`[data-decision-delivery="${state}"]`)).not.toBeNull();
+    const retry = host.querySelectorAll("[data-decision-retry]");
+    expect(retry).toHaveLength(1);
+    expect(retry[0]!.textContent).toBe(state === "no-orchestrator" ? "Send now" : "Send again");
+    await click(retry[0]!);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(calls.filter((call) => call.body)).toEqual([{ url: "/api/projects/decisions", body: { project: "project-a", reviewId: SEAT, retry: true } }]);
+    expect(host.querySelector('[data-decision-delivery="sent"]')).not.toBeNull();
+    expect(host.querySelector("[data-decision-retry]")).toBeNull();
+  });
+}
+
+test("a refused retry says why and keeps the action", async () => {
+  const round = seatDecision({ decision: { chosen: [], answers: [{ questionId: "when", options: [0] }, { questionId: "why", options: [0] }], comment: "", at: "2026-10-11T14:46:00.000Z", delivery: { state: "failed", retryable: true } } });
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => init?.method === "POST"
+    ? new Response(JSON.stringify({ error: "prototype decision is busy" }), { status: 409 })
+    : new Response(JSON.stringify({ project: "project-a", decisions: [], round }), { status: 200 })) as typeof fetch;
+  const host = await render(<DecisionPointer target={{ reviewId: SEAT, project: "project-a", title: "Deploy tonight?" }} />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await click(host.querySelector("[data-decision-retry]"));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(host.querySelector("[data-decision-retry-error]")?.textContent).toContain("prototype decision is busy");
+  expect(host.querySelector("[data-decision-retry]")).not.toBeNull();
 });

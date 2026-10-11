@@ -1830,6 +1830,7 @@ export const en = {
   "decisions.state.no-orchestrator": "no orchestrator",
   "decisions.recordAria": "Your answer to «{title}»",
   "decisions.refused": "The answer was not saved: {error}",
+  "decisions.retryFailed": "The answer was not sent again: {error}",
   "proto.notice.questions": "Questions for you",
   "proto.notice.answer": "Answer",
   "proto.notice.answerAria": "Answer the questions for «{title}»",

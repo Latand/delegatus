@@ -14,11 +14,24 @@ export function decisionsUrl(project: string, review?: string): string {
 
 export type DecisionAnswer = Omit<DecidePrototypeInput, "reviewId">;
 
+/* What the operator chose and wrote, by round, from the press of «Відповісти»
+   until the server keeps it. The form leaves the list while its answer is on
+   the way; when the server refuses, the form that comes back starts from this
+   draft, so a second press sends the same answer. */
+const drafts = new Map<string, DecisionAnswer>();
+export function decisionDraft(reviewId: string): DecisionAnswer | undefined {
+  return drafts.get(reviewId);
+}
+/** Tests only: forget every held draft. */
+export function resetDecisionDraftsForTests(): void {
+  drafts.clear();
+}
+
 /**
  * A project's open decisions while the column shows them: read at once, then
  * every few seconds. An answer leaves the list the moment it is pressed and
- * comes back, with the server's reason, only if the server refused it
- * (docs/design/operator-decision-forms.md §2.4).
+ * comes back, with the server's reason and the operator's draft, only if the
+ * server refused it (docs/design/operator-decision-forms.md §2.4).
  */
 export function useOperatorDecisions(project: string, active: boolean, initial?: OperatorDecisionView[]) {
   const [state, setState] = useState<{ project: string; decisions: OperatorDecisionView[] | null; failed: boolean }>(
@@ -54,6 +67,7 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
 
   const answer = useCallback(async (reviewId: string, body: DecisionAnswer): Promise<boolean> => {
     setError(null);
+    drafts.set(reviewId, body);
     setAnswering((held) => new Set([...held, reviewId]));
     ++sequence.current;
     try {
@@ -64,6 +78,7 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
       const result = await response.json() as OperatorDecisionsRead & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "the answer could not be saved");
       ++sequence.current;
+      drafts.delete(reviewId);
       setState({ project, decisions: result.decisions, failed: false });
       fireTasksChanged();
       return true;

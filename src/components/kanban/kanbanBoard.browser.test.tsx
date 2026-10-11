@@ -27889,7 +27889,8 @@ describe("operator decision forms: the «Рішення» column beside the seat
    *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "operator decision forms"
    *
-   * Readings go to `evidence/operator-decisions/column.json`; frames to
+   * Readings go to `evidence/operator-decisions/column.json` (and the
+   * «Чекають на вас» mirror's to `mirror.json`); frames to
    * OPERATOR_DECISIONS_PNG_DIR or `.artifacts/operator-decisions/`, never committed.
    */
   const OUT = path.resolve(process.env.OPERATOR_DECISIONS_PNG_DIR ?? ".artifacts/operator-decisions");
@@ -28046,6 +28047,130 @@ describe("operator decision forms: the «Рішення» column beside the seat
     }
     fs.mkdirSync("evidence/operator-decisions", { recursive: true });
     fs.writeFileSync("evidence/operator-decisions/column.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+
+  /*
+   * The same seat questions mirrored in «Чекають на вас»: the desktop panel at
+   * 1440 and 1000, the phone's attention sheet at 390, uk and en, light and
+   * dark. Each frame reads the seat's two rows (whole, apart, inside the list,
+   * no sideways scroll), opens the exact form from its row, answers it there
+   * and finds the row gone and the counter one lower; then the other question
+   * is answered as another window would (a POST this page never hears of) and
+   * the next read of the board takes its row and its count away as well.
+   * Readings go to `evidence/operator-decisions/mirror.json`.
+   */
+  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
+  const waitingCount = (page: Page, phone: boolean) => page.evaluate((onPhone) => onPhone
+    ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
+    : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "0"), phone);
+  const readMirror = (page: Page, list: string) => page.evaluate(({ list, ids }) => {
+    const root = document.querySelector<HTMLElement>(list);
+    const frame = root?.getBoundingClientRect();
+    const all = [...root?.querySelectorAll<HTMLElement>("[data-needs-you-row]") ?? []];
+    const boxes = all.map((row) => row.getBoundingClientRect());
+    const overlaps = boxes.flatMap((a, i) => boxes.slice(i + 1).some((b) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) ? [all[i]!.dataset.needsYouRow] : []);
+    const rows = ids.flatMap((id) => {
+      const target = root?.querySelector<HTMLElement>(`[data-attention-prototype="${id}"]`);
+      if (!target) return [];
+      const row = target.closest<HTMLElement>("[data-needs-you-row]") ?? target;
+      const rect = row.getBoundingClientRect();
+      const title = row.querySelector<HTMLElement>("[data-needs-you-title-line], .text-body") ?? null;
+      return [{
+        id, width: Math.round(rect.width * 100) / 100, height: Math.round(rect.height * 100) / 100, text: row.innerText.replace(/\s+/g, " ").trim(),
+        overflow: row.scrollWidth > row.clientWidth + 0.5 || target.scrollWidth > target.clientWidth + 0.5,
+        titleCut: title ? title.scrollHeight > title.clientHeight + 0.5 || title.scrollWidth > title.clientWidth + 0.5 : null,
+        inside: Boolean(frame && rect.left >= frame.left - 0.5 && rect.right <= frame.right + 0.5),
+        label: target.getAttribute("aria-label"),
+      }];
+    });
+    return { rows, prototypes: [...root?.querySelectorAll<HTMLElement>("[data-attention-prototype]") ?? []].map((node) => node.dataset.attentionPrototype), overlaps, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+  }, { list, ids: [SEAT_ASK, SEAT_SECOND] });
+
+  browserTest("«Чекають на вас» mirrors the seat's questions at 1440, 1000 and 390: each row opens its own form, and an answer here or elsewhere takes the row and its count away", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const width of [1440, 1000, 390] as const) for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string, vars?: Record<string, string | number>) => translate(lang, key as never, vars);
+        const phone = width === 390;
+        const label = `mirror-${width}-${lang}-${scheme}`;
+        const fail = (text: string) => failures.push(`${label}: ${text}`);
+        const LIST = phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+        const COUNTER = phone ? "[data-mobile2-attention-count]" : "[data-attention-count]";
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=1`, { width, height: phone ? 844 : width === 1000 ? 900 : VIEWPORT.height }, scheme, lang, "reduce", phone);
+        const openList = async () => {
+          if (await page.locator(`${LIST}:visible`).count()) return;
+          await page.locator(COUNTER).first().click();
+          await page.waitForSelector(`${LIST} [data-needs-you-row]`, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+        };
+        try {
+          await page.locator(COUNTER).first().waitFor({ timeout: 30_000 });
+          await page.waitForFunction((selector) => Boolean(document.querySelector(selector)), "[data-decision-strip], [data-decision-column]", { timeout: 30_000 }).catch(() => {});
+          await page.mouse.move(0, 0);
+          const before = await waitingCount(page, phone);
+          await openList();
+          await page.waitForSelector(`${LIST} [data-attention-prototype="${SEAT_SECOND}"]`, { timeout: 10_000 });
+          const mirror = await readMirror(page, LIST);
+          readings[`${label}-rows`] = { count: before, ...mirror };
+          await page.screenshot({ path: path.join(OUT, `${label}-rows.png`) });
+          if (mirror.rows.length !== 2 || mirror.overlaps.length || mirror.horizontalOverflow) fail(`the mirror reads ${JSON.stringify(mirror)}`);
+          for (const row of mirror.rows) {
+            if (row.overflow || row.titleCut || !row.inside || (phone && row.height < 44)) fail(`the row of ${row.id} is not whole: ${JSON.stringify(row)}`);
+            if (row.label !== t("decisions.expandAria", { title: row.id === SEAT_ASK ? (lang === "uk" ? "«Готово»: місце і деплой" : "«Done»: placement and deploy") : (lang === "uk" ? "Акаунт для нічних лейнів Codex" : "Account for the night Codex lanes") })) fail(`the row of ${row.id} is named «${row.label}»`);
+          }
+          if (JSON.stringify([...mirror.prototypes].sort()) !== JSON.stringify([SEAT_ASK, SEAT_SECOND, "t-search"].sort())) fail(`the list's decisions are ${JSON.stringify(mirror.prototypes)}`);
+          /* The row opens its own form, wherever the page answers it. */
+          await page.locator(`${LIST} [data-attention-prototype="${SEAT_ASK}"]`).click();
+          await page.waitForSelector(`[data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 10_000 });
+          await page.waitForTimeout(500);
+          const scope = await page.evaluate((id) => {
+            const card = document.querySelector(`[data-decision-card="open"][data-decision-review="${id}"]`);
+            return card?.closest("[data-decision-sheet]") ? `[data-decision-sheet="${card.closest("[data-decision-sheet]")!.getAttribute("data-decision-sheet")}"]` : "[data-decision-column]";
+          }, SEAT_ASK);
+          const form = await readForm(page, scope);
+          readings[`${label}-open`] = { scope, ...form };
+          await page.screenshot({ path: path.join(OUT, `${label}-open.png`) });
+          if (form.review !== SEAT_ASK || !form.sendReachable || form.minOptionHeight < (phone ? 44 : 36) || form.titleCut || form.horizontalOverflow) fail(`the row opened ${JSON.stringify({ scope, ...form })}`);
+          await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-send]`).click();
+          await page.waitForSelector(`[data-decision-list] [data-decision-review="${SEAT_ASK}"], [data-decision-row="${SEAT_ASK}"]`, { state: "detached", timeout: 10_000 });
+          await page.waitForFunction(({ phone, expected }) => (phone
+            ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
+            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "0")) === expected, { phone, expected: before - 1 }, { timeout: 15_000 }).catch(() => {});
+          /* The sheet that stood in for the column closes as any sheet does. */
+          if (await page.locator("[data-decision-sheet]").count()) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-decision-sheet]", { state: "detached", timeout: 5_000 }); }
+          await openList();
+          await page.waitForSelector(`${LIST} [data-attention-prototype="${SEAT_ASK}"]`, { state: "detached", timeout: 10_000 }).catch(() => {});
+          const answered = { count: await waitingCount(page, phone), ...await readMirror(page, LIST) };
+          readings[`${label}-answered`] = answered;
+          await page.screenshot({ path: path.join(OUT, `${label}-answered.png`) });
+          if (answered.count !== before - 1 || answered.rows.map((row) => row.id).join() !== SEAT_SECOND || answered.overlaps.length) fail(`after the answer the mirror reads ${JSON.stringify(answered)}`);
+          /* Answered in another window: nothing here hears of it but the board's next read. */
+          await page.evaluate(async (id) => {
+            await fetch("/api/projects/decisions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: "atlas", reviewId: id, chosen: [], comment: "", answers: [{ questionId: "account", options: [0] }] }) });
+          }, SEAT_SECOND);
+          await page.waitForSelector(`${LIST} [data-attention-prototype="${SEAT_SECOND}"]`, { state: "detached", timeout: 30_000 }).catch(() => {});
+          await page.waitForTimeout(300);
+          const elsewhere = { count: await waitingCount(page, phone), ...await readMirror(page, LIST) };
+          readings[`${label}-elsewhere`] = elsewhere;
+          await page.screenshot({ path: path.join(OUT, `${label}-elsewhere.png`) });
+          if (elsewhere.count !== before - 2 || elsewhere.rows.length || elsewhere.prototypes.join() !== "t-search") fail(`after an answer elsewhere the mirror reads ${JSON.stringify(elsewhere)}`);
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await page.screenshot({ path: path.join(OUT, `${label}-failed.png`) }).catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/operator-decisions", { recursive: true });
+    fs.writeFileSync("evidence/operator-decisions/mirror.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });

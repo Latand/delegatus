@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, ZoomIn } from "lucide-react";
+import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, RotateCw, ZoomIn } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
 import { ChevronDown } from "@/components/icons";
@@ -12,7 +12,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
 import type { OperatorDecisionView, PrototypeAnswer } from "@/lib/prototypeReview/types";
 
-import type { DecisionAnswer } from "./useOperatorDecisions";
+import { decisionDraft, type DecisionAnswer } from "./useOperatorDecisions";
 
 /*
  * One operator decision as a form (docs/design/operator-decision-forms.md
@@ -113,8 +113,9 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   const { t, locale } = useLocale();
   const questions = decision.questions ?? [];
   const asks = questions.length > 0;
-  const [answers, setAnswers] = useState<PrototypeAnswer[]>(() => recommendedAnswers(questions));
-  const [comment, setComment] = useState("");
+  /* A form the server refused comes back as the operator left it. */
+  const [answers, setAnswers] = useState<PrototypeAnswer[]>(() => decisionDraft(decision.id)?.answers ?? recommendedAnswers(questions));
+  const [comment, setComment] = useState(() => decisionDraft(decision.id)?.comment ?? "");
   const [sending, setSending] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -197,12 +198,21 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
 }
 
 /** The answer where it was asked: each question with the answer chosen, the
-    time of the answer and whether the seat has it. */
-export function DecisionRecord({ decision }: { decision: OperatorDecisionView }) {
+    time of the answer and whether the seat has it. A message that did not
+    reach the seat offers to send it again from here: a seat's own question has
+    no task card and no review window to retry from (§2.4). */
+export function DecisionRecord({ decision, onRetry, retrying = false, retryError = null }: {
+  decision: OperatorDecisionView;
+  /** Sends the saved message again; absent where the record cannot. */
+  onRetry?: () => void;
+  retrying?: boolean;
+  retryError?: string | null;
+}) {
   const { t, locale } = useLocale();
   const made = decision.decision;
   if (!made) return null;
   const state = made.delivery.state;
+  const retry = onRetry && made.delivery.retryable && state !== "pending" && state !== "sent";
   const tone = state === "sent" ? "bg-success-soft text-success" : state === "pending" ? "bg-sunken text-secondary" : "bg-warning-soft text-warning";
   return (
     <section data-decision-card="answered" data-decision-review={decision.id} aria-label={t("decisions.recordAria", { title: decision.title })} className="min-w-0 rounded-surface border border-border bg-card">
@@ -230,6 +240,17 @@ export function DecisionRecord({ decision }: { decision: OperatorDecisionView })
         </ol>
       ) : null}
       {made.comment ? <p data-decision-record-comment="" className="m-0 whitespace-pre-wrap break-words px-3 pb-2.5 text-ui text-primary">{made.comment}</p> : null}
+      {retry || retryError ? (
+        <footer className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-2.5">
+          {retry ? (
+            <button type="button" data-decision-retry="" className={SECONDARY} disabled={retrying} onClick={onRetry}>
+              {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RotateCw className="h-3.5 w-3.5" aria-hidden />}
+              {t(state === "no-orchestrator" ? "proto.delivery.sendNow" : "proto.delivery.retry")}
+            </button>
+          ) : null}
+          {retryError ? <p role="alert" data-decision-retry-error="" className="m-0 min-w-0 text-label font-semibold text-danger">{t("decisions.retryFailed", { error: retryError })}</p> : null}
+        </footer>
+      ) : null}
     </section>
   );
 }

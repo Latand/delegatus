@@ -5,7 +5,7 @@ import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
 import { publishPrototype } from "./store";
 import { operatorDecisionRound, operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
-import { findSeatRound } from "./seatRounds";
+import { findSeatRound, loadSeatRounds } from "./seatRounds";
 import { loadTasks } from "@/lib/tasks/store";
 import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery } from "./decision";
 import { prototypeWorld, taskForPrototype, type PrototypeCaller, type PrototypeWorld } from "./world";
@@ -64,13 +64,22 @@ export async function reviewScopePOST(request: NextRequest,world: PrototypeWorld
     return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId },{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error); }
 }
-export async function reviewReadPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
+/** A seat's answered rounds whose message is not yet known delivered take the
+    receipt's word before they are read, as a task's rounds do in reviewGET.
+    The refresh only reads the receipt; it never sends. */
+async function refreshSeatDeliveries(project: string,delivery: PrototypeDelivery): Promise<void> {
+  for (const round of loadSeatRounds(project)) if (round.decision && round.decision.delivery.state !== "sent") await refreshPrototypeDelivery(null,round.id,delivery);
+}
+export async function reviewReadPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
   try {
     const body = await request.json();
     const target = readTarget(request,body?.taskId,world);
-    if (target.taskId === null) return NextResponse.json(readSeatRounds(target.seat!),{ headers: { "cache-control": "private, no-store" } });
-    return reviewGET(request,target.taskId,world);
+    if (target.taskId === null) {
+      await refreshSeatDeliveries(target.seat!,delivery);
+      return NextResponse.json(readSeatRounds(target.seat!),{ headers: { "cache-control": "private, no-store" } });
+    }
+    return reviewGET(request,target.taskId,world,delivery);
   } catch (error) { return prototypeFailure(error); }
 }
 export async function publishPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
@@ -119,13 +128,24 @@ export async function reviewPOST(request: NextRequest,taskId: string,world: Prot
 /** The operator's own read of a project's open decisions: the «Рішення»
     column (docs/design/operator-decision-forms.md). An agent reads its
     project's rounds through read_prototype_review instead. */
-export async function decisionsGET(request: NextRequest,project: string,world: PrototypeWorld = prototypeWorld,review: string | null = null): Promise<NextResponse> {
+export async function decisionsGET(request: NextRequest,project: string,world: PrototypeWorld = prototypeWorld,review: string | null = null,delivery: PrototypeDelivery = prototypeDelivery): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     if (!project) throw new PrototypeError("project is required");
     const caller = world.caller(request);
     if (caller.conversationId && (!caller.project || canonicalProject(caller.project) !== canonicalProject(project))) throw new PrototypeError("prototype access is limited to the caller's project",403);
+    /* One round's record is what the feed polls while its message travels:
+       the receipt moves it on here, as reviewGET does for a task's rounds. */
+    if (review && /^pr_[a-f0-9]{32}$/.test(review)) {
+      const key = canonicalProject(project);
+      const seat = findSeatRound(review);
+      if (seat) { if (canonicalProject(seat.project) === key) await refreshPrototypeDelivery(null,review,delivery); }
+      else {
+        const task = loadTasks().find(t => canonicalProject(t.project) === key && t.prototypeReviews?.some(r => r.id === review));
+        if (task && !runsElsewhere(task)) await refreshPrototypeDelivery(task.id,review,delivery);
+      }
+    }
     return NextResponse.json({ ...operatorDecisions(project), ...(review ? { round: operatorDecisionRound(project,review) } : {}) },{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error); }
 }

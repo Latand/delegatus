@@ -1783,6 +1783,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "decisions.state.no-orchestrator": "немає оркестратора",
   "decisions.recordAria": "Ваша відповідь на «{title}»",
   "decisions.refused": "Відповідь не збережено: {error}",
+  "decisions.retryFailed": "Відповідь не надіслано ще раз: {error}",
   "proto.notice.questions": "Питання до вас",
   "proto.notice.answer": "Відповісти",
   "proto.notice.answerAria": "Відповісти на питання задачі «{title}»",
