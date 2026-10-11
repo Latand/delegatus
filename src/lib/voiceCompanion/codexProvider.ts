@@ -7,6 +7,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountProjectBindings, type AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import { FRESH_QUOTA_MS } from "@/lib/accounts/headlessSelection";
 import { recordLiveObservation } from "@/lib/accounts/liveLimits";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
@@ -40,18 +41,32 @@ export interface CodexVoiceOptions {
   voice?: CodexVoice;
   recordObservation?(observation: QuotaObservation): void;
 }
+/** An account's reading said its limit is reached. `rateLimitReachedType` can say
+ * so while no window shows 100% (a workspace member's limit, spent credits), and
+ * the recorded observation keeps the percentages it read, so the pick reads this
+ * beside it. Unix seconds in `resetsAt`, milliseconds in `observedAt`. */
+export interface VoiceLimitMark { accountId: string; observedAt: number; resetsAt: number | null }
 export class CodexVoiceError extends Error {
   constructor(code: "NO_CODEX_ACCOUNT" | "CODEX_LIMIT_REACHED" | "CODEX_AUTH_REQUIRED" | "CODEX_UNSUPPORTED" | "PROVIDER_ERROR", readonly resetsAt: number | null = null) { super(code); }
 }
-export function selectVoiceAccount(accounts: readonly VoiceAccount[], observations: readonly DurableQuotaObservation[], bindings: readonly AccountProjectBinding[], project: string | null, now = Date.now()): VoiceAccount {
+export function selectVoiceAccount(accounts: readonly VoiceAccount[], observations: readonly DurableQuotaObservation[], bindings: readonly AccountProjectBinding[], project: string | null, now = Date.now(),
+  marks: readonly VoiceLimitMark[] = []): VoiceAccount {
   // Exclusions are a fallback tier in headless selection. Remove legacy homes
   // from the candidate set itself, so exhaustion can never pick the main home.
-  const candidates = accounts.filter(account => account.kind === "managed" && account.authPresent);
+  const signedIn = accounts.filter(account => account.kind === "managed" && account.authPresent);
+  // A mark holds as long as the selector trusts any reading, and never past its reset;
+  // the next start reads the account again and marks it anew if it is still out.
+  const reached = marks.filter(mark => signedIn.some(account => account.id === mark.accountId) && now >= mark.observedAt && now - mark.observedAt <= FRESH_QUOTA_MS
+    && (mark.resetsAt === null || mark.resetsAt * 1000 > now));
+  const candidates = signedIn.filter(account => !reached.some(mark => mark.accountId === account.id));
   const picked = selectProjectAccount({ accounts: candidates, observations, bindings, project, engine: "codex", unbound: "capacity", model: LIVE_BACKEND_MODEL, now });
-  if (picked.kind === "exhausted") throw new CodexVoiceError("CODEX_LIMIT_REACHED", picked.resetsAt);
   const account = picked.kind === "available" ? candidates.find(account => account.id === picked.accountId) : undefined;
-  if (!account) throw new CodexVoiceError("NO_CODEX_ACCOUNT");
-  return account;
+  if (account) return account;
+  if (picked.kind === "exhausted" || reached.length) {
+    const resets = [...(picked.kind === "exhausted" && picked.resetsAt !== null ? [picked.resetsAt] : []), ...reached.flatMap(mark => mark.resetsAt === null ? [] : [mark.resetsAt])];
+    throw new CodexVoiceError("CODEX_LIMIT_REACHED", resets.length ? Math.min(...resets) : null);
+  }
+  throw new CodexVoiceError("NO_CODEX_ACCOUNT");
 }
 export const CODEX_VOICE_ARGS = ["-c", "cli_auth_credentials_store=file", "-c", "mcp_servers={}", "-c", "analytics.enabled=false", "-c", "features.shell_tool=false",
   ...Object.entries(CODEX_VIEWER_SPAWN_FEATURES).flatMap(([name, value]) => ["-c", `features.${name}=${value}`]), "--enable", "realtime_conversation", "app-server"];
@@ -86,6 +101,8 @@ interface Call {
   writing: Promise<void>;
   speech: string[]; speaking: boolean; awaitingSpeech: boolean;
   backingTurns: Set<string>; awaitingBackingSpeech: boolean;
+  /** The limit sentence: waiting for the voice to be free, sent, then voiced to its end. */
+  limitSpeech?: "pending" | "sent" | "done";
 }
 /** Said once when the account's plan runs out mid-call, before the call stops. */
 export const LIMIT_SPEECH: Record<Locale, string> = {
@@ -98,12 +115,13 @@ export const LIMIT_SPEECH: Record<Locale, string> = {
 export class CodexLiveProvider implements LiveProvider {
   readonly backend = "codex" as const;
   private readonly calls = new Map<string, Call>();
+  private readonly marks = new Map<string, VoiceLimitMark>();
   private readonly now: () => number;
   constructor(private readonly options: CodexVoiceOptions = {}) { this.now = options.now ?? Date.now; }
 
   async create(_key: string, locale: Locale, sdp: string, projectName?: string, project?: string) {
     const account = selectVoiceAccount((this.options.accounts ?? listCodexAccounts)(), (this.options.observations ?? (() => agentRegistry().quotaObservations("codex")))(),
-      (this.options.bindings ?? accountProjectBindings)(), project ?? null, this.now());
+      (this.options.bindings ?? accountProjectBindings)(), project ?? null, this.now(), this.limitMarks());
     const directory = statePath("scratch", "voice-codex"); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const cwd = fs.mkdtempSync(path.join(directory, "call-"));
     let call: Call | undefined;
@@ -157,9 +175,12 @@ export class CodexLiveProvider implements LiveProvider {
           const limit = this.limits(active, params?.rateLimits);
           if (!limit || active.limitReached || active.stopping || active.failed) return;
           if (!active.sdpReceived) { rejectSdp(new CodexVoiceError("CODEX_LIMIT_REACHED", limit.resetsAt)); return; }
+          // Reports not yet said stay unsaid: the limit sentence is the call's last.
           active.limitReached = true;
-          void active.client.request("thread/realtime/appendSpeech", { threadId: id, text: LIMIT_SPEECH[locale] }).catch(() => {});
+          active.speech.length = 0;
+          active.limitSpeech = "pending";
           this.emit(active, { type: "codex.limitReached", resetsAt: limit.resetsAt });
+          this.flushSpeech(active);
           return;
         }
         if (params?.threadId !== id) return;
@@ -208,11 +229,14 @@ export class CodexLiveProvider implements LiveProvider {
         if (notification.method.endsWith("/delta")) call.speaking = true;
         else if (notification.method.endsWith("/done")) {
           call.speaking = false;
+          if (call.limitSpeech === "sent" && call.awaitingSpeech) call.limitSpeech = "done";
           call.awaitingSpeech = false;
           if (!call.backingTurns.size) call.awaitingBackingSpeech = false;
         }
       }
       for (const event of call.transcriptAdapter.notification(notification.method, params, this.now() - call.createdAt)) this.emit(call, event);
+      // Its transcript is recorded before the call is told the sentence is over.
+      if (call.limitSpeech === "done" && notification.method.endsWith("/done") && params.role === "assistant") this.emit(call, { type: "codex.limitSpoken" });
       this.flushSpeech(call);
     } else if (notification.method === "thread/realtime/itemAdded") {
       const item = jsonObject(params.item);
@@ -262,14 +286,19 @@ export class CodexLiveProvider implements LiveProvider {
     const exhausted = [primary, secondary].filter((row): row is PlanWindow => !!row && row.usedPercent >= 100);
     const reached = exhausted.length > 0 || (typeof source.rateLimitReachedType === "string" && source.rateLimitReachedType.length > 0);
     call.plan = { type: type ?? call.plan?.type ?? null, primary, secondary, limitReached: reached, observedAt: this.now() };
+    const resetsAt = exhausted.length && exhausted.every(row => row.resetsAt !== null) ? Math.max(...exhausted.map(row => row.resetsAt!)) : null;
+    if (reached) this.marks.set(call.account.id, { accountId: call.account.id, observedAt: this.now(), resetsAt });
+    else if ("rateLimitReachedType" in source) this.marks.delete(call.account.id);
     const rateLimits: AppServerRateLimits = { primary: primary && { usedPercent: primary.usedPercent, resetsAt: primary.resetsAt, windowDurationMins: primary.windowMinutes },
       secondary: secondary && { usedPercent: secondary.usedPercent, resetsAt: secondary.resetsAt, windowDurationMins: secondary.windowMinutes }, planType: call.plan.type };
     const observation: QuotaObservation = { engine: "codex", accountId: call.account.id, authenticated: true, authCheckedAt: this.now(), observedAt: this.now(),
       limits: mapAppServerRateLimits(rateLimits, Math.floor(this.now() / 1000)), provenance: { source: "live", reason: null, staleSince: null } };
     if (this.options.recordObservation) this.options.recordObservation(observation); else recordLiveObservation(observation, "managed");
     this.emit(call, { type: "codex.plan", plan: call.plan });
-    return reached ? { resetsAt: exhausted.length && exhausted.every(row => row.resetsAt !== null) ? Math.max(...exhausted.map(row => row.resetsAt!)) : null } : null;
+    return reached ? { resetsAt } : null;
   }
+  /** The limits this provider's calls have read, for the next pick. */
+  limitMarks(): VoiceLimitMark[] { return [...this.marks.values()]; }
   async attach(id: string, _key: string, event: (value: unknown) => void, lost: () => void, tool?: LiveToolHandler): Promise<LiveConnection> {
     const call = this.calls.get(id); if (!call || call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");
     call.event = event; call.lost = lost; call.tool = tool;
@@ -292,16 +321,18 @@ export class CodexLiveProvider implements LiveProvider {
     } };
   }
   private queueSpeech(call: Call, text: string): void {
-    call.speech.push(text);
+    if (!call.limitReached) call.speech.push(text);
     this.flushSpeech(call);
   }
   /** Standalone speech can be lost while a backing answer is being voiced.
    * An RPC acknowledgement confirms context receipt only. Wait for assistant
    * output completion before sending the next report, including across polls. */
   private flushSpeech(call: Call): void {
-    if (call.stopping || call.failed || call.limitReached || call.speaking || call.awaitingSpeech || call.backingTurns.size || call.awaitingBackingSpeech) return;
-    const text = call.speech.shift();
+    if (call.stopping || call.failed || call.speaking || call.awaitingSpeech || call.backingTurns.size || call.awaitingBackingSpeech) return;
+    // After the limit only its own sentence is said, once, on the same pacing as a report.
+    const text = call.limitReached ? call.limitSpeech === "pending" ? LIMIT_SPEECH[call.locale] : undefined : call.speech.shift();
     if (text === undefined) return;
+    if (call.limitReached) call.limitSpeech = "sent";
     call.awaitingSpeech = true;
     call.writing = call.writing.then(async () => {
       if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text });

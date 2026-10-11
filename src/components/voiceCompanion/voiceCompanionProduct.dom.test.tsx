@@ -496,6 +496,39 @@ test("project switches and null context preserve the same live call, transcript 
   } finally { await unmountNow(); await live.release(); }
 });
 
+for (const backend of ["codex", "api"] as const) test(`a ${backend} call that closes ${backend === "codex" ? "at its plan limit says nothing of a reserved cost" : "without final usage says its reserved cost is retained"}`, async () => {
+  const live = await liveHarness();
+  let seq = 0;
+  const events: CompanionEvent[] = [];
+  const emit = (payload: Payload) => events.push({ ...payload, version: 1, sessionId: "limit-call", generation: 1, seq: ++seq, eventId: `limit-${seq}`, atMs: seq } as CompanionEvent);
+  harness.setRoute((url, init) => {
+    const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/voice-companion/settings") return jsonResponse(settingsOf({ enabled: true, backend, keySource: backend === "api" ? "file" : "missing" }));
+    if (path === "/api/orchestrator/seat") return jsonResponse({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all: null });
+    if (path !== "/api/voice-companion/session") return undefined;
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (body?.action === "start") {
+      emit({ type: "session.ready", mode: "official-realtime" });
+      emit({ type: "usage.updated", usage: backend === "codex"
+        ? { backend: "codex", callSeconds: 42, callFinal: true, planStartPercent: 97, plan: { type: "pro", primary: { usedPercent: 100, resetsAt: 2000000100, windowMinutes: 300 }, secondary: null, limitReached: true, observedAt: 1 } }
+        : { backend: "api", callUsd: 0.75, callFinal: false, callIncomplete: true, month: "2026-10", monthUsd: 1, monthCapUsd: 20 } });
+      /* An earlier server marked every Codex close incomplete; the notice must still belong to the API alone. */
+      emit({ type: "session.closed", reason: backend === "codex" ? "limit" : "transport", incomplete: true });
+      return jsonResponse({ sessionId: "limit-call", sdp: "fake-answer" });
+    }
+    return jsonResponse(body ? { ok: true } : { events });
+  });
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause(300);
+    expect(document.querySelector<HTMLElement>("[data-voice-companion]")?.dataset.phase).toBe("offline");
+    const notice = document.querySelector('[data-companion-notice][data-code="FINALIZATION_INCOMPLETE"]');
+    if (backend === "codex") expect(notice?.textContent ?? null).toBeNull();
+    else expect(notice?.querySelector(".vc-notice-text")?.textContent).toBe(companionErrorMessage("FINALIZATION_INCOMPLETE", "en"));
+  } finally { await unmountNow(); await live.release(); }
+});
+
 test("a request to the orchestrator goes out at once with no button; one the model asks about waits with its reason and takes a spoken yes or no", async () => {
   const live = await liveHarness();
   try {

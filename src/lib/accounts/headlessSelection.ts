@@ -1,7 +1,7 @@
 import { gatingWindows } from "./migration/quotaPolicy";
 import type { DurableQuotaObservation } from "./migration/contracts";
 
-const FRESH_QUOTA_MS = 5 * 60 * 1_000;
+export const FRESH_QUOTA_MS = 5 * 60 * 1_000;
 
 export type HeadlessAccountSelection =
   | { kind: "available"; accountId: string }

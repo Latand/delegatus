@@ -51,8 +51,10 @@ interface Options {
   apiProvider?: Pick<LiveProvider, "hangup"> | LiveProvider;
   /** The Codex provider beside an API one, for calls the settings put on Codex. */
   codexProvider?: LiveProvider;
-  /** How long the voice has to say that the plan ran out before the call stops. */
+  /** The longest the call waits for the voice to finish saying that the plan ran out. */
   limitGraceMs?: number;
+  /** How long the call stays up after that sentence's transcript ends, so its audio can finish playing. */
+  limitTailMs?: number;
 }
 export interface MintedCompanionSession { sessionId: string; providerId: string; sdp: string }
 /** `session.commentary.append` takes at most 500 tokens. A token holds at
@@ -333,9 +335,12 @@ export class CompanionLiveSessions {
       if (!active.limitReached) {
         active.limitReached = true;
         active.reason = "limit";
-        // The provider has asked the voice to say so; the call stops once it could have.
-        active.timers.push(setTimeout(() => { void this.close(active.id, "limit"); }, this.options.limitGraceMs ?? 6_000));
+        // The provider says so once the voice is free and reports the sentence voiced;
+        // a voice that never gets there still ends the call by this bound.
+        active.timers.push(setTimeout(() => { void this.close(active.id, "limit"); }, this.options.limitGraceMs ?? 30_000));
       }
+    } else if (event.type === "codex.limitSpoken" && active.codex) {
+      if (active.limitReached) active.timers.push(setTimeout(() => { void this.close(active.id, "limit"); }, this.options.limitTailMs ?? 1_500));
     } else if (event.type === "codex.tokenUsage" && active.codex) {
       const tokens = jsonObject(event.tokens);
       if (tokens) this.storage.change(document => { document.sessions[active.id].usage!.codexTokens = tokens as Record<string, number>; });
@@ -759,7 +764,9 @@ export class CompanionLiveSessions {
       const complete = finalized && Object.values(usage.responses).every(row => row.complete);
       const usd = Math.max(15, usage.seconds) * LIVE_USD_PER_SECOND + Object.values(usage.responses).reduce((sum, row) => sum + (row.usd ?? 0), 0);
       if (!active.codex) this.storage.settle(active.id, complete ? usd : null);
-      this.admission.emit(active.id, { type: "session.closed", reason: active.reason ?? (finalized ? "operator" : "transport"), incomplete: !complete });
+      // Only API usage can be unconfirmed: a Codex call's seconds are this server's
+      // own clock and its plan holds no reservation to keep.
+      this.admission.emit(active.id, { type: "session.closed", reason: active.reason ?? (finalized ? "operator" : "transport"), incomplete: !active.codex && !complete });
       this.admission.retire(active.id);
     } finally {
       for (const timer of active.timers) clearTimeout(timer);

@@ -627,10 +627,11 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (refusedStart) say(`start${refusedStart.n}`, refusedStart.code);
     /* Until the session asked for is ready, an error the state still holds is the previous conversation's. */
     if (state.error && !awaiting) say("error", state.error, "failure", state.errorResetsAt);
-    if (state.closure?.incomplete && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
+    /* A retained reservation exists only for an API call. */
+    if (state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
     if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
     return [...speech, ...calls, ...deleg, ...reports, ...notices];
-  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, paced, refusedStart, seat, talks, awaiting, charsOf]);
+  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, state.usage?.backend, paced, refusedStart, seat, talks, awaiting, charsOf]);
 
   /* When each element arrived and when it settled. The lane is ordered by arrival,
      and one not stamped yet is the newest there is. */

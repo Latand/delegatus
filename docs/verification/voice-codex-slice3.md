@@ -33,17 +33,32 @@ assertions that said there was no backend to choose.
    unchanged (`evidence/voice-companion/transcript.json`). At 390 the
    companion is not mounted, so the dialog is the only place for these
    figures there, as #2681 set.
-2. **Limit mid-call.** A recorded `account/rateLimits/updated` at 100 % with
-   `rateLimitReachedType`, delivered twice by the stub app-server mid-call,
-   produces exactly one `thread/realtime/appendSpeech` in the call's language,
-   then `thread/realtime/stop`, a `session.closed` with reason `limit`, and an
-   ended usage with `limitReached: true`. The recorded observation, read back
-   through `durableQuotaObservation`, makes `selectVoiceAccount` pick the
-   other managed account, and refuse with `CODEX_LIMIT_REACHED` when that
-   account is the only one. A `thread/realtime/error` that follows the limit
-   still closes with reason `limit` and emits no generic error. A start the
-   limit refuses names its reset in the notice (`liveAdapter.test.ts`,
-   `voiceCompanionProduct.dom.test.tsx`, and the driver's no-key case).
+2. **Limit mid-call.** `codexProvider.test.ts` delivers a recorded
+   `account/rateLimits/updated` twice through the stub app-server mid-call,
+   once at 100 % with `rateLimitReachedType` and once with only
+   `rateLimitReachedType: "workspace_member_usage_limit_reached"` and the
+   primary window at 10 %. Each produces exactly one
+   `thread/realtime/appendSpeech` in the call's language. The limit sentence
+   follows the pacing slice 2 gave reports. It waits while assistant output
+   or a backing turn is running, and reports queued earlier or filed after
+   the limit are dropped. The call stops only after the sentence's assistant
+   transcript ends, with a short tail for its audio. If that never happens, a
+   bounded wait still stops it. Then come `thread/realtime/stop`, one
+   `session.closed` with reason `limit` and `incomplete: false`, and an ended
+   usage with `limitReached: true`. The recorded observation keeps the
+   percentages it read (100 or 10). The provider also keeps a reached mark
+   for the account, which holds while the selector trusts any reading
+   (five minutes) and never past a known reset. The next start through the
+   same provider runs on the other managed account; with only the marked
+   account it is refused with `CODEX_LIMIT_REACHED` before any process
+   starts. A `thread/realtime/error` that follows the limit still closes
+   with reason `limit` and emits no generic error. A start the limit refuses
+   names its reset in the notice (`liveAdapter.test.ts`,
+   `voiceCompanionProduct.dom.test.tsx`, and the driver's no-key case). A
+   Codex call closes with `incomplete: false`, since its seconds come from
+   the server clock and no dollars are reserved. The companion shows the
+   retained-reservation notice only for API calls; an API call whose final
+   usage never arrived still keeps its reservation and shows the notice.
 3. **The voice.** `thread/realtime/listVoices` on `codex-cli 0.162.1` answers
    a v1 list of nine voices (juniper, maple, spruce, ember, vale, breeze,
    arbor, sol, cove; default cove) and a v2 list. A V3 start validates against
