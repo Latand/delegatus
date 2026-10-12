@@ -63,8 +63,7 @@ function combineProjectRows(project: string, rows: readonly ProjectRow[]): Proje
   });
   const claimRevisions: Record<string, number> = {};
   for (const row of rows) for (const [scope, revision] of Object.entries(row.claimRevisions ?? {})) {
-    const canonicalScopeName = canonicalScope(scope);
-    claimRevisions[canonicalScopeName] = Math.max(claimRevisions[canonicalScopeName] ?? 0, revision);
+    claimRevisions[scope] = Math.max(claimRevisions[scope] ?? 0, revision);
   }
   const current = rows.map(row => row.current).find(id => id && passIsLive(readPass(id))) ?? null;
   return {
@@ -94,9 +93,12 @@ export function curationStatus(project: string, now = Date.now()) {
     const since = [row.curatedAt, held?.lastClaimAt].filter((at): at is string => !!at).sort().at(-1) ?? "";
     // Revisions retain write order when an agent and a curator share a clock instant.
     // The timestamp fallback preserves claims recorded before revision tracking.
-    const revision = held?.claimRevisions ? Math.max(held.claimRevisions[canonicalScope(row.scope)] ?? 0,
-      ...row.history.filter(change => change.by === "curator").map(change => change.revision)) : null;
-    for (const change of row.history) if (change.by === "agent" && (revision === null ? change.at > since : change.revision > revision)) newLessons += change.added.length + (change.rewritten?.length ?? 0) + change.merged.length;
+    for (const change of row.history) if (change.by === "agent") {
+      const revisionScope = change.revisionScope ?? row.scope;
+      const revision = held?.claimRevisions ? Math.max(held.claimRevisions[revisionScope] ?? 0,
+        ...row.history.filter(entry => entry.by === "curator" && (entry.revisionScope ?? row.scope) === revisionScope).map(entry => entry.revision)) : null;
+      if (revision === null ? change.at > since : change.revision > revision) newLessons += change.added.length + (change.rewritten?.length ?? 0) + change.merged.length;
+    }
   }
   const lastAt = held?.lastAt ?? null;
   const due = active && (!lastAt || newLessons >= CURATION_NEW_LESSONS || now - Date.parse(lastAt) >= CURATION_INTERVAL_MS);
@@ -110,8 +112,8 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   const scopes = passScopes(project);
   const claimRevisions: Record<string, number> = Object.fromEntries(scopes.map(scope => [scope, 0]));
   for (const row of roleMemoryCollection()?.snapshot() ?? []) if (row.kind === "scope" && scopes.includes(canonicalScope(row.scope))) {
-    const scope = canonicalScope(row.scope);
-    claimRevisions[scope] = Math.max(claimRevisions[scope], row.revision);
+    const scope = row.revisionScope ?? canonicalScope(row.scope);
+    claimRevisions[scope] = Math.max(claimRevisions[scope] ?? 0, row.revision);
   }
   return collection(true)!.boundedPatch(12, tx => {
     const machine = tx.get("machine");

@@ -89,6 +89,8 @@ export interface RoleMemoryRule {
 
 export interface ScopeHistoryEntry {
   revision: number;
+  /** Revision counters are local to a scope until project succession joins them. */
+  revisionScope?: string;
   at: string;
   /** Who changed the scope: a stage agent's lesson, the operator in the rules
       window, a curator, or the join of a scope stored under a project key that moved. */
@@ -113,6 +115,8 @@ export interface RoleMemoryScopeRow {
   kind: "scope";
   scope: string;
   revision: number;
+  /** Current revision counter namespace; succession starts a fresh joined namespace. */
+  revisionScope?: string;
   /** Active ids in order of leaving: never-curated, then curated low to high. */
   active: string[];
   history: ScopeHistoryEntry[];

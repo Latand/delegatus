@@ -180,7 +180,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
     const counts = { calls: 1, changed: touched.size + created.size, rewritten: input.rewrite?.length ?? 0, merged: input.merge?.reduce((n, m) => n + m.from.length, 0) ?? 0, moved: input.move?.length ?? 0, split: input.split?.length ?? 0, archived: input.archive?.length ?? 0, restored: input.restore?.length ?? 0 };
     for (const [scope, row] of scopes) {
       const revision = row.revision + 1;
-      tx.put({ ...row, active: orders.get(scope)!, curatedAt: now, revision, history: [...row.history, { revision, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
+      tx.put({ ...row, active: orders.get(scope)!, curatedAt: now, revision, history: [...row.history, { revision, revisionScope: row.revisionScope ?? scope, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
         rewritten: [...prior.values()].flatMap(p => p.version && canonicalScope(p.fields.scope) === scope ? [{ id: p.id, version: p.version }] : []),
         moved: (input.move ?? []).filter(m => get(m.id).scope === scope).map(m => ({ id: m.id, from: scope, to: m.to })),
         split: (input.split ?? []).filter(s => get(s.id).scope === scope).map(s => ({ id: s.id, parts: [s.id, ...s.parts.slice(1).map((_, index) => placeholders[`split:${s.id}:${index + 1}`])] })),
@@ -227,15 +227,22 @@ export function revertCuratorPass(id: string, now = new Date().toISOString()) {
       if (row?.kind !== "rule" || row.changedAt !== at) return false;
       const scope = tx.get(`s:${canonicalScope(row.scope)}`);
       if (scope?.kind !== "scope") return false;
-      const revision = scope.history.find(change => change.pass === id && change.at === at)?.revision;
-      if (revision === undefined) return false;
+      const passHistory = scope.history.find(change => change.pass === id && change.at === at);
+      if (!passHistory) return false;
+      const revision = passHistory.revision;
       // A later write can share the call's timestamp. Scope history proves its order,
       // including writes after a move and another curator's complete active partition.
-      return !scope.history.some(change => change.revision > revision && (
+      const revisionScope = passHistory.revisionScope ?? scope.scope;
+      return !scope.history.some(change => {
+        const sameRevisionLineage = (change.revisionScope ?? scope.scope) === revisionScope
+          || change.revisionScope === scope.revisionScope;
+        const later = sameRevisionLineage ? change.revision > revision : change.at > at;
+        return later && (
         change.by === "curator" && row.state === "active" || change.prior?.some(prior => prior.id === rule) || change.created?.includes(rule)
         || change.by !== "succession" && change.added.includes(rule) || change.merged.some(merge => merge.from === rule || merge.into === rule) || change.archived.includes(rule)
         || change.restored?.includes(rule) || change.rewritten?.some(rewrite => rewrite.id === rule)
-        || change.moved?.some(move => move.id === rule) || change.split?.some(split => split.id === rule || split.parts.includes(rule))));
+        || change.moved?.some(move => move.id === rule) || change.split?.some(split => split.id === rule || split.parts.includes(rule)));
+      });
     }).map(([rule]) => rule));
     const orders = new Map<string, string[]>();
     for (const { scope, history } of histories) {

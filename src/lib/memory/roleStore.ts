@@ -153,8 +153,11 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
       for (const changed of retained.changed) tx.put(changed);
       const archived = retained.archived;
       const revision = Math.max(current.revision, source.revision) + 1;
+      const revisionScope = `succession:${from}:${into}:${revision}`;
+      const sourceHistory = source.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? source.scope }));
+      const currentHistory = current.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? current.scope }));
       tx.put({ ...current, revision, active: retained.active.map((rule) => rule.id),
-        history: keepHistory([...source.history, ...current.history, { revision, at: now, by: "succession" as const, added: source.active, merged, archived }]) });
+        revisionScope, history: keepHistory([...sourceHistory, ...currentHistory, { revision, revisionScope, at: now, by: "succession" as const, added: source.active, merged, archived }]) });
       tx.delete(`s:${from}`);
     }
   });
@@ -264,7 +267,7 @@ export function leaveLessons(input: {
       const retained = retainRules(active, now, new Set([target.id]));
       for (const changed of retained.changed) tx.put(changed);
       const revision = held.revision + 1;
-      tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }]) });
+      tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }]) });
       tx.put({ ...request, rewrote: target.id });
       return { left: [{ action: "rewrite" as const, id: updated.id, version, scope, state: updated.state, scopeChars: scopeChars(retained.active), archived: retained.archived, hints: updated.hints }], none: null };
     }
@@ -285,7 +288,7 @@ export function leaveLessons(input: {
       const revision = current.revision + 1;
       tx.put({
         ...current, revision, active: outcome.active.map((entry) => entry.id),
-        history: keepHistory([...current.history, { revision, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }]),
+        history: keepHistory([...current.history, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }]),
       });
       const stored = outcome.changed.find((entry) => entry.id === incoming.id)!;
       left.push({ action: "lesson", id: incoming.id, scope, state: stored.state, ...(stored.mergedInto ? { mergedInto: stored.mergedInto } : {}), scopeChars: scopeChars(outcome.active), archived: outcome.archived, hints });
@@ -314,7 +317,7 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
     const deleted: RoleMemoryRule = { ...rule, state: "archived", reason: "deleted", changedAt: now };
     tx.put(deleted);
     tx.put({ ...held, revision, active: held.active.filter((id) => id !== ruleId),
-      history: keepHistory([...held.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }]) });
+      history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? held.scope, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }]) });
     return deleted;
   });
 }
@@ -342,7 +345,7 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
     const archived = retained.archived;
     const revision = current.revision + 1;
     tx.put({ ...current, revision, active: retained.active.map((entry) => entry.id),
-      history: keepHistory([...current.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }]) });
+      history: keepHistory([...current.history, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }]) });
     return restored;
   });
 }
@@ -364,7 +367,7 @@ export function revertRule(versionId: string, now = new Date().toISOString()): R
     const retained = retainRules(active, now, new Set([current.id]));
     for (const changed of retained.changed) tx.put(changed);
     const revision = held.revision + 1;
-    tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }]) });
+    tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }]) });
     return updated;
   });
   try { refreshLessonKnownValues(); } catch { /* egress fails closed */ }

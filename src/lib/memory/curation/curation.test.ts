@@ -50,7 +50,7 @@ function fixture(scope = roleScope(PROJECT, "builder"), extra: Partial<RoleMemor
     return id;
   });
 }
-function pass(now = NOW) { return claimPass({ project: PROJECT, repoDir: dir, now })!; }
+function pass(now = NOW, project = PROJECT) { return claimPass({ project, repoDir: dir, now })!; }
 function input(scopes: Record<string, string[]>, edits: Partial<CurationApply> = {}): CurationApply {
   return { scopes: Object.entries(scopes).map(([scope, order]) => {
     const held = roleMemoryCollection()?.get(`s:${scope}`);
@@ -364,6 +364,82 @@ test("project succession keeps a live pass visible and owned through either proj
   expect(projectView(PROJECT).curation?.passes[0]?.state).toBe("succeeded");
   expect(projectView("curation-renamed").curation?.passes[0]?.state).toBe("succeeded");
   expect(projectView("curation-renamed").curation?.lastAt).toBe(at(1000));
+});
+test("project succession preserves undo ordering between independently numbered scopes", () => {
+  const sourceScope = roleScope(PROJECT, "builder"), targetProject = "curation-renamed";
+  const sourceRules = Array.from({ length: 50 }, () => fixture(sourceScope));
+  const sourcePass = pass();
+  applyCuration(sourcePass, input({ [sourceScope]: sourceRules }), at(100));
+  applyCuration(sourcePass, input({ [sourceScope]: sourceRules }), at(101));
+  ended(sourcePass);
+
+  const targetScope = roleScope(targetProject, "builder"), targetRule = fixture(targetScope);
+  const targetPass = pass(NOW + 1, targetProject);
+  const rewritten = "Inspect current scope history before changing stored rule guidance.";
+  applyCuration(targetPass, input({ [targetScope]: [targetRule] }, {
+    rewrite: [{ id: targetRule, rule: rewritten, note: "Clarify the condition for this scope." }],
+  }), at(200));
+  ended(targetPass, 200);
+
+  expect(persistProjectAliases([{ source: PROJECT, target: targetProject, displayName: targetProject }])).toBe(true);
+  projectView(targetProject);
+
+  expect(revertCuratorPass(targetPass.id, at(3000))).toEqual({ skipped: [] });
+  expect(row(targetRule).rule).toBe(text);
+  expect(row(targetRule).why).toBe(why);
+  expect(row(targetRule).scope).toBe(targetScope);
+  expect(projectView(targetProject).scopes.find(scope => scope.scope === targetScope)!.active.map(rule => rule.id)).toContain(targetRule);
+});
+test("project succession counts destination lessons against their own claim history", () => {
+  const sourceScope = roleScope(PROJECT, "builder"), targetProject = "curation-renamed";
+  const sourceRules = Array.from({ length: 50 }, () => fixture(sourceScope));
+  const sourcePass = pass();
+  applyCuration(sourcePass, input({ [sourceScope]: sourceRules }), at(100));
+  applyCuration(sourcePass, input({ [sourceScope]: sourceRules }), at(101));
+  ended(sourcePass);
+
+  const targetScope = roleScope(targetProject, "builder"), targetRule = fixture(targetScope);
+  const targetPass = pass(NOW + 1, targetProject);
+  applyCuration(targetPass, input({ [targetScope]: [targetRule] }), at(200));
+  ended(targetPass, 200);
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    const source: RuleSource = { project: targetProject, pipelineId: "succession-lessons", stageId: "build", attempt, roleId: "builder", fixRound: false, conversationId: "succession-reader" };
+    recordLessonRequest({ ...source, at: at(300 + attempt) });
+    leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: `Inspect destination scope history before changing condition ${attempt}.`, why }], none: null, now: at(300 + attempt) });
+  }
+
+  expect(persistProjectAliases([{ source: PROJECT, target: targetProject, displayName: targetProject }])).toBe(true);
+  projectView(targetProject);
+
+  const status = curationStatus(targetProject, NOW + 31 * 60_000);
+  expect(status.newLessons).toBe(10);
+  expect(status.due).toBe(true);
+});
+test("post-succession same-time curator rankings remain a later undo guard", () => {
+  const sourceScope = roleScope(PROJECT, "builder"), targetProject = "curation-renamed";
+  const sourceRules = Array.from({ length: 50 }, () => fixture(sourceScope));
+  const sourcePass = pass();
+  applyCuration(sourcePass, input({ [sourceScope]: sourceRules }), at(100));
+  applyCuration(sourcePass, input({ [sourceScope]: sourceRules }), at(101));
+  ended(sourcePass);
+
+  const targetScope = roleScope(targetProject, "builder"), targetRule = fixture(targetScope);
+  const targetPass = pass(NOW + 1, targetProject);
+  const rewritten = "Inspect current scope history before changing stored rule guidance.";
+  applyCuration(targetPass, input({ [targetScope]: [targetRule] }, {
+    rewrite: [{ id: targetRule, rule: rewritten, note: "Clarify the condition for this scope." }],
+  }), at(200));
+  ended(targetPass, 200);
+
+  expect(persistProjectAliases([{ source: PROJECT, target: targetProject, displayName: targetProject }])).toBe(true);
+  projectView(targetProject);
+  const laterPass = pass(NOW + CURATION_INTERVAL_MS + 5000, targetProject);
+  const joinedOrder = projectView(targetProject).scopes.find(scope => scope.scope === targetScope)!.active.map(rule => rule.id);
+  applyCuration(laterPass, input({ [targetScope]: joinedOrder }), at(200));
+  ended(laterPass, CURATION_INTERVAL_MS + 6000);
+
+  expect(revertCuratorPass(targetPass.id, at(CURATION_INTERVAL_MS + 7000))).toEqual({ skipped: [targetRule] });
+  expect(row(targetRule).rule).toBe(rewritten);
 });
 test("a live pass reads and applies canonical scopes after project succession", () => {
   const originalScope = roleScope(PROJECT, "builder"), one = fixture(originalScope), p = pass();
