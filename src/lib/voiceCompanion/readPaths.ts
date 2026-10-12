@@ -19,7 +19,7 @@ import type { BoardReadPaths } from "./boardReads";
  * lifecycle-journal writes. Search reuses its ordinary page handler. */
 export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcpDomainDependencies; liveness?: AgentLivenessSources;
   transcript?: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext"> } = {}): BoardReadPaths {
-  const domain = { ...(dependencies.domain ?? productionDomainDependencies), ...dependencies.transcript,
+  const domain = { ...(dependencies.domain ?? productionDomainDependencies), fleetDetailBudgetBytes: 3_200, ...dependencies.transcript,
     ...(dependencies.liveness ? { livenessSources: () => dependencies.liveness! } : {}),
     refreshLifecycleJournal: () => ({ appended: 0 }) as ReturnType<ViewerMcpDomainDependencies["refreshLifecycleJournal"]>,
   };

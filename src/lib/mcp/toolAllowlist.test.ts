@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 
 import type { AttentionCallerAuthority } from "@/lib/attention/callerAuthority";
 
-import { MCP_TOOL_NAMES } from "./server";
+import { MCP_TOOL_NAMES, OPTIONAL_READ_KEY_TOOLS, isMutatingMcpTool } from "./server";
 import {
   HEALTH_PROBE_ALLOWED_TOOLS,
   mcpCallerIdentity,
@@ -31,6 +31,13 @@ const EVERY_SESSION_IDENTITY = [
   mcpCallerIdentity({ kind: "worker", conversationId: "conversation_builder", role: "builder" }),
   mcpCallerIdentity({ kind: "worker", conversationId: MANAGER_CONVERSATION, role: "orchestrator" }, MANAGER),
 ];
+
+test("agent_fleet is an optional-key pure read available to every session classification", () => {
+  expect(MCP_TOOL_NAMES).toContain("agent_fleet");
+  expect(OPTIONAL_READ_KEY_TOOLS.has("agent_fleet")).toBe(true);
+  expect(isMutatingMcpTool("agent_fleet")).toBe(false);
+  for (const identity of EVERY_SESSION_IDENTITY) expect(permitMcpTool(identity, "agent_fleet").allowed).toBe(true);
+});
 
 test("every session classification holds the FULL tool surface — enumerated over the real tool list", () => {
   for (const identity of EVERY_SESSION_IDENTITY) {

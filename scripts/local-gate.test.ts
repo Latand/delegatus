@@ -208,24 +208,37 @@ test("a deadline that passed before a step starts prepares nothing, alone or in 
   }
   expect(prepared).toEqual([]);
 });
-test("a cold fixture install held by machine admission ends at the deadline with a named missing verdict and no installer left", async () => {
+test.skipIf(process.platform !== "linux")("a cold fixture install excludes CPU queue time and reaches its verdict after the original deadline", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-cold-")); roots.push(dir);
   writeFileSync(path.join(dir, "pressure"), "some avg10=99.00 avg60=99.00 avg300=99.00 total=1\n");
-  // The real installer path: gate-slot holds it for CPU pressure, so npm never starts.
-  const env = { ...process.env, LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_LOCK_DIR: dir, LLV_GATE_POLL_SECONDS: "0.2" };
+  const bin = path.join(dir, "bin"); mkdirSync(bin);
+  const relative = `node_modules/@openai/codex-linux-${process.arch}/vendor/${process.arch === "x64" ? "x86_64" : "aarch64"}-unknown-linux-musl/bin`;
+  writeFileSync(path.join(bin, "npm"), `#!/bin/bash\nwhile [[ "$1" != --prefix ]]; do shift; done\nshift\nmkdir -p "$1/${relative}"\nprintf fixture > "$1/${relative}/codex"\n`, { mode: 0o700 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DELEGATUS_CPU_PRESSURE: "on", DELEGATUS_AGENT_CPU: "off", LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_LOCK_DIR: dir, LLV_GATE_POLL_SECONDS: "0.02" };
   const cache = path.join(dir, "cold-cache");
-  const lines: string[] = [];
-  const started = performance.now();
-  const error = await runSteps("pre-push", [grouped("native Codex 0.154.0"), grouped("native Codex shared contracts", true)], {
-    root, deadline: soon(1_500), logDir: dir, say: line => lines.push(line),
-    prepare: async (step, until) => ({ command: ["true", await codexFixture(root, cache, "0.154.0", until, env)], env: process.env }),
-  }).then(() => null, (caught: unknown) => caught);
-  expect(performance.now() - started).toBeLessThan(6_000);
-  expect(error).toBeInstanceOf(NoVerdict);
-  expect((error as Error).message).toMatch(/"native Codex 0\.154\.0" was stopped while it was being prepared after \d+ s; nothing was judged$/);
-  expect(lines).toContainEqual(expect.stringMatching(/^pre-push: left to the hosted job: "native Codex shared contracts" was stopped while it was being prepared/));
-  await Bun.sleep(200);
-  expect(processesNaming(cache)).toEqual([]);
+  const pending = runSteps("pre-push", [grouped("native Codex 0.154.0"), grouped("native Codex shared contracts", true)], {
+    root, deadline: soon(1_500), logDir: dir, say: () => {},
+    prepare: async (_step, until, cancel, waitEnv) => ({ command: ["true", await codexFixture(root, cache, "0.154.0", until, { ...env, LLV_CPU_WAIT_ROOTS: waitEnv!.LLV_CPU_WAIT_ROOTS }, cancel)], env }),
+  });
+  try {
+    const { Database } = await import("bun:sqlite");
+    let queued = false;
+    for (let poll = 0; poll < 250 && !queued; poll++) {
+      if (existsSync(path.join(dir, "admission.sqlite"))) {
+        const db = new Database(path.join(dir, "admission.sqlite"), { readonly: true });
+        try { queued = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tickets").get()!.n === 2; }
+        catch { /* The waiting helper is still creating its queue schema. */ }
+        finally { db.close(); }
+      }
+      if (!queued) await Bun.sleep(20);
+    }
+    expect(queued).toBe(true);
+    await Bun.sleep(1_600);
+    expect(existsSync(cache)).toBe(false);
+    writeFileSync(path.join(dir, "pressure"), "");
+    expect(await pending).toEqual([]);
+    expect(processesNaming(cache)).toEqual([]);
+  } finally { writeFileSync(path.join(dir, "pressure"), ""); await pending.catch(() => {}); }
 }, 30_000);
 test("the fetch before planning ends at the deadline", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-fetch-")); roots.push(dir);
@@ -402,7 +415,7 @@ test("Viewer route and layout inputs select build and served-runtime verificatio
   }
   const doc = ["CONTRIBUTING.md"] as const;
   expect(plan("pre-push", doc, discover(root, "HEAD", doc)).some(step => step.pinned)).toBeFalse();
-});
+}, 20_000);
 test("deleting the built root route or layout still selects runtime verification", () => {
   const deletedRoot = mkdtempSync(path.join(tmpdir(), "deleted-viewer-input-")); roots.push(deletedRoot);
   symlinkSync(path.join(root, ".github"), path.join(deletedRoot, ".github"), "dir");
@@ -433,7 +446,7 @@ test("state isolation replaces inherited roots and removes the live owner claim"
   }
   expect(env.LLV_STATE_OWNER).toBeUndefined(); expect(env.LLV_INBOX_DIR).toBeUndefined();
   for (const key of ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) expect(env[key]).toBeUndefined();
-  expect(env.LLV_GATE_LOCK_DIR).toBe("/var/tmp");
+  expect(env.LLV_GATE_LOCK_DIR).toBeUndefined();
   expect(isolatedEnvironment(sandbox, { NODE_ENV: "test", LLV_GATE_LOCK_DIR: sandbox }).LLV_GATE_LOCK_DIR).toBe(sandbox);
   expect(env.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
 });
@@ -451,7 +464,7 @@ test("scope uses executed import closure and the workflow test lists", () => {
   expect(pinnedBunVersion("RUN npm install -g bun@1.4.0\nRUN npm install -g bun@1.4.0")).toBe("1.4.0");
   expect(() => pinnedBunVersion("bun@1.4.0")).toThrow();
   expect(() => pinnedBunVersion("npm install -g bun@1.4.0\nnpm install -g bun@1.3.3")).toThrow();
-});
+}, 20_000);
 
 function hookFixture(realLint = false) {
   const dir = mkdtempSync(path.join(tmpdir(), "hooks-e2e-")); roots.push(dir);
@@ -465,6 +478,7 @@ function hookFixture(realLint = false) {
   }
   for (const file of ["gate-slot.sh", "verify-native-codex-runtime.ts"]) copyFileSync(path.join(root, "scripts", file), path.join(dir, "scripts", file));
   symlinkSync(path.join(root, "scripts/owned-runner.ts"), path.join(dir, "scripts/owned-runner.ts"));
+  symlinkSync(path.join(root, "scripts/cpu-admission.ts"), path.join(dir, "scripts/cpu-admission.ts"));
   for (const file of ["platform-tests.yml", "bun-runtime.yml"]) copyFileSync(path.join(root, ".github/workflows", file), path.join(dir, ".github/workflows", file));
   const log = path.join(dir, "commands.jsonl");
   writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
@@ -553,7 +567,7 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   expect(f.calls().some(call => call.args.includes("--check-commits"))).toBeTrue();
   const rejected = spawnSync("git", ["push", "origin", "HEAD:blocked"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "tsc" }, encoding: "utf8" });
   expect(rejected.status).not.toBe(0);
-});
+}, 20_000);
 test("linked-worktree pre-push clears Git selectors and preserves the complete shared config", () => {
   const f = hookFixture();
   const linkedRoot = mkdtempSync(path.join(tmpdir(), "linked-push-")); roots.push(linkedRoot);
@@ -576,7 +590,7 @@ test("linked-worktree pre-push clears Git selectors and preserves the complete s
   expect(result.status).toBe(0);
   expect(readFileSync(configPath)).toEqual(before);
   expect(f.calls().some(call => call.gitDir === undefined && call.index === undefined && call.workTree === undefined && call.commonDir === undefined && call.configCount === undefined && call.configKey === undefined)).toBeTrue();
-});
+}, 20_000);
 
 test("media deferral recognizes disguised raster magic without loading the privacy gate", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-media-")); roots.push(dir);

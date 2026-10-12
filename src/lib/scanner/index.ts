@@ -33,6 +33,7 @@ import { scanRootEntries } from "./roots";
 import { createTranscriptPathCanonicalizer, type TranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { waitingInputProbe } from "./waitingInput";
 import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
+import { machineCpuPressurePollMs } from "../runtime/cpuPressure";
 
 function applyProcessState(entry: FileEntry, holders: Map<string, number>) {
   if (entry.root === "claude-tasks" && entry.path.endsWith(".output")) {
@@ -453,9 +454,28 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
     console.error("[pipelines] skipping embedded review flow reconcile", error);
   }
   await yieldToRuntime();
-  await tickPipelines(entries);
-  await yieldToRuntime();
-  await tickWorkflows(entries);
+  // A controller that finishes its pass may still own the FIFO head an
+  // unfinished peer needs. Keep both ticking for the whole shared pass.
+  const controllers = [tickPipelines, tickWorkflows] as const;
+  const polling: (Promise<void> | null)[] = controllers.map(() => null);
+  const watch = setInterval(() => {
+    for (const [index, tick] of controllers.entries()) {
+      if (polling[index]) continue;
+      polling[index] = tick(entries).then(() => {})
+        .catch(error => { console.error("[scanner] work controller polling failed", error); })
+        .finally(() => { polling[index] = null; });
+    }
+  }, machineCpuPressurePollMs());
+  watch.unref();
+  try {
+    const results = await Promise.allSettled(controllers.map(tick => tick(entries)));
+    for (const result of results) if (result.status === "rejected") throw result.reason;
+  } finally {
+    // A timer may have started another pass; retain admission until it too
+    // settles, then leave no controller work behind this scanner pass.
+    while (polling.some(Boolean)) await Promise.all(polling);
+    clearInterval(watch);
+  }
   await yieldToRuntime();
   /* Canonical task membership (#1586): every root conversation the board draws
      belongs to a task. Placeholders are minted here, on the durable controller
