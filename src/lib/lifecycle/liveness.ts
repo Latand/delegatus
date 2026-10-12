@@ -1061,6 +1061,7 @@ async function livenessSnapshotWithin(
 
   const previousPaths = new Map<string, string[]>();
   const candidatePaths = new Map<string, Set<string>>();
+  const unresolvedCurrentWriters = new Set<string>();
   for (const path of targeted ? requestedPaths : [...hostedPaths].slice(0, limit)) {
     const id = conversationIdForPath(registry, path);
     const candidates = candidatePaths.get(id ?? path) ?? new Set<string>();
@@ -1074,7 +1075,16 @@ async function livenessSnapshotWithin(
     () => EVIDENCE_TAIL_BYTES,
     async (paths, readSignal) => {
       const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
+      const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
+      const currentWriterPaths = new Set(Object.values(registry.entries)
+        .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
+        .map(entry => entry.artifactPath)
+        .filter((path): path is string => Boolean(path && paths.has(path))));
+      for (const path of currentWriterPaths) {
+        if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationIdForPath(registry, path) ?? path);
+      }
       const entries = descriptions.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT).sort(byNewest);
+      if ([...currentWriterPaths].some(path => !describedPaths.has(path))) return;
       const entry = entries[0];
       if (!entry) return;
       for (const path of paths) hostedDescriptions.set(path, entry);
@@ -1102,7 +1112,7 @@ async function livenessSnapshotWithin(
        that outlives them is reported as not yet described, never waited out. */
     await hostedRead;
     const described = await Promise.all([...requestedPaths].slice(0, limit)
-      .map((path) => hostedDescriptions.get(path) ?? describeWithin(path, sources.describeTranscript, answer)));
+      .map((path) => hostedDescriptions.get(path) ?? describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
     entries = described.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT);
     selection = {
       scope: "targeted",
@@ -1203,6 +1213,15 @@ async function livenessSnapshotWithin(
   }
   await Promise.all([...unhostedGenerations.values()].map(async paths => {
     const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
+    const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
+    const currentWriterPaths = new Set(Object.values(registry.entries)
+      .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
+      .map(entry => entry.artifactPath)
+      .filter((path): path is string => Boolean(path && paths.has(path))));
+    for (const path of currentWriterPaths) {
+      if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationIdForPath(registry, path) ?? path);
+    }
+    if ([...currentWriterPaths].some(path => !describedPaths.has(path))) return;
     const newest = descriptions.filter((description): description is LivenessTranscript => description !== null && description !== ANSWER_SPENT).sort(byNewest)[0];
     if (!newest) return;
     for (const path of paths) hostedDescriptions.set(path, newest);
@@ -1230,6 +1249,8 @@ async function livenessSnapshotWithin(
     hydratable,
     (entry) => Math.min(Number.isFinite(entry.sizeBytes) ? entry.sizeBytes as number : EVIDENCE_TAIL_BYTES, EVIDENCE_TAIL_BYTES),
     async (entry, hydrationSignal) => {
+      const conversationId = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+      if (unresolvedCurrentWriters.has(conversationId ?? entry.path)) return null;
       if (hostedEvidence.has(entry.path)) return hostedEvidence.get(entry.path)!;
       return readEntry(entry, hydrationSignal);
     },
@@ -1293,9 +1314,12 @@ async function livenessSnapshotWithin(
     const activity = evidence !== null && lastRecordMs !== null && host.state === "alive" && turnState !== "idle"
       ? classifyAgentActivity({ ...evidence.activityFacts, lastRecordAt: lastRecordMs, workProcesses: host.pid === null ? [] : processes(host.pid) }, now, stallAfterMs)
       : undefined;
+    const unresolvedActivityOwnership = evidence?.activityFacts?.turnBoundaryVerified === false
+      || unresolvedCurrentWriters.has(conversationId ?? entry.path);
     const verified = evidence !== null && lastRecordMs !== null
       && !(host.state === "alive" && turnState !== "idle" && evidence.activityFacts?.backgroundVerified === false
-        && activity?.state !== "checking" && silentForMs !== null && silentForMs >= stallAfterMs);
+        && activity?.state !== "checking" && silentForMs !== null && silentForMs >= stallAfterMs)
+      && !(unresolvedActivityOwnership && activity?.state !== "checking" && silentForMs !== null && silentForMs >= stallAfterMs);
     const verdict = evaluateLiveness({
       host,
       turnState,

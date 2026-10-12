@@ -76,6 +76,30 @@ for (const engine of ["codex", "claude"] as const) {
 }
 
 for (const engine of ["codex", "claude"] as const) {
+  test(`${engine} cannot transfer an unreadable current writer to its readable predecessor`, async () => {
+    const old = "/fixture/previous-writer.jsonl";
+    const current = "/fixture/current-writer.jsonl";
+    const injected = sources({
+      selectInventory: undefined,
+      listFiles: async () => [{ ...row, engine, path: old }, { ...row, engine, path: current, mtime: (now - 10_000) / 1000 }],
+      describeTranscript: async path => {
+        if (path === current) throw Object.assign(new Error("unreadable"), { code: "EACCES" });
+        return { ...described, engine, path: old, mtimeMs: now - 18_000_000 };
+      },
+      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now - 18_000_000 }),
+    });
+    const registry = injected.registrySnapshot();
+    registry.entries.one.artifactPath = current;
+    registry.conversations = { conversation_one: { id: "conversation_one", generations: [{ path: old }, { path: current }], continuityPaths: [] } } as unknown as RegistryFile["conversations"];
+    const result = await agentLivenessSnapshot({ conversationId: "conversation_one" }, { ...injected, registrySnapshot: () => registry });
+    expect(result.conversations[0]).toMatchObject({ verified: false, lifecycle: "running", reason: "evidence_unverified", silentForMs: null, stalledForMs: null });
+    expect(result.conversations[0]).not.toHaveProperty("activity");
+    expect(result.stalledCount).toBe(0);
+    expect(projectLivenessEvents(result.conversations, new Map([["conversation_one", "stalled"]]))).toEqual([]);
+  });
+}
+
+for (const engine of ["codex", "claude"] as const) {
   test(`${engine} native tool records keep a long check running and a truly idle turn stalled`, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "activity-native-"));
     const file = path.join(dir, "one.jsonl");
@@ -131,6 +155,50 @@ test("incomplete background history cannot assert idle or retire an earlier stal
   const result = await agentLivenessSnapshot({}, sources({ selectInventory: undefined, listFiles: async () => [row], transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now - 660_000, activityFacts: { lastRecordAt: now - 660_000, backgroundVerified: false } }) }));
   expect(result.conversations[0]).toMatchObject({ lifecycle: "running", reason: "evidence_unverified", verified: false, silentForMs: null });
   expect(projectLivenessEvents(result.conversations, new Map([["conversation_one", "stalled"]]))).toEqual([]);
+});
+
+test("an unresolved turn boundary cannot verify a stall or emit idle, while recent activity stays working", async () => {
+  const evidence = (lastRecordTs: number) => ({ turn: "busy" as const, lastRecordTs, activityFacts: { lastRecordAt: lastRecordTs, turnBoundaryVerified: false } });
+  const stale = await agentLivenessSnapshot({}, sources({ selectInventory: undefined, listFiles: async () => [row], transcriptEvidence: async () => evidence(now - 660_000) }));
+  expect(stale.conversations[0]).toMatchObject({ verified: false, lifecycle: "running", reason: "evidence_unverified", silentForMs: null, stalledForMs: null });
+  expect(stale.conversations[0]).not.toHaveProperty("activity");
+  expect(stale.stalledCount).toBe(0);
+  expect(projectLivenessEvents(stale.conversations, new Map([["conversation_one", "stalled"]]))).toEqual([]);
+
+  const recent = await agentLivenessSnapshot({}, sources({ selectInventory: undefined, listFiles: async () => [row], transcriptEvidence: async () => evidence(now - 15_000) }));
+  expect(recent.conversations[0]).toMatchObject({ verified: true, lifecycle: "running", silentForMs: 15_000, activity: { state: "working" } });
+});
+
+test("a Codex tail with an unresolved pre-window turn boundary cannot report a verified stall", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "activity-unresolved-boundary-"));
+  const file = path.join(dir, "one.jsonl");
+  const stamp = (age: number) => new Date(now - age).toISOString();
+  const records = [
+    { type: "event_msg", timestamp: stamp(900_000), payload: { type: "task_started", turn_id: "turn-one" } },
+    { type: "response_item", timestamp: stamp(890_000), payload: { type: "function_call", name: "sleep", call_id: "sleep-one", arguments: '{"duration_ms":50000}' } },
+    { type: "event_msg", timestamp: stamp(700_000), payload: { type: "token_count", padding: "x".repeat(140_000) } },
+    { type: "response_item", timestamp: stamp(660_000), payload: { type: "function_call_output", call_id: "unmatched-one", output: "done" } },
+  ];
+  try {
+    fs.writeFileSync(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+    const evidence = await readLivenessTranscriptEvidence("codex", file);
+    expect(evidence?.activityFacts?.turnBoundaryVerified).toBe(false);
+    const injected = sources({
+      selectInventory: undefined,
+      listFiles: async () => [{ ...row, path: file, size: fs.statSync(file).size, engine: "codex" }],
+      transcriptEvidence: (_engine, pathname) => readLivenessTranscriptEvidence("codex", pathname),
+      describeTranscript: async pathname => ({ ...described, path: pathname, engine: "codex", sizeBytes: fs.statSync(pathname).size }),
+      workProcesses: () => [],
+    });
+    const registry = injected.registrySnapshot();
+    registry.entries.one.artifactPath = file;
+    const result = await agentLivenessSnapshot({}, { ...injected, registrySnapshot: () => registry });
+    expect(result.conversations[0]).toMatchObject({ verified: false, lifecycle: "running", reason: "evidence_unverified", silentForMs: null, stalledForMs: null });
+    expect(result.stalledCount).toBe(0);
+    expect(projectLivenessEvents(result.conversations, new Map([["conversation_one", "stalled"]]))).toEqual([]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 

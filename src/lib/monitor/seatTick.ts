@@ -1537,6 +1537,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         kind: "wake",
         reasons,
         items,
+        activeStallTokens: [...stalled.map(entry => laneStallToken(entry.pipeline)), ...stalledKids.map(entry => childStallToken(entry.child))],
         pendingMergeSeqs: laneEvents.filter(event => event.type === "pipeline_merged").map(event => event.seq),
         deferred: Math.max(0, offered.length - input.policy.itemsPerWake),
         skippedChildren,
@@ -2109,6 +2110,7 @@ export function seatTickWakeCommitPlan(
   }
   return {
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
+    ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
     itemsShown: items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
     itemLines: items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(seatTickBullet(item)) }] : []),
@@ -2196,11 +2198,13 @@ export function seatTickWakeCommit(
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
     ...(commit.diskPressure && visibleAgendaVersions(state, commit).includes(commit.diskPressure.version) ? { diskPressureShown: commit.diskPressure.episode } : {}),
-    itemsShown: mergeAgendaVersions(state.itemsShown ?? [], visibleAgendaVersions(state, commit)),
+    itemsShown: mergeAgendaVersions(state.itemsShown ?? [], visibleAgendaVersions(state, commit), commit.activeStallTokens),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
     announcedMaintenance: announced(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? [], SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
-    ...(commit.reportedStalls?.length || state.reportedStalls
+    ...(commit.activeStallTokens
+      ? { reportedStalls: [...new Set([...(state.reportedStalls ?? []), ...(commit.reportedStalls ?? [])].filter(token => commit.activeStallTokens!.includes(token)))] }
+      : commit.reportedStalls?.length || state.reportedStalls
       ? { reportedStalls: announced(state.reportedStalls ?? [], commit.reportedStalls ?? [], SEAT_TICK_REPORTED_STALLS_LIMIT) }
       : {}),
     ...(owed ?? {}),
@@ -2279,10 +2283,15 @@ function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | 
 
 /** Replace the prior version of an item; retain a bounded recent history.
  * Eviction can re-offer an old item, and can never lose an unseen obligation. */
-function mergeAgendaVersions(before: readonly string[], delivered: readonly string[]): string[] {
+function mergeAgendaVersions(before: readonly string[], delivered: readonly string[], activeStallTokens?: readonly string[]): string[] {
   const key = (token: string) => token.split("@")[0];
   const replaced = new Set(delivered.map(key));
-  return [...before.filter(token => !replaced.has(key(token))), ...new Set(delivered)].slice(-2000);
+  const merged = [...before.filter(token => !replaced.has(key(token))), ...new Set(delivered)];
+  if (!activeStallTokens) return merged.slice(-2000);
+  const active = new Set(activeStallTokens.map(token => `stall:${createHash("sha256").update(token).digest("hex")}`));
+  const retained = merged.filter(token => active.has(token));
+  const history = merged.filter(token => !active.has(token)).slice(-2000);
+  return [...history, ...retained];
 }
 
 /** Production landings use the exact frozen text. The renderer may have cut

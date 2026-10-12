@@ -27,6 +27,52 @@ test("verified ten-minute idle wakes on first sighting, once per record, and a l
   const later = seatTickDecision({ ...moved, now: now + 660_000, state: committed });
   expect(later.verdict.kind === "wake" && later.verdict.items.some(item => item.stallToken)).toBe(true);
 });
+
+test("active idle episodes survive unrelated history rotation and a new record starts one fresh alert", () => {
+  const conversation = (id: string, lastRecordAt: string) => ({
+    id, title: id, state: "active" as const, updatedAt: lastRecordAt, stageId: "build",
+    stageActivity: { lifecycle: "stalled" as const, reason: "host_alive_transcript_silent", conversationId: id, lastRecordAt, verified: true, activity: { state: "idle" as const, check: null, idleForMs: 660_000 } },
+  });
+  const first = input();
+  const aRecord = new Date(now - 660_000).toISOString();
+  first.pipelines = [conversation("lane_a", aRecord), conversation("lane_b", aRecord)];
+  let decision = seatTickDecision(first);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("initial idle episodes must wake");
+  let state = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, { fingerprint: "initial", eventsThrough: 0 })!, now);
+
+  for (let episode = 1; episode <= 2_000; episode++) {
+    const at = now + episode * 660_000;
+    const bRecord = new Date(at - 660_000).toISOString();
+    const check = input();
+    check.now = at;
+    check.pipelines = [conversation("lane_a", aRecord), conversation("lane_b", bRecord)];
+    decision = seatTickDecision({ ...check, state });
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") throw new Error("new idle episode must wake");
+    state = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, { fingerprint: `episode-${episode}`, eventsThrough: 0 })!, at);
+  }
+
+  expect(state.reportedStalls).toContain(`lane_a@${aRecord}`);
+  expect(state.reportedStalls).toHaveLength(2);
+  const unchanged = input();
+  unchanged.now = now + 2_001 * 660_000;
+  unchanged.pipelines = [conversation("lane_a", aRecord), conversation("lane_b", new Date(unchanged.now - 660_000).toISOString())];
+  decision = seatTickDecision({ ...unchanged, state });
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("new B episode must wake");
+  expect(decision.verdict.items.filter(item => item.stallToken?.startsWith("lane_a@")).length).toBe(0);
+
+  const movedAt = new Date(unchanged.now - 660_000 + 1_000).toISOString();
+  const moved = { ...unchanged, pipelines: [conversation("lane_a", movedAt), unchanged.pipelines[1]!] };
+  const resumed = seatTickDecision({ ...moved, state });
+  expect(resumed.verdict.kind).toBe("wake");
+  if (resumed.verdict.kind !== "wake") throw new Error("new A episode must wake");
+  expect(resumed.verdict.items.filter(item => item.stallToken?.startsWith("lane_a@")).map(item => item.stallToken)).toEqual([`lane_a@${movedAt}`]);
+  const resumedState = seatTickWakeCommit(resumed.state, seatTickWakeCommitPlan(resumed.verdict, { fingerprint: "a-moved", eventsThrough: 0 })!, unchanged.now);
+  const afterDelivery = seatTickDecision({ ...moved, now: unchanged.now + 300_000, state: resumedState });
+  expect(afterDelivery.verdict.kind === "wake" ? afterDelivery.verdict.items.filter(item => item.stallToken?.startsWith("lane_a@")) : []).toHaveLength(0);
+});
 test("an hour checking and an unverified projected stall produce no stall wake", () => {
   for (const activity of [{ state: "checking", check: "bun test", idleForMs: null }, { state: "idle", check: null, idleForMs: 660_000 }] as const) {
     const check = input();

@@ -36,6 +36,41 @@ test("activity tail accepts a complete final JSON object without a line ending",
   expect(tailRecordsResult(pathname, stat.size, stat.mtimeMs)).toMatchObject({ complete: true, records: [record] });
 });
 
+test("a multibyte partial prefix is trimmed before decoding the complete activity tail", () => {
+  const pathname = path.join(sandbox, "utf8-split-prefix-activity.jsonl");
+  const task = (idLength: number) => JSON.stringify({
+    type: "event_msg", timestamp: "2026-10-12T05:45:19Z", payload: { type: "task_started", turn_id: "t".repeat(idLength) },
+  });
+  const prefix = `${JSON.stringify({ padding: "ї".repeat(100_000) })}\n`;
+  let content = "";
+  let idLength = 1;
+  do {
+    content = `${prefix}${task(idLength)}\n`;
+    const bytes = Buffer.from(content);
+    const seek = bytes.length - 128 * 1024;
+    if ((bytes[seek]! & 0xc0) === 0x80) break;
+    idLength++;
+  } while (idLength < 8);
+  fs.writeFileSync(pathname, content);
+  const stat = fs.statSync(pathname);
+  const result = tailRecordsResult(pathname, stat.size, stat.mtimeMs);
+  expect(result.complete).toBe(true);
+  expect(result.prefixTruncated).toBe(true);
+  expect(result.records).toHaveLength(1);
+  expect(result.records[0]).toMatchObject({ payload: { type: "task_started" } });
+  expect(turnStateFromRecords(result.records, "codex")).toBe("busy");
+  expect(activityVerdict("codex-sessions", pathname, stat.mtimeMs / 1000, stat.size)).toMatchObject({ state: "live", reason: "jsonl_turn_open" });
+});
+
+test("fatal UTF-8 validation still rejects malformed bytes inside retained rows", () => {
+  const pathname = path.join(sandbox, "utf8-invalid-retained-activity.jsonl");
+  const prefix = Buffer.from(`${JSON.stringify({ padding: "x".repeat(140_000) })}\n{"type":"event_msg","payload":{"type":"task_started","turn_id":"`);
+  const content = Buffer.concat([prefix, Buffer.from([0xff]), Buffer.from('"}}\n')]);
+  fs.writeFileSync(pathname, content);
+  const stat = fs.statSync(pathname);
+  expect(tailRecordsResult(pathname, stat.size, stat.mtimeMs)).toMatchObject({ complete: false, records: [] });
+});
+
 const assistant = (stop: string | null, ...kinds: string[]) => ({
   type: "assistant",
   message: {
