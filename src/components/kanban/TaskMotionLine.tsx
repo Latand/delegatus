@@ -7,10 +7,12 @@ import { fmtAgeSeconds } from "@/components/utils";
 
 /** The reason stays above the collapsed contents. A needs-you question has
     its own slot immediately below this line in the sibling card design. */
-export function TaskMotionLine({ motion, working, nowMs, plain = false, full = false, taskTitle, onOpenTask, referenceUrl, finding, cpuWaiting = false }: { finding?: BoardTask["finding"]; motion: TaskMotion; working: number; nowMs: number; plain?: boolean; full?: boolean; taskTitle?: string; onOpenTask?: () => void; referenceUrl?: string | null; cpuWaiting?: boolean }) {
+export function TaskMotionLine({ laneShown = false, motion, working, nowMs, plain = false, full = false, taskTitle, onOpenTask, referenceUrl, finding, cpuWaiting = false }: { finding?: BoardTask["finding"]; /** A lane row on the card states how its work ended. */ laneShown?: boolean; motion: TaskMotion; working: number; nowMs: number; plain?: boolean; full?: boolean; taskTitle?: string; onOpenTask?: () => void; referenceUrl?: string | null; cpuWaiting?: boolean }) {
   const { t, locale } = useLocale();
   const recurred = finding && finding.count > 1 ? finding : null;
-  const quiet = motion.key === "not-started" || motion.key === "done" || (cpuWaiting && motion.key === "working");
+  /* A stopped task with no declared reason and a lane row under it: the row
+     says how the work ended, so «no reason given» would only contradict it. */
+  const quiet = motion.key === "not-started" || motion.key === "done" || (laneShown && motion.key === "stopped" && !motion.reason) || (cpuWaiting && motion.key === "working");
   if (quiet && !recurred) return null;
   const hold = typeof motion.reason === "object" ? motion.reason : null;
   const date = hold?.until ? new Date(hold.until).toLocaleString(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";

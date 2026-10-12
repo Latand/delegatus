@@ -434,7 +434,7 @@ function AgentsLine({ item, nowMs, remote }: { item: PhoneCard; nowMs: number; r
         </>
       ) : null}
       {word ? <span className="shrink-0">{word}</span> : null}
-      {agents.atMs > 0 ? <>{word ? <Sep /> : null}<span className="shrink-0">{ageText(t, agents.atMs, nowMs)}</span></> : null}
+      {agents.atMs > 0 ? <>{word ? <Sep /> : null}<span className="shrink-0">{agents.worked ? ageText(t, agents.atMs, nowMs) : t("kanban.editedAge", { age: ageText(t, agents.atMs, nowMs) })}</span></> : null}
     </span>
   );
 }
@@ -552,7 +552,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         {loose && item.firstAgent?.agentActivity ? <CardStatusBadge file={item.firstAgent} /> : null}
         <NeedBadge item={item} />
       </span>
-      {loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />}
+      {loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain laneShown={Boolean(item.shown && !loose)} taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />}
       <TaskStepsLine summary={card.stepSummary} />
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
