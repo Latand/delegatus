@@ -2942,6 +2942,13 @@ if (PROTO) {
       { image: image(390, 760, 330, "cards · 390", true), caption: L("results, phone", "результати, телефон"), width: 390, lang: "uk" },
     ], videos: [{ media: { id: "v1", mime: "video/webm", bytes: 210_000, available: !gone, url: gone ? null : "/proto-video.webm" }, caption: L("hover and keyboard walk", "наведення і прохід клавіатурою") }] },
   ])];
+  /* `&duplicate-frames=1` gives the gallery identity regression two distinct
+     frames that reference the same media, as can happen when a review reuses
+     one image for multiple views. */
+  if (params.has("duplicate-frames")) {
+    const variants = protoRounds["t-search"]![0]!.variants;
+    variants[1]!.frames[0]!.image = variants[0]!.frames[0]!.image;
+  }
   protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
     { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
       { image: image(960, 600, 190, "upload · running"), caption: L("uploading", "завантажується"), width: 1440, lang: "en" },
@@ -3053,6 +3060,7 @@ if (DECISIONS) {
     { number: 1, name: L("Account A for every lane", "Акаунт A на всі лейни"), description: "", videos: [], frames: [{ image: frame(265, "account A · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
     { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
   ];
+  if (DECISIONS === "reject") seatRounds[0]!.variants = protoRounds["t-search"]![0]!.variants;
   /* `&decisions=long`: the first seat question has a title of ninety characters and a recommended option of a sentence. */
   if (DECISIONS === "long") {
     const held = seatRounds[0]!;
@@ -3419,11 +3427,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if ((DECISIONS || PROTO) && url.pathname === "/api/projects/decisions") {
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[] };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true };
       decisionPosts.push(body);
       const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
       if (!held) return json({ error: "review not found" }, 404);
-      held.decision = { chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
+      held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
       protoPublish();
       return json({ project: PROJECT, decisions: fixtureDecisions() });
     }
@@ -3435,7 +3443,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; reject?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
       /* A held save has not been written yet: the decision is recorded only once it is released. */
       await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
@@ -3449,7 +3457,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       else if (!held.decision) {
         const state = phase === "saved" || phase === "delivering" ? "pending" : protoSaveState[taskId] ?? "sent";
-        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
+        held.decision = { ...(body.reject ? { rejected: true as const } : {}), ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
       }
       protoPublish();
     }

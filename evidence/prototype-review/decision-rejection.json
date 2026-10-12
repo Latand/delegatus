@@ -1,0 +1,282 @@
+[
+  {
+    "width": 1440,
+    "lang": "en",
+    "scheme": "light",
+    "geometry": {
+      "height": 36,
+      "inside": true,
+      "overflow": false,
+      "uncovered": true,
+      "background": "rgb(138, 95, 0)"
+    },
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_cccccccccccccccccccccccccccccccc",
+        "chosen": [],
+        "comment": "Redo all variants with fewer controls.",
+        "answers": [
+          {
+            "questionId": "variant",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "phone",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "lang": "en",
+    "scheme": "dark",
+    "geometry": {
+      "height": 36,
+      "inside": true,
+      "overflow": false,
+      "uncovered": true,
+      "background": "rgb(224, 174, 69)"
+    },
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_cccccccccccccccccccccccccccccccc",
+        "chosen": [],
+        "comment": "Redo all variants with fewer controls.",
+        "answers": [
+          {
+            "questionId": "variant",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "phone",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "lang": "uk",
+    "scheme": "light",
+    "geometry": {
+      "height": 36,
+      "inside": true,
+      "overflow": false,
+      "uncovered": true,
+      "background": "rgb(138, 95, 0)"
+    },
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_cccccccccccccccccccccccccccccccc",
+        "chosen": [],
+        "comment": "Redo all variants with fewer controls.",
+        "answers": [
+          {
+            "questionId": "variant",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "phone",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "lang": "uk",
+    "scheme": "dark",
+    "geometry": {
+      "height": 36,
+      "inside": true,
+      "overflow": false,
+      "uncovered": true,
+      "background": "rgb(224, 174, 69)"
+    },
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_cccccccccccccccccccccccccccccccc",
+        "chosen": [],
+        "comment": "Redo all variants with fewer controls.",
+        "answers": [
+          {
+            "questionId": "variant",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "phone",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "lang": "en",
+    "scheme": "light",
+    "geometry": {
+      "height": 44,
+      "inside": true,
+      "overflow": false,
+      "uncovered": true,
+      "background": "rgb(138, 95, 0)"
+    },
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_cccccccccccccccccccccccccccccccc",
+        "chosen": [],
+        "comment": "Redo all variants with fewer controls.",
+        "answers": [
+          {
+            "questionId": "variant",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "phone",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "lang": "en",
+    "scheme": "dark",
+    "geometry": {
+      "height": 44,
+      "inside": true,
+      "overflow": false,
+      "uncovered": true,
+      "background": "rgb(224, 174, 69)"
+    },
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_cccccccccccccccccccccccccccccccc",
+        "chosen": [],
+        "comment": "Redo all variants with fewer controls.",
+        "answers": [
+          {
+            "questionId": "variant",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "phone",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "lang": "uk",
+    "scheme": "light",
+    "geometry": {
+      "height": 44,
+      "inside": true,
+      "overflow": false,
+      "uncovered": true,
+      "background": "rgb(138, 95, 0)"
+    },
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_cccccccccccccccccccccccccccccccc",
+        "chosen": [],
+        "comment": "Redo all variants with fewer controls.",
+        "answers": [
+          {
+            "questionId": "variant",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "phone",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "lang": "uk",
+    "scheme": "dark",
+    "geometry": {
+      "height": 44,
+      "inside": true,
+      "overflow": false,
+      "uncovered": true,
+      "background": "rgb(224, 174, 69)"
+    },
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_cccccccccccccccccccccccccccccccc",
+        "chosen": [],
+        "comment": "Redo all variants with fewer controls.",
+        "answers": [
+          {
+            "questionId": "variant",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "phone",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ]
+  }
+]

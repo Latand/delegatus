@@ -4,7 +4,7 @@ import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, 
 import { useCallback, useRef, useState } from "react";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
-import { ChevronDown } from "@/components/icons";
+import { Check, ChevronDown } from "@/components/icons";
 import { MicButtonView } from "@/components/MicButton";
 import { DecisionQuestions, selectPrototypeAnswer } from "@/components/prototypeReview/DecisionQuestions";
 import { roundGallery } from "@/components/prototypeReview/PrototypeReview";
@@ -132,6 +132,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   /* A form the server refused comes back as the operator left it. */
   const [answers, setAnswers] = useState<PrototypeAnswer[]>(() => decisionDraft(decision.id)?.answers ?? recommendedAnswers(questions));
   const [comment, setComment] = useState(() => decisionDraft(decision.id)?.comment ?? "");
+  const [reject, setReject] = useState(() => decisionDraft(decision.id)?.reject === true);
   const [sending, setSending] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -147,11 +148,11 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   if (asks) {
     try { normalizePrototypeAnswers(questions, answers, comment); } catch { valid = false; }
   }
-  const savable = valid && !sending && dictation.phase === "idle";
+  const savable = valid && (!reject || Boolean(comment.trim())) && !sending && dictation.phase === "idle";
   const send = async () => {
     if (!savable) return;
     setSending(true);
-    try { await onAnswer(decision.id, { chosen: [], comment, answers }); }
+    try { await onAnswer(decision.id, { chosen: [], comment, answers, ...(reject ? { reject: true as const } : {}) }); }
     finally { setSending(false); }
   };
   const Mark = asks ? MessageCircleQuestionMark : GalleryHorizontalEnd;
@@ -179,6 +180,12 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
       ) : null}
       {asks ? (
         <footer data-decision-footer="" className="flex min-w-0 flex-col gap-1.5 p-3">
+          {decision.variants.length ? (
+            <button type="button" role="checkbox" aria-checked={reject} data-decision-reject="" disabled={sending}
+              className={`${SECONDARY} self-start ${reject ? "border-warning/60 bg-warning-soft text-warning" : ""}`} onClick={() => setReject((held) => !held)}>
+              <span aria-hidden className="grid h-4 w-4 place-items-center rounded-sm border border-current">{reject ? <Check className="h-3 w-3" /> : null}</span>{t("proto.reject.none")}
+            </button>
+          ) : null}
           <div className="flex min-w-0 items-end gap-2">
             <div className={`flex min-w-0 flex-1 rounded-control border border-border bg-canvas focus-within:border-accent/60 ${recording ? "flex-col gap-1.5 p-2" : "items-center gap-1 py-0.5 pl-2.5 pr-1"}`}>
               <textarea
@@ -188,7 +195,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
                 readOnly={Boolean(dictation.liveText)}
                 data-decision-comment=""
                 aria-label={t("proto.comment")}
-                placeholder={t("proto.q.commentPlaceholder")}
+                placeholder={t(reject ? "proto.reject.needs" : "proto.q.commentPlaceholder")}
                 className={`max-h-32 min-h-8 resize-none bg-transparent py-1 text-body text-primary outline-none placeholder:text-muted [field-sizing:content] [@media(pointer:coarse)]:min-h-10 ${recording ? "w-full" : "min-w-0 flex-1"}`}
                 onChange={(event) => setComment(event.target.value)}
                 onKeyDown={(event) => {
@@ -199,11 +206,12 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
                 <MicButtonView {...dictation} start={dictation.start} busy={sending} onText={insertSpoken} anchored />
               </span>
             </div>
-            <button type="button" data-decision-send="" className={PRIMARY} disabled={!savable} onClick={() => void send()}>
+            <button type="button" data-decision-send="" className={reject ? PRIMARY.replace("bg-accent", "bg-warning").replace("text-white", "text-canvas").replace("ring-accent", "ring-warning") : PRIMARY} disabled={!savable} onClick={() => void send()}>
               {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-              {t("proto.answer")}
+              {t(reject ? "proto.reject.save" : "proto.answer")}
             </button>
           </div>
+          {reject && !comment.trim() ? <p role="status" data-decision-reject-needs="" className="m-0 text-label text-warning">{t("proto.reject.needs")}</p> : null}
           {!valid ? <p role="status" className="m-0 text-label text-muted">{t(answers.some((answer) => answer.other) && !comment.trim() ? "proto.q.otherNeedsComment" : "proto.q.answerAll")}</p> : null}
           {error ? <p role="alert" data-decision-error="" className="m-0 text-label font-semibold text-danger">{t("decisions.refused", { error })}</p> : null}
           {voiceError ? <p role="alert" className="m-0 text-label font-semibold text-danger">{voiceError}</p> : null}
@@ -238,6 +246,7 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
         <span className="min-w-0 flex-1 truncate text-label text-muted">· {decision.title}</span>
         <span data-decision-delivery={state} className={`shrink-0 rounded-full px-1.5 py-0.5 text-caption font-semibold ${tone}`}>{t(`decisions.state.${state}`)}</span>
       </header>
+      {made.rejected ? <p data-decision-rejected="" className="m-0 px-3 pb-2.5 text-ui font-semibold text-warning">{t("proto.rejected")}</p> : null}
       {decision.questions?.length ? (
         <ol className="m-0 flex list-none flex-col gap-1 px-3 pb-2.5">
           {decision.questions.map((question, at) => {

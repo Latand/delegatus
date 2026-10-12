@@ -4597,3 +4597,43 @@ describe("a control's hint never outlives its click", () => {
     }
   }, 240_000);
 });
+
+
+describe("prototype decision forms: rejection stays in the seat's conversation", () => {
+  browserTest("a taskless form with existing frames requires corrections and records rejection in the feed", async () => {
+    const out = path.resolve(".artifacts/prototype-review/decision-feed");
+    fs.mkdirSync(out, { recursive: true });
+    // The shared board fixture renders the seat's production conversation and its decision sheet.
+    const served = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=reject`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+        try {
+          await page.locator("[data-mobile2-seat-open]").click();
+          const pointer = page.locator("[data-decision-pointer-open]");
+          await pointer.waitFor({ timeout: 30_000 });
+          await pointer.click();
+          const card = page.locator('[data-decision-card="open"]');
+          await card.locator("[data-decision-reject]").click();
+          expect(await card.locator("[data-decision-send]").isEnabled()).toBe(false);
+          expect(await card.locator("[data-decision-reject-needs]").count()).toBe(1);
+          await card.locator("[data-decision-comment]").fill("Simplify every frame.");
+          await card.locator("[data-decision-send]").click();
+          await page.keyboard.press("Escape");
+          const rejected = page.locator("[data-decision-pointer] [data-decision-rejected]");
+          await rejected.waitFor({ timeout: 15_000 });
+          expect(await rejected.textContent()).toBe(translate(lang, "proto.rejected"));
+          expect(await page.locator("[data-decision-record-comment]").textContent()).toBe("Simplify every frame.");
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: { chosen: number[]; reject?: boolean; comment: string }[] }).decisionPosts);
+          expect(posts.at(-1)).toMatchObject({ chosen: [], reject: true, comment: "Simplify every frame." });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, scheme, posts, rejected: await rejected.textContent() });
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-rejected.png`) });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync("evidence/prototype-review/decision-feed.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 240_000);
+});

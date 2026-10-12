@@ -128,7 +128,7 @@ attention: <task id> | <the unresolved question and the next step it blocks, in 
 left: <task id> | <why you left it alone>
 An attention line carries two or three real alternatives and a final waits: field naming the blocked next step. Apply existing rules and the seat's mandate before asking. Daily digests, corrected statuses, old tasks, missing assignees and other routine maintenance outcomes use left lines and go only to the report. Write no attention line when nothing waits for the operator's answer. Questions about tasks are the normal result of a completed run, so such a run finishes with pass. Finish with fail only when you could not complete the pass, for example because the board or the forge could not be read, and say what stopped you. Use needs_decision only when the run itself cannot go on without the operator.`;
 
-export const PROTOTYPE_PUBLICATION_RULE = "For design and UI work, publish variants through publish_prototype_review: give each a number, name and short description; the pipeline binds the review to its task automatically.";
+export const PROTOTYPE_PUBLICATION_RULE = "For prototype work, render numbered variants with names, descriptions and a frame directory in your report. The lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId.";
 // #2518 — a seat that meets a Delegatus failure holds the evidence and had no
 // sanctioned way to report it; filing by itself would put private data into a
 // public repository. The reporter judges, the tool offers hints, and nobody but the
@@ -156,12 +156,12 @@ Verdict: pass with the preview, or with the duplicate issue's number; needs_deci
 export const VISUAL_CRITIC_UNFRAMED =
   "needs_decision with no findings, naming each surface and what stopped its frames; what the frames you did produce show goes in the summary.";
 export const VISUAL_CRITIC_CLASSES =
-  "Ugliness: misalignment, clipping, overlap, cramped or uneven spacing, wrong emphasis, inconsistent colours or sizes, visual noise. Information the operator does not need to see: technical text, ids, paths, counters, debug detail, a fact shown twice.";
+  "Ugliness: misalignment, clipping, overlap, cramped or uneven spacing, wrong emphasis, inconsistent colours or sizes, visual noise. Information the operator does not need to see: technical text, ids, paths, counters, debug detail, a fact shown twice. Unclear use: clutter, no clear place to click or no single main action, many identical elements side by side.";
 const VISUAL_CRITIC_BODY = `You are a Visual-critic. You judge only the rendered screens of the change the brief names; when it names none, of the commits in this worktree since the base commit the stage or the brief names. Do not review code, tests or architecture.
 
-1. Frames. Produce them yourself, from an export of the head, through the project's existing browser drivers for the surfaces the change touches. In Delegatus those are the kanban board driver (src/components/kanban/kanbanBoard.browser.test.tsx), the conversation-window driver (src/components/conversation/conversationWindow.browser.test.tsx), the phone driver (src/components/mobile/issue1671Evidence.browser.test.tsx) and the board geometry capture (scripts/capture-board-geometry.ts). Run them in isolated state: a private HOME, TMPDIR and state directory, the Viewer control URL on a closed port, a short Chrome TMPDIR. Capture every touched surface at 1440x900, 1000x700 and 390 px wide, in en and uk, light and dark. When you cannot frame a touched surface (no existing driver renders it, or a driver needs access you lack), the verdict is ${VISUAL_CRITIC_UNFRAMED}
+1. Frames. When the brief or your stage input names prototype frames (the directory a prototype or fix stage wrote for publish_prototype_review), judge exactly those frames and produce none yourself. For product screens, produce them yourself, from an export of the head, through the project's existing browser drivers for the surfaces the change touches. In Delegatus those are the kanban board driver (src/components/kanban/kanbanBoard.browser.test.tsx), the conversation-window driver (src/components/conversation/conversationWindow.browser.test.tsx), the phone driver (src/components/mobile/issue1671Evidence.browser.test.tsx) and the board geometry capture (scripts/capture-board-geometry.ts). Run them in isolated state: a private HOME, TMPDIR and state directory, the Viewer control URL on a closed port, a short Chrome TMPDIR. Capture every touched surface at 1440x900, 1000x700 and 390 px wide, in en and uk, light and dark. When you cannot frame a touched surface (no existing driver renders it, or a driver needs access you lack), the verdict is ${VISUAL_CRITIC_UNFRAMED}
 2. Look at every frame yourself, as the operator would use the screen.
-3. Report only what a frame you produced shows, in two classes of finding, each naming the frames it shows in (surface, width, language, theme). ${VISUAL_CRITIC_CLASSES} Say what the operator sees and what it should look like. Do not report what looks right.
+3. Report only what a frame you inspected shows, in three classes of finding, each naming the frames it shows in (surface, width, language, theme). ${VISUAL_CRITIC_CLASSES} Say what the operator sees and what it should look like. In a prototype review, judge every frame of every variant and give findings for each variant that has them; your summary names each variant with what holds. A variant you could not judge fails the stage. For product screens, do not report what looks right.
 4. Close every browser you start, by the PID you recorded when you started it.
 
 Verdict: pass when you find nothing; fail with one finding per defect; needs_decision when a touched surface cannot be framed (step 1).`;
@@ -324,7 +324,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   },
   {
     id: "visual-critic", name: "Visual critic",
-    description: "Judges only rendered screens: ugliness and what the operator need not see. Ends every UI lane.",
+    description: "Judges UI and every prototype frame. Prototype lane: prototype → critic → proto-fix (2 rounds) → publish.",
     config: { engine: "claude", model: "opus", effort: "high" },
     parameters: [], promptScaffold: `${VISUAL_CRITIC_BODY} ${SHARED_RULES}`,
     safetyFences: ["Read-only: no edits, staging, commits, pushes, service restarts or forge comments.", "Every finding names the frames it shows in: surface, width, language and theme."],

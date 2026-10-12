@@ -7,8 +7,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 307,
-          "height": 74.25,
-          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -17,8 +17,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 307,
-          "height": 74.25,
-          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -37,7 +37,7 @@
       "scope": "[data-decision-column]",
       "card": {
         "x": 277,
-        "y": 270,
+        "y": 235,
         "w": 814,
         "h": 293
       },
@@ -57,8 +57,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 307,
-          "height": 74.25,
-          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -87,8 +87,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 307,
-          "height": 74.25,
-          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -97,8 +97,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 307,
-          "height": 74.25,
-          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -117,7 +117,7 @@
       "scope": "[data-decision-column]",
       "card": {
         "x": 277,
-        "y": 270,
+        "y": 235,
         "w": 814,
         "h": 293
       },
@@ -137,8 +137,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 307,
-          "height": 74.25,
-          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -167,8 +167,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 307,
-          "height": 74.25,
-          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer",
+          "height": 90.75,
+          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -177,8 +177,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 307,
-          "height": 74.25,
-          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "height": 90.75,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -197,7 +197,7 @@
       "scope": "[data-decision-column]",
       "card": {
         "x": 277,
-        "y": 270,
+        "y": 235,
         "w": 814,
         "h": 293
       },
@@ -217,8 +217,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 307,
-          "height": 74.25,
-          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "height": 90.75,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -247,8 +247,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 307,
-          "height": 74.25,
-          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer",
+          "height": 90.75,
+          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -257,8 +257,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 307,
-          "height": 74.25,
-          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "height": 90.75,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -277,7 +277,7 @@
       "scope": "[data-decision-column]",
       "card": {
         "x": 277,
-        "y": 270,
+        "y": 235,
         "w": 814,
         "h": 293
       },
@@ -297,8 +297,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 307,
-          "height": 74.25,
-          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "height": 90.75,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -327,8 +327,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 346,
-          "height": 74.25,
-          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -337,8 +337,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 346,
-          "height": 74.25,
-          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -357,7 +357,7 @@
       "scope": "[data-decision-column]",
       "card": {
         "x": 273,
-        "y": 310,
+        "y": 235,
         "w": 702,
         "h": 293
       },
@@ -377,8 +377,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 346,
-          "height": 74.25,
-          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -407,8 +407,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 346,
-          "height": 74.25,
-          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -417,8 +417,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 346,
-          "height": 74.25,
-          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -437,7 +437,7 @@
       "scope": "[data-decision-column]",
       "card": {
         "x": 273,
-        "y": 310,
+        "y": 235,
         "w": 702,
         "h": 293
       },
@@ -457,8 +457,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 346,
-          "height": 74.25,
-          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "height": 90.75,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -487,8 +487,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 346,
-          "height": 74.25,
-          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer",
+          "height": 90.75,
+          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -497,8 +497,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 346,
-          "height": 74.25,
-          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "height": 90.75,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -517,7 +517,7 @@
       "scope": "[data-decision-column]",
       "card": {
         "x": 273,
-        "y": 310,
+        "y": 235,
         "w": 702,
         "h": 293
       },
@@ -537,8 +537,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 346,
-          "height": 74.25,
-          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "height": 90.75,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -567,8 +567,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 346,
-          "height": 74.25,
-          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer",
+          "height": 90.75,
+          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -577,8 +577,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 346,
-          "height": 74.25,
-          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "height": 90.75,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -597,7 +597,7 @@
       "scope": "[data-decision-column]",
       "card": {
         "x": 273,
-        "y": 310,
+        "y": 235,
         "w": 702,
         "h": 293
       },
@@ -617,8 +617,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 346,
-          "height": 74.25,
-          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "height": 90.75,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -647,8 +647,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 333.89,
-          "height": 66.75,
-          "text": "ПИТАННЯ ДО ВАС «Готово»: місце і деплой 4 хв тому",
+          "height": 101.75,
+          "text": "ПИТАННЯ ДО ВАС «Готово»: місце і деплой Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі. 4 хв тому",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -657,8 +657,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 333.89,
-          "height": 66.75,
-          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex 2 хв тому",
+          "height": 101.75,
+          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі. 2 хв тому",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -697,8 +697,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 333.89,
-          "height": 66.75,
-          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex 2 хв тому",
+          "height": 101.75,
+          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі. 2 хв тому",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -727,8 +727,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 333.89,
-          "height": 66.75,
-          "text": "ПИТАННЯ ДО ВАС «Готово»: місце і деплой 4 хв тому",
+          "height": 101.75,
+          "text": "ПИТАННЯ ДО ВАС «Готово»: місце і деплой Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі. 4 хв тому",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -737,8 +737,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 333.89,
-          "height": 66.75,
-          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex 2 хв тому",
+          "height": 101.75,
+          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі. 2 хв тому",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -777,8 +777,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 333.89,
-          "height": 66.75,
-          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex 2 хв тому",
+          "height": 101.75,
+          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі. 2 хв тому",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -807,8 +807,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 323.8,
-          "height": 66.75,
-          "text": "QUESTIONS FOR YOU «Done»: placement and deploy 4m ago",
+          "height": 118.25,
+          "text": "QUESTIONS FOR YOU «Done»: placement and deploy Answer the questions in the form; the project orchestrator receives your answers and carries them on. 4m ago",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -817,8 +817,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 323.8,
-          "height": 66.75,
-          "text": "QUESTIONS FOR YOU Account for the night Codex lanes 2m ago",
+          "height": 118.25,
+          "text": "QUESTIONS FOR YOU Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on. 2m ago",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -857,8 +857,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 323.8,
-          "height": 66.75,
-          "text": "QUESTIONS FOR YOU Account for the night Codex lanes 2m ago",
+          "height": 118.25,
+          "text": "QUESTIONS FOR YOU Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on. 2m ago",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -887,8 +887,8 @@
         {
           "id": "pr_dddddddddddddddddddddddddddddddd",
           "width": 323.8,
-          "height": 66.75,
-          "text": "QUESTIONS FOR YOU «Done»: placement and deploy 4m ago",
+          "height": 118.25,
+          "text": "QUESTIONS FOR YOU «Done»: placement and deploy Answer the questions in the form; the project orchestrator receives your answers and carries them on. 4m ago",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -897,8 +897,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 323.8,
-          "height": 66.75,
-          "text": "QUESTIONS FOR YOU Account for the night Codex lanes 2m ago",
+          "height": 118.25,
+          "text": "QUESTIONS FOR YOU Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on. 2m ago",
           "overflow": false,
           "titleCut": false,
           "inside": true,
@@ -937,8 +937,8 @@
         {
           "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "width": 323.8,
-          "height": 66.75,
-          "text": "QUESTIONS FOR YOU Account for the night Codex lanes 2m ago",
+          "height": 118.25,
+          "text": "QUESTIONS FOR YOU Account for the night Codex lanes Answer the questions in the form; the project orchestrator receives your answers and carries them on. 2m ago",
           "overflow": false,
           "titleCut": false,
           "inside": true,

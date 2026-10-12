@@ -1,3 +1,5 @@
+import type { PrototypeCriticPass } from "./criticGate";
+
 /** Client-safe contract shared by the task card, review and orchestrator pane. */
 export interface PrototypeFrameInput {
   path: string;
@@ -59,6 +61,7 @@ export type PrototypeDeliveryPhase = "saved" | "delivering" | "delivered" | "wai
 export interface PrototypeDecision {
   answers?: PrototypeAnswer[];
   skipped?: true;
+  rejected?: true;
   chosen: number[];
   comment: string;
   at: string;
@@ -92,13 +95,14 @@ export interface PrototypeReviewRound {
   /** Stable publication key and argument digest survive source-file removal. */
   publicationKey: string;
   inputDigest: string;
+  critic?: PrototypeCriticPass;
   variants: PrototypeVariant[];
   questions?: PrototypeQuestion[];
   decision?: PrototypeDecision;
   mediaRemovedAt?: string;
 }
 export interface PrototypeMediaView extends PrototypeMedia { available: boolean; url: string | null }
-export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "decision" | "variants"> {
+export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "critic" | "decision" | "variants"> {
   variants: Array<Omit<PrototypeVariant, "frames" | "videos"> & {
     frames: Array<Omit<PrototypeFrame, "image" | "original"> & { image: PrototypeMediaView; original?: PrototypeMediaView }>;
     videos: Array<{ media: PrototypeMediaView; caption: string }>;
@@ -130,7 +134,7 @@ export interface PrototypeReviewSummary {
   title: string;
   rounds: number;
   createdAt: string;
-  decision?: { answered?: true; chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState; phase?: PrototypeDeliveryPhase };
+  decision?: { answered?: true; rejected?: true; chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState; phase?: PrototypeDeliveryPhase };
 }
 export interface PrototypeReviewNotice {
   asks?: "questions";
@@ -162,4 +166,4 @@ export interface OperatorDecisionsRead {
       seat's feed draws where it asked. Null when the project holds no such round. */
   round?: OperatorDecisionView | null;
 }
-export interface DecidePrototypeInput { reviewId: string; chosen: number[]; comment: string; answers?: PrototypeAnswer[]; skip?: true }
+export interface DecidePrototypeInput { reviewId: string; chosen: number[]; comment: string; answers?: PrototypeAnswer[]; skip?: true; reject?: true }
