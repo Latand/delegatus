@@ -394,14 +394,14 @@ function revisionView(revision: RuleRevision): RuleRevisionView {
 /** Request answers retain task provenance even when a curator replaces revisedBy.
     Follow current merge and split edges, so Undo also restores the task counts. */
 function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, RoleMemoryRule>): (id: string) => number {
-  const tasks = new Map<string, Set<string>>();
+  const tasks = new Map<string, { key: string; at: string }[]>();
   const merged = new Map<string, string[]>();
   for (const row of all) {
     if (row.kind === "request") {
       const key = row.taskId ?? `pipeline:${row.pipelineId}`;
       for (const id of [...row.ruleIds, ...(row.rewrote ? [row.rewrote] : [])]) {
-        if (!tasks.has(id)) tasks.set(id, new Set());
-        tasks.get(id)!.add(key);
+        if (!tasks.has(id)) tasks.set(id, []);
+        tasks.get(id)!.push({ key, at: row.at });
       }
     } else if (row.kind === "rule" && !row.versionOf && row.mergedInto) {
       if (!merged.has(row.mergedInto)) merged.set(row.mergedInto, []);
@@ -411,16 +411,20 @@ function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, Ro
   return (id) => {
     const seen = new Set<string>();
     const keys = new Set<string>();
-    const pending = [id];
+    const pending: { id: string; through?: string }[] = [{ id }];
     while (pending.length) {
       const current = pending.pop()!;
-      if (seen.has(current)) continue;
-      seen.add(current);
-      for (const key of tasks.get(current) ?? []) keys.add(key);
-      const row = byId.get(current);
-      pending.push(...(merged.get(current) ?? []), ...(row?.mergedFrom ?? []));
-      if (row?.versionOf) pending.push(row.versionOf);
-      if (row?.splitFrom) pending.push(row.splitFrom);
+      const visitKey = `${current.id}\0${current.through ?? ""}`;
+      if (seen.has(visitKey)) continue;
+      seen.add(visitKey);
+      for (const task of tasks.get(current.id) ?? []) {
+        if (!current.through || task.at <= current.through) keys.add(task.key);
+      }
+      const row = byId.get(current.id);
+      pending.push(...(merged.get(current.id) ?? []).map(parent => ({ id: parent, through: current.through })),
+        ...(row?.mergedFrom ?? []).map(parent => ({ id: parent, through: current.through })));
+      if (row?.versionOf) pending.push({ id: row.versionOf, through: current.through });
+      if (row?.splitFrom) pending.push({ id: row.splitFrom, through: !current.through || (row.splitAt && row.splitAt < current.through) ? row.splitAt : current.through });
     }
     return keys.size;
   };

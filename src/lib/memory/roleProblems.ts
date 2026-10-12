@@ -10,14 +10,18 @@ import { lessonText, lessonTextLength, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_C
     curator still judge whether the remaining imperative holds on other tasks. */
 export function assertGenericRule(rule: string, scope: ScopeKind): void {
   const normalized = rule.normalize("NFKC");
-  const file = /(?:^|[\s`"'(])(?:[A-Z]:)?[\\/]*(?:[\w.@~-]+[\\/])*[\w.@~-]+\.(?:[cm]?[jt]sx?|json|ya?ml|toml|mdx?|ftl|py|sh|sql|go|rs|css|html|xml)(?=[:\s`"'),;.!?]|$)/iu;
+  const file = /(?:^|[\s`"'(])((?:[A-Z]:)?[\\/]*(?:[\w.@~-]+[\\/])*[\w.@~-]+\.(?:[cm]?[jt]sx?|json|ya?ml|toml|mdx?|ftl|py|sh|sql|go|rs|css|html|xml))(?=[:\s`"'),;.!?]|$)/gu;
+  // Bare capitalized names include runtimes and frameworks such as Node.js and Next.js.
+  const concreteFile = [...normalized.matchAll(file)].some(([, reference]) =>
+    /[\\/]/u.test(reference!) || /^[a-z0-9_.-]/u.test(reference!),
+  );
   const home = /(?:\/(?:home|Users)\/|[A-Z]:\\Users\\)/iu;
   const conditional = /^(?:when|whenever|if|unless|before|after|коли|якщо|когда|если)(?=\s|$)/iu.test(normalized)
     || /^(?:check|verify|validate|test|measure|keep|retain|use|run|read|write|preserve|require|ensure|confirm|always|never)\s.+\b(?:when|whenever|if|unless|while|before|after)\s/iu.test(normalized);
   const defect = !conditional && (/\b(?:is|are|was|were)\s+(?:broken|mismatched|missing|incorrect|inconsistent|failing|wrong)\b/iu.test(normalized)
     || /^(?:the|this|our)\s.+\b(?:fails?|omits?|accepts?|rejects?|disagrees?|requires?|uses?|supports?|lists?)\b/iu.test(normalized)
     || /(?:зламан|не\s+збіга|несумісн|сломан|не\s+совпада)/iu.test(normalized));
-  if (file.test(normalized) || home.test(normalized) || defect) throw new RoleMemoryRefusal("LESSON_IS_PROBLEM", "this names a concrete file or defect; answer problem {statement, evidence} for the project seat, or express the generic check without the project's fact");
+  if (concreteFile || home.test(normalized) || defect) throw new RoleMemoryRefusal("LESSON_IS_PROBLEM", "this names a concrete file or defect; answer problem {statement, evidence} for the project seat, or express the generic check without the project's fact");
   if (scope === "machine" && /\b(?:in|for|on|within)\s+(?:this|our|the current)\s+(?:project|repository|repo)\b|\b(?:this|our)\s+(?:project|repository|repo)(?:['’]s)?\s+(?:uses|requires|has|runs|supports|is)\b|(?:у|в)\s+(?:цьому|этом)\s+(?:проєкті|проекте)/iu.test(normalized)) {
     throw new RoleMemoryRefusal("LESSON_WRONG_LEVEL", "a machine rule must hold across projects; use the narrowest role/project level for a generic check, or problem {statement, evidence} for a concrete inconsistency");
   }

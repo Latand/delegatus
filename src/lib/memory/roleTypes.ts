@@ -89,6 +89,8 @@ export interface RoleMemoryRule {
   mergedFrom?: string[];
   movedFrom?: string;
   splitFrom?: string;
+  /** Requests from the split source after this point belong only to its first part. */
+  splitAt?: string;
   /** A curator transfer retained with the reversible archive. */
   problem?: ProblemInput;
   problemEpisode?: string;

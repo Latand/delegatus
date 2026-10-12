@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as problems from "./roleProblems";
+import { parseLessons } from "./roleStage";
 import { leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, newRuleId } from "./roleStore";
 import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan, seatTickSignalVersion } from "@/lib/monitor/seatTick";
@@ -83,6 +84,21 @@ test("the production controller credits a landed problem before losing the seat 
 test("concrete file paths are steered to problem on Unix and Windows", () => {
   const paths = ["config/locales.js", ["", "workspace", "config", "locales.js"].join("/"), ["C:", "workspace", "config", "locales.js"].join("\\")];
   for (const file of paths) expect(() => problems.assertGenericRule(`Read ${file} before translation work.`, "project")).toThrow(/answer problem/);
+});
+
+test("leave_lesson accepts generic runtime and framework guidance while concrete paths remain guarded", () => {
+  const rules = [
+    "Before changing Node.js stream handling, test errors after the first write.",
+    "Before changing Next.js route handling, test requests after the first response.",
+  ];
+  for (const [index, rule] of rules.entries()) {
+    const parsed = parseLessons({ lesson: { scope: "role", rule, why: "A runtime boundary needs a repeatable validation check." } }, "builder");
+    expect(parsed.lessons[0]?.rule).toBe(rule);
+    const source = { project: PROJECT, pipelineId: `runtime-guidance-${index}`, stageId: "fix", attempt: 1, roleId: "builder", conversationId: `runtime-guidance-conversation-${index}`, fixRound: true };
+    recordLessonRequest({ ...source, taskId: `runtime-guidance-task-${index}`, at: new Date(NOW).toISOString() });
+    expect(leaveLessons({ request: source, source, ...parsed }).left).toHaveLength(1);
+  }
+  expect(() => parseLessons({ lesson: { scope: "role", rule: "Read config/locales.js before changing language handling.", why: "A runtime boundary needs a repeatable validation check." } }, "builder")).toThrow(/answer problem/);
 });
 
 test("a curator problem in machine scope belongs to its author's project and disappears when restored", () => {

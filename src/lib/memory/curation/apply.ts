@@ -116,7 +116,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         if (!index) work.set(item.id, { ...rule, ...fields, scope: part.to, note: item.note, movedFrom: rule.scope });
         else {
           const id = newRuleId({ get: key => created.has(key.slice(2)) ? created.get(key.slice(2))! : tx.get(key) });
-          const row: RoleMemoryRule = { ...rule, ...fields, id, scope: part.to, createdAt: now, changedAt: now, versions: [], splitFrom: rule.id, note: item.note };
+          const row: RoleMemoryRule = { ...rule, ...fields, id, scope: part.to, createdAt: now, changedAt: now, versions: [], splitFrom: rule.id, splitAt: now, note: item.note };
           delete row.keptByOperatorAt; delete row.versionOf;
           created.set(id, row); work.set(id, row); placeholders[`split:${item.id}:${index}`] = id;
         }

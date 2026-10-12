@@ -6,6 +6,8 @@ import { leaveLessons, projectView, recordLessonRequest, roleScope, roleMemoryCo
 import { codePoints, ruleLine } from "./roleConsolidate";
 import { ROLE_MEMORY_BOUND } from "./roleTypes";
 import type { RuleSource } from "./roleTypes";
+import { applyCuration } from "./curation/apply";
+import { claimPass, patchPass } from "./curation/store";
 
 const PROJECT = "review-lessons";
 const RULE = "For rendered changes, check every supported width, theme and language before the first review.";
@@ -17,15 +19,16 @@ beforeEach(() => {
   previous = process.env.LLV_STATE_DIR;
   root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-review-lessons-"));
   process.env.LLV_STATE_DIR = root;
+  fs.writeFileSync(path.join(root, "AGENTS.md"), "Run the repository checks before publication.\n");
 });
 
 afterEach(() => {
   if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
   fs.rmSync(root, { recursive: true, force: true });
 });
-function request(lane: string, taskId?: string, attempt = 1): RuleSource {
+function request(lane: string, taskId?: string, attempt = 1, at = "2026-10-12T06:00:00.000Z"): RuleSource {
   const source: RuleSource = { project: PROJECT, pipelineId: lane, stageId: "fix", attempt, roleId: "builder", fixRound: true, conversationId: `conversation_${lane}` };
-  recordLessonRequest({ ...source, ...(taskId ? { taskId } : {}), at: "2026-10-12T06:00:00.000Z" });
+  recordLessonRequest({ ...source, ...(taskId ? { taskId } : {}), at });
   return source;
 }
 function leave(source: RuleSource, rule = RULE) {
@@ -55,6 +58,32 @@ test("duplicates from two tasks produce one candidate; two lanes of one task do 
   rewrite(request("lane-four", "task-three"), other.id);
   expect(builder().active.find(rule => rule.id === other.id)?.tasks).toBe(1);
   expect(builder().active.filter(rule => (rule.tasks ?? 0) >= 2)).toHaveLength(1);
+});
+
+test("a post-split rewrite adds recurrence only to the first part", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const source = request("split-source", "task-a");
+  const combined = leave(source, "For rendered changes, check every width and language before the first review.");
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: Date.parse("2026-10-12T06:01:00.000Z") });
+  if (!pass) throw Error("curation pass was not admitted");
+  const splitAt = "2026-10-12T06:01:00.000Z";
+  const split = applyCuration(pass, {
+    scopes: [{ scope, revision: projectView(PROJECT).scopes.find(item => item.scope === scope)!.revision, order: [combined.id, `split:${combined.id}:1`] }],
+    split: [{ id: combined.id, note: "Width and language checks apply independently.", parts: [
+      { to: scope, rule: "For rendered changes, check every supported width before the first review." },
+      { to: scope, rule: "For rendered changes, check every supported language before the first review." },
+    ] }],
+  }, splitAt);
+  const language = split.placeholders[`split:${combined.id}:1`]!;
+  patchPass(pass.id, { state: "succeeded", endedAt: splitAt });
+
+  const later = request("width-followup", "task-b", 1, "2026-10-12T06:02:00.000Z");
+  rewrite(later, combined.id);
+
+  const active = builder().active;
+  expect(active.find(rule => rule.id === combined.id)?.tasks).toBe(2);
+  expect(active.find(rule => rule.id === language)?.tasks).toBe(1);
+  expect(active.filter(rule => (rule.tasks ?? 0) >= 2)).toHaveLength(1);
 });
 
 test("legacy request rows count pipelines, including repeated attempts of that pipeline", () => {
