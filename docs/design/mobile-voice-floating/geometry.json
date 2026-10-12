@@ -17,7 +17,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 657,
+     "width": 388,
+     "height": 68
+    },
     "sheet": null,
     "chromeLine": 725,
     "rowsCutByWords": 0,
@@ -49,6 +54,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -57,7 +73,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ju9k2y",
+    "mount": "uz50l0",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -102,6 +118,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -110,7 +131,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ju9k2y",
+    "mount": "uz50l0",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -163,6 +184,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -182,7 +208,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "ju9k2y",
+    "mount": "uz50l0",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -236,6 +262,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -260,7 +291,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "ju9k2y",
+    "mount": "uz50l0",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -305,6 +336,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -313,7 +349,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ju9k2y",
+    "mount": "uz50l0",
     "callSeconds": 138,
     "feedAtEnd": true
    },
@@ -339,7 +375,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 288.25,
+     "width": 388,
+     "height": 183.75
+    },
     "sheet": {
      "x": 0,
      "y": 472,
@@ -347,9 +388,9 @@
      "height": 372
     },
     "chromeLine": 725,
-    "rowsCutByWords": 1,
+    "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -376,6 +417,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 123.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -384,7 +436,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ju9k2y",
+    "mount": "uz50l0",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -424,6 +476,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -432,15 +489,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ju9k2y",
-    "callSeconds": 142,
+    "mount": "uz50l0",
+    "callSeconds": 143,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "ju9k2y",
-    "mountAfter": "ju9k2y",
+    "mountBefore": "uz50l0",
+    "mountAfter": "uz50l0",
     "secondsBefore": 141,
-    "secondsAfter": 142
+    "secondsAfter": 143
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -472,6 +529,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -480,7 +542,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ju9k2y",
+    "mount": "uz50l0",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -501,7 +563,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 727,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 42,
+      "y": 727,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 719,
+     "width": 390,
+     "height": 68
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "g2sb6s",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-2-390x844-uk-light": {
    "talk": {
@@ -513,30 +647,30 @@
     },
     "bubbles": [
      {
-      "x": 167.390625,
-      "y": 495.25,
+      "x": 175.390625,
+      "y": 549,
       "width": 205.609375,
       "height": 36
      },
      {
-      "x": 17,
-      "y": 537.25,
-      "width": 356,
+      "x": 9,
+      "y": 591,
+      "width": 372,
       "height": 58
      }
     ],
     "pop": null,
     "plate": {
-     "x": 8,
-     "y": 476,
-     "width": 374,
-     "height": 128.25
+     "x": 1,
+     "y": 505,
+     "width": 388,
+     "height": 220
     },
     "sheet": null,
     "chromeLine": 725,
     "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -560,9 +694,20 @@
     },
     "bottomChromeTop": 732,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 15174,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 44,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -571,7 +716,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1g528h",
+    "mount": "u4rsnd",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -616,6 +761,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -624,7 +774,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1g528h",
+    "mount": "u4rsnd",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -677,6 +827,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -696,7 +851,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "1g528h",
+    "mount": "u4rsnd",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -750,6 +905,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -774,7 +934,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "1g528h",
+    "mount": "u4rsnd",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -819,6 +979,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -827,7 +992,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1g528h",
+    "mount": "u4rsnd",
     "callSeconds": 138,
     "feedAtEnd": true
    },
@@ -878,6 +1043,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -886,8 +1056,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1g528h",
-    "callSeconds": 141,
+    "mount": "u4rsnd",
+    "callSeconds": 140,
     "feedAtEnd": true
    },
    "sheet": {
@@ -906,7 +1076,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 288.25,
+     "width": 388,
+     "height": 183.75
+    },
     "sheet": {
      "x": 0,
      "y": 472,
@@ -914,9 +1089,9 @@
      "height": 372
     },
     "chromeLine": 725,
-    "rowsCutByWords": 1,
+    "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -943,6 +1118,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 123.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -951,7 +1137,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1g528h",
+    "mount": "u4rsnd",
     "callSeconds": 143,
     "feedAtEnd": true
    },
@@ -991,6 +1177,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -999,15 +1190,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1g528h",
-    "callSeconds": 146,
+    "mount": "u4rsnd",
+    "callSeconds": 145,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "1g528h",
-    "mountAfter": "1g528h",
+    "mountBefore": "u4rsnd",
+    "mountAfter": "u4rsnd",
     "secondsBefore": 144,
-    "secondsAfter": 146
+    "secondsAfter": 145
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -1039,6 +1230,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1047,7 +1243,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1g528h",
+    "mount": "u4rsnd",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -1063,12 +1259,90 @@
    "restored": {
     "head": {
      "x": 330,
-     "y": 79,
+     "y": 254.3115692138672,
+     "width": 52,
+     "height": 52.00001525878906
+    },
+    "sheetClosed": true
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 727,
      "width": 52,
      "height": 52
     },
-    "sheetClosed": true
-   }
+    "bubbles": [
+     {
+      "x": 176.390625,
+      "y": 611,
+      "width": 205.609375,
+      "height": 36
+     },
+     {
+      "x": 8,
+      "y": 653,
+      "width": 374,
+      "height": 58
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 445.75,
+     "width": 390,
+     "height": 341.25
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 4,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 165.25,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "6lfj9f",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-3-390x844-uk-light": {
    "talk": {
@@ -1121,9 +1395,20 @@
     },
     "bottomChromeTop": 732,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 1159,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1132,8 +1417,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lwnw1x",
-    "callSeconds": 136,
+    "mount": "kuykef",
+    "callSeconds": 135,
     "feedAtEnd": true
    },
    "offline": {
@@ -1177,6 +1462,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1185,7 +1475,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lwnw1x",
+    "mount": "kuykef",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -1238,6 +1528,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1257,7 +1552,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "lwnw1x",
+    "mount": "kuykef",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -1311,6 +1606,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1335,7 +1635,7 @@
     ],
     "status": "Слухаю· 2:17",
     "sideways": 0,
-    "mount": "lwnw1x",
+    "mount": "kuykef",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -1380,6 +1680,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1388,8 +1693,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lwnw1x",
-    "callSeconds": 139,
+    "mount": "kuykef",
+    "callSeconds": 138,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -1456,6 +1761,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1464,8 +1780,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lwnw1x",
-    "callSeconds": 142,
+    "mount": "kuykef",
+    "callSeconds": 141,
     "feedAtEnd": true
    },
    "board": {
@@ -1504,6 +1820,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1512,15 +1833,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lwnw1x",
-    "callSeconds": 145,
+    "mount": "kuykef",
+    "callSeconds": 143,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "lwnw1x",
-    "mountAfter": "lwnw1x",
-    "secondsBefore": 144,
-    "secondsAfter": 145
+    "mountBefore": "kuykef",
+    "mountAfter": "kuykef",
+    "secondsBefore": 142,
+    "secondsAfter": 143
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -1552,6 +1873,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1560,7 +1886,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lwnw1x",
+    "mount": "kuykef",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -1581,7 +1907,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 175,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 42,
+      "y": 175,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 167,
+     "width": 390,
+     "height": 130.125
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "iizl6w",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-1-390x844-uk-dark": {
    "talk": {
@@ -1600,7 +1998,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 657,
+     "width": 388,
+     "height": 68
+    },
     "sheet": null,
     "chromeLine": 725,
     "rowsCutByWords": 0,
@@ -1632,6 +2035,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1640,7 +2054,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "v8hbim",
+    "mount": "i4w377",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -1685,6 +2099,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1693,7 +2112,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "v8hbim",
+    "mount": "i4w377",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -1746,6 +2165,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1765,7 +2189,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "v8hbim",
+    "mount": "i4w377",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -1819,6 +2243,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1843,7 +2272,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "v8hbim",
+    "mount": "i4w377",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -1888,6 +2317,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1896,8 +2330,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "v8hbim",
-    "callSeconds": 137,
+    "mount": "i4w377",
+    "callSeconds": 138,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -1922,7 +2356,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 288.25,
+     "width": 388,
+     "height": 183.75
+    },
     "sheet": {
      "x": 0,
      "y": 472,
@@ -1930,9 +2369,9 @@
      "height": 372
     },
     "chromeLine": 725,
-    "rowsCutByWords": 1,
+    "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -1959,6 +2398,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 123.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -1967,7 +2417,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "v8hbim",
+    "mount": "i4w377",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -2007,6 +2457,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2015,14 +2470,14 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "v8hbim",
+    "mount": "i4w377",
     "callSeconds": 143,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "v8hbim",
-    "mountAfter": "v8hbim",
-    "secondsBefore": 141,
+    "mountBefore": "i4w377",
+    "mountAfter": "i4w377",
+    "secondsBefore": 142,
     "secondsAfter": 143
    },
    "showRowInFirstScreen": true,
@@ -2055,6 +2510,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2063,7 +2523,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "v8hbim",
+    "mount": "i4w377",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -2084,7 +2544,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 727,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 42,
+      "y": 727,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 719,
+     "width": 390,
+     "height": 68
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "bu7q9g",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-2-390x844-uk-dark": {
    "talk": {
@@ -2096,30 +2628,30 @@
     },
     "bubbles": [
      {
-      "x": 167.390625,
-      "y": 495.25,
+      "x": 175.390625,
+      "y": 549,
       "width": 205.609375,
       "height": 36
      },
      {
-      "x": 17,
-      "y": 537.25,
-      "width": 356,
+      "x": 9,
+      "y": 591,
+      "width": 372,
       "height": 58
      }
     ],
     "pop": null,
     "plate": {
-     "x": 8,
-     "y": 476,
-     "width": 374,
-     "height": 128.25
+     "x": 1,
+     "y": 505,
+     "width": 388,
+     "height": 220
     },
     "sheet": null,
     "chromeLine": 725,
     "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -2143,9 +2675,20 @@
     },
     "bottomChromeTop": 732,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 15174,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 44,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2154,8 +2697,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ih980p",
-    "callSeconds": 136,
+    "mount": "h8ozje",
+    "callSeconds": 135,
     "feedAtEnd": true
    },
    "offline": {
@@ -2199,6 +2742,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2207,7 +2755,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ih980p",
+    "mount": "h8ozje",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -2260,6 +2808,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2279,7 +2832,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "ih980p",
+    "mount": "h8ozje",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -2333,6 +2886,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2355,10 +2913,10 @@
       "cut": false
      }
     ],
-    "status": "Слухаю· 2:18",
+    "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "ih980p",
-    "callSeconds": 138,
+    "mount": "h8ozje",
+    "callSeconds": 136,
     "feedAtEnd": true
    },
    "drag": {
@@ -2402,6 +2960,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2410,8 +2973,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ih980p",
-    "callSeconds": 142,
+    "mount": "h8ozje",
+    "callSeconds": 137,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -2461,6 +3024,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2469,8 +3037,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ih980p",
-    "callSeconds": 146,
+    "mount": "h8ozje",
+    "callSeconds": 140,
     "feedAtEnd": true
    },
    "sheet": {
@@ -2489,7 +3057,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 288.25,
+     "width": 388,
+     "height": 183.75
+    },
     "sheet": {
      "x": 0,
      "y": 472,
@@ -2497,9 +3070,9 @@
      "height": 372
     },
     "chromeLine": 725,
-    "rowsCutByWords": 1,
+    "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -2526,6 +3099,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 123.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2534,8 +3118,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ih980p",
-    "callSeconds": 150,
+    "mount": "h8ozje",
+    "callSeconds": 142,
     "feedAtEnd": true
    },
    "board": {
@@ -2574,6 +3158,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2582,15 +3171,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ih980p",
-    "callSeconds": 154,
+    "mount": "h8ozje",
+    "callSeconds": 145,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "ih980p",
-    "mountAfter": "ih980p",
-    "secondsBefore": 153,
-    "secondsAfter": 154
+    "mountBefore": "h8ozje",
+    "mountAfter": "h8ozje",
+    "secondsBefore": 143,
+    "secondsAfter": 145
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -2622,6 +3211,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2630,7 +3224,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ih980p",
+    "mount": "h8ozje",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -2646,12 +3240,90 @@
    "restored": {
     "head": {
      "x": 330,
-     "y": 666.98974609375,
+     "y": 79,
      "width": 52,
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 727,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 176.390625,
+      "y": 611,
+      "width": 205.609375,
+      "height": 36
+     },
+     {
+      "x": 8,
+      "y": 653,
+      "width": 374,
+      "height": 58
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 445.75,
+     "width": 390,
+     "height": 341.25
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 4,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 165.25,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "8kw5cm",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-3-390x844-uk-dark": {
    "talk": {
@@ -2704,9 +3376,20 @@
     },
     "bottomChromeTop": 732,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 1159,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2715,7 +3398,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ez7yfd",
+    "mount": "2qjsiz",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -2760,6 +3443,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2768,7 +3456,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ez7yfd",
+    "mount": "2qjsiz",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -2821,6 +3509,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2840,7 +3533,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "ez7yfd",
+    "mount": "2qjsiz",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -2894,6 +3587,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2918,7 +3616,7 @@
     ],
     "status": "Слухаю· 2:17",
     "sideways": 0,
-    "mount": "ez7yfd",
+    "mount": "2qjsiz",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -2963,6 +3661,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -2971,7 +3674,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ez7yfd",
+    "mount": "2qjsiz",
     "callSeconds": 139,
     "feedAtEnd": true
    },
@@ -3039,6 +3742,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3047,8 +3761,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ez7yfd",
-    "callSeconds": 143,
+    "mount": "2qjsiz",
+    "callSeconds": 142,
     "feedAtEnd": true
    },
    "board": {
@@ -3087,6 +3801,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3095,15 +3814,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ez7yfd",
-    "callSeconds": 146,
+    "mount": "2qjsiz",
+    "callSeconds": 145,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "ez7yfd",
-    "mountAfter": "ez7yfd",
-    "secondsBefore": 145,
-    "secondsAfter": 146
+    "mountBefore": "2qjsiz",
+    "mountAfter": "2qjsiz",
+    "secondsBefore": 143,
+    "secondsAfter": 145
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -3135,6 +3854,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3143,7 +3867,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ez7yfd",
+    "mount": "2qjsiz",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -3159,12 +3883,84 @@
    "restored": {
     "head": {
      "x": 330,
-     "y": 79,
+     "y": 104.99917602539062,
      "width": 52,
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 175,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 42,
+      "y": 175,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 167,
+     "width": 390,
+     "height": 130.125
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "esr3ix",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-1-390x844-en-light": {
    "talk": {
@@ -3183,7 +3979,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 657,
+     "width": 388,
+     "height": 68
+    },
     "sheet": null,
     "chromeLine": 725,
     "rowsCutByWords": 0,
@@ -3215,6 +4016,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3223,7 +4035,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "09tuge",
+    "mount": "s2oen2",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -3268,6 +4080,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3276,7 +4093,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "09tuge",
+    "mount": "s2oen2",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -3329,6 +4146,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3348,7 +4170,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "09tuge",
+    "mount": "s2oen2",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -3402,6 +4224,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3426,7 +4253,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "09tuge",
+    "mount": "s2oen2",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -3471,6 +4298,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3479,8 +4311,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "09tuge",
-    "callSeconds": 137,
+    "mount": "s2oen2",
+    "callSeconds": 138,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -3505,7 +4337,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 288.25,
+     "width": 388,
+     "height": 183.75
+    },
     "sheet": {
      "x": 0,
      "y": 472,
@@ -3513,9 +4350,9 @@
      "height": 372
     },
     "chromeLine": 725,
-    "rowsCutByWords": 1,
+    "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -3542,6 +4379,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 123.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3550,8 +4398,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "09tuge",
-    "callSeconds": 140,
+    "mount": "s2oen2",
+    "callSeconds": 141,
     "feedAtEnd": true
    },
    "board": {
@@ -3590,6 +4438,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3598,15 +4451,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "09tuge",
-    "callSeconds": 142,
+    "mount": "s2oen2",
+    "callSeconds": 144,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "09tuge",
-    "mountAfter": "09tuge",
-    "secondsBefore": 140,
-    "secondsAfter": 142
+    "mountBefore": "s2oen2",
+    "mountAfter": "s2oen2",
+    "secondsBefore": 143,
+    "secondsAfter": 144
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -3638,6 +4491,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3646,7 +4504,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "09tuge",
+    "mount": "s2oen2",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -3667,7 +4525,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 727,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 42,
+      "y": 727,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 706.25,
+     "width": 390,
+     "height": 80.75
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 20.75,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "ae5ugm",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-2-390x844-en-light": {
    "talk": {
@@ -3679,30 +4609,30 @@
     },
     "bubbles": [
      {
-      "x": 193.765625,
-      "y": 495.25,
+      "x": 201.765625,
+      "y": 549,
       "width": 179.234375,
       "height": 36
      },
      {
-      "x": 17,
-      "y": 537.25,
-      "width": 356,
+      "x": 9,
+      "y": 591,
+      "width": 372,
       "height": 58
      }
     ],
     "pop": null,
     "plate": {
-     "x": 8,
-     "y": 476,
-     "width": 374,
-     "height": 128.25
+     "x": 1,
+     "y": 505,
+     "width": 388,
+     "height": 220
     },
     "sheet": null,
     "chromeLine": 725,
     "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -3726,9 +4656,20 @@
     },
     "bottomChromeTop": 732,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 15174,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 44,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3737,7 +4678,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kmzhux",
+    "mount": "r8ceyl",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -3782,6 +4723,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3790,7 +4736,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kmzhux",
+    "mount": "r8ceyl",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -3843,6 +4789,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3862,7 +4813,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "kmzhux",
+    "mount": "r8ceyl",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -3916,6 +4867,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3940,7 +4896,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "kmzhux",
+    "mount": "r8ceyl",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -3985,6 +4941,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -3993,8 +4954,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kmzhux",
-    "callSeconds": 138,
+    "mount": "r8ceyl",
+    "callSeconds": 137,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -4044,6 +5005,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4052,8 +5018,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kmzhux",
-    "callSeconds": 141,
+    "mount": "r8ceyl",
+    "callSeconds": 140,
     "feedAtEnd": true
    },
    "sheet": {
@@ -4072,7 +5038,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 288.25,
+     "width": 388,
+     "height": 183.75
+    },
     "sheet": {
      "x": 0,
      "y": 472,
@@ -4080,9 +5051,9 @@
      "height": 372
     },
     "chromeLine": 725,
-    "rowsCutByWords": 1,
+    "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -4109,6 +5080,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 123.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4117,8 +5099,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kmzhux",
-    "callSeconds": 144,
+    "mount": "r8ceyl",
+    "callSeconds": 142,
     "feedAtEnd": true
    },
    "board": {
@@ -4157,6 +5139,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4165,15 +5152,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kmzhux",
-    "callSeconds": 147,
+    "mount": "r8ceyl",
+    "callSeconds": 145,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "kmzhux",
-    "mountAfter": "kmzhux",
-    "secondsBefore": 145,
-    "secondsAfter": 147
+    "mountBefore": "r8ceyl",
+    "mountAfter": "r8ceyl",
+    "secondsBefore": 143,
+    "secondsAfter": 145
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -4205,6 +5192,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4213,7 +5205,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kmzhux",
+    "mount": "r8ceyl",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -4234,7 +5226,85 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 727,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 202.765625,
+      "y": 611,
+      "width": 179.234375,
+      "height": 36
+     },
+     {
+      "x": 8,
+      "y": 653,
+      "width": 374,
+      "height": 58
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 445.75,
+     "width": 390,
+     "height": 341.25
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 4,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 165.25,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "a2xgfa",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-3-390x844-en-light": {
    "talk": {
@@ -4287,9 +5357,20 @@
     },
     "bottomChromeTop": 732,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 1002,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4298,7 +5379,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "yj0vdp",
+    "mount": "6iaua9",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -4343,6 +5424,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4351,7 +5437,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "yj0vdp",
+    "mount": "6iaua9",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -4404,6 +5490,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4423,7 +5514,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "yj0vdp",
+    "mount": "6iaua9",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -4477,6 +5568,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4499,10 +5595,10 @@
       "cut": false
      }
     ],
-    "status": "Listening· 2:17",
+    "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "yj0vdp",
-    "callSeconds": 137,
+    "mount": "6iaua9",
+    "callSeconds": 136,
     "feedAtEnd": true
    },
    "drag": {
@@ -4546,6 +5642,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4554,8 +5655,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "yj0vdp",
-    "callSeconds": 139,
+    "mount": "6iaua9",
+    "callSeconds": 137,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -4622,6 +5723,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4630,8 +5742,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "yj0vdp",
-    "callSeconds": 141,
+    "mount": "6iaua9",
+    "callSeconds": 140,
     "feedAtEnd": true
    },
    "board": {
@@ -4670,6 +5782,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4678,15 +5795,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "yj0vdp",
-    "callSeconds": 144,
+    "mount": "6iaua9",
+    "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "yj0vdp",
-    "mountAfter": "yj0vdp",
-    "secondsBefore": 143,
-    "secondsAfter": 144
+    "mountBefore": "6iaua9",
+    "mountAfter": "6iaua9",
+    "secondsBefore": 141,
+    "secondsAfter": 142
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -4718,6 +5835,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4726,7 +5848,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "yj0vdp",
+    "mount": "6iaua9",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -4747,7 +5869,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 175,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 42,
+      "y": 175,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 167,
+     "width": 390,
+     "height": 130.125
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "be72ht",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-1-390x844-en-dark": {
    "talk": {
@@ -4766,7 +5960,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 657,
+     "width": 388,
+     "height": 68
+    },
     "sheet": null,
     "chromeLine": 725,
     "rowsCutByWords": 0,
@@ -4798,6 +5997,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4806,7 +6016,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "6pz2gw",
+    "mount": "ze4xss",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -4851,6 +6061,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4859,7 +6074,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "6pz2gw",
+    "mount": "ze4xss",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -4912,6 +6127,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -4931,7 +6151,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "6pz2gw",
+    "mount": "ze4xss",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -4985,6 +6205,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5009,7 +6234,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "6pz2gw",
+    "mount": "ze4xss",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -5054,6 +6279,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5062,7 +6292,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "6pz2gw",
+    "mount": "ze4xss",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -5088,7 +6318,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 288.25,
+     "width": 388,
+     "height": 183.75
+    },
     "sheet": {
      "x": 0,
      "y": 472,
@@ -5096,9 +6331,9 @@
      "height": 372
     },
     "chromeLine": 725,
-    "rowsCutByWords": 1,
+    "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -5125,6 +6360,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 123.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5133,7 +6379,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "6pz2gw",
+    "mount": "ze4xss",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -5173,6 +6419,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5181,13 +6432,13 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "6pz2gw",
+    "mount": "ze4xss",
     "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "6pz2gw",
-    "mountAfter": "6pz2gw",
+    "mountBefore": "ze4xss",
+    "mountAfter": "ze4xss",
     "secondsBefore": 141,
     "secondsAfter": 142
    },
@@ -5221,6 +6472,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5229,7 +6485,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "6pz2gw",
+    "mount": "ze4xss",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -5245,12 +6501,84 @@
    "restored": {
     "head": {
      "x": 330,
-     "y": 253.7723388671875,
+     "y": 254.73516845703125,
      "width": 52,
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 727,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 42,
+      "y": 727,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 706.25,
+     "width": 390,
+     "height": 80.75
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 20.75,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "4jz8qh",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-2-390x844-en-dark": {
    "talk": {
@@ -5262,30 +6590,30 @@
     },
     "bubbles": [
      {
-      "x": 193.765625,
-      "y": 495.25,
+      "x": 201.765625,
+      "y": 549,
       "width": 179.234375,
       "height": 36
      },
      {
-      "x": 17,
-      "y": 537.25,
-      "width": 356,
+      "x": 9,
+      "y": 591,
+      "width": 372,
       "height": 58
      }
     ],
     "pop": null,
     "plate": {
-     "x": 8,
-     "y": 476,
-     "width": 374,
-     "height": 128.25
+     "x": 1,
+     "y": 505,
+     "width": 388,
+     "height": 220
     },
     "sheet": null,
     "chromeLine": 725,
     "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -5309,9 +6637,20 @@
     },
     "bottomChromeTop": 732,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 15174,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 44,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5320,7 +6659,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1n6rb6",
+    "mount": "v8sl4d",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -5365,6 +6704,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5373,7 +6717,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1n6rb6",
+    "mount": "v8sl4d",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -5426,6 +6770,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5445,7 +6794,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "1n6rb6",
+    "mount": "v8sl4d",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -5499,6 +6848,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5523,7 +6877,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "1n6rb6",
+    "mount": "v8sl4d",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -5568,6 +6922,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5576,8 +6935,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1n6rb6",
-    "callSeconds": 138,
+    "mount": "v8sl4d",
+    "callSeconds": 137,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -5627,6 +6986,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5635,8 +6999,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1n6rb6",
-    "callSeconds": 142,
+    "mount": "v8sl4d",
+    "callSeconds": 140,
     "feedAtEnd": true
    },
    "sheet": {
@@ -5655,7 +7019,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 288.25,
+     "width": 388,
+     "height": 183.75
+    },
     "sheet": {
      "x": 0,
      "y": 472,
@@ -5663,9 +7032,9 @@
      "height": 372
     },
     "chromeLine": 725,
-    "rowsCutByWords": 1,
+    "rowsCutByWords": 0,
     "marksCutByWords": 0,
-    "controlsHiddenByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -5692,6 +7061,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 123.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5700,8 +7080,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1n6rb6",
-    "callSeconds": 145,
+    "mount": "v8sl4d",
+    "callSeconds": 143,
     "feedAtEnd": true
    },
    "board": {
@@ -5740,6 +7120,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5748,15 +7133,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1n6rb6",
-    "callSeconds": 148,
+    "mount": "v8sl4d",
+    "callSeconds": 145,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "1n6rb6",
-    "mountAfter": "1n6rb6",
-    "secondsBefore": 146,
-    "secondsAfter": 148
+    "mountBefore": "v8sl4d",
+    "mountAfter": "v8sl4d",
+    "secondsBefore": 144,
+    "secondsAfter": 145
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -5788,6 +7173,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5796,7 +7186,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "1n6rb6",
+    "mount": "v8sl4d",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -5817,7 +7207,85 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 727,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 202.765625,
+      "y": 611,
+      "width": 179.234375,
+      "height": 36
+     },
+     {
+      "x": 8,
+      "y": 653,
+      "width": 374,
+      "height": 58
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 445.75,
+     "width": 390,
+     "height": 341.25
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 4,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 165.25,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "9b8rtr",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-3-390x844-en-dark": {
    "talk": {
@@ -5870,9 +7338,20 @@
     },
     "bottomChromeTop": 732,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 1002,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5881,7 +7360,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eju9gv",
+    "mount": "immdhg",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -5926,6 +7405,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -5934,7 +7418,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eju9gv",
+    "mount": "immdhg",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -5987,6 +7471,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6006,7 +7495,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "eju9gv",
+    "mount": "immdhg",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -6060,6 +7549,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6084,7 +7578,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "eju9gv",
+    "mount": "immdhg",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -6129,6 +7623,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6137,8 +7636,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eju9gv",
-    "callSeconds": 137,
+    "mount": "immdhg",
+    "callSeconds": 138,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -6205,6 +7704,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6213,7 +7723,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eju9gv",
+    "mount": "immdhg",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -6253,6 +7763,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6261,15 +7776,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eju9gv",
-    "callSeconds": 143,
+    "mount": "immdhg",
+    "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "eju9gv",
-    "mountAfter": "eju9gv",
+    "mountBefore": "immdhg",
+    "mountAfter": "immdhg",
     "secondsBefore": 141,
-    "secondsAfter": 143
+    "secondsAfter": 142
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -6301,6 +7816,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6309,7 +7829,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eju9gv",
+    "mount": "immdhg",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -6325,12 +7845,84 @@
    "restored": {
     "head": {
      "x": 330,
-     "y": 105.04197692871094,
+     "y": 79,
      "width": 52,
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 330,
+     "y": 175,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 42,
+      "y": 175,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 167,
+     "width": 390,
+     "height": 130.125
+    },
+    "sheet": null,
+    "chromeLine": 787,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 390,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 787,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "1myjyv",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-1-375x667-uk-light": {
    "talk": {
@@ -6349,7 +7941,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 480,
+     "width": 373,
+     "height": 68
+    },
     "sheet": null,
     "chromeLine": 548,
     "rowsCutByWords": 0,
@@ -6381,6 +7978,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6389,7 +7997,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "euze6h",
+    "mount": "5o94t7",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -6434,6 +8042,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6442,7 +8055,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "euze6h",
+    "mount": "5o94t7",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -6495,6 +8108,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6514,7 +8132,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "euze6h",
+    "mount": "5o94t7",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -6568,6 +8186,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6592,7 +8215,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "euze6h",
+    "mount": "5o94t7",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -6637,6 +8260,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6645,7 +8273,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "euze6h",
+    "mount": "5o94t7",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -6671,7 +8299,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 93.25,
+     "width": 373,
+     "height": 205.75
+    },
     "sheet": {
      "x": 0,
      "y": 295,
@@ -6679,9 +8312,9 @@
      "height": 372
     },
     "chromeLine": 548,
-    "rowsCutByWords": 3,
-    "marksCutByWords": 2,
-    "controlsHiddenByWords": 0,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -6708,6 +8341,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 141.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6716,7 +8360,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "euze6h",
+    "mount": "5o94t7",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -6756,6 +8400,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6764,14 +8413,14 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "euze6h",
+    "mount": "5o94t7",
     "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "euze6h",
-    "mountAfter": "euze6h",
-    "secondsBefore": 140,
+    "mountBefore": "5o94t7",
+    "mountAfter": "5o94t7",
+    "secondsBefore": 141,
     "secondsAfter": 142
    },
    "showRowInFirstScreen": true,
@@ -6804,6 +8453,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6812,7 +8466,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "euze6h",
+    "mount": "5o94t7",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -6833,7 +8487,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 550,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 27,
+      "y": 550,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 462.25,
+     "width": 375,
+     "height": 147.75
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 87.75,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "wy35tm",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-2-375x667-uk-light": {
    "talk": {
@@ -6845,24 +8571,24 @@
     },
     "bubbles": [
      {
-      "x": 152.390625,
-      "y": 369,
+      "x": 160.390625,
+      "y": 372,
       "width": 205.609375,
       "height": 36
      },
      {
-      "x": 17,
-      "y": 411,
-      "width": 341,
+      "x": 9,
+      "y": 414,
+      "width": 357,
       "height": 58
      }
     ],
     "pop": null,
     "plate": {
-     "x": 8,
-     "y": 344,
-     "width": 359,
-     "height": 134
+     "x": 1,
+     "y": 310,
+     "width": 373,
+     "height": 238
     },
     "sheet": null,
     "chromeLine": 548,
@@ -6892,9 +8618,20 @@
     },
     "bottomChromeTop": 555,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 10794,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
-    "controlsUnderWordsPx2": 1232,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 62,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6903,7 +8640,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -6948,6 +8685,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -6956,7 +8698,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -7009,6 +8751,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7028,7 +8775,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -7082,6 +8829,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7106,7 +8858,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -7151,6 +8903,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7159,7 +8916,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -7210,6 +8967,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7218,7 +8980,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -7238,7 +9000,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 93.25,
+     "width": 373,
+     "height": 205.75
+    },
     "sheet": {
      "x": 0,
      "y": 295,
@@ -7246,9 +9013,9 @@
      "height": 372
     },
     "chromeLine": 548,
-    "rowsCutByWords": 3,
-    "marksCutByWords": 2,
-    "controlsHiddenByWords": 0,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -7275,6 +9042,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 141.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7283,7 +9061,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": 142,
     "feedAtEnd": true
    },
@@ -7323,6 +9101,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7331,13 +9114,13 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": 145,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "qmyabe",
-    "mountAfter": "qmyabe",
+    "mountBefore": "wwf7jb",
+    "mountAfter": "wwf7jb",
     "secondsBefore": 143,
     "secondsAfter": 145
    },
@@ -7371,6 +9154,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7379,7 +9167,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "qmyabe",
+    "mount": "wwf7jb",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -7400,7 +9188,85 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 550,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 161.390625,
+      "y": 434,
+      "width": 205.609375,
+      "height": 36
+     },
+     {
+      "x": 8,
+      "y": 476,
+      "width": 359,
+      "height": 58
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 317.625,
+     "width": 375,
+     "height": 292.375
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 4,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 116.375,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "20wiwr",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-3-375x667-uk-light": {
    "talk": {
@@ -7453,9 +9319,20 @@
     },
     "bottomChromeTop": 555,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 1194,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7464,8 +9341,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "10bplw",
-    "callSeconds": 136,
+    "mount": "g96x77",
+    "callSeconds": 135,
     "feedAtEnd": true
    },
    "offline": {
@@ -7509,6 +9386,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7517,7 +9399,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "10bplw",
+    "mount": "g96x77",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -7570,6 +9452,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7589,7 +9476,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "10bplw",
+    "mount": "g96x77",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -7643,6 +9530,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7667,7 +9559,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "10bplw",
+    "mount": "g96x77",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -7712,6 +9604,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7720,8 +9617,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "10bplw",
-    "callSeconds": 137,
+    "mount": "g96x77",
+    "callSeconds": 138,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -7788,6 +9685,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7796,7 +9704,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "10bplw",
+    "mount": "g96x77",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -7836,6 +9744,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7844,13 +9757,13 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "10bplw",
+    "mount": "g96x77",
     "callSeconds": 143,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "10bplw",
-    "mountAfter": "10bplw",
+    "mountBefore": "g96x77",
+    "mountAfter": "g96x77",
     "secondsBefore": 141,
     "secondsAfter": 143
    },
@@ -7884,6 +9797,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7892,7 +9810,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "10bplw",
+    "mount": "g96x77",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -7908,12 +9826,84 @@
    "restored": {
     "head": {
      "x": 315,
-     "y": 20.046875,
+     "y": 61.99360656738281,
      "width": 52,
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 175,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 27,
+      "y": 175,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 167,
+     "width": 375,
+     "height": 146.625
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "iigsbp",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-1-375x667-uk-dark": {
    "talk": {
@@ -7932,7 +9922,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 480,
+     "width": 373,
+     "height": 68
+    },
     "sheet": null,
     "chromeLine": 548,
     "rowsCutByWords": 0,
@@ -7964,6 +9959,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -7972,7 +9978,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lxwthk",
+    "mount": "q9jk3z",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -8017,6 +10023,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8025,7 +10036,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lxwthk",
+    "mount": "q9jk3z",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -8078,6 +10089,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8097,7 +10113,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "lxwthk",
+    "mount": "q9jk3z",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -8151,6 +10167,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8175,7 +10196,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "lxwthk",
+    "mount": "q9jk3z",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -8220,6 +10241,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8228,7 +10254,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lxwthk",
+    "mount": "q9jk3z",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -8254,7 +10280,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 93.25,
+     "width": 373,
+     "height": 205.75
+    },
     "sheet": {
      "x": 0,
      "y": 295,
@@ -8262,9 +10293,9 @@
      "height": 372
     },
     "chromeLine": 548,
-    "rowsCutByWords": 3,
-    "marksCutByWords": 2,
-    "controlsHiddenByWords": 0,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -8291,6 +10322,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 141.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8299,7 +10341,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lxwthk",
+    "mount": "q9jk3z",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -8339,6 +10381,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8347,13 +10394,13 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lxwthk",
+    "mount": "q9jk3z",
     "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "lxwthk",
-    "mountAfter": "lxwthk",
+    "mountBefore": "q9jk3z",
+    "mountAfter": "q9jk3z",
     "secondsBefore": 141,
     "secondsAfter": 142
    },
@@ -8387,6 +10434,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8395,7 +10447,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "lxwthk",
+    "mount": "q9jk3z",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -8416,7 +10468,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 550,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 27,
+      "y": 550,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 462.25,
+     "width": 375,
+     "height": 147.75
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 87.75,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "6whcdm",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-2-375x667-uk-dark": {
    "talk": {
@@ -8428,24 +10552,24 @@
     },
     "bubbles": [
      {
-      "x": 152.390625,
-      "y": 369,
+      "x": 160.390625,
+      "y": 372,
       "width": 205.609375,
       "height": 36
      },
      {
-      "x": 17,
-      "y": 411,
-      "width": 341,
+      "x": 9,
+      "y": 414,
+      "width": 357,
       "height": 58
      }
     ],
     "pop": null,
     "plate": {
-     "x": 8,
-     "y": 344,
-     "width": 359,
-     "height": 134
+     "x": 1,
+     "y": 310,
+     "width": 373,
+     "height": 238
     },
     "sheet": null,
     "chromeLine": 548,
@@ -8475,9 +10599,20 @@
     },
     "bottomChromeTop": 555,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 10794,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
-    "controlsUnderWordsPx2": 1232,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 62,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8486,7 +10621,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "di11ls",
+    "mount": "caue3u",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -8531,6 +10666,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8539,7 +10679,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "di11ls",
+    "mount": "caue3u",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -8592,6 +10732,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8611,7 +10756,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "di11ls",
+    "mount": "caue3u",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -8665,6 +10810,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8689,7 +10839,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "di11ls",
+    "mount": "caue3u",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -8734,6 +10884,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8742,8 +10897,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "di11ls",
-    "callSeconds": 137,
+    "mount": "caue3u",
+    "callSeconds": 138,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -8793,6 +10948,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8801,8 +10961,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "di11ls",
-    "callSeconds": 140,
+    "mount": "caue3u",
+    "callSeconds": 141,
     "feedAtEnd": true
    },
    "sheet": {
@@ -8821,7 +10981,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 93.25,
+     "width": 373,
+     "height": 205.75
+    },
     "sheet": {
      "x": 0,
      "y": 295,
@@ -8829,9 +10994,9 @@
      "height": 372
     },
     "chromeLine": 548,
-    "rowsCutByWords": 3,
-    "marksCutByWords": 2,
-    "controlsHiddenByWords": 0,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -8858,6 +11023,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 141.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8866,7 +11042,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "di11ls",
+    "mount": "caue3u",
     "callSeconds": 143,
     "feedAtEnd": true
    },
@@ -8906,6 +11082,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8914,13 +11095,13 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "di11ls",
+    "mount": "caue3u",
     "callSeconds": 145,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "di11ls",
-    "mountAfter": "di11ls",
+    "mountBefore": "caue3u",
+    "mountAfter": "caue3u",
     "secondsBefore": 144,
     "secondsAfter": 145
    },
@@ -8954,6 +11135,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -8962,7 +11148,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "di11ls",
+    "mount": "caue3u",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -8983,7 +11169,85 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 550,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 161.390625,
+      "y": 434,
+      "width": 205.609375,
+      "height": 36
+     },
+     {
+      "x": 8,
+      "y": 476,
+      "width": 359,
+      "height": 58
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 317.625,
+     "width": 375,
+     "height": 292.375
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 4,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 116.375,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "20cub0",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-3-375x667-uk-dark": {
    "talk": {
@@ -9036,9 +11300,20 @@
     },
     "bottomChromeTop": 555,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 1194,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9047,7 +11322,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eb4qzz",
+    "mount": "41gchc",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -9092,6 +11367,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9100,7 +11380,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eb4qzz",
+    "mount": "41gchc",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -9153,6 +11433,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9172,7 +11457,7 @@
     ],
     "status": "Не підключено",
     "sideways": 0,
-    "mount": "eb4qzz",
+    "mount": "41gchc",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -9226,6 +11511,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9250,7 +11540,7 @@
     ],
     "status": "Слухаю· 2:16",
     "sideways": 0,
-    "mount": "eb4qzz",
+    "mount": "41gchc",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -9295,6 +11585,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9303,8 +11598,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eb4qzz",
-    "callSeconds": 138,
+    "mount": "41gchc",
+    "callSeconds": 137,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -9371,6 +11666,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9379,7 +11685,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eb4qzz",
+    "mount": "41gchc",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -9419,6 +11725,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9427,15 +11738,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eb4qzz",
-    "callSeconds": 143,
+    "mount": "41gchc",
+    "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "eb4qzz",
-    "mountAfter": "eb4qzz",
-    "secondsBefore": 142,
-    "secondsAfter": 143
+    "mountBefore": "41gchc",
+    "mountAfter": "41gchc",
+    "secondsBefore": 141,
+    "secondsAfter": 142
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -9467,6 +11778,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9475,7 +11791,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "eb4qzz",
+    "mount": "41gchc",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -9491,12 +11807,84 @@
    "restored": {
     "head": {
      "x": 315,
-     "y": 20.046875,
+     "y": 62.03042984008789,
+     "width": 52,
+     "height": 51.999996185302734
+    },
+    "sheetClosed": true
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 175,
      "width": 52,
      "height": 52
     },
-    "sheetClosed": true
-   }
+    "bubbles": [
+     {
+      "x": 27,
+      "y": 175,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 167,
+     "width": 375,
+     "height": 146.625
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "yfnym8",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-1-375x667-en-light": {
    "talk": {
@@ -9515,7 +11903,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 480,
+     "width": 373,
+     "height": 68
+    },
     "sheet": null,
     "chromeLine": 548,
     "rowsCutByWords": 0,
@@ -9547,6 +11940,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9555,7 +11959,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "3l051k",
+    "mount": "x1hk3v",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -9600,6 +12004,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9608,7 +12017,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "3l051k",
+    "mount": "x1hk3v",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -9661,6 +12070,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9680,7 +12094,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "3l051k",
+    "mount": "x1hk3v",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -9734,6 +12148,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9758,7 +12177,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "3l051k",
+    "mount": "x1hk3v",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -9803,6 +12222,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9811,8 +12235,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "3l051k",
-    "callSeconds": 138,
+    "mount": "x1hk3v",
+    "callSeconds": 137,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -9837,7 +12261,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 93.25,
+     "width": 373,
+     "height": 205.75
+    },
     "sheet": {
      "x": 0,
      "y": 295,
@@ -9845,9 +12274,9 @@
      "height": 372
     },
     "chromeLine": 548,
-    "rowsCutByWords": 3,
-    "marksCutByWords": 2,
-    "controlsHiddenByWords": 0,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -9874,6 +12303,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 141.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9882,7 +12322,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "3l051k",
+    "mount": "x1hk3v",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -9922,6 +12362,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9930,13 +12375,13 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "3l051k",
+    "mount": "x1hk3v",
     "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "3l051k",
-    "mountAfter": "3l051k",
+    "mountBefore": "x1hk3v",
+    "mountAfter": "x1hk3v",
     "secondsBefore": 141,
     "secondsAfter": 142
    },
@@ -9970,6 +12415,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -9978,7 +12428,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "3l051k",
+    "mount": "x1hk3v",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -9994,12 +12444,84 @@
    "restored": {
     "head": {
      "x": 315,
-     "y": 20.046875,
+     "y": 163.41387939453125,
      "width": 52,
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 550,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 27,
+      "y": 550,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 445.75,
+     "width": 375,
+     "height": 164.25
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 104.25,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "r26qfz",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-2-375x667-en-light": {
    "talk": {
@@ -10011,24 +12533,24 @@
     },
     "bubbles": [
      {
-      "x": 178.765625,
-      "y": 369,
+      "x": 186.765625,
+      "y": 372,
       "width": 179.234375,
       "height": 36
      },
      {
-      "x": 17,
-      "y": 411,
-      "width": 341,
+      "x": 9,
+      "y": 414,
+      "width": 357,
       "height": 58
      }
     ],
     "pop": null,
     "plate": {
-     "x": 8,
-     "y": 344,
-     "width": 359,
-     "height": 134
+     "x": 1,
+     "y": 310,
+     "width": 373,
+     "height": 238
     },
     "sheet": null,
     "chromeLine": 548,
@@ -10058,9 +12580,20 @@
     },
     "bottomChromeTop": 555,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 9970,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
-    "controlsUnderWordsPx2": 1232,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 62,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10069,7 +12602,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "0uryx3",
+    "mount": "gvcfqj",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -10114,6 +12647,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10122,7 +12660,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "0uryx3",
+    "mount": "gvcfqj",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -10175,6 +12713,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10194,7 +12737,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "0uryx3",
+    "mount": "gvcfqj",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -10248,6 +12791,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10272,7 +12820,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "0uryx3",
+    "mount": "gvcfqj",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -10317,6 +12865,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10325,7 +12878,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "0uryx3",
+    "mount": "gvcfqj",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -10376,6 +12929,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10384,7 +12942,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "0uryx3",
+    "mount": "gvcfqj",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -10404,7 +12962,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 93.25,
+     "width": 373,
+     "height": 205.75
+    },
     "sheet": {
      "x": 0,
      "y": 295,
@@ -10412,9 +12975,9 @@
      "height": 372
     },
     "chromeLine": 548,
-    "rowsCutByWords": 3,
-    "marksCutByWords": 2,
-    "controlsHiddenByWords": 0,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -10441,6 +13004,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(255, 253, 250)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 141.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10449,7 +13023,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "0uryx3",
+    "mount": "gvcfqj",
     "callSeconds": 142,
     "feedAtEnd": true
    },
@@ -10489,6 +13063,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10497,15 +13076,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "0uryx3",
-    "callSeconds": 145,
+    "mount": "gvcfqj",
+    "callSeconds": 144,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "0uryx3",
-    "mountAfter": "0uryx3",
+    "mountBefore": "gvcfqj",
+    "mountAfter": "gvcfqj",
     "secondsBefore": 143,
-    "secondsAfter": 145
+    "secondsAfter": 144
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -10537,6 +13116,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10545,7 +13129,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "0uryx3",
+    "mount": "gvcfqj",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -10566,7 +13150,85 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 550,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 187.765625,
+      "y": 434,
+      "width": 179.234375,
+      "height": 36
+     },
+     {
+      "x": 8,
+      "y": 476,
+      "width": 359,
+      "height": 58
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 301.125,
+     "width": 375,
+     "height": 308.875
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 4,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 132.875,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "ip5gv2",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-3-375x667-en-light": {
    "talk": {
@@ -10619,9 +13281,20 @@
     },
     "bottomChromeTop": 555,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 1037,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10630,8 +13303,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "iu5jiv",
-    "callSeconds": 136,
+    "mount": "zckgh3",
+    "callSeconds": 135,
     "feedAtEnd": true
    },
    "offline": {
@@ -10675,6 +13348,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10683,7 +13361,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "iu5jiv",
+    "mount": "zckgh3",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -10736,6 +13414,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10755,7 +13438,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "iu5jiv",
+    "mount": "zckgh3",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -10809,6 +13492,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10833,7 +13521,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "iu5jiv",
+    "mount": "zckgh3",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -10878,6 +13566,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10886,8 +13579,8 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "iu5jiv",
-    "callSeconds": 138,
+    "mount": "zckgh3",
+    "callSeconds": 137,
     "feedAtEnd": true
    },
    "dragRest": {
@@ -10954,6 +13647,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(255, 253, 250)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -10962,7 +13666,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "iu5jiv",
+    "mount": "zckgh3",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -11002,6 +13706,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11010,15 +13719,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "iu5jiv",
-    "callSeconds": 143,
+    "mount": "zckgh3",
+    "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "iu5jiv",
-    "mountAfter": "iu5jiv",
-    "secondsBefore": 142,
-    "secondsAfter": 143
+    "mountBefore": "zckgh3",
+    "mountAfter": "zckgh3",
+    "secondsBefore": 141,
+    "secondsAfter": 142
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -11050,6 +13759,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11058,7 +13772,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "iu5jiv",
+    "mount": "zckgh3",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -11074,12 +13788,84 @@
    "restored": {
     "head": {
      "x": 315,
-     "y": 96.34192657470703,
+     "y": 20.046875,
      "width": 52,
-     "height": 51.99999237060547
+     "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 175,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 27,
+      "y": 175,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 167,
+     "width": 375,
+     "height": 130.125
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(244, 241, 236)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(244, 241, 236)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "1fupdo",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-1-375x667-en-dark": {
    "talk": {
@@ -11098,7 +13884,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 480,
+     "width": 373,
+     "height": 68
+    },
     "sheet": null,
     "chromeLine": 548,
     "rowsCutByWords": 0,
@@ -11130,6 +13921,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11138,7 +13940,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ugypj7",
+    "mount": "d3bxt7",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -11183,6 +13985,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11191,7 +13998,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ugypj7",
+    "mount": "d3bxt7",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -11244,6 +14051,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11263,7 +14075,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "ugypj7",
+    "mount": "d3bxt7",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -11317,6 +14129,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11341,7 +14158,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "ugypj7",
+    "mount": "d3bxt7",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -11386,6 +14203,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11394,7 +14216,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ugypj7",
+    "mount": "d3bxt7",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -11420,7 +14242,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 93.25,
+     "width": 373,
+     "height": 205.75
+    },
     "sheet": {
      "x": 0,
      "y": 295,
@@ -11428,9 +14255,9 @@
      "height": 372
     },
     "chromeLine": 548,
-    "rowsCutByWords": 3,
-    "marksCutByWords": 2,
-    "controlsHiddenByWords": 0,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -11457,6 +14284,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 141.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11465,7 +14303,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ugypj7",
+    "mount": "d3bxt7",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -11505,6 +14343,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11513,13 +14356,13 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ugypj7",
+    "mount": "d3bxt7",
     "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "ugypj7",
-    "mountAfter": "ugypj7",
+    "mountBefore": "d3bxt7",
+    "mountAfter": "d3bxt7",
     "secondsBefore": 141,
     "secondsAfter": 142
    },
@@ -11553,6 +14396,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11561,7 +14409,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "ugypj7",
+    "mount": "d3bxt7",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -11582,7 +14430,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 550,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 27,
+      "y": 550,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 445.75,
+     "width": 375,
+     "height": 164.25
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 104.25,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "yb257w",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-2-375x667-en-dark": {
    "talk": {
@@ -11594,24 +14514,24 @@
     },
     "bubbles": [
      {
-      "x": 178.765625,
-      "y": 369,
+      "x": 186.765625,
+      "y": 372,
       "width": 179.234375,
       "height": 36
      },
      {
-      "x": 17,
-      "y": 411,
-      "width": 341,
+      "x": 9,
+      "y": 414,
+      "width": 357,
       "height": 58
      }
     ],
     "pop": null,
     "plate": {
-     "x": 8,
-     "y": 344,
-     "width": 359,
-     "height": 134
+     "x": 1,
+     "y": 310,
+     "width": 373,
+     "height": 238
     },
     "sheet": null,
     "chromeLine": 548,
@@ -11641,9 +14561,20 @@
     },
     "bottomChromeTop": 555,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 9970,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
-    "controlsUnderWordsPx2": 1232,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 62,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11652,7 +14583,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "4ns6hz",
+    "mount": "32i8fo",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -11697,6 +14628,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11705,7 +14641,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "4ns6hz",
+    "mount": "32i8fo",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -11758,6 +14694,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11777,7 +14718,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "4ns6hz",
+    "mount": "32i8fo",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -11831,6 +14772,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11855,7 +14801,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "4ns6hz",
+    "mount": "32i8fo",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -11900,6 +14846,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11908,7 +14859,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "4ns6hz",
+    "mount": "32i8fo",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -11959,6 +14910,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": 0,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -11967,7 +14923,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "4ns6hz",
+    "mount": "32i8fo",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -11987,7 +14943,12 @@
      }
     ],
     "pop": null,
-    "plate": null,
+    "plate": {
+     "x": 1,
+     "y": 93.25,
+     "width": 373,
+     "height": 205.75
+    },
     "sheet": {
      "x": 0,
      "y": 295,
@@ -11995,9 +14956,9 @@
      "height": 372
     },
     "chromeLine": 548,
-    "rowsCutByWords": 3,
-    "marksCutByWords": 2,
-    "controlsHiddenByWords": 0,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 1,
     "marks": {
      "headBorder": "solid",
      "dotBorder": "solid",
@@ -12024,6 +14985,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(25, 27, 35)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 141.75,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12032,7 +15004,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "4ns6hz",
+    "mount": "32i8fo",
     "callSeconds": 142,
     "feedAtEnd": true
    },
@@ -12072,6 +15044,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12080,15 +15057,15 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "4ns6hz",
-    "callSeconds": 145,
+    "mount": "32i8fo",
+    "callSeconds": 144,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "4ns6hz",
-    "mountAfter": "4ns6hz",
+    "mountBefore": "32i8fo",
+    "mountAfter": "32i8fo",
     "secondsBefore": 143,
-    "secondsAfter": 145
+    "secondsAfter": 144
    },
    "showRowInFirstScreen": true,
    "hidden": {
@@ -12120,6 +15097,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12128,7 +15110,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "4ns6hz",
+    "mount": "32i8fo",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -12149,7 +15131,85 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 550,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 187.765625,
+      "y": 434,
+      "width": 179.234375,
+      "height": 36
+     },
+     {
+      "x": 8,
+      "y": 476,
+      "width": 359,
+      "height": 58
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 301.125,
+     "width": 375,
+     "height": 308.875
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 4,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "clear",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 132.875,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "cwjq4q",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   },
   "variant-3-375x667-en-dark": {
    "talk": {
@@ -12202,9 +15262,20 @@
     },
     "bottomChromeTop": 555,
     "textUnderHeadPx2": 0,
-    "textUnderWordsPx2": 1037,
+    "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12213,7 +15284,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kcw7zi",
+    "mount": "02xwtd",
     "callSeconds": 135,
     "feedAtEnd": true
    },
@@ -12258,6 +15329,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12266,7 +15342,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kcw7zi",
+    "mount": "02xwtd",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -12319,6 +15395,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12338,7 +15419,7 @@
     ],
     "status": "Not connected",
     "sideways": 0,
-    "mount": "kcw7zi",
+    "mount": "02xwtd",
     "callSeconds": null,
     "feedAtEnd": true
    },
@@ -12392,6 +15473,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12416,7 +15502,7 @@
     ],
     "status": "Listening· 2:16",
     "sideways": 0,
-    "mount": "kcw7zi",
+    "mount": "02xwtd",
     "callSeconds": 136,
     "feedAtEnd": true
    },
@@ -12461,6 +15547,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12469,7 +15560,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kcw7zi",
+    "mount": "02xwtd",
     "callSeconds": 137,
     "feedAtEnd": true
    },
@@ -12537,6 +15628,17 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 1,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": true
+    },
+    "paneBackground": "rgb(25, 27, 35)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12545,7 +15647,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kcw7zi",
+    "mount": "02xwtd",
     "callSeconds": 140,
     "feedAtEnd": true
    },
@@ -12585,6 +15687,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12593,14 +15700,14 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kcw7zi",
+    "mount": "02xwtd",
     "callSeconds": 142,
     "feedAtEnd": null
    },
    "navigation": {
-    "mountBefore": "kcw7zi",
-    "mountAfter": "kcw7zi",
-    "secondsBefore": 141,
+    "mountBefore": "02xwtd",
+    "mountAfter": "02xwtd",
+    "secondsBefore": 140,
     "secondsAfter": 142
    },
    "showRowInFirstScreen": true,
@@ -12633,6 +15740,11 @@
     "textUnderWordsPx2": 0,
     "controlsUnderHeadPx2": 0,
     "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": null,
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": null,
+    "dropWordOnPagePx2": null,
     "headOverSheetPx2": 0,
     "wordsOverSheetPx2": 0,
     "inViewport": true,
@@ -12641,7 +15753,7 @@
     "popRows": [],
     "status": null,
     "sideways": 0,
-    "mount": "kcw7zi",
+    "mount": "02xwtd",
     "callSeconds": null,
     "feedAtEnd": null
    },
@@ -12662,7 +15774,79 @@
      "height": 52
     },
     "sheetClosed": true
-   }
+   },
+   "board-talk": {
+    "head": {
+     "x": 315,
+     "y": 175,
+     "width": 52,
+     "height": 52
+    },
+    "bubbles": [
+     {
+      "x": 27,
+      "y": 175,
+      "width": 280,
+      "height": 52
+     }
+    ],
+    "pop": null,
+    "plate": {
+     "x": 0,
+     "y": 167,
+     "width": 375,
+     "height": 130.125
+    },
+    "sheet": null,
+    "chromeLine": 610,
+    "rowsCutByWords": 0,
+    "marksCutByWords": 0,
+    "controlsHiddenByWords": 2,
+    "marks": {
+     "headBorder": "solid",
+     "dotBorder": "solid",
+     "character": {
+      "opacity": "1",
+      "filter": "none"
+     }
+    },
+    "popPrimary": [],
+    "bar": {
+     "x": 0,
+     "y": 0,
+     "width": 375,
+     "height": 52
+    },
+    "feed": null,
+    "bottomChromeTop": 610,
+    "textUnderHeadPx2": 0,
+    "textUnderWordsPx2": 0,
+    "controlsUnderHeadPx2": 0,
+    "controlsUnderWordsPx2": 0,
+    "blocksSplitByWords": 0,
+    "plateLook": {
+     "kind": "strip",
+     "background": "rgb(17, 18, 24)",
+     "borderTop": "0px",
+     "shadow": "none",
+     "underScrim": false
+    },
+    "paneBackground": "rgb(17, 18, 24)",
+    "plateRoomAbove": 8,
+    "dropWordOnPagePx2": null,
+    "headOverSheetPx2": 0,
+    "wordsOverSheetPx2": 0,
+    "inViewport": true,
+    "wordsCut": false,
+    "dot": 13,
+    "popRows": [],
+    "status": null,
+    "sideways": 0,
+    "mount": "totbu8",
+    "callSeconds": 135,
+    "feedAtEnd": null
+   },
+   "boardCards": 40
   }
  }
 }

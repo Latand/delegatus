@@ -1,7 +1,7 @@
 # Voice Delegatus on the phone: the floating head
 
-Status: prototype, three numbered variants. The visual critic's first round is answered below; the frames wait for the
-critic's next look and then the operator's pick.
+Status: prototype, three numbered variants. The visual critic's first and second rounds are answered below; the frames
+wait for the critic's next look and then the operator's pick.
 Nothing in `src/` is changed by this folder.
 
 ## Originating requirement
@@ -91,27 +91,34 @@ remounts, and a change of project is passed to the running session (`VoiceCompan
   landscape.
 - **Words.** Each variant uses the product's bubble. On the phone it is opaque: the desktop's glass let the rows under it
   read through (first render of variant 2), and the operator's rule is no liquid glass.
-- **No row is covered in part.** Where words lie over the conversation (variants 2 and 3) they stand on one opaque plate
-  whose edges are moved to the nearest gap between two rows. A line of text or an icon is covered whole or not at all, and
-  nothing shows between two bubbles. The plate takes the touch, so no control under it is pressed unseen. The prototype finds
-  the gaps from the rendered lines; the build would take them from the feed's own rows.
+- **Cleared page, nothing covered in part.** While the head speaks, it and its words stand on cleared page: an opaque
+  stretch in the pane's own colour (the feed's, or the board's behind the cards), with no border and no shadow. It spans
+  the head and every bubble with 8 px around them, and each edge moves outward to the nearest gap. In variants 1 and 2 a
+  message counts as one row and a card always does, so a message or a card is hidden whole (author line, every line, copy
+  button) or left whole. Variant 3's strip hangs from the bar, so its lower edge falls between two lines of the feed or two
+  cards, as a scrolled feed's top edge does. The plate takes the touch, so no control under it is pressed unseen. While a
+  sheet is open the plate lies under the sheet's dimming like the rest of the page, and only the head and its words stay
+  lit above it. The prototype finds the gaps from the rendered lines, messages and cards; the build would take them from
+  the feed's and the column's own rows.
 
 ## The variants
 
 | | 1 · Над полем вводу | 2 · Вільна голова, хмаринки | 3 · Під шапкою |
 | --- | --- | --- | --- |
 | Where it floats | Bottom right, 8 px above the composer (above the dock on a board). | The same place by default; any height on either side edge once moved. | Top right, 8 px under the bar (under the seat card and the tabs on a board). |
-| Words | One bubble of two lines beside the head, as tall as the head, in a 76 px band the feed is inset by. At the feed's end the last row stands above the band. | The desktop's lane: the newest bubble and the one before it, on one plate as wide as the page, above the head (under it when the head is in the upper half). | One bubble of two lines beside the head, in a strip under the bar that ends between two rows. |
-| Rows under the words, speaking | **None** in 8 of 8 frames | Whole rows only, 0 cut: a plate 128 to 134 px high, about five lines of the newest reply | Whole rows only, 0 cut: a strip 71 px high, the first two rows under the bar |
-| Text under the head | 0 px² in every frame | 0 px² in these frames; with no inset, a row that reaches the right edge passes under it | 0 px² in these frames; the same holds |
-| Cost | The last 76 px of the feed's end are kept for the head while it is shown. The feed's box is unchanged (668 px of 844, 491 px of 667). | Hides about five lines of what the operator reads for as long as it speaks; a line of the same paragraph can stay in view under the plate. | Far from the thumb; the first two rows under the bar are hidden while it speaks. |
+| Words | One bubble of two lines beside the head, as tall as the head, in a 76 px band the feed (and on a board the column) is inset by. At the end of the list the last row stands above the band. | The desktop's lane: the newest bubble and the one before it, above the head (under it when the head is in the upper half), its tail pointing at the head, on cleared page from the bubbles down to the composer. | One bubble of two lines beside the head, in a strip under the bar that ends between two rows. |
+| Rows under the words, speaking | **None** in the conversation (8 of 8 frames: the plate is 68 px and clears nothing). On the board: the card at the band, whole. | Whole messages only, 0 cut: the newest reply, author line to copy button. Plate 220 px of the feed's 668 at 390×844, 238 of 491 at 375×667. On the board, the cards under it whole (292 to 341 px). | Whole lines only, 0 cut: a strip 71 px high, the first two rows under the bar. On the board, the first card whole (130 to 147 px). |
+| Text under the head | 0 px² in every frame | 0 px² in these frames; with no inset, a row that reaches the right edge passes under the idle head | 0 px² in these frames; the same holds |
+| Cost | The last 76 px of the list's end are kept for the head while it is shown. The feed's box is unchanged (668 px of 844, 491 px of 667). | Hides the newest reply whole, about a third to a half of the feed, for as long as it speaks. | Far from the thumb; the first rows under the bar are hidden while it speaks, and on the board a whole card, which can leave a blank band under the bubble when that card is tall. |
 | Dragging | Left or right corner of the same row; it snaps to the nearer. Measured rest: x = 8, same y. | Either edge at any height between the bar and the composer; it keeps the height. Measured rest: x = 8, 30 % of the height up. | Left or right corner under the bar. Measured rest: x = 8, same y. |
-| «Сховати» | The row of the head's menu: two taps. | The same row, and one gesture: drag the head into the round place that appears over the composer while it is held. | The row of the head's menu: two taps. |
-| Sheet open | Rides above the sheet's top edge, 0 px² on the sheet. | The same; its words stand beside it, as in 1. | Stays under the bar with its strip, above the dimming, and moves 0 px. It rides the sheet's edge only for a sheet tall enough to cover it. |
+| «Сховати» | The row of the head's menu: two taps. | The same row, and one gesture: drag the head into the round place that appears over the composer while it is held, labelled «Сховати» beside it in the free band above the composer. | The row of the head's menu: two taps. |
+| Sheet open | Rides above the sheet's top edge, 0 px² on the sheet; its bubble stands beside it on cleared page under the dimming. | The same; its words stand beside it, as in 1. | Stays under the bar and moves 0 px; its strip takes the dimming, the head and the bubble stay lit. It rides the sheet's edge only for a sheet tall enough to cover it. |
 | Keyboard | Rises with the composer. | Rises when the composer reaches it. | Does not move. |
 
 Measured in all 24 runs (3 variants, 390×844 and 375×667, uk and en, light and dark): the head, its words and its menu stay
-inside the viewport; 0 px of sideways scroll; 0 px² of the head or a bare bubble on any control (variant 2's plate hides the copy button of the reply it covers, whole, in some frames); no bubble's text is cut; the
+inside the viewport; 0 px of sideways scroll; 0 px² of the head or a bubble on any shown control or line (what the plate
+hides whole, such as the copy button of the reply variant 2 covers, is not shown); 0 lines, icons, messages or cards cut by
+a plate in `talk`, `sheet` and `board-talk`; no bubble's text is cut; the
 head is 52 × 52 px and every menu row 44 px; the same mounted head and the same call clock after a real navigation from the
 conversation to the board; «Показати голос» is a 44 px row on the first screen of the menu at both sizes, and a tap on it
 closes the sheet with the head back in place.
@@ -134,14 +141,13 @@ closed by the case and its process id is recorded; no process of the run was lef
   (`Input.dispatchTouchEvent`), and «Сховати» and «Показати голос» are tapped.
 - The conversation is the fixture's seat conversation filled past the screen (`?mvf-long`), so what is covered is measured
   over real rows.
-- 400 frames, 200 pairs: `variant-N-<scene>-<size>-<lang>-<theme>-changed.png` beside `…-original.png`, the same screen as
+- 448 frames, 224 pairs: `variant-N-<scene>-<size>-<lang>-<theme>-changed.png` beside `…-original.png`, the same screen as
   the product draws it today. Scenes: `talk`, `offline`, `menu-idle` (a tap on the idle head), `menu` (in a call), `drag`,
-  `drag-hide` (variant 2), `sheet`, `board`, `hidden`.
+  `drag-hide` (variant 2), `sheet`, `board` (after the navigation, empty tab), `board-talk` (the fixture's board with its
+  cards, `?kanban`, on «У роботі» with 11 tasks, the head speaking), `hidden`.
   Every frame carries its printed band: the variant's number and name, then the scene, size, language and theme.
-- The frames are under `/var/tmp/mvf-fix-8a952634/frames/`, outside the repository; `FRAMES.md` lists every path. The
-  readings are `geometry.json` here. The full run drew 400 frames and failed on one check, in variant 1 at 390×844 (see
-  the critic's round below); after that fix all of variant 1 was drawn again into the same directory: 128 frames, 0 failures.
-  The frames of variants 2 and 3 are those of the full run, which the fix does not touch.
+- The frames are under `/var/tmp/mvf-fix2-8a952634/frames/`, outside the repository; `FRAMES.md` lists every path. The
+  readings are `geometry.json` here. One full run drew all 448 frames: 0 failed checks.
 - `PhoneVoiceHead.tsx` and the patched files type-check (`tsc` on them through a small tsconfig in the export, exit 0).
 
 The first render found three defects, fixed before these frames: the head's menu opened above the screen; the desktop's glass
@@ -156,7 +162,7 @@ which read variant 2 as covering nothing.
 | Clutter | One object on screen: the head. Its words show only while it speaks; its menu only on a tap. |
 | An obvious primary action | With no call the menu has one filled button, «Говорити». In a call the menu has three plain rows, the hang-up in the danger colour. |
 | Rows of identical cards or buttons | None. The menu has at most three rows, each with its own icon. |
-| Overlap and truncation | Measured, see above: 0 px² of the head on controls and on sheets in every frame, no cut text. Variants 2 and 3 hide whole rows while they speak and cut none; that is their trade-off and it is stated. |
+| Overlap and truncation | Measured, see above: 0 px² of the head on controls and on sheets in every frame, no cut text. While the head speaks, variants 2 and 3 hide whole messages, lines or cards and cut none; that is their trade-off and it is stated. |
 | Affordances | The head is the one thing that takes a tap and a drag. While it is dragged, where it may land is drawn: the two places (1, 3), the two edges and the place to hide (2). |
 | Hierarchy | The head is 52 px beside 44 px controls; its dot is 13 px; the words use the product's 14 px bubble. |
 | Consistency | The character, the ring colours, the bubble and the menu's words are the desktop companion's. The menu row is the phone menu's own row. |
@@ -182,13 +188,30 @@ One more defect came out of the gap's fix and is fixed too: raised by 7 px, vari
 area of the last reply's copy button at 390×844, because the feed pins its tail by its own measure and stopped short of the
 inset. The prototype now carries that pin on to the true end (`feedAtEnd` is true in all 8 `talk` frames of variant 1).
 
-Still open after this round, none of it in the findings:
+## The critic's second round
 
-- With a sheet open, the bubble of variants 1 and 2 stands beside the head over dimmed rows and covers 1 to 3 of their
-  lines in part (`rowsCutByWords` in `sheet`). The operator reads the sheet then, and the critic passed these frames.
+The critic rendered all 400 frames again and returned six findings. All are fixed in every variant they name, by one rule
+shared by all three (cleared page, above), and each is held by a check in the driver case.
+
+| Finding | What changed | The check |
+| --- | --- | --- |
+| P2, variant 2, speaking: the plate ended inside a message, leaving its tail or its author line alone | The plate's edges skip whole messages: it clears the newest reply from its author line to its copy button, from above the bubbles down to the composer. | `blocksSplitByWords` (a message or card under the plate in part) is 0 in 8 of 8 `talk` frames of variants 1 and 2. |
+| P2, variants 1 and 2, sheet: the bubble cut dimmed rows and the copy button | The head and its bubble stand on cleared page under the sheet's dimming; its edge moves to the gap above the message. | `rowsCutByWords`, `marksCutByWords` and `blocksSplitByWords` are 0 in all 24 `sheet` frames, every variant; a `sheet` frame with no plate, or a plate above the dimming, fails. |
+| P2, all variants: the board frames were empty and silent | A new scene, `board-talk`: the board with its cards, the head speaking. 24 frames, each with its pair. Variant 1 insets the column by its band, as it does the feed. | 0 lines, icons and cards cut, 0 px² of shown text under the head and its words in 24 of 24, and in variants 1 and 2 the head 8 px above the dock. |
+| P3, variant 2, speaking: the plate read as a third boxed card, and the tail poked out of it | The plate is the pane's own colour with no border, no shadow and square edges; it reaches from 8 px above the bubbles to the composer, so the tail, which now points at the head's middle, is inside it. | The plate's background equals the pane's, its border is 0 and its shadow `none`; 8 px from the plate's top edge to the highest bubble. |
+| P3, variant 3, sheet, light: the strip stayed a bright band over the dimming | The strip is drawn under the sheet's dimming; the head and its bubble stay above it. | A `sheet` frame whose plate lies above the dimming fails. |
+| P3, variant 2, drag at 390×844: the «Сховати» label cut a line of the conversation | The label stands beside the round place, on its left and level with it, inside the free band above the composer. | `dropWordOnPagePx2` (the label over any line or icon of the page) is 0 in all 16 `drag` and `drag-hide` frames. |
+
+Still open after these rounds, none of it in the findings:
+
+- Variant 3's strip ends between two lines of the feed, as its first round asked, so the message at the top can show
+  without its author line, as a scrolled feed does (`blocksSplitByWords` 1 in `talk` and `sheet`). Skipping whole messages
+  there would grow the strip by up to a whole reply.
+- Variant 2's cleared page is large: 220 px of 668 at 390×844 and 238 of 491 at 375×667 in the conversation, up to 341 px
+  on the board. That is the price of covering whole messages and cards.
 - The rule that variant 3 rides a sheet tall enough to reach it is written and not rendered: the driver's sheets end
   below the head.
-- Variant 3's strip on a board is not rendered: the board scene has no speech.
+- The idle head over a scrolled feed or a long column (no words, so no plate) still lies over whatever passes under it.
 
 ## Questions for the operator
 

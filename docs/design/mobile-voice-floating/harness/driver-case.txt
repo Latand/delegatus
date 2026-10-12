@@ -26,13 +26,14 @@ describe("phone voice head prototype", () => {
     "drag-hide": { uk: "перетягнути на «Сховати»", en: "drag onto «Hide»" },
     sheet: { uk: "над шторкою", en: "over a sheet" },
     board: { uk: "після переходу на дошку", en: "after going to the board" },
+    "board-talk": { uk: "говорить над картками дошки", en: "speaking over the board's cards" },
     hidden: { uk: "сховано, «Показати голос» у меню", en: "hidden, «Show voice» in the menu" },
   } as const;
   type SceneName = keyof typeof SCENES;
   type Variant = keyof typeof NAMES;
   /* What each changed frame is paired with: the same screen today. */
-  const ORIGINAL_OF: Record<SceneName, "conversation" | "sheet" | "board" | "menu"> = {
-    talk: "conversation", offline: "conversation", "menu-idle": "conversation", menu: "conversation", drag: "conversation", "drag-hide": "conversation", sheet: "sheet", board: "board", hidden: "menu",
+  const ORIGINAL_OF: Record<SceneName, "conversation" | "sheet" | "board" | "menu" | "cards"> = {
+    talk: "conversation", offline: "conversation", "menu-idle": "conversation", menu: "conversation", drag: "conversation", "drag-hide": "conversation", sheet: "sheet", board: "board", "board-talk": "cards", hidden: "menu",
   };
 
   browserTest("three variants at 390x844 and 375x667, en and uk, light and dark", async () => {
@@ -65,15 +66,16 @@ describe("phone voice head prototype", () => {
       } finally { await context.close(); }
     };
 
-    const open = async (size: { width: number; height: number }, lang: "en" | "uk", scheme: "light" | "dark", variant: Variant | 0) => {
+    /* \`kanban\`: the fixture's board filled with its cards, which the page opens on, for the board the head speaks over. */
+    const open = async (size: { width: number; height: number }, lang: "en" | "uk", scheme: "light" | "dark", variant: Variant | 0, kanban = false) => {
       const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
       await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
       const page = await context.newPage();
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
-      await page.goto(`${base}/?${variant ? `voice=${variant}&` : ""}mvf-long=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+      await page.goto(`${base}/?${variant ? `voice=${variant}&` : ""}${kanban ? "kanban=1&" : ""}mvf-long=1&seatnoise=ii&runtime=structured${kanban ? "" : "#c=conversation_running"}`);
       await page.waitForSelector("[data-mobile2-bar] [data-mobile2-open=menu]", { timeout: 30_000 });
-      await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+      if (!kanban) await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
       if (variant) await page.waitForSelector("[data-mvf-head]", { timeout: 10_000 });
       await pause(page, 900);
       return { context, page, pageErrors, cdp: await context.newCDPSession(page) };
@@ -137,6 +139,9 @@ describe("phone voice head prototype", () => {
         return reach(node.parentElement, node.getBoundingClientRect()) ?? [];
       });
       const head = rect(document.querySelector("[data-mvf-head]"));
+      const plateEarly = rect(document.querySelector("[data-mvf-plate]"));
+      /* What the cleared page hides whole is not on screen: the head and its words stand on the plate, not on those rows. */
+      const shown = (item: R) => !plateEarly || area(plateEarly, item) < item.width * item.height - 1;
       const bubbleNodes = [...document.querySelectorAll<HTMLElement>("[data-mvf-bubble]")];
       const bubbles = bubbleNodes.flatMap((node) => rect(node) ?? []);
       const pop = rect(document.querySelector("[data-mvf-pop]"));
@@ -197,8 +202,23 @@ describe("phone voice head prototype", () => {
         } : null,
         popPrimary: [...document.querySelectorAll<HTMLElement>("[data-mvf-pop] .mvf-row")].map((row) => row.getAttribute("data-tone") ?? "plain"), bar: rect(document.querySelector("[data-mobile2-bar]")), feed: feed ? rect(feed) : null,
         bottomChromeTop: bottoms.length ? Math.min(...bottoms.map((item) => item.y)) : null,
-        textUnderHeadPx2: under(head, texts), textUnderWordsPx2: Math.round(bubbles.reduce((sum, bubble) => sum + texts.reduce((inner, item) => inner + area(bubble, item), 0), 0)),
-        controlsUnderHeadPx2: under(head, controls), controlsUnderWordsPx2: Math.round(bubbles.reduce((sum, bubble) => sum + controls.reduce((inner, item) => inner + area(bubble, item), 0), 0)),
+        textUnderHeadPx2: under(head, texts.filter(shown)), textUnderWordsPx2: Math.round(bubbles.reduce((sum, bubble) => sum + texts.filter(shown).reduce((inner, item) => inner + area(bubble, item), 0), 0)),
+        controlsUnderHeadPx2: under(head, controls.filter(shown)), controlsUnderWordsPx2: Math.round(bubbles.reduce((sum, bubble) => sum + controls.filter(shown).reduce((inner, item) => inner + area(bubble, item), 0), 0)),
+        /* A message or a card the plate covers in part: only its author line, or only a tail of its lines, left on screen. */
+        blocksSplitByWords: plate ? [...document.querySelectorAll("[data-mobile-message], [data-phone-card-shell], [data-phone-kanban-more], [data-phone-kanban-unlinked]")].filter((node) => !root?.contains(node) && !sheetNode?.contains(node)).flatMap((node) => reach(node.parentElement, node.getBoundingClientRect()) ?? []).filter((block) => {
+          const wide = Math.min(plate.x + plate.width, block.x + block.width) - Math.max(plate.x, block.x);
+          const high = Math.min(plate.y + plate.height, block.y + block.height) - Math.max(plate.y, block.y);
+          return wide > 0.75 && high > 0.75 && high < block.height - 0.75;
+        }).length : 0,
+        plateLook: plateNode ? { kind: plateNode.getAttribute("data-kind"), background: getComputedStyle(plateNode).backgroundColor, borderTop: getComputedStyle(plateNode).borderTopWidth, shadow: getComputedStyle(plateNode).boxShadow, underScrim: !root?.contains(plateNode) } : null,
+        paneBackground: (() => {
+          const pane = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller], [data-phone-kanban-column]")].map((node) => ({ node, r: rect(node) })).filter(({ r }) => r && r.x > -1 && r.x + r.width < innerWidth + 1).sort((a, b) => b.r!.height - a.r!.height)[0]?.node ?? null;
+          for (let at: Element | null = pane; at; at = at.parentElement) { const colour = getComputedStyle(at).backgroundColor; if (colour && colour !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(colour)) return colour; }
+          return null;
+        })(),
+        /* The words' room above the head on the plate: from the plate's top edge to the highest bubble. */
+        plateRoomAbove: plate && bubbles.length ? Math.min(...bubbles.map((bubble) => bubble.y)) - plate.y : null,
+        dropWordOnPagePx2: (() => { const word = rect(document.querySelector("[data-mvf-drop-word]")); return word ? under(word, [...pageTexts, ...pageMarks]) : null; })(),
         headOverSheetPx2: Math.round(area(head, rect(sheetNode))), wordsOverSheetPx2: Math.round(bubbles.reduce((sum, bubble) => sum + area(bubble, rect(sheetNode)), 0)),
         inViewport: inside(head) && bubbles.every(inside) && inside(pop),
         wordsCut: bubbleNodes.some((node) => { const text = node.querySelector<HTMLElement>(".vc-text")!; return text.scrollHeight > text.clientHeight + 1; }),
@@ -214,8 +234,8 @@ describe("phone voice head prototype", () => {
     const voice = (page: Page, next: Record<string, unknown>) => page.evaluate((value) => (window as unknown as { mvfVoice: { set(value: unknown): void } }).mvfVoice.set(value), next);
 
     try {
-      if (process.env.MVF_PROBE === "1") {
-        const { context, page } = await open(SIZES[0], "uk", "light", 1);
+      if (process.env.MVF_PROBE) {
+        const { context, page } = await open(SIZES[0], "uk", "light", 1, process.env.MVF_PROBE === "kanban");
         const dump = () => page.evaluate(() => ({
           hash: location.hash, openers: [...document.querySelectorAll("[data-mobile2-open]")].map((node) => `${node.closest("[data-mobile2-bar]") ? "bar:" : ""}${node.getAttribute("data-mobile2-open")}`),
           bottoms: [...document.querySelectorAll("[data-mobile2-composer], [data-mobile2-dock], footer, [class*='fixed']")].map((node) => { const r = node.getBoundingClientRect(); return `${node.tagName} ${[...node.attributes].filter((a) => a.name.startsWith("data-")).map((a) => a.name).join(",")} ${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}`; }),
@@ -240,7 +260,7 @@ describe("phone voice head prototype", () => {
         ];
 
         /* Today's frames, once per size, language and scheme. */
-        const today = {} as Record<"conversation" | "sheet" | "board" | "menu", Buffer>;
+        const today = {} as Record<"conversation" | "sheet" | "board" | "menu" | "cards", Buffer>;
         {
           const { context, page, pageErrors } = await open(size, lang, scheme, 0);
           try {
@@ -251,23 +271,38 @@ describe("phone voice head prototype", () => {
             if (pageErrors.length) failures.push(`today ${tag}: ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
+        {
+          const { context, page, pageErrors } = await open(size, lang, scheme, 0, true);
+          try {
+            await page.waitForSelector("[data-phone-kanban-column] [data-phone-card-shell]", { state: "attached", timeout: 30_000 })
+              .catch(async (error) => { await page.screenshot({ path: path.join(out, `failed-today-cards-${tag}.png`) }); throw error; });
+            await pause(page, 600);
+            today.cards = await page.screenshot();
+            if (pageErrors.length) failures.push(`today cards ${tag}: ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
 
         for (const variant of variants) {
           const key = `variant-${variant}-${tag}`;
           const fail = (scene: string, text: string) => failures.push(`${key} ${scene}: ${text}`);
           const record: Record<string, unknown> = {};
           const { context, page, pageErrors, cdp } = await open(size, lang, scheme, variant);
-          const shot = async (scene: SceneName) => {
-            const reading = await read(page);
+          const shot = async (scene: SceneName, on: Page = page) => {
+            const reading = await read(on);
             record[scene] = reading;
             const name = (kind: string) => path.join(out, `variant-${variant}-${scene}-${tag}-${kind}.png`);
-            await stamp(size, await page.screenshot(), band(variant, scene, false), name("changed"));
+            await stamp(size, await on.screenshot(), band(variant, scene, false), name("changed"));
             await stamp(size, today[ORIGINAL_OF[scene]], band(variant, scene, true), name("original"));
             if (!reading.inViewport) fail(scene, "the head, its words or its menu leave the viewport");
             if (reading.sideways > 0) fail(scene, `the page scrolls sideways by ${reading.sideways}px`);
             if (reading.controlsUnderHeadPx2 > 0 && scene !== "drag" && scene !== "drag-hide") fail(scene, `the head lies on ${reading.controlsUnderHeadPx2}px² of controls`);
             /* Bubbles alone lie on no control. A plate covers whole rows, their controls with them, and takes the touch itself: no icon may show in part. */
-            if (!reading.plate && reading.controlsUnderWordsPx2 > 0) fail(scene, `the words lie on ${reading.controlsUnderWordsPx2}px² of controls`);
+            if (reading.controlsUnderWordsPx2 > 0) fail(scene, `the words lie on ${reading.controlsUnderWordsPx2}px² of controls`);
+            /* Cleared page: the pane's own colour, no border, no shadow. */
+            if (reading.plateLook?.kind === "clear" && (reading.plateLook.background !== reading.paneBackground || reading.plateLook.borderTop !== "0px" || reading.plateLook.shadow !== "none")) fail(scene, `the plate is not cleared page: ${JSON.stringify(reading.plateLook)} over ${reading.paneBackground}`);
+            /* With a sheet open the plate lies under the sheet's dimming; only the head and its words stay lit. */
+            if (reading.plate && reading.sheet && !reading.plateLook?.underScrim) fail(scene, "the plate stays lit over the dimming");
+            if (reading.dropWordOnPagePx2 !== null && reading.dropWordOnPagePx2 > 0) fail(scene, `the «Hide» label lies on ${reading.dropWordOnPagePx2}px² of the conversation`);
             if (reading.plate && reading.marksCutByWords > 0) fail(scene, `the words' plate covers part of ${reading.marksCutByWords} icons`);
             /* On a screen with no sheet the head and its words keep 8 px above the line of the composer or the dock. */
             if (!reading.sheet && reading.chromeLine !== null && reading.head && variant !== 3 && scene !== "drag" && scene !== "drag-hide") {
@@ -299,7 +334,9 @@ describe("phone voice head prototype", () => {
             const talk = await shot("talk");
             if (!talk.bubbles.length) fail("talk", "no words are shown");
             if (talk.rowsCutByWords > 0) fail("talk", `the words cover part of ${talk.rowsCutByWords} lines of the conversation`);
-            if (variant !== 1 && !talk.plate) fail("talk", "the words over the page stand on no plate");
+            if (!talk.plate) fail("talk", "the words over the page stand on no plate");
+            if (variant !== 3 && talk.blocksSplitByWords > 0) fail("talk", `the plate covers ${talk.blocksSplitByWords} messages in part`);
+            if (variant === 2 && (talk.plateRoomAbove ?? 0) < 7.5) fail("talk", `the bubbles stand ${talk.plateRoomAbove}px under the plate's edge`);
             if (variant === 1 && (talk.textUnderHeadPx2 > 0 || talk.textUnderWordsPx2 > 0)) fail("talk", `the band lies on ${talk.textUnderHeadPx2 + talk.textUnderWordsPx2}px² of text at the feed's end`);
             if (talk.bottomChromeTop !== null && talk.head && talk.head.y + talk.head.height > talk.bottomChromeTop) fail("talk", "the head lies on the composer");
 
@@ -352,10 +389,10 @@ describe("phone voice head prototype", () => {
             await openSheet(page);
             const sheet = await shot("sheet");
             if (sheet.headOverSheetPx2 > 0 || sheet.wordsOverSheetPx2 > 0) fail("sheet", `the head or its words lie on ${sheet.headOverSheetPx2 + sheet.wordsOverSheetPx2}px² of the sheet`);
-            if (variant === 3) {
-              if (!talk.head || !sheet.head || Math.abs(sheet.head.y - talk.head.y) > 0.5) fail("sheet", `the head left its place under the bar for a sheet that does not reach it (${talk.head?.y} to ${sheet.head?.y})`);
-              if (sheet.rowsCutByWords > 0) fail("sheet", `the words cover part of ${sheet.rowsCutByWords} lines of the page`);
-            }
+            if (variant === 3 && (!talk.head || !sheet.head || Math.abs(sheet.head.y - talk.head.y) > 0.5)) fail("sheet", `the head left its place under the bar for a sheet that does not reach it (${talk.head?.y} to ${sheet.head?.y})`);
+            if (!sheet.plate) fail("sheet", "the words over the dimmed page stand on no plate");
+            if (sheet.rowsCutByWords > 0 || sheet.marksCutByWords > 0) fail("sheet", `the words cover part of ${sheet.rowsCutByWords} lines and ${sheet.marksCutByWords} icons of the page`);
+            if (variant !== 3 && sheet.blocksSplitByWords > 0) fail("sheet", `the plate covers ${sheet.blocksSplitByWords} messages in part`);
             await closeSheet(page);
 
             /* Navigation: the same mounted head and the same running call on the next screen. */
@@ -385,6 +422,22 @@ describe("phone voice head prototype", () => {
             await row.click();
             await page.waitForSelector("[data-mvf-head]", { timeout: 5_000 });
             record.restored = { head: await rectOf(page, "[data-mvf-head]"), sheetClosed: await page.locator("[data-mobile2-sheet]").count() === 0 };
+
+            /* The board with its cards, the head speaking over them: no card and no line shown in part beside the head and its words. */
+            const cards = await open(size, lang, scheme, variant, true);
+            try {
+              await cards.page.waitForSelector("[data-phone-kanban-column] [data-phone-card-shell]", { state: "attached", timeout: 30_000 });
+              await voice(cards.page, { phase: "speaking", words: true, muted: false });
+              await pause(cards.page, 500);
+              const over = await shot("board-talk", cards.page);
+              if (!over.bubbles.length) fail("board-talk", "no words are shown");
+              if (!over.plate) fail("board-talk", "the words over the cards stand on no plate");
+              if (over.rowsCutByWords > 0 || over.marksCutByWords > 0) fail("board-talk", `the words cover part of ${over.rowsCutByWords} lines and ${over.marksCutByWords} icons`);
+              if (over.blocksSplitByWords > 0) fail("board-talk", `the plate covers ${over.blocksSplitByWords} cards in part`);
+              if (over.textUnderHeadPx2 > 0 || over.textUnderWordsPx2 > 0) fail("board-talk", `the head or its words lie on ${over.textUnderHeadPx2 + over.textUnderWordsPx2}px² of text`);
+              record.boardCards = await cards.page.locator("[data-phone-kanban-column] [data-phone-card-shell]").count();
+              if (cards.pageErrors.length) fail("board-talk", cards.pageErrors.join("; "));
+            } finally { await cards.context.close(); }
             if (pageErrors.length) fail("page", pageErrors.join("; "));
           } catch (error) {
             fail("run", error instanceof Error ? error.message.split("\n")[0]! : String(error));
