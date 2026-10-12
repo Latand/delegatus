@@ -70,16 +70,21 @@ test("remote relay binds and dispatches withheld lesson text; local binding stay
   const bound = await recoverable.bind(args);
   expect(bound.sendPayload!.text).toContain("[learned rule]");
   expect(bound.sendPayload!.text).not.toContain(rule);
-  const local = await recoverable.bind({ ...args, machine: undefined });
-  expect(local.sendPayload!.text).toContain(rule);
+  for (const machine of [undefined, "Here", "this machine", selfId]) {
+    const local = await recoverable.bind({ ...args, machine });
+    expect(local.sendPayload!.text).toContain(rule);
+  }
   const posts: Record<string, unknown>[] = [];
-  const api = createMcpToolService(viewerMcpBindings(undefined, { post: async (_path, body) => { posts.push(body); return { outcome: "accepted", state: "queued" }; } }, domain), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const api = createMcpToolService(viewerMcpBindings(undefined, { post: async (_path, body) => { posts.push(body); const link = resolveSeatMessageMachine(String(body.machine), String(body.project))!; return queueSeatMessage(link, String(body.project), String(body.text), caller, String(body.clientMessageId)); } }, domain), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) });
   expect(await api.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true });
   expect(posts[0]!.text).toContain("[learned rule]");
   expect(posts[0]!.text).not.toContain(rule);
+  expect(await api.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, replayed: true });
+  expect(posts).toHaveLength(1);
   const read = spyOn(roleMemoryCollection()!, "snapshot").mockImplementation(() => { throw new Error("unreadable rule store"); });
   try {
-    await expect(recoverable.bind({ ...args, clientRequestId: "unreadable-rule" })).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE" });
+    expect(await api.callTool("send_message_to_orchestrator", { ...args, clientRequestId: "unreadable-rule" })).toMatchObject({ ok: false, code: "LESSON_PRIVACY_UNAVAILABLE" });
+    expect(posts).toHaveLength(1);
   } finally { read.mockRestore(); }
 });
 

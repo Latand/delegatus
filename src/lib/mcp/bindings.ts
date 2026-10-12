@@ -5052,7 +5052,7 @@ async function sendMessageToOrchestrator(
         return await dispatchControl(control)("/api/orchestrator/message", {
           project, machine: link.install, text: bound?.sendPayload
             ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
-            : withoutStoredLessons(requiredMessageText(args)),
+            : orchestratorRelayEgressText(requiredMessageText(args)),
           clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
         }, callerCapabilityHeaders());
       } catch (error) {
@@ -7080,10 +7080,19 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
+/** Only a send leaving this installation crosses the learned-rule boundary. */
+function orchestratorRelayEgressText(message: string): string {
+  try { return withoutStoredLessons(message); }
+  catch (error) {
+    if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
+    throw error;
+  }
+}
+
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
   const named = required(args, "project");
-  const message = text(args.machine) ? withoutStoredLessons(requiredMessageText(args)) : requiredMessageText(args);
+  const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
   // Match HTTP admission: a designated seat takes precedence even when the
@@ -7101,11 +7110,12 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
+  const outgoing = link ? orchestratorRelayEgressText(message) : message;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: link ? `machine:${link.install}` : project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
-    sendPayload: seat ? orchestratorRelayPayload(message, seat) : owner ?? {
+    sendPayload: seat ? orchestratorRelayPayload(outgoing, seat) : owner ?? {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
     // Separate from direct send: equal client keys on different tools are

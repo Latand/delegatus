@@ -17,7 +17,7 @@ const rule = "Before reporting an agent as stalled, inspect the tail of its conv
 const why = "An activity signal reported a stall while the transcript showed progress.";
 function service(kind = "manager", seats: { project: string | null; conversationId: string; path: null }[] = [{ project, conversationId, path: null }], via?: { deputy: string }) {
   return createMcpToolService(viewerMcpBindings(undefined, undefined, {
-    callerAttribution: () => ({ kind, conversationId, ...(via ? { via } : {}) }),
+    callerAttribution: () => ({ kind, conversationId, role: "orchestrator", ...(via ? { via } : {}) }),
     authorizedSeats: () => seats,
     listPipelineRecords: () => [],
   } as never), new MemoryMcpReceiptStore());
