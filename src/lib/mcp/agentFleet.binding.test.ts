@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { normalizeRegistry } from "@/lib/agent/registry";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import type { FileEntry } from "@/lib/types";
@@ -10,7 +12,7 @@ import { viewerMcpBindings, viewerReadTools, type CallerAttribution, type Viewer
 import { CompanionBoardReads } from "@/lib/voiceCompanion/boardReads";
 import { createCompanionBoardReadPaths } from "@/lib/voiceCompanion/readPaths";
 import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
-import { fleetRegistry, fleetRow, FLEET_NOW } from "./agentFleet.fixture";
+import { fleetEntry, fleetRegistry, fleetRow, FLEET_NOW } from "./agentFleet.fixture";
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
@@ -82,6 +84,50 @@ test("detail filters imply rows, redact before title clipping, and reveal no pat
   const encoded = JSON.stringify(answer);
   expect(encoded).not.toContain(secret.slice(0, 30));
   for (const field of ["transcriptPath", "cwd", "records", "message"]) expect(encoded).not.toContain(`"${field}"`);
+});
+
+test("fleet reads do not materialize archived registry history on initial or repeated reads", async () => {
+  const f = fixture();
+  const sqlitePath = path.join(f.directory, "fleet.sqlite");
+  const initial = structuredClone(f.registry);
+  for (let i = 0; i < 200; i++) {
+    const row = fleetRow(`archived_${i}`, { lifecycle: "gone", host: { state: "gone", kind: "none", pid: null } });
+    initial.entries[row.transcriptPath] = fleetEntry(row, { status: "dead", host: null, structuredHost: null,
+      claimOwner: null, pendingAction: null });
+  }
+  const payloadReads = new Map<string, number>();
+  const store = new SqliteAgentRegistryStore(sqlitePath, { initialSnapshot: initial, normalize: normalizeRegistry,
+    onRowPayloadRead: (collection, count) => payloadReads.set(collection, (payloadReads.get(collection) ?? 0) + count) });
+  try {
+    expect(store.archiveInactive(1000)).toBeGreaterThanOrEqual(200);
+    store.readOnlySnapshot(); // Warm the lazy registry projection before measuring tool work.
+    f.sources.registrySnapshot = () => store.readOnlySnapshot().file;
+    f.dependencies.registrySnapshot = f.sources.registrySnapshot;
+    payloadReads.clear();
+
+    const boundedReads = () => (payloadReads.get("entries") ?? 0) + (payloadReads.get("receipts") ?? 0);
+    expect(await f.call()).toMatchObject({ agents: { live: 2, running: 2 } });
+    expect(boundedReads()).toBeLessThanOrEqual(6);
+    expect(await f.call({ detail: true })).toMatchObject({ agents: [
+      { turn: "running" }, { turn: "running" },
+    ] });
+    payloadReads.clear();
+    expect(await f.call()).toMatchObject({ agents: { live: 2, running: 2 } });
+    expect(boundedReads()).toBeLessThanOrEqual(6);
+  } finally { store.close(); }
+});
+
+test("fleet binding resolves aliases before durable generation fallback", async () => {
+  const f = fixture(1);
+  const oldId = f.rows[0].conversationId!;
+  const currentId = "conversation_current";
+  f.registry.entries[f.rows[0].transcriptPath].accountId = null;
+  f.registry.entries[f.rows[0].transcriptPath].launchProfile = undefined;
+  f.registry.conversationAliases[oldId] = currentId as never;
+  f.registry.conversations = { [currentId]: { id: currentId, engine: "claude", continuityPaths: [], generations: [
+    { id: currentId, accountId: "generation-account", launchProfile: emptyLaunchProfile({ model: "generation-model", effort: "high" }) },
+  ] } as never };
+  expect(await f.call({ detail: true })).toMatchObject({ agents: [{ conversationId: oldId, account: "generation-account", model: "generation-model", effort: "high" }] });
 });
 
 test("detail paging stays within 24 KB, covers every selected agent and binds scope on every continuation", async () => {

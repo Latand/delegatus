@@ -1,4 +1,4 @@
-import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
+import { resolveConversationAlias, type AgentRegistryEntry, type RegistryFile } from "@/lib/agent/registry";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
@@ -34,7 +34,13 @@ export function fleetRuntimeFor(rows: readonly AgentLivenessRecord[], registry: 
     const group = byPath.get(entry.artifactPath) ?? [];
     group.push(entry); byPath.set(entry.artifactPath, group);
   }
-  const receipts = registryRowsMatching(registry, "receipts", "conversationId", rows.flatMap(row => row.conversationId ? [row.conversationId] : []));
+  const canonicalIds = new Map(rows.flatMap(row => row.conversationId ? [[row.conversationId, resolveConversationAlias(registry, row.conversationId as `conversation_${string}`)] as const] : []));
+  const receipts = registryRowsMatching(registry, "receipts", "conversationId", [...new Set(canonicalIds.values())]);
+  const receiptByConversation = new Map<string, RegistryFile["receipts"][string]>();
+  for (const receipt of receipts) {
+    const previous = receiptByConversation.get(receipt.conversationId);
+    if (!previous || previous.createdAt.localeCompare(receipt.createdAt) < 0) receiptByConversation.set(receipt.conversationId, receipt);
+  }
   return (row: AgentLivenessRecord) => {
     const rank = (entry: AgentRegistryEntry) => {
       const pid = entry.structuredHost?.process?.pid ?? entry.host?.panePid.pid;
@@ -42,8 +48,9 @@ export function fleetRuntimeFor(rows: readonly AgentLivenessRecord[], registry: 
       return entry.status === "live" ? 2 : entry.status === "idle" ? 1 : 0;
     };
     const entry = [...(byPath.get(row.transcriptPath) ?? [])].sort((a, b) => rank(b) - rank(a) || b.updatedAt.localeCompare(a.updatedAt))[0];
-    const generation = row.conversationId ? registry.conversations[row.conversationId]?.generations.at(-1) : undefined;
-    const receipt = receipts.filter(item => item.conversationId === row.conversationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const canonicalId = row.conversationId ? canonicalIds.get(row.conversationId) : undefined;
+    const generation = canonicalId ? registry.conversations[canonicalId]?.generations.at(-1) : undefined;
+    const receipt = canonicalId ? receiptByConversation.get(canonicalId) : undefined;
     const profile = entry?.launchProfile ?? generation?.launchProfile ?? receipt?.launchProfile;
     return {
       account: entry?.accountId ?? generation?.accountId ?? receipt?.accountId ?? "unknown",

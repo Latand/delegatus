@@ -12,7 +12,7 @@ import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blocking
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
-import type { RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
+import type { AgentRegistryEntry, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
 import { archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 
@@ -59,6 +59,7 @@ type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "
 const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId" };
 const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
 const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
+const livenessReaders = new WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>();
 
 /** A reader's frozen copy of one row. `stored` is the stored JSON a complete
     load decided it from and `grants` the MCP lists that decision left on it;
@@ -157,12 +158,21 @@ class RegistryReaderViews {
 /** Indexed selection inside the same lazy transaction, including pending writes. */
 export function registryRowsMatching<C extends RowCollection>(file: RegistryFile, collection: C, field: LookupField, value: LookupValue): RegistryFile[C][string][] {
   const keys = registryKeysMatching(file, collection, field, value);
-  const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+  const rows = (file[collection] ?? {}) as Record<string, RegistryFile[C][string]>;
   return keys.map(key => rows[key]!).filter(Boolean);
 }
 
+/** The owner rows liveness can still consider. SQLite applies the durable
+    owner predicate before loading payloads, so archived terminal history is
+    never expanded into an in-memory census. Plain registry fixtures retain
+    their complete behavior. */
+export function registryLivenessRows(file: RegistryFile): { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] } {
+  const read = livenessReaders.get(file);
+  return read ? read() : { entries: Object.values(file.entries ?? {}), receipts: Object.values(file.receipts ?? {}) };
+}
+
 export function registryKeysMatching(file: RegistryFile, collection: RowCollection, field: LookupField, value: LookupValue): string[] {
-  return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection]).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
+  return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection] ?? {}).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
 }
 
 function lookupValue(row: unknown, field: LookupField): unknown {
@@ -1283,6 +1293,24 @@ export class SqliteAgentRegistryStore {
       if (!values.length) return [];
       return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM ${this.recordsSource} WHERE collection=? AND json_extract(value_json,'${LOOKUP_PATHS[field]}') IN (${values.map(() => "?").join(",")}) ORDER BY row_order`)
         .all(collection,...values).map(row => row.row_key);
+    });
+    livenessReaders.set(file,() => {
+      const entryKeys = this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='entries' AND (
+        json_extract(value_json,'$.status')!='dead'
+        OR json_extract(value_json,'$.host') IS NOT NULL
+        OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL
+        OR json_extract(value_json,'$.claimOwner') IS NOT NULL
+        OR json_extract(value_json,'$.pendingAction') IS NOT NULL
+        OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
+      ) ORDER BY row_order`).all().map(row => file.entries[row.row_key]).filter((row): row is AgentRegistryEntry => !!row);
+      const receiptKeys = this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='receipts' AND (
+        json_extract(value_json,'$.state') NOT IN ('completed','failed','conflicted')
+        OR json_extract(value_json,'$.admissionOwner') IS NOT NULL
+        OR json_extract(value_json,'$.verifiedHost.agent') IS NOT NULL
+        OR json_extract(value_json,'$.pane.panePid') IS NOT NULL
+        OR json_extract(value_json,'$.queuedPinnedSpawn') IS NOT NULL
+      ) ORDER BY row_order`).all().map(row => file.receipts[row.row_key]).filter((row): row is RegistryFile["receipts"][string] => !!row);
+      return { entries: entryKeys, receipts: receiptKeys };
     });
     if (this.changesReady) pathReaders.set(file,path => this.db.query<{ conversation_id: string }, [string]>(
       `SELECT p.conversation_id FROM registry_conversation_paths p JOIN ${this.recordsSource} r ON r.collection='conversations' AND r.row_key=p.conversation_id WHERE p.path=? ORDER BY r.row_order`)

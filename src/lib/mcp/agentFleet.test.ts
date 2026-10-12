@@ -51,6 +51,27 @@ test("runtime prefers the observed live host then generation then receipt, never
   expect(read()).toMatchObject({ account: "unknown", model: "default", effort: "default" });
 });
 
+test("runtime resolves an aliased conversation before generation and receipt fallback", () => {
+  const row = fleetRow();
+  const registry = fleetRegistry([row]);
+  const oldId = row.conversationId!;
+  const currentId = "conversation_current";
+  registry.conversationAliases[oldId] = currentId as never;
+  registry.entries[row.transcriptPath].accountId = null;
+  registry.entries[row.transcriptPath].launchProfile = undefined;
+  registry.conversations[currentId] = { id: currentId, generations: [{ accountId: "generation-account",
+    launchProfile: emptyLaunchProfile({ model: "generation-model", effort: "high" }) }] } as never;
+  expect(fleetRuntimeFor([row], registry)(row)).toMatchObject({ account: "generation-account", model: "generation-model", effort: "high" });
+
+  registry.conversations = {};
+  registry.receipts.one = { conversationId: currentId, accountId: "receipt-account",
+    launchProfile: emptyLaunchProfile({ model: "receipt-model", effort: "xhigh" }), createdAt: "now" } as never;
+  expect(fleetRuntimeFor([row], registry)(row)).toMatchObject({ account: "receipt-account", model: "receipt-model", effort: "xhigh" });
+
+  registry.receipts = {};
+  expect(fleetRuntimeFor([row], registry)(row)).toMatchObject({ account: "unknown", model: "unknown", effort: "unknown" });
+});
+
 test("active accounts with no agents and optional activity retain their meaning", () => {
   const row = fleetRow(), registry = fleetRegistry([row]);
   const agents = fleetAgents([row], fleetRuntimeFor([row], registry), new Set(), new Map(), []);

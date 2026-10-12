@@ -6,6 +6,7 @@ import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
+import { registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { getPipelines } from "@/lib/pipelines/engine";
@@ -470,8 +471,7 @@ function entryForPath(
   probe: LivenessProbe,
 ): AgentRegistryEntry | null {
   let first: AgentRegistryEntry | null = null;
-  for (const entry of Object.values(snapshot.entries)) {
-    if (entry.artifactPath !== transcriptPath) continue;
+  for (const entry of registryRowsMatching(snapshot as RegistryFile, "entries", "artifactPath", transcriptPath)) {
     if (hostEvidence(entry, probe).state === "alive") return entry;
     first ??= entry;
   }
@@ -675,7 +675,10 @@ function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId:
   let alive: { state: "alive"; kind: "structured" | "tmux"; pid: number; turnPending: boolean } | null = null;
   let gone = false;
   let unresolved = false;
-  for (const receipt of Object.values(registry.receipts ?? {})) {
+  const candidates = new Map<string, RegistryFile["receipts"][string]>();
+  for (const receipt of registryRowsMatching(registry as RegistryFile, "receipts", "conversationId", ownerId ? [ownerId, conversationId!] : [])) candidates.set(receipt.launchId, receipt);
+  if (artifactPath) for (const receipt of registryRowsMatching(registry as RegistryFile, "receipts", "artifactPath", artifactPath)) candidates.set(receipt.launchId, receipt);
+  for (const receipt of candidates.values()) {
     if ((!ownerId || canonicalConversationId(registry, receipt.conversationId) !== ownerId)
       && (!artifactPath || receipt.artifactPath !== artifactPath)) continue;
     const evidence = receiptProcessEvidence(receipt, probe);
@@ -753,10 +756,13 @@ export function conversationIdForPath(
     a minute ago — the correctness half of not sweeping the corpus (#860). */
 function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: LivenessProbe): Set<string> {
   const hosted = new Set<string>();
-  for (const entry of Object.values(snapshot.entries)) {
+  // Select durable owners before hydrating payloads; enumerating the registry
+  // compatibility view makes every archived entry look like a candidate.
+  const { entries, receipts } = registryLivenessRows(snapshot as RegistryFile);
+  for (const entry of entries) {
     if (entry.artifactPath && hostEvidence(entry, probe).state === "alive") hosted.add(entry.artifactPath);
   }
-  for (const receipt of Object.values(snapshot.receipts ?? {})) {
+  for (const receipt of receipts) {
     if (receiptProcessEvidence(receipt, probe)?.state !== "alive") continue;
     const path = receipt.artifactPath ?? canonicalConversation(snapshot, receipt.conversationId)?.generations.at(-1)?.path;
     if (path) hosted.add(path);
