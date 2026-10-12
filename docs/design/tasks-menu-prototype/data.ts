@@ -92,7 +92,7 @@ export const TASKS: ProtoTask[] = [
     events: [{ min: 3, kind: "asked" }, { min: 68, kind: "stage_started", stage: "prototype" }, { min: 70, kind: "created" }], assignments: 1,
   },
   {
-    id: "t-header", project: PROJECT, status: "assigned", color: "sky", icon: "panel-top", updatedMin: 3, createdMin: 90, workMin: 1,
+    id: "t-header", project: PROJECT, status: "assigned", color: "sky", icon: "panel-top", updatedMin: 3, createdMin: 90, workMin: 40 / 60,
     title: { uk: "Хедер дошки не перевантажений і нічого не накладається", en: "The board header is uncluttered and nothing overlaps" },
     stages: [S("prototype", "architect", "claude", OPUS, "running")], agent: { state: "working", sinceMin: 18 },
     events: [{ min: 18, kind: "stage_started", stage: "prototype" }, { min: 88, kind: "stage_failed", stage: "prototype" }], assignments: 2,

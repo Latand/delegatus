@@ -50,11 +50,14 @@ for (const width of WIDTHS) for (const lang of ["uk", "en"] as const) for (const
   shots.push({ name: `variant-2-${base}-expanded`, query: `v=2&expand=t-login${phone}`, width, lang, theme });
   shots.push({ name: `variant-3-${base}-tasks`, query: `v=3&select=t-login${phone}`, width, lang, theme });
   shots.push({ name: `variant-3-${base}-agents`, query: `v=3&tab=agents&select=t-login${phone}`, width, lang, theme });
-  if (width === 390) shots.push({ name: `variant-3-${base}-detail`, query: `v=3&select=t-login&detail=1${phone}`, width, lang, theme });
+  if (width === 390) {
+    shots.push({ name: `variant-3-${base}-detail`, query: `v=3&select=t-login&detail=1${phone}`, width, lang, theme });
+    shots.push({ name: `variant-3-${base}-agent-detail`, query: `v=3&tab=agents&agent=a-login&detail=1${phone}`, width, lang, theme });
+  }
   if (width === 1440) {
     shots.push({ name: `original-${base}-all`, query: "v=0", width, lang, theme, click: '[data-task-panel] button[aria-pressed="false"]' });
     for (const v of [1, 2, 3]) shots.push({ name: `variant-${v}-${base}-all`, query: `v=${v}&scope=all${v === 3 ? "&select=t-pricing" : ""}`, width, lang, theme });
-    for (const v of [1, 3]) shots.push({ name: `variant-${v}-${base}-status`, query: `v=${v}&pop=t-header${v === 3 ? "&select=t-login" : ""}`, width, lang, theme });
+    for (const v of [1, 2, 3]) shots.push({ name: `variant-${v}-${base}-status`, query: `v=${v}&pop=t-header${v === 3 ? "&select=t-login" : ""}`, width, lang, theme });
   }
 }
 
@@ -131,7 +134,7 @@ async function measure(page: Page, width: number) {
       return (framed || painted(style.backgroundColor)) && (ownText(element) || element.matches("[data-proto-stage]"));
     }).map((element) => (element.textContent ?? "").slice(0, 30));
     const glyphGaps = all("[data-proto-stage-name]").map((name) => {
-      const glyph = name.previousElementSibling;
+      const glyph = name.closest("[data-proto-now]")?.querySelector("[data-proto-glyph]") ?? name.previousElementSibling;
       return glyph ? name.getBoundingClientRect().left - glyph.getBoundingClientRect().right : 99;
     });
     const unique = (values: number[]) => [...new Set(values.map((value) => Math.round(value)))].sort((a, b) => a - b);
@@ -143,13 +146,33 @@ async function measure(page: Page, width: number) {
     }));
     const projects = all("[data-proto-project]");
     const projectRights = unique(projects.map((element) => element.getBoundingClientRect().right));
+    /* A task row's project sits right under its age; an agent row's on its task line. */
     const projectOffLine = projects.filter((element) => {
-      const row = element.closest("button")!;
-      const line = row.querySelector("[data-proto-line], [data-proto-agent-task]");
+      const age = element.closest("[data-proto-meta]")?.querySelector("[data-proto-age]");
+      if (age) return Math.abs(age.getBoundingClientRect().bottom - element.getBoundingClientRect().top) > 1.5;
+      const line = element.closest("button")!.querySelector("[data-proto-agent-task]");
       return !line || Math.abs(line.getBoundingClientRect().top - element.getBoundingClientRect().top) > 1.5;
     }).length;
     const rowHeights = unique(all("[data-proto-row] > button").map((row) => row.getBoundingClientRect().height));
+    /* Every rendered row's height by task, scrolled out of view or not, so an
+       «all projects» frame can be held to its «this project» frame. */
+    const rowHeightById = Object.fromEntries([...document.querySelectorAll<HTMLElement>("[data-proto-row] > button")]
+      .filter((row) => row.getBoundingClientRect().height > 0)
+      .map((row) => [row.parentElement!.getAttribute("data-proto-row")!, Math.round(row.getBoundingClientRect().height)]));
+    /* A wrapped stage state or question continues under the stage name. */
+    const hangingWraps = all("[data-proto-now]").flatMap((now) => {
+      const name = now.querySelector("[data-proto-stage-name]");
+      const word = name?.nextElementSibling;
+      if (!name || !word) return [];
+      const left = name.getBoundingClientRect().left;
+      return [...word.getClientRects()].filter((rect) => rect.left < left - 0.5).map(() => (now.textContent ?? "").slice(0, 40));
+    });
+    /* One word for a running stage: the agent's («working»), never «running». */
+    const runningWords = all("[data-proto-now], [data-proto-stages] li, [data-proto-stages] span").filter((element) => /\brunning\b/.test(element.innerText)).length;
+    /* An age printed in seconds reads as a minute from 60 s on. */
+    const longSeconds = all("[data-proto-age]").filter((element) => /^(?:[6-9]\d)\s?(?:с|s)(?!\p{L})/u.test((element.textContent ?? "").trim())).map((element) => element.textContent ?? "");
     const agentRows = all("[data-proto-agent] > button");
+    const agentChevrons = all("[data-proto-agent] [data-proto-chevron] svg").length;
     const agentRowHeights = unique(agentRows.map((row) => row.getBoundingClientRect().height));
     /* One time per row: the same duration printed twice in one row or one
        agent line is the critic's «one fact shown twice». `innerText` reads
@@ -205,9 +228,13 @@ async function measure(page: Page, width: number) {
       firstTitles: visibleTitles.slice(0, 10),
       critic: variant ? {
         variant, firstBlock, pills, statusDots: all("[data-proto-status-dot]").length,
+        taskRows: all("[data-proto-row] > button [data-proto-line]").length, rowDots: all("[data-proto-row] > button [data-proto-status-dot]").length,
         minGlyphGap: glyphGaps.length ? Math.round(Math.min(...glyphGaps) * 10) / 10 : null,
         chevrons: all("[data-proto-chevron] svg").length, chevronRights, titleGaps, rowHeights,
-        projectRights, projectOffLine, agentRows: agentRows.length, agentRowHeights, spawnedMarks: all("[data-proto-spawned]").length,
+        projectRights, projectOffLine, rowHeightById, hangingWraps, runningWords, longSeconds,
+        agentRows: agentRows.length, agentRowHeights, agentChevrons, spawnedMarks: all("[data-proto-spawned]").length,
+        detailScreen: document.querySelector("[data-proto-detail]")?.getAttribute("data-proto-detail") ?? null,
+        detailParts: { back: all("[data-proto-back]").length, agentHead: all("[data-proto-agent-head]").length, card: all("[data-proto-expanded]").length },
         repeatedTimes, repeatedInOpened, timesPerAgent, asksUnderHeading, needsYouPrefix, askTones, tabCounts,
         newTaskOnAgents: agentsTab ? all("[data-proto-new]").length : 0,
         headTabs: all("[data-proto-head] [data-proto-tabs]").length,
@@ -236,7 +263,10 @@ function problemsOf(name: string, reading: Reading, pageErrors: readonly unknown
   if (critic.chevronRights.length > 1) out.push(`chevron column moves: ${critic.chevronRights.join(",")}`);
   if (critic.titleGaps.length > 1) out.push(`title-to-line gap uneven: ${critic.titleGaps.join(",")}`);
   if (critic.projectRights.length > 1) out.push(`project place moves: ${critic.projectRights.join(",")}`);
-  if (critic.projectOffLine) out.push(`project on a line of its own: ${critic.projectOffLine}`);
+  if (critic.projectOffLine) out.push(`project away from its place: ${critic.projectOffLine}`);
+  if (critic.hangingWraps.length) out.push(`wrapped state left of the stage name: ${critic.hangingWraps.join(" | ")}`);
+  if (critic.runningWords) out.push(`«running» beside «working»: ${critic.runningWords}`);
+  if (critic.longSeconds.length) out.push(`age in seconds past a minute: ${critic.longSeconds.join(" | ")}`);
   if (critic.repeatedTimes.length) out.push(`one time twice: ${critic.repeatedTimes.join(" | ")}`);
   if (critic.repeatedInOpened) out.push("a duration repeated between the row and its opened card");
   if (critic.timesPerAgent.some((count) => count > 1)) out.push(`agent with ${critic.timesPerAgent.join("/")} times`);
@@ -249,7 +279,10 @@ function problemsOf(name: string, reading: Reading, pageErrors: readonly unknown
   if (/-(tasks|all|expanded|status)$/.test(name) && critic.variant !== "3" && !critic.chevrons) out.push("no open mark on rows");
   if (/variant-3-390-.*-tasks$/.test(name) && !critic.chevrons) out.push("no open mark on phone rows");
   if (name.endsWith("-expanded") && critic.expandedShown !== "t-login") out.push("opened task not in view");
-  if ((critic.variant === "1" || critic.variant === "3") && /-(tasks|all|expanded|status)$/.test(name) && !critic.statusDots) out.push("no status dot");
+  if (/-(tasks|all|expanded|status)$/.test(name) && (!critic.taskRows || critic.rowDots !== critic.taskRows)) out.push(`status dots on ${critic.rowDots} of ${critic.taskRows} rows`);
+  if (/variant-3-390-.*-agents$/.test(name) && critic.agentChevrons !== critic.agentRows) out.push(`agent rows with an open mark: ${critic.agentChevrons} of ${critic.agentRows}`);
+  if (name.endsWith("-agent-detail") && !(critic.detailScreen === "agent" && critic.detailParts.back === 1 && critic.detailParts.agentHead === 1 && critic.detailParts.card === 1)) out.push(`agent screen incomplete: ${JSON.stringify(critic.detailParts)}`);
+  if (/-3-390-.*-detail$/.test(name) && !name.endsWith("-agent-detail") && !(critic.detailScreen === "task" && critic.detailParts.back === 1 && critic.detailParts.card === 1)) out.push(`task screen incomplete: ${JSON.stringify(critic.detailParts)}`);
   if (name.endsWith("-agents") && critic.agentRowHeights.some((height) => height > 76)) out.push(`agent row ${Math.max(...critic.agentRowHeights)}px tall`);
   if (name.endsWith("-agents") && critic.spawnedMarks >= critic.agentRows) out.push("every agent row is labelled");
   if (critic.pane) {
@@ -303,6 +336,20 @@ try {
 } finally {
   await browser.close();
   server.stop();
+}
+/* «All projects» must not make a row taller than the same task's row in
+   «this project» at the same width, language and theme. */
+type Stored = { problems: string[]; critic: { rowHeightById: Record<string, number> } | null };
+for (const [name, value] of Object.entries(results) as [string, Stored][]) {
+  const pair = name.endsWith("-all") ? results[name.replace(/-all$/, "-tasks")] as Stored | undefined : undefined;
+  if (!value.critic || !pair?.critic) continue;
+  const taller = Object.entries(value.critic.rowHeightById).filter(([id, height]) => id in pair.critic!.rowHeightById && height !== pair.critic!.rowHeightById[id]).map(([id, height]) => `${id} ${pair.critic!.rowHeightById[id]}→${height}`);
+  value.problems = value.problems.filter((problem) => !problem.startsWith("row height differs from «this project»"));
+  if (taller.length) {
+    if (!value.problems.length) dirty += 1;
+    value.problems.push(`row height differs from «this project»: ${taller.join(", ")}`);
+    console.log(name, "row heights", taller.join(", "));
+  }
 }
 fs.writeFileSync(path.join(OUT, "geometry.json"), `${JSON.stringify(results, null, 2)}\n`);
 console.log("frames", Object.keys(results).length, "with problems", dirty, "->", FRAMES);

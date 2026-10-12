@@ -50,7 +50,7 @@ Notes outside this menu: the kanban card's own age reads `updatedAtMs` too (`src
 
 1. **One recency: the board's.** The menu reads the cards `buildKanbanModel` already produces (cross-project through the same path `OverviewKanban` uses) and sorts by `lastAgentWorkAtMs`; a task nothing ever ran on sorts by `createdAt`. `updatedAt` leaves the menu entirely. PR events join the recency by keeping the PR's `updatedAt`, which the forge sweep reads today and drops when it stores the row (`src/lib/forge/sweep.ts:238`).
 2. **Folds, never drops.** A task with no work for 3 days and the done tasks older than 24 hours fold at the bottom under a header with their count; opening a fold lists every one. Tasks finished within 24 hours stay in the recent list, where the operator looks for them.
-3. **The row** (prototype `menu.tsx`, one `TaskRow` for all three variants). Line 1: `TaskIcon` in the task's colour beside the colour edge, the title (wrapped, never cut), the last-work age, and the open mark in a column of its own at the right edge. Line 2: the status as a dot in the status tone (`TASK_TONES`) under the icon, with its name in a short popover on hover or tap; then what runs now as `StageGlyph` (the model glyph in the stage's state) + the stage id + the agent's state in one to three words (working 22m / waiting on checks / idle / finished); then the PR as `WorkLinkText` in the chip's tone with its merge state. When the agent asks the operator, the state is the question itself in the attention colour («asks you: pick a menu variant»). Line 3, only for a hold that is not a question: `TaskMotionLine` over `taskMotion`, the board's own sentence, without its age. A row prints one time, the last work; «working 22m» is a duration of a different fact and stays. Under «all projects» the project name sits under the age, on line 2, at one right edge in every row. No status is a text pill and no stage is a chip.
+3. **The row** (prototype `menu.tsx`, one `TaskRow` for all three variants). Line 1: `TaskIcon` in the task's colour beside the colour edge, the title (wrapped, never cut), the last-work age, and the open mark in a column of its own at the right edge. Line 2: the status as a dot in the status tone (`TASK_TONES`) under the icon, with its name in a short popover on hover or tap; then what runs now as `StageGlyph` (the model glyph in the stage's state) + the stage id + the agent's state in one to three words (working 22m / waiting on checks / idle / finished), and a state or question that wraps continues under the stage id, never under the glyph; then the PR as `WorkLinkText` in the chip's tone with its merge state. When the agent asks the operator, the state is the question itself in the attention colour («asks you: pick a menu variant»). Line 3, only for a hold that is not a question: `TaskMotionLine` over `taskMotion`, the board's own sentence, without its age. A row prints one time, the last work; «working 22m» is a duration of a different fact and stays. Under «all projects» the project name sits right under the age, at one right edge in every row; under «this project» its place stays empty, so switching the scope never rewraps a title. Line 2 starts under the title, so once the title takes two lines the project does not narrow it, and a row is as tall in either scope. A running stage reads «working», the agent's own word, on the row, in the stage list and on the agent line alike. No status is a text pill and no stage is a chip.
 4. **Agents** = stage agents and spawned agents of the scope, newest launch first. A row is the model glyph in the agent's state, the name (`roleCopy.<role>.name` and the stage id, or the agent's own title) with its state beside it, and the launch age the list is ordered by; under it the task with its icon, wrapped and never cut. Only a spawned agent is marked («spawned»); a stage agent is the rule and carries no label. One time per agent. Source: pipeline attempts and the files catalogue the board already polls. The crowned favourites are a fold at the top of the Agents list in every variant; they are conversations.
 5. **Moved elsewhere:** the band preference (D6) moves into the opened card's actions («Show on the board»); «unplaced» (D5) goes, since nothing can act on it; «+ new task» stays at the top of the Tasks tab; the project scope toggle stays and the phone gains it.
 6. **One count.** The bar's `Tasks N` becomes open tasks with work inside the fold window (not idle). The tabs carry no number; each fold and group prints its own count, and the Agents list its own in its heading.
@@ -59,7 +59,7 @@ Notes outside this menu: the kanban card's own age reads `updatedAtMs` too (`src
 
 ## 3. Variants
 
-Frames: `original-*` is today's `TaskPanel` and `TaskSheet` rendered from the same fixture; each variant has `-tasks`, `-agents` and an opened task (`-expanded` for variants 1 and 2; variant 3 shows its pane in every desktop frame and has `-detail` on the phone); `-all` at 1440 shows the «all projects» scope; `-status` at 1440 shows the status popover of variants 1 and 3 open on the first row.
+Frames: `original-*` is today's `TaskPanel` and `TaskSheet` rendered from the same fixture; each variant has `-tasks`, `-agents` and an opened task (`-expanded` for variants 1 and 2; variant 3 shows its pane in every desktop frame and has `-detail` on the phone); `-all` at 1440 shows the «all projects» scope; `-status` at 1440 shows the status popover open on the first row of each variant.
 
 ### Variant 1 — One list by recency (recommended)
 
@@ -69,13 +69,13 @@ It answers the quote most directly: the newest work is the first row whatever it
 
 ### Variant 2 — Grouped by what the task needs
 
-420 px (360 at 1000). The same head and the same row, grouped: Needs you · Working now · Waiting (checks, holds, queue) · Not started · Finished today · No work for 3+ days (folded) · Done earlier (folded); recency inside each group. The group heading carries the state, so the row has no status dot, and under «Needs you» the row prints the question alone. A row expands in place exactly as in variant 1. The agents are the Agents tab, as in the other two.
+420 px (360 at 1000). The same head and the same row, grouped: Needs you · Working now · Waiting (checks, holds, queue) · Not started · Finished today · No work for 3+ days (folded) · Done earlier (folded); recency inside each group. The group heading names what the work needs; the row keeps the task's status dot with its popover, as in the other two, so a blocked task among the waiting ones reads as blocked. Under «Needs you» the row prints the question alone. A row expands in place exactly as in variant 1. The agents are the Agents tab, as in the other two.
 
 It repeats the board's own columns by motion, so it is a second kanban in a side panel.
 
 ### Variant 3 — Two panes
 
-The list is a 340 px dock (320 at 1000) in day buckets (Today, Yesterday, This week, Older) with the Done fold. The selected row is highlighted, and its whole card hangs off the list's left edge over the board: 380 px wide (360 at 1000), as tall as its content, with its own close button. The card adds the recent activity (stage started/passed, PR opened/merged, agent launched). On the Agents tab the selected agent is highlighted in the list and the pane shows what the list does not: the agent's model, then its task's card. Phone: the list with a chevron on every row, then a pushed detail screen with Back.
+The list is a 340 px dock (320 at 1000) in day buckets (Today, Yesterday, This week, Older) with the Done fold. The selected row is highlighted, and its whole card hangs off the list's left edge over the board: 380 px wide (360 at 1000), as tall as its content, with its own close button. The card adds the recent activity (stage started/passed, PR opened/merged, agent launched). On the Agents tab the selected agent is highlighted in the list and the pane shows what the list does not: the agent's model, then its task's card. Phone: the list with a chevron on every task and agent row, then a pushed screen with Back: the task's whole card, or the agent (model, state, launch age) above its task's card.
 
 The richest detail, at the cost of covering part of the board while a card is open and the most new code.
 
@@ -83,11 +83,11 @@ The richest detail, at the cost of covering part of the board while a card is op
 
 `capture.ts` serves `fixture.tsx` through the kanban driver's harness (`serveEvidenceFixture`, `openFixture`, `caseChromium` from `src/components/kanban/issue1695BrowserHarness.ts`) with the production stylesheet plus one `@source` line for this folder, in Chromium at 1440 × 900, 1000 × 760 and 390 × 844 (touch), uk and en, light and dark. Today's menu is drawn by the real `TaskPanel`, `TaskSheet`, `DashboardBar` and `BarPanelToggles` over the same fixture, so each variant frame has an original at the same width, language and theme.
 
-`geometry.json` holds each frame's measurements. Geometry: sideways scroll of the page and of every scroller (scrollLeft pushed and read back), facts cut by their box (a Range over the text against the box), title/age overlap, phone buttons under 44 px, the panel width, and the titles visible without scrolling, in order. The visual critic's findings, each as a number under `critic`: passive text on a fill or inside a border (a pill or a chip), the gap between a stage's glyph and its name, the right edges of the open marks and of the project names, the gap between a title and the line under it, a duration printed twice in one row, the times per agent, «asks you» under «Needs you», a count in a tab, what the list opens on, whether the opened task is in view, the pane's width, the board it leaves and the empty space under its content, the selected row, the favourites fold, and whether the status popover is inside the viewport and on top. `problems` names what a frame still fails; a clean frame has an empty list.
+`geometry.json` holds each frame's measurements. Geometry: sideways scroll of the page and of every scroller (scrollLeft pushed and read back), facts cut by their box (a Range over the text against the box), title/age overlap, phone buttons under 44 px, the panel width, and the titles visible without scrolling, in order. The visual critic's findings, each as a number under `critic`: passive text on a fill or inside a border (a pill or a chip), the gap between a stage's glyph and its name, the right edges of the open marks and of the project names, the gap between a title and the line under it, a duration printed twice in one row, the times per agent, «asks you» under «Needs you», a count in a tab, what the list opens on, whether the opened task is in view, the pane's width, the board it leaves and the empty space under its content, the selected row, the favourites fold, and whether the status popover is inside the viewport and on top. Round 2 adds: a status dot on every task row of every variant, the project right under the age, each «all projects» row's height against the same task's row in «this project» (a check across the two frames, run after the matrix), a wrapped state or question that starts left of the stage id, the word «running» anywhere in a row or a stage list, an age printed as 60 seconds or more, an open mark on every agent row of variant 3 on the phone, and the parts of the phone's pushed screens (Back, the agent's head, the task's card). `problems` names what a frame still fails; a clean frame has an empty list.
 
 The frames are kept out of the tree (the hosted privacy gate refuses rasters); a later stage publishes them on the task's prototype review after the visual critic has judged them again.
 
-Frame names: `original-<width>-<lang>-<theme>[-all].png`; `variant-<n>-<width>-<lang>-<theme>-<state>.png` with state `tasks`, `agents`, `expanded` (variants 1 and 2), `detail` (variant 3, phone), `all` (1440 only) and `status` (variants 1 and 3, 1440 only). The `tasks` and `all` frames pair with the original of the same width, language and theme.
+Frame names: `original-<width>-<lang>-<theme>[-all].png`; `variant-<n>-<width>-<lang>-<theme>-<state>.png` with state `tasks`, `agents`, `expanded` (variants 1 and 2), `detail` and `agent-detail` (variant 3, phone), `all` (1440 only) and `status` (1440 only). The `tasks` and `all` frames pair with the original of the same width, language and theme.
 
 ## 5. Questions for the operator
 
@@ -99,9 +99,9 @@ Decided here without asking: a task finished within the last 24 hours stays in t
 
 ## 6. Measurements
 
-All 136 frames (16 original, 120 variant) measure clean: no sideways scroll of the page or of any scroller, no fact cut by its box, no title/age overlap, no page error, every variant button on the phone at least 44 px, and an empty `problems` list in every frame.
+All 144 frames (16 original, 128 variant) measure clean: no sideways scroll of the page or of any scroller, no fact cut by its box, no title/age overlap, no page error, every variant button on the phone at least 44 px, and an empty `problems` list in every frame.
 
-What the critic's findings measure now, over the 120 variant frames:
+What the critic's findings measure now, over the 128 variant frames:
 
 | Check | Reading |
 |---|---|
@@ -109,17 +109,22 @@ What the critic's findings measure now, over the 120 variant frames:
 | Gap from a stage's glyph to its name | 8 px everywhere |
 | Right edge of the open mark | one value per frame: 1430, 990 and 380 px at the three widths |
 | Gap from a title to the line under it | one value per frame (5 px on the desktop, 6 px on the phone) |
-| Right edge of the project name («all projects») | one value per frame, always on line 2 |
+| Right edge of the project name («all projects») | one value per frame, right under the age in every task row |
+| Row height under «all projects» against «this project», same task | equal in all 12 pairs |
+| Status dot | on every visible task row of all three variants |
+| Wrapped state or question starting left of the stage id; «running» in a row or stage list; an age of 60 s or more | 0 |
+| Open mark on variant 3's phone agent rows | every row |
 | A duration printed twice in a row, an agent line, or a row with its opened card | 0 |
 | Times printed per agent | 1 at most |
 | «asks you» or «Needs you» inside a row under the «Needs you» heading | 0 |
 | A number in a tab | 0 |
 | First block of variant 2 | «Needs you» in every `tasks`, `all` and `expanded` frame |
-| Agent row height | 54 px for two lines, 70 to 73 px when the task title wraps (was about 90 px) |
+| Agent row height | 54 to 56 px for two lines, 70 to 73 px when the task title wraps (was about 90 px) |
 | Agents visible without scrolling (uk, light) | 12, 13 and 11 at 1440 for variants 1, 2 and 3; 9, 9 and 8 at 1000; 11 on the phone |
 | Variant 3 pane | 380 px wide at 1440 and 360 px at 1000; the board keeps 721 px and 321 px beside it; the pane ends 1 px under its content (297 to 551 px tall) |
 | Variant 3 selection | exactly one highlighted row in the list, on Tasks and on Agents; one close button on the pane |
-| Status popover (`-status`) | inside the viewport and on top in all 8 frames |
+| Status popover (`-status`) | inside the viewport and on top in all 12 frames |
+| Phone pushed screens (`-detail`, `-agent-detail`) | Back, the card, and on the agent screen the agent's head, in all 8 frames |
 
 Panel width and the rows whose titles are visible without scrolling (uk, light, tasks):
 
@@ -156,6 +161,18 @@ The critic judged the first 116 frames and passed no variant. Every finding is f
 | P3, variants 1 and 3: two task counts in one view | The tabs carry no number. |
 | P3, variant 2, all projects: PR and project read as one string, the age floats | The project is under the age; the age is aligned to the title's first line in every row. |
 | P3, variant 3: the activity list contradicts the agent line | The fixture's newest event of a working agent is a pushed commit; an asking agent's is its question; the failed refresh is failed in the task, the stage and the agent alike. |
+
+## 8. Visual critic, round 2: findings and what changed
+
+The critic judged all 136 frames of round 1 and raised two P2 and three P3 findings. Each is fixed in every variant it named, and `capture.ts` measures each one in every frame.
+
+| Finding | Fix |
+|---|---|
+| P2, variant 2: no status dot, so a blocked task in «Waiting» reads like the rest | Every variant-2 row carries the same dot under the icon with the same popover as variants 1 and 3; `variant-2-1440-*-status` frames show it open. The driver fails a `tasks`, `all`, `expanded` or `status` frame where any visible row lacks its dot. |
+| P2, variant 3 on the phone: agent rows have no open mark, and the agent's screen was never rendered | Agent rows carry the chevron in a column of their own, as task rows do; a tap pushes the agent's screen: Back, the agent (model, state, launch age), then its task's card (`variant-3-390-*-agent-detail`). |
+| P3, «all projects» in Ukrainian: the project narrows line 2 and pushes the PR or the question onto a third line | The project sits right under the age, and «this project» keeps its place empty so a title wraps the same in both scopes; line 2 starts under the title and takes the row's full width once the title has two lines. A wrapped state or question continues under the stage id. The driver compares every «all projects» row with the same task's row in «this project». |
+| P3, English: the same state is «running» on the stage and «working» on the row and the agent | A running stage reads «working» in the stage list, on the row and on the agent line (Ukrainian already said «працює» everywhere). |
+| P3, the first row's age reads «60 s ago» above «2m ago» | The fixture's newest work is 40 seconds old; the driver fails an age printed as 60 seconds or more. |
 
 ## Deferred — not currently justified
 

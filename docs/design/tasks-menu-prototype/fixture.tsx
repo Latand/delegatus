@@ -3,8 +3,9 @@
  * (`serveEvidenceFixture(out, "docs/design/tasks-menu-prototype/fixture.tsx")`).
  * Query: `v` 0 (today's panel and sheet, the real components) or 1–3 (the
  * variants); `phone=1`; `tab=agents`; `scope=all`; `expand=<task>` (variants 1
- * and 2); `select=<task>` and `detail=1` (variant 3); `pop=<task>` pins that
- * row's status popover open (variants 1 and 3).
+ * and 2); `select=<task>`, `agent=<agent>` and `detail=1` (variant 3; with
+ * `tab=agents` the phone's pushed screen is that agent's); `pop=<task>` pins
+ * that row's status popover open.
  */
 import { useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -73,7 +74,7 @@ function Desktop() {
   } else if (variant === 1) {
     panel = <DockFrame width={wide ? 380 : 340} title={t("tasks.panelTitle")}><Variant1 now={NOW} phone={false} initialTab={tab} initialScope={scope} expandedId={params.get("expand")} popId={params.get("pop")} /></DockFrame>;
   } else if (variant === 2) {
-    panel = <DockFrame width={wide ? 420 : 360} title={t("tasks.panelTitle")}><Variant2 now={NOW} phone={false} initialTab={tab} initialScope={scope} expandedId={params.get("expand")} /></DockFrame>;
+    panel = <DockFrame width={wide ? 420 : 360} title={t("tasks.panelTitle")}><Variant2 now={NOW} phone={false} initialTab={tab} initialScope={scope} expandedId={params.get("expand")} popId={params.get("pop")} /></DockFrame>;
   } else if (variant === 3) {
     panel = <DockFrame width={wide ? 340 : 320} title={t("tasks.panelTitle")}><Variant3 now={NOW} phone={false} initialTab={tab} initialScope={scope} selectedId={params.get("select")} paneWidth={wide ? 380 : 360} popId={params.get("pop")} /></DockFrame>;
   }
@@ -98,7 +99,7 @@ function Phone() {
     ? <Variant1 now={NOW} phone initialTab={tab} initialScope={scope} expandedId={params.get("expand")} />
     : variant === 2
       ? <Variant2 now={NOW} phone initialTab={tab} initialScope={scope} expandedId={params.get("expand")} />
-      : <Variant3 now={NOW} phone initialTab={tab} initialScope={scope} selectedId={params.get("select")} phoneDetail={params.get("detail") === "1"} />;
+      : <Variant3 now={NOW} phone initialTab={tab} initialScope={scope} selectedId={params.get("select")} selectedAgentId={params.get("agent")} phoneDetail={params.get("detail") === "1"} />;
   return <PhoneSheet title={t("tasks.panelTitle")}>{body}</PhoneSheet>;
 }
 

@@ -101,6 +101,12 @@ const STAGE_WORD_TONE: Record<StageChipState, string> = {
   passed: "text-secondary", failed: AGENT_TONE.failed, needs_decision: AGENT_TONE["needs-you"],
 };
 
+/** A stage's state word. A running stage reads as its agent does
+    («working»), so the row, the stage list and the agent line agree. */
+function stageWord(t: TFunction, p: ReturnType<typeof useProto>["p"], state: StageChipState): string {
+  return state === "running" ? p("agentWorkingBare") : t(`kanban.graphState.${state}`);
+}
+
 /** The agent waits on the operator and the task carries the question. */
 const asksOperator = (task: ProtoTask) => task.agent?.state === "needs-you" && task.hold?.kind === "operator";
 
@@ -116,18 +122,18 @@ function NowLine({ task, underHeading = false }: { task: ProtoTask; underHeading
   }
   const agent = task.agent;
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-2" data-proto-now="">
-      <span className="flex shrink-0 items-center gap-2">
-        <StageGlyph state={stage.state} model={{ engine: stage.engine, model: stage.model }} fallback="mark" badge={false} />
-        <span className="font-mono text-[10.5px] text-secondary" data-proto-stage-name="">{stage.id}</span>
+    <span className="flex min-w-0 items-start gap-2" data-proto-now="">
+      <span className="flex h-4 shrink-0 items-center" data-proto-glyph=""><StageGlyph state={stage.state} model={{ engine: stage.engine, model: stage.model }} fallback="mark" badge={false} /></span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        <span className="mr-2 font-mono text-[10.5px] text-secondary" data-proto-stage-name="">{stage.id}</span>
+        {asksOperator(task) ? (
+          <span className="font-medium text-warning" data-proto-ask="">{underHeading ? task.hold!.note[locale] : p("asksYou", { question: task.hold!.note[locale] })}</span>
+        ) : agent ? (
+          <span className={`whitespace-nowrap ${AGENT_TONE[agent.state]}`}>{agentWord(p, agent.state, agent.state === "working" ? agent.sinceMin : null)}</span>
+        ) : (
+          <span className={`whitespace-nowrap ${STAGE_WORD_TONE[stage.state]}`}>{stageWord(t, p, stage.state)}</span>
+        )}
       </span>
-      {asksOperator(task) ? (
-        <span className="min-w-0 font-medium text-warning [overflow-wrap:anywhere]" data-proto-ask="">{underHeading ? task.hold!.note[locale] : p("asksYou", { question: task.hold!.note[locale] })}</span>
-      ) : agent ? (
-        <span className={`whitespace-nowrap ${AGENT_TONE[agent.state]}`}>{agentWord(p, agent.state, agent.state === "working" ? agent.sinceMin : null)}</span>
-      ) : (
-        <span className={`whitespace-nowrap ${STAGE_WORD_TONE[stage.state]}`}>{t(`kanban.graphState.${stage.state}`)}</span>
-      )}
     </span>
   );
 }
@@ -256,7 +262,7 @@ interface TaskRowProps {
   now: number;
   scope: Scope;
   phone: boolean;
-  /** The status dot under the icon (variants 1 and 3; variant 2's heading says the state). */
+  /** The status dot under the icon. */
   status?: boolean;
   underHeading?: boolean;
   /** The PR and the hold on the row (variants 1 and 2; variant 3 keeps them in its pane). */
@@ -272,10 +278,14 @@ interface TaskRowProps {
 }
 
 /**
- * One grid for every variant. Line 1: icon, title, age, the open mark in a
- * column of its own at the right edge. Line 2: the status dot under the icon,
- * what runs now and the PR, and the project under the age when the scope is
- * all projects. Line 3: the hold. The row is as tall as its lines.
+ * One row for every variant: the icon column, the text column, and the open
+ * mark in a column of its own at the right edge. In the text column the age
+ * floats at the top right with the project under it; in «this project» the
+ * project's place is kept empty, so switching the scope never rewraps a
+ * title. The title keeps its own box beside it. Line 2 (the status dot
+ * under the icon, what runs now, the PR) starts under the title, so once a
+ * title takes two lines the project no longer narrows line 2. Line 3: the
+ * hold. The row is as tall as its lines.
  */
 function TaskRow({ task, now, scope, phone, status = false, underHeading = false, detail = true, small = false, divided = false, opens, active = false, onOpen, popStatus = false, children }: TaskRowProps) {
   const { locale } = useProto();
@@ -287,24 +297,30 @@ function TaskRow({ task, now, scope, phone, status = false, underHeading = false
       <button
         type="button"
         {...(opens === "expand" ? { "aria-expanded": active } : opens === "select" ? { "aria-current": active || undefined } : {})}
-        className={`grid w-full ${marked ? "grid-cols-[16px_minmax(0,1fr)_auto_14px]" : "grid-cols-[16px_minmax(0,1fr)_auto]"} content-center items-start gap-x-2 gap-y-1 py-2 pl-3 pr-2.5 text-left ${tint} ${phone ? "min-h-14" : ""} ${task.status === "done" ? "opacity-75" : ""}`}
+        className={`grid w-full ${marked ? "grid-cols-[16px_minmax(0,1fr)_14px]" : "grid-cols-[16px_minmax(0,1fr)]"} content-center items-start gap-x-2 py-2 pl-3 pr-2.5 text-left ${tint} ${phone ? "min-h-14" : ""} ${task.status === "done" ? "opacity-75" : ""}`}
         onClick={onOpen}
       >
         <span className="col-start-1 row-start-1 flex h-[18px] items-center"><TaskMark task={task} /></span>
-        <span className={`col-start-2 row-start-1 min-w-0 font-semibold leading-[18px] [overflow-wrap:anywhere] ${phone ? "text-[14px]" : small ? "text-ui" : "text-body"}`} data-proto-title="">{task.title[locale]}</span>
-        <Age min={recencyMin(task)} className="col-start-3 row-start-1" />
+        <span className="col-start-2 row-start-1 flow-root min-w-0">
+          <span className="float-right flex flex-col items-end pl-2" data-proto-meta="">
+            <Age min={recencyMin(task)} />
+            {scope === "all"
+              ? <span className="max-w-[110px] truncate text-label leading-4 text-muted" data-proto-project="">{PROJECT_NAMES[task.project]}</span>
+              : <span aria-hidden className="invisible max-w-[110px] truncate text-label leading-4" data-proto-project-slot="">{PROJECT_NAMES[task.project]}</span>}
+          </span>
+          <span className={`flow-root font-semibold leading-[18px] [overflow-wrap:anywhere] ${phone ? "text-[14px]" : small ? "text-ui" : "text-body"}`} data-proto-title="">{task.title[locale]}</span>
+          <span className="relative mt-1 flex min-w-0 flex-wrap items-start gap-x-3 gap-y-0.5 text-label leading-4" data-proto-line="">
+            {status ? <span className="absolute -left-6 top-0 flex h-4 w-4 items-center"><StatusDot task={task} open={popStatus} /></span> : null}
+            <NowLine task={task} underHeading={underHeading} />
+            {detail ? <PrLine task={task} now={now} /> : null}
+          </span>
+          {detail && task.hold && !asksOperator(task) ? <span className="mt-1 flow-root min-w-0"><HoldLine task={task} now={now} /></span> : null}
+        </span>
         {marked ? (
-          <span className="col-start-4 row-start-1 flex h-[18px] items-center justify-end text-muted" data-proto-chevron="">
+          <span className="col-start-3 row-start-1 flex h-[18px] items-center justify-end text-muted" data-proto-chevron="">
             {opens === "expand" ? <ChevronDown className={`h-3.5 w-3.5 transition-transform ${active ? "rotate-180" : ""}`} aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
           </span>
         ) : null}
-        {status ? <span className="col-start-1 row-start-2 flex h-4 items-center"><StatusDot task={task} open={popStatus} /></span> : null}
-        <span className={`col-start-2 ${scope === "all" ? "" : "col-end-[-1]"} row-start-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-label leading-4`} data-proto-line="">
-          <NowLine task={task} underHeading={underHeading} />
-          {detail ? <PrLine task={task} now={now} /> : null}
-        </span>
-        {scope === "all" ? <span className="col-start-3 col-end-[-1] row-start-2 max-w-[110px] justify-self-end truncate text-label leading-4 text-muted" data-proto-project="">{PROJECT_NAMES[task.project]}</span> : null}
-        {detail && task.hold && !asksOperator(task) ? <span className="col-start-2 col-end-[-1] row-start-3 min-w-0"><HoldLine task={task} now={now} /></span> : null}
       </button>
       {children}
     </li>
@@ -370,7 +386,7 @@ function ExpandedCard({ task, now, phone, pane = false, agents: withAgents = tru
               <li key={stage.id} className="contents" data-proto-stage={stage.id}>
                 <StageGlyph state={stage.state} model={{ engine: stage.engine, model: stage.model }} fallback="mark" badge={false} />
                 <span className="font-mono text-[10.5px]" data-proto-stage-name="">{stage.id}</span>
-                <span className={STAGE_WORD_TONE[stage.state]}>{t(`kanban.graphState.${stage.state}`)}</span>
+                <span className={STAGE_WORD_TONE[stage.state]}>{stageWord(t, p, stage.state)}</span>
               </li>
             ))}
           </ol>
@@ -427,7 +443,7 @@ function AgentFacts({ agent }: { agent: ProtoAgent }) {
 /** An agent in the Agents list. Line 1: the name with its state beside it,
     and the launch age the list is ordered by. Line 2: its task, wrapped and
     never cut. Only a spawned agent is marked, since a stage agent is the rule. */
-function AgentRow({ agent, scope, phone, selected = false, onSelect }: { agent: ProtoAgent; scope: Scope; phone: boolean; selected?: boolean; onSelect?: () => void }) {
+function AgentRow({ agent, scope, phone, selected = false, pushes = false, onSelect }: { agent: ProtoAgent; scope: Scope; phone: boolean; selected?: boolean; pushes?: boolean; onSelect?: () => void }) {
   const { t, locale, p } = useProto();
   const task = agent.taskId ? taskById.get(agent.taskId) ?? null : null;
   const all = scope === "all";
@@ -436,7 +452,7 @@ function AgentRow({ agent, scope, phone, selected = false, onSelect }: { agent: 
       <button
         type="button"
         aria-current={selected || undefined}
-        className={`grid w-full grid-cols-[16px_minmax(0,1fr)_auto] content-center items-start gap-x-2 gap-y-1 py-2 pl-3 pr-2.5 text-left ${selected ? "bg-accent/10" : "hover:bg-well"} ${phone ? "min-h-14" : ""}`}
+        className={`grid w-full ${pushes ? "grid-cols-[16px_minmax(0,1fr)_auto_14px]" : "grid-cols-[16px_minmax(0,1fr)_auto]"} content-center items-start gap-x-2 gap-y-1 py-2 pl-3 pr-2.5 text-left ${selected ? "bg-accent/10" : "hover:bg-well"} ${phone ? "min-h-14" : ""}`}
         onClick={onSelect}
       >
         <span className="col-start-1 row-start-1 flex h-[18px] items-center justify-center"><StageGlyph state={AGENT_STAGE_STATE[agent.state]} model={{ engine: agent.engine, model: agent.model }} fallback="mark" badge={false} /></span>
@@ -445,6 +461,7 @@ function AgentRow({ agent, scope, phone, selected = false, onSelect }: { agent: 
           <span className={`whitespace-nowrap pl-2 text-label ${AGENT_TONE[agent.state]}`} data-proto-agent-state="">{agentWord(p, agent.state, null)}</span>
         </span>
         <span className="col-start-3 row-start-1 shrink-0 text-label leading-[18px] tabular-nums text-muted" data-proto-age="">{age(agent.launchedMin)}</span>
+        {pushes ? <span className="col-start-4 row-start-1 flex h-[18px] items-center justify-end text-muted" data-proto-chevron=""><ChevronRight className="h-3.5 w-3.5" aria-hidden /></span> : null}
         <span className={`col-start-2 ${all ? "" : "col-end-[-1]"} row-start-2 flex min-w-0 items-start gap-1.5 text-label leading-4 text-secondary`} data-proto-agent-task="">
           {agent.kind === "spawned" ? <span className="shrink-0 text-muted" data-proto-spawned="">{p("spawnedAgent")}{task ? " ·" : ` · ${p("noTask")}`}</span> : null}
           {task ? (
@@ -454,13 +471,13 @@ function AgentRow({ agent, scope, phone, selected = false, onSelect }: { agent: 
             </>
           ) : agent.kind === "spawned" ? null : <span className="text-muted">{p("noTask")}</span>}
         </span>
-        {all ? <span className="col-start-3 row-start-2 max-w-[110px] justify-self-end truncate text-label leading-4 text-muted" data-proto-project="">{PROJECT_NAMES[agent.project]}</span> : null}
+        {all ? <span className="col-start-3 col-end-[-1] row-start-2 max-w-[110px] justify-self-end truncate text-label leading-4 text-muted" data-proto-project="">{PROJECT_NAMES[agent.project]}</span> : null}
       </button>
     </li>
   );
 }
 
-function AgentsList({ scope, phone, selectedId = null, onSelect }: { scope: Scope; phone: boolean; selectedId?: string | null; onSelect?: (id: string) => void }) {
+function AgentsList({ scope, phone, selectedId = null, pushes = false, onSelect }: { scope: Scope; phone: boolean; selectedId?: string | null; pushes?: boolean; onSelect?: (id: string) => void }) {
   const { locale, p } = useProto();
   const [favOpen, setFavOpen] = useState(false);
   const rows = scoped(AGENTS, scope).sort((a, b) => a.launchedMin - b.launchedMin);
@@ -479,7 +496,7 @@ function AgentsList({ scope, phone, selectedId = null, onSelect }: { scope: Scop
         </ul>
       ) : null}
       <div className="border-y border-border px-3 py-1.5 text-label font-semibold text-secondary" data-proto-agents-heading="">{p("recentAgents")} · {rows.length}</div>
-      <ul>{rows.map((agent) => <AgentRow key={agent.id} agent={agent} scope={scope} phone={phone} selected={agent.id === selectedId} onSelect={onSelect ? () => onSelect(agent.id) : undefined} />)}</ul>
+      <ul>{rows.map((agent) => <AgentRow key={agent.id} agent={agent} scope={scope} phone={phone} selected={agent.id === selectedId} pushes={pushes} onSelect={onSelect ? () => onSelect(agent.id) : undefined} />)}</ul>
     </div>
   );
 }
@@ -527,7 +544,7 @@ const GROUP_LABEL: Record<Group, ProtoKey> = {
 };
 const GROUP_FOLDED: ReadonlySet<Group> = new Set(["idle", "done"]);
 
-export function Variant2({ now, phone, initialTab, expandedId, initialScope = "project" }: { now: number; phone: boolean; initialTab: Tab; expandedId?: string | null; initialScope?: Scope }) {
+export function Variant2({ now, phone, initialTab, expandedId, initialScope = "project", popId = null }: { now: number; phone: boolean; initialTab: Tab; expandedId?: string | null; initialScope?: Scope; popId?: string | null }) {
   const { locale, p } = useProto();
   const [tab, setTab] = useState<Tab>(initialTab);
   const [scope, setScope] = useState<Scope>(initialScope);
@@ -561,7 +578,7 @@ export function Variant2({ now, phone, initialTab, expandedId, initialScope = "p
               {isOpen ? (
                 <ul className="pb-1">
                   {rows.map((task) => (
-                    <TaskRow key={task.id} task={task} now={now} scope={scope} phone={phone} underHeading={group === "needs-you"} opens="expand" active={expanded === task.id} onOpen={() => setExpanded(expanded === task.id ? null : task.id)}>
+                    <TaskRow key={task.id} task={task} now={now} scope={scope} phone={phone} status underHeading={group === "needs-you"} opens="expand" active={expanded === task.id} popStatus={popId === task.id} onOpen={() => setExpanded(expanded === task.id ? null : task.id)}>
                       {expanded === task.id ? <ExpandedCard task={task} now={now} phone={phone} /> : null}
                     </TaskRow>
                   ))}
@@ -580,8 +597,9 @@ export function Variant2({ now, phone, initialTab, expandedId, initialScope = "p
 const BUCKET_LABEL: Record<Bucket, ProtoKey> = { today: "bucketToday", yesterday: "bucketYesterday", week: "bucketWeek", older: "bucketOlder" };
 
 /** The agent the pane is about: what the list beside it does not say (the
-    model), above its task's card. The list row carries the launch age. */
-function AgentHead({ agent, onClose }: { agent: ProtoAgent; onClose: () => void }) {
+    model), above its task's card. Beside the list the row carries the launch
+    age; the phone's pushed screen, with no list in view, prints it here. */
+function AgentHead({ agent, onClose }: { agent: ProtoAgent; onClose?: () => void }) {
   const { t, locale, p } = useProto();
   return (
     <div className="flex items-start gap-2 border-b border-border px-4 py-3" data-proto-agent-head={agent.id}>
@@ -592,20 +610,21 @@ function AgentHead({ agent, onClose }: { agent: ProtoAgent; onClose: () => void 
           <span>{modelGlyphName(agent.engine, agent.model)}</span>
           {agent.kind === "spawned" ? <span>· {p("spawnedAgent")}</span> : null}
           <span className={AGENT_TONE[agent.state]}>· {agentWord(p, agent.state, null)}</span>
+          {onClose ? null : <span>· {p("launched", { age: age(agent.launchedMin) })}</span>}
         </div>
       </div>
-      <PaneClose onClose={onClose} />
+      {onClose ? <PaneClose onClose={onClose} /> : null}
     </div>
   );
 }
 
-export function Variant3({ now, phone, initialTab, selectedId, initialScope = "project", phoneDetail = false, paneWidth = 380, popId = null }: { now: number; phone: boolean; initialTab: Tab; selectedId?: string | null; initialScope?: Scope; phoneDetail?: boolean; paneWidth?: number; popId?: string | null }) {
+export function Variant3({ now, phone, initialTab, selectedId, selectedAgentId = null, initialScope = "project", phoneDetail = false, paneWidth = 380, popId = null }: { now: number; phone: boolean; initialTab: Tab; selectedId?: string | null; selectedAgentId?: string | null; initialScope?: Scope; phoneDetail?: boolean; paneWidth?: number; popId?: string | null }) {
   const { p } = useProto();
   const [tab, setTab] = useState<Tab>(initialTab);
   const [scope, setScope] = useState<Scope>(initialScope);
   const tasks = useMemo(() => scoped(TASKS, scope).sort(byRecency), [scope]);
   const [selected, setSelected] = useState<string>(selectedId ?? tasks[0]!.id);
-  const [agentId, setAgentId] = useState<string | null>(AGENTS.find((agent) => agent.taskId === (selectedId ?? tasks[0]!.id))?.id ?? null);
+  const [agentId, setAgentId] = useState<string | null>(selectedAgentId ?? AGENTS.find((agent) => agent.taskId === (selectedId ?? tasks[0]!.id))?.id ?? null);
   const [detail, setDetail] = useState(phoneDetail);
   const [paneOpen, setPaneOpen] = useState(true);
   const [doneOpen, setDoneOpen] = useState(false);
@@ -615,12 +634,23 @@ export function Variant3({ now, phone, initialTab, selectedId, initialScope = "p
   const selectedTask = TASKS.find((task) => task.id === selected) ?? tasks[0]!;
   const selectedAgent = AGENTS.find((agent) => agent.id === agentId) ?? null;
   if (phone && detail) {
+    /* The pushed screen: a task's whole card, or an agent above its task's card. */
+    const agentTask = selectedAgent?.taskId ? taskById.get(selectedAgent.taskId) ?? null : null;
     return (
-      <div className="flex min-h-0 flex-1 flex-col" data-proto-variant="3" data-proto-detail="">
-        <button type="button" className="flex min-h-11 shrink-0 items-center gap-1 border-b border-border px-2 text-[13px] font-semibold text-accent" onClick={() => setDetail(false)}>
+      <div className="flex min-h-0 flex-1 flex-col" data-proto-variant="3" data-proto-detail={tab === "agents" ? "agent" : "task"}>
+        <button type="button" className="flex min-h-11 shrink-0 items-center gap-1 border-b border-border px-2 text-[13px] font-semibold text-accent" onClick={() => setDetail(false)} data-proto-back="">
           <ChevronLeft className="h-5 w-5" aria-hidden />{p("back")}
         </button>
-        <div className="min-h-0 flex-1 overflow-y-auto"><ExpandedCard task={selectedTask} now={now} phone pane /></div>
+        <div className="min-h-0 flex-1 overflow-y-auto" data-proto-scroll="">
+          {tab === "agents" && selectedAgent ? (
+            <>
+              <AgentHead agent={selectedAgent} />
+              {agentTask
+                ? <ExpandedCard task={agentTask} now={now} phone pane agents={false} label={p("taskOfAgent")} />
+                : <p className="p-4 text-label text-muted">{p("noTask")}</p>}
+            </>
+          ) : <ExpandedCard task={selectedTask} now={now} phone pane />}
+        </div>
       </div>
     );
   }
@@ -631,7 +661,7 @@ export function Variant3({ now, phone, initialTab, selectedId, initialScope = "p
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <MenuHead tab={tab} onTab={setTab} scope={scope} onScope={setScope} phone={phone} />
       <div className="min-h-0 flex-1 overflow-y-auto" data-proto-scroll="">
-        {tab === "agents" ? <AgentsList scope={scope} phone={phone} selectedId={phone || !paneOpen ? null : agentId} onSelect={(id) => { setAgentId(id); setPaneOpen(true); }} /> : (
+        {tab === "agents" ? <AgentsList scope={scope} phone={phone} selectedId={phone || !paneOpen ? null : agentId} pushes={phone} onSelect={(id) => { setAgentId(id); setDetail(true); setPaneOpen(true); }} /> : (
           <>
             {buckets.map(([bucket, rows]) => (
               <section key={bucket} data-proto-bucket={bucket}>
