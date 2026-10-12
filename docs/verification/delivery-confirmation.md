@@ -20,14 +20,15 @@ The focused lost-answer regression fails on main baseline `f2e3c3858` with
 another send. Its sibling cases cover receipt-service failure, retained image
 bytes, Retry before confirmation, a check sharing a held automatic read,
 visibility, inactivity, remount, transcript-path migration, conversation
-changes, stale revisions and a hide during evidence persistence.
+changes, stale revisions and a hide during confirmation or non-execution
+persistence.
 
 The following explicit files were run separately through the shared gate,
 each process with private HOME, XDG config, TMPDIR, CLAUDE_CODE_TMPDIR and state:
 
 | Test file | Passing tests |
 | --- | ---: |
-| `src/components/TmuxComposer.admissionRecovery.dom.test.tsx` | 11 |
+| `src/components/TmuxComposer.admissionRecovery.dom.test.tsx` | 12 |
 | `src/hooks/runtimeAdmissionObservation.test.ts` | 7 |
 | `src/components/TmuxComposer.reconciliationExpiry.dom.test.tsx` | 44 |
 | `src/components/composerDeliveryReconciliation.integration.test.ts` | 3 |

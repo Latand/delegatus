@@ -328,3 +328,31 @@ test("confirmation persisted while hiding is projected into the live bubble on r
     await fixture.delivered();
   });
 });
+
+test("non-execution saved while hiding retires uncertainty on return", async () => {
+  await scenario("attachment", async fixture => {
+    const refuse = composerSubmissionPayloads.refuse.bind(composerSubmissionPayloads);
+    let hidden = false;
+    composerSubmissionPayloads.refuse = async (ref, refusal) => {
+      const accepted = await refuse(ref, refusal);
+      if (accepted && !hidden) {
+        hidden = true;
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+      }
+      return accepted;
+    };
+    try {
+      fixture.state.lookup = async () => ({ outcome: "not-executed" });
+      await until(() => hidden);
+      expect(readOutbox(fixture.conversationId)[0]?.deliveryUncertain).toBe(true);
+      expect((await composerSubmissionPayloads.restore({ conversationId: fixture.conversationId, key: fixture.key }))?.refusal).not.toBeNull();
+    } finally { composerSubmissionPayloads.refuse = refuse; }
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+    await until(() => readOutbox(fixture.conversationId)[0]?.deliveryUncertain === undefined);
+    expect(readOutbox(fixture.conversationId)[0]).toMatchObject({ id: fixture.key, state: "failed" });
+    expect(fixture.host.textContent).not.toContain(translate("uk", "composer.deliveryUnconfirmed"));
+    expect(fixture.state.sends).toBe(1);
+  });
+});

@@ -2727,7 +2727,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       if (entry?.state === "delivered" || row?.operationId
         || (entry?.operationId && !entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))) return { outcome: "unknown" } as const;
       if (row && !await composerSubmissionPayloads.refuse(row.ref, { status: 404, reason: "the delivery record holds nothing under this key" })) {
-        return { outcome: "unknown" } as const;
+        // A previous observer may have saved this proof as the view hid.
+        // Re-read the latest attempt so a newer wire claim stays protected.
+        const recorded = await composerSubmissionPayloads.restore(row.ref);
+        if (!recorded?.refusal || recorded.operationId) return { outcome: "unknown" } as const;
       }
       if (!current()) return { outcome: "unknown" } as const;
       receiptReconciliations.current.get(key)?.abort();
