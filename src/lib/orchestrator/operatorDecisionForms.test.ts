@@ -8,12 +8,12 @@ test("every delivered seat mandate asks operator decisions through a durable for
     for (const rule of [
       "every operator decision",
       "publish_prototype_review",
-      "relevant board task",
+      "taskId for a task (3–7 questions)",
+      "omit it without a task (1–7)",
       "3–7 questions",
-      "options and exactly one recommended",
+      "options with exactly one recommended",
       "variants optional",
-      "Restate the ask in chat with suggest_replies",
-      "question bridge report",
+      "Chat and reports only point to the form",
       "Never use engine built-in ask tools",
     ]) expect(mandate).toContain(rule);
     expect(orchestratorMandateForDelivery(mandate)).toBe(mandate);

@@ -1,3 +1,4 @@
+import { fileAgentActivity } from "@/lib/lifecycle/agentActivity";
 import type { FileEntry } from "@/lib/types";
 
 import { mobileRowState } from "./mobile/mobileBoardModel";
@@ -26,6 +27,7 @@ import { turnIsRunning } from "./turnDuration";
  */
 export function isWorkingAgent(file: FileEntry, now: number): boolean {
   if (file.engine === "shell" || isSubagent(file) || file.spawnOrigin === "engine") return false;
+  if (file.agentActivity && fileAgentActivity(file, workingClock(now) * 1000).state === "idle") return false;
   const row = mobileRowState(file, workingClock(now));
   if (row.key === "working") return true;
   return row.key === "held" && file.proc !== "killed" && turnIsRunning(file);

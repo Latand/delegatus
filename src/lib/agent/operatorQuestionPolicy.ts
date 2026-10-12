@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { codexProcessCleanupConfig } from "./processCleanupPolicy";
 
 const QUESTION_MATCHER = "request_user_input|request_user_input_async|send_user_message_async";
-const QUESTION_DENIAL = "Orchestrator operator decisions require a Delegatus form. Use publish_prototype_review on the relevant board task, then suggest_replies and a question bridge report.";
+const QUESTION_DENIAL = "Orchestrator operator decisions require a Delegatus form. Use publish_prototype_review: 3–7 questions with a task, 1–7 without a task. Chat and reports point to the form.";
 
 /** Codex 0.162.1 leaves async questions available when the sync setting is off.
  * Its PreToolUse boundary rejects both before execution, including control tools.

@@ -8,6 +8,7 @@ export interface ToolProperty {
   minimum?: number;
   maximum?: number;
   maxItems?: number;
+  minItems?: number;
   items?: ToolProperty;
 }
 const optionalText = (maxLength: number): ToolProperty => ({ type: ["string", "null"], maxLength });
@@ -24,12 +25,18 @@ export const READ_SCHEMAS: Record<string, Record<string, ToolProperty>> = {
   get_task: { project, taskId: handle },
   list_pipelines: { project, state: optionalSet(["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]), includeClosed: { type: ["boolean", "null"], description: "Set true to include closed history, including when state contains closed." }, ids: optionalSet(), query: optionalText(120), cursor, limit },
   get_pipeline: { project, pipelineId: handle, stageId: optionalText(128) },
+  agent_fleet: { project, detail: { type: ["boolean", "null"] }, conversationId: optionalText(128), pipelineId: optionalText(128),
+    engine: { type: ["string", "null"], enum: ["claude", "codex", "copilot", null] }, model: optionalText(128), effort: optionalText(128), account: optionalText(128),
+    state: { type: ["string", "null"], enum: ["running", "waiting", "stalled", "limitWait", "throttled", "permission", null] }, cursor, limit },
   agent_activity: { project, liveOnly: { type: ["boolean", "null"] }, conversationId: optionalText(128), cursor, limit },
   conversation_messages: { project, conversationId: handle, ...messages },
   orchestrator_messages: { project, ...messages },
   search_transcripts: { project, query: { type: "string", minLength: 1, maxLength: 200 }, order: { type: ["string", "null"], enum: ["relevance", "newest", null] }, cursor },
-  read_prototype_review: { project, taskId: handle },
-  view_prototype_frame: { project, taskId: handle, reviewId: handle, mediaId: handle },
+  read_prototype_review: { project, taskId: optionalText(128), reviewId: optionalText(128), query: optionalText(120) },
+  view_prototype_frame: { project, taskId: optionalText(128), reviewId: optionalText(128), query: optionalText(120),
+    variants: { type: "array", minItems: 1, maxItems: 3, items: { type: "integer", minimum: 1, maximum: 9 } },
+    view: optionalText(120), width: { type: ["integer", "null"], minimum: 240, maximum: 3840 },
+    lang: { type: ["string", "null"], enum: ["uk", "en", null] }, original: { type: ["boolean", "null"] } },
 };
 for (const schema of Object.values(READ_SCHEMAS)) schema.refresh = {
   type: ["boolean", "null"],
@@ -43,6 +50,6 @@ export function validToolValue(property: ToolProperty, value: unknown): boolean 
   if (typeof value === "boolean") return types.includes("boolean");
   if (typeof value === "number") return types.includes("integer") && Number.isSafeInteger(value)
     && value >= (property.minimum ?? 0) && value <= (property.maximum ?? Number.MAX_SAFE_INTEGER);
-  return Array.isArray(value) && types.includes("array") && value.length <= (property.maxItems ?? 20)
+  return Array.isArray(value) && types.includes("array") && value.length >= (property.minItems ?? 0) && value.length <= (property.maxItems ?? 20)
     && !!property.items && value.every(item => validToolValue(property.items!, item));
 }

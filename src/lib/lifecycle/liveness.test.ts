@@ -161,6 +161,7 @@ function sources(
 ): AgentLivenessSources {
   return {
     now: () => NOW,
+    workProcesses: () => [],
     probe: {
       now: () => NOW,
       /* Nothing answers: the structured host process is gone. */
@@ -437,7 +438,7 @@ test("a single-conversation query does no inventory sweep and reads the tail onc
         project: "viewer",
         title: "named agent",
         engine: "claude",
-        mtimeMs: NOW - 60_000,
+        mtimeMs: transcriptPath === agentPath ? NOW - 60_000 : FROZEN_AT,
         conversationId: null,
         activity: null,
         activityReason: null,
@@ -451,8 +452,8 @@ test("a single-conversation query does no inventory sweep and reads the tail onc
     pipelines: () => [],
   }));
 
-  /* Only the conversation's CURRENT generation, described once, tail read once. */
-  expect(described).toEqual([agentPath]);
+  /* Stat every generation to choose the newest writer; read only its tail. */
+  expect(described).toEqual(["/transcripts/old-generation.jsonl", agentPath]);
   expect(tailReads).toEqual([agentPath]);
   expect(snapshot.count).toBe(1);
   const record = snapshot.conversations[0]!;
@@ -898,6 +899,7 @@ function corpusSources(
 ): AgentLivenessSources {
   return {
     now: () => NOW,
+    workProcesses: () => [],
     probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
     listFiles: async () => {
       throw new Error("a project-scoped read must never sweep the whole corpus");
@@ -1494,10 +1496,8 @@ test("rows the evidence budget degraded never reach the journal as durable alarm
   );
 
   expect(snapshot.count).toBe(3);
-  expect(snapshot.stalledCount).toBe(3);
-  /* The headline count carries every stalled row; the confirmed count carries
-     only the ones a transcript read stands behind — the same discipline the
-     journal applies, so an operator subtitle can prefer it. */
+  expect(snapshot.stalledCount).toBe(1);
+  /* Both counts require transcript evidence; projected rows carry no stall. */
   expect(snapshot.stalledConfirmedCount).toBe(1);
   expect(snapshot.selection).toMatchObject({ hydrated: 1, unreadable: 0, projected: 2, budget: "byte_budget" });
 

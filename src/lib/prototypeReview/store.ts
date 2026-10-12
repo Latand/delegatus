@@ -9,6 +9,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { admittedSource, expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } from "./input";
 import { openedAt } from "@/lib/artifact/localFile";
+import { findSeatRound, insertSeatRound, loadSeatRounds, mutateSeatRound } from "./seatRounds";
 import type { PrototypeMedia, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 
 const MIME: Record<string, PrototypeMedia["mime"]> = {
@@ -22,7 +23,7 @@ export function decisionLock(reviewId: string): string {
 const DECISION_LOCK_LEFTOVER = /^(pr_[a-f0-9]{32})\.decision\.lock\.write-locks?$/;
 /** Under the publication lock, retire only directories marked by this store. */
 async function removeOrphanCopies(): Promise<void> {
-  const rounds = loadTasks().flatMap(task => task.prototypeReviews ?? []);
+  const rounds = [...loadTasks().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()];
   const live = new Set(rounds.filter(round => !round.mediaRemovedAt).map(round => round.id));
   /* A round keeps its decision after its pictures are retired, so its lock is
      kept for as long as a task holds the round at all. */
@@ -109,7 +110,10 @@ async function copyMedia(raw: string, staging: string): Promise<PrototypeMedia> 
     throw unreadableSource(raw);
   } finally { await handle?.close(); }
 }
-export function mutatePrototypeRound<T>(taskId: string, reviewId: string, change: (round: PrototypeReviewRound, task: BoardTask) => T): T {
+/** One round's read-modify-write. A null task names the seat's own round,
+    which has no task to hand the change (docs/design/operator-decision-forms.md §2.2). */
+export function mutatePrototypeRound<T>(taskId: string | null, reviewId: string, change: (round: PrototypeReviewRound, task: BoardTask | null) => T): T {
+  if (taskId === null) return mutateSeatRound(reviewId, round => change(round, null));
   return mutateTasks(tasks => {
     const task = tasks.find(t => t.id === taskId);
     const round = task?.prototypeReviews?.find(r => r.id === reviewId);
@@ -121,20 +125,26 @@ export function mutatePrototypeRound<T>(taskId: string, reviewId: string, change
     return { tasks, result };
   });
 }
-export function findPrototypeRound(taskId: string, reviewId: string): PrototypeReviewRound | undefined {
+export function findPrototypeRound(taskId: string | null, reviewId: string): PrototypeReviewRound | undefined {
+  if (taskId === null) return findSeatRound(reviewId);
   return loadTasks().find(t => t.id === taskId)?.prototypeReviews?.find(r => r.id === reviewId);
 }
-/** Metadata is a task extension in the existing revisioned, linked SQLite store. */
-export async function publishPrototype(input: PublishPrototypeInput, taskId: string, source: PrototypeReviewRound["source"]): Promise<PrototypeReviewRound> {
+/** Metadata is a task extension in the existing revisioned, linked SQLite store.
+    A null task is the seat asking without one: the round goes to the seat's
+    collection under `seatProject`, and nothing else about it differs. */
+export async function publishPrototype(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string): Promise<PrototypeReviewRound> {
+  if (taskId === null && !seatProject) throw new PrototypeError("a seat round needs its project");
   const publicationKey = `${source.conversationId ?? "operator"}:${input.clientRequestId}`;
   const inputDigest = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
   const id = `pr_${crypto.createHash("sha256").update(publicationKey).digest("hex").slice(0,32)}`;
   const replay = () => {
-    const existing = loadTasks().flatMap(t => t.prototypeReviews ?? []).find(r => r.publicationKey === publicationKey);
+    const existing = [...loadTasks().flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()].find(r => r.publicationKey === publicationKey);
     if (existing && (existing.inputDigest !== inputDigest || existing.taskId !== taskId)) throw new PrototypeError("publication key already belongs to another payload",409);
     return existing;
   };
   const held = replay(); if (held) return held;
+  // The resolved task also covers a pipeline publication with no explicit taskId.
+  if (taskId !== null && input.questions && input.questions.length < 3) throw new PrototypeError("a task form needs 3–7 questions");
   await fs.mkdir(prototypeRoot(), { recursive: true, mode: 0o700 });
   return withFileTransaction(path.join(prototypeRoot(),"publication.lock"),"prototype publication is busy",async () => {
     const held = replay(); if (held) return held;
@@ -148,7 +158,7 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
     const removed: string[] = [];
     try {
       await fs.writeFile(path.join(staging,"manifest.json"),JSON.stringify({ id }), { mode: 0o600, flush: true });
-      const round: PrototypeReviewRound = { id, taskId, project: "", title: input.title, publicationKey, inputDigest, source,
+      const round: PrototypeReviewRound = { id, taskId, project: seatProject ?? "", title: input.title, publicationKey, inputDigest, source,
         createdAt: new Date().toISOString(), variants: [], ...(input.questions ? { questions: input.questions } : {}) };
       let bytes = 0, imageBytes = 0;
       const copy = async (raw: string) => {
@@ -177,7 +187,8 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
       // The publication lock owns this id. An earlier interrupted copy has no metadata.
       await fs.rm(roundDirectory(id),{ recursive: true, force: true });
       await fs.rename(staging,roundDirectory(id));
-      mutateTasks(tasks => {
+      if (taskId === null) removed.push(...insertSeatRound(round));
+      else mutateTasks(tasks => {
         const task = tasks.find(t => t.id === taskId);
         if (!task) throw new PrototypeError("task not found",404);
         round.project = task.project;

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 
+import { translate } from "@/lib/i18n";
 import { retiredSeatPaths } from "@/components/orchestrator/seatState";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
@@ -12,6 +13,7 @@ import {
   needsDecisionPipelineRows,
   nowFragment,
   RECENT_CAP,
+  rowStateWord,
 } from "./mobileBoardModel";
 
 /*
@@ -511,4 +513,24 @@ test("a needs_review lane is in the phone queue on its review stage with both he
   expect(model.needsYou.map((item) => item.kind === "pipeline" ? item.id : item.path)).toEqual(["p-review"]);
   /* Hidden while it waits, it leaves the queue as a decision lane does. */
   expect(needsDecisionPipelineRows([{ ...parked, dismissedAt: new Date(NOW * 1_000).toISOString() }], PROJECT, NOW)).toEqual([]);
+});
+
+test("the reader header, the rail and the tile name a running agent by the dot's own words", () => {
+  for (const lang of ["uk", "en"] as const) {
+    const t = ((key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(lang, key, values)) as Parameters<typeof rowStateWord>[0];
+    const base = { path: "/p/activity.jsonl", activity: "live" as const };
+    const idle = mobileRowState(working({ ...base, agentActivity: { lastRecordAt: (NOW - 840) * 1_000 } }), NOW);
+    expect([idle.key, idle.activity, idle.seconds]).toEqual(["stalled", "idle", 840]);
+    expect(rowStateWord(t, idle)).toBe(translate(lang, "cardStatus.idle"));
+    const checking = mobileRowState(working({ ...base, agentActivity: { lastRecordAt: (NOW - 60) * 1_000, checking: true } }), NOW);
+    expect([checking.key, checking.activity]).toEqual(["working", "checking"]);
+    expect(rowStateWord(t, checking)).toBe(translate(lang, "cardStatus.checking"));
+    const busy = mobileRowState(working({ ...base, agentActivity: { lastRecordAt: (NOW - 60) * 1_000 } }), NOW);
+    expect([busy.key, busy.activity]).toEqual(["working", "working"]);
+    expect(rowStateWord(t, busy)).toBe(translate(lang, "kanban.memberState.working"));
+    /* A file the scan gave no activity facts keeps the older words. */
+    const legacy = mobileRowState(working({ ...base, activity: "stalled", mtime: NOW - 840 }), NOW);
+    expect([legacy.key, legacy.activity]).toEqual(["stalled", null]);
+    expect(rowStateWord(t, legacy)).toBe(translate(lang, "kanban.memberState.stalled"));
+  }
 });

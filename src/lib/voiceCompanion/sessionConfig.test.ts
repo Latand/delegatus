@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration } from "./sessionConfig";
+import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration, PROTOTYPE_BACKEND_RULES, PROTOTYPE_LIVE_RULES } from "./sessionConfig";
 import { z } from "zod";
 import { VOICE_ASK_MAX_CHARS } from "./liveGate";
 import { codexVoiceThread } from "./codexProvider";
@@ -84,4 +84,21 @@ test("the Codex thread carries the same backend rules and the call's reports rea
   expect(thread.developerInstructions).toContain("passes its handle as pending_request and nothing is sent");
   expect(thread.developerInstructions).toContain(`at most ${VOICE_ASK_MAX_CHARS} characters`);
   expect(thread.dynamicTools.map(tool => tool.name)).toContain("orchestrator_reports");
+});
+
+test("both voice paths require prototype evidence and stop reading on a hand-off", () => {
+  for (const instructions of [BACKEND_INSTRUCTIONS, codexVoiceThread("/fixture").developerInstructions]) {
+    expect(instructions).toContain(PROTOTYPE_BACKEND_RULES);
+    expect(instructions).toContain("State a prototype detail only when a read in this call returned it.");
+    expect(instructions).toContain("Say what a frame shows only when view_prototype_frame returned that frame to you in this call");
+    expect(instructions).toContain("call no read or search tool: send one ask in their words");
+    expect(instructions).toContain("A spoken choice records no decision");
+  }
+  for (const locale of ["uk", "en"] as const) {
+    const instructions = liveSessionConfiguration(locale).instructions;
+    expect(instructions).toContain(PROTOTYPE_LIVE_RULES);
+    expect(instructions).toContain("you never see prototype pictures yourself; the backend looks at them");
+    expect(instructions).toContain("delegate once, and say it was passed on only when the backend says so");
+    expect(instructions).toContain("never say what you are about to look at, read or send");
+  }
 });

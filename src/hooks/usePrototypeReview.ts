@@ -27,11 +27,11 @@ export function usePrototypeReviewSummary(task: BoardTask | null) {
   return useMemo(() => task?.prototypeReview ?? prototypeReviewSummary(task?.prototypeReviews ?? []),[task]);
 }
 /** Orchestrator notices and the same waiting set counted by the kanban model. */
-export function usePrototypeReviewNotices(tasks: readonly BoardTask[],project?: string) {
+export function usePrototypeReviewNotices(tasks: readonly BoardTask[],project?: string,seatDecisions?: readonly PrototypeReviewNotice[]) {
   return useMemo(() => {
-    const notices = prototypeReviewNotices(tasks).filter(notice => !project || notice.project === project);
+    const notices = prototypeReviewNotices(tasks,seatDecisions).filter(notice => !project || notice.project === project);
     return { notices, needsYouCount: notices.length };
-  },[tasks,project]);
+  },[tasks,project,seatDecisions]);
 }
 type DecisionWrite = DecidePrototypeInput | { reviewId: string; retry: true };
 /** What the review shows the moment the operator presses retry on a saved

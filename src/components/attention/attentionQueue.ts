@@ -63,9 +63,11 @@ export function buildNeedsYouQueue(
   closing: readonly string[],
   decision?: AutoView["decision"],
   tasks: readonly BoardTask[] = [],
+  /** The orchestrators' own open questions, which no task carries. */
+  seatDecisions: readonly PrototypeReviewNotice[] = [],
 ): MobileAttentionEntry[] {
   const queue = buildMobileAttentionQueue(buildAttentionQueue([...files], now), overviewPipelineRows(pipelines, now, closing));
-  for (const notice of prototypeReviewNotices(tasks)) queue.push({ kind: "prototype", id: notice.id, notice });
+  for (const notice of prototypeReviewNotices(tasks, seatDecisions)) queue.push({ kind: "prototype", id: notice.id, notice });
   if (decision) queue.push({ kind: "update", id: `auto-update:${decision.id}`, decision });
   return queue;
 }

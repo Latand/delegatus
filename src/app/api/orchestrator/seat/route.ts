@@ -9,9 +9,13 @@ import { executeOrchestratorSeatRequest, reconcileOrchestratorSeatLaunch } from 
 import { deputiesForSeatIn, deputyConversationRefsIn, readDeputyFileOrNull, type OrchestratorDeputy, type RetiredDeputyRef } from "@/lib/orchestrator/deputies";
 import { seatDeputyView, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
+import { currentSeatFailure, type SeatHostObservation } from "@/lib/orchestrator/seatFailure";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { loadTasks } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
+
+import { productionIncumbentDependencies } from "./status/incumbent";
 
 /* The board draft's Orchestrator confirm surface (designate + inject) and its
    status read. Everything with behavior lives in
@@ -23,13 +27,11 @@ export const dynamic = "force-dynamic";
 interface SeatStatus {
   seat: OrchestratorSeat | null;
   pending: OrchestratorSeat | null;
-  /** The last designation attempt that FAILED, once it has left the pending
-      position (issue #1757). A failure is terminalized into durable history the
-      moment it happens, so without this the panel's reason banner would vanish
-      the instant the record became complete — and a failure the operator did
-      not personally submit (a rotation ordered from a seat, an accepted launch
-      that died) would never reach them at all. */
+  /** The latest terminal failure still needing attention. Its durable history
+      remains available after host recovery or a later successful designation. */
   lastFailure: SeatFailure | null;
+  settledFailureRequestId: string | null;
+  hostObservation: SeatHostObservation | null;
   /** Whether the active seat's transcript is still on disk; false invites a
       resume or a replacement from the same draft surface. */
   exists: boolean;
@@ -70,8 +72,10 @@ interface SeatFailure {
   clientRequestId: string;
   seatEpoch: number;
   conversationId: string | null;
+  predecessorConversationId?: string | null;
   designatedAt: string;
   terminalizedAt: string;
+  automaticReplacement?: { conversationId: string; seatEpoch: number };
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
@@ -92,6 +96,26 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
   const deputies = deputyFile?.deputies ?? null;
   const { active, pending, history } = orchestratorSeatIn(record, project);
   const failed = [...history].reverse().find((entry) => entry.seat.intent.error !== null);
+  const failure: SeatFailure | null = failed ? {
+    error: failed.seat.intent.error ?? "",
+    clientRequestId: failed.seat.intent.clientRequestId,
+    seatEpoch: failed.seat.seatEpoch,
+    conversationId: failed.seat.conversationId,
+    predecessorConversationId: failed.seat.predecessorConversationId ?? null,
+    designatedAt: failed.seat.designatedAt,
+    terminalizedAt: failed.terminalizedAt,
+    ...(failed.seat.intent.automaticReplacement ? { automaticReplacement: failed.seat.intent.automaticReplacement } : {}),
+  } : null;
+  let hostObservation: SeatHostObservation | null = null;
+  // Only a still-current failure needs the targeted host read; healthy polls
+  // and failures superseded by a successful designation keep their cheap read.
+  if (active?.conversationId && currentSeatFailure(failure, active)) {
+    const observedAt = new Date().toISOString();
+    try {
+      const liveness = await productionIncumbentDependencies.liveness(active.conversationId as ViewerConversationId);
+      if (liveness) hostObservation = { conversationId: active.conversationId, seatEpoch: active.seatEpoch, hostState: liveness.hostState, observedAt };
+    } catch { /* Unknown liveness cannot clear a failure. The next poll retries. */ }
+  }
   const retired = previousOrchestratorSeatsIn(record, project);
   /* The task store is read only when there is a seat to find notes for. A
      failed read leaves the rows without notes; the seat answer still stands. */
@@ -109,16 +133,9 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
   return NextResponse.json({
     seat: active,
     pending,
-    lastFailure: failed
-      ? {
-        error: failed.seat.intent.error ?? "",
-        clientRequestId: failed.seat.intent.clientRequestId,
-        seatEpoch: failed.seat.seatEpoch,
-        conversationId: failed.seat.conversationId,
-        designatedAt: failed.seat.designatedAt,
-        terminalizedAt: failed.terminalizedAt,
-      }
-      : null,
+    lastFailure: currentSeatFailure(failure, active, hostObservation),
+    settledFailureRequestId: failure?.clientRequestId ?? null,
+    hostObservation,
     exists: active !== null && (active.path === null || fs.existsSync(active.path)),
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
     previous,

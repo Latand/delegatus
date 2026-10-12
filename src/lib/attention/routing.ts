@@ -1,6 +1,7 @@
 import { attentionReason } from "@/components/attention";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -62,9 +63,10 @@ export function laneReservedForOperator(pipeline: Pick<Pipeline, "srcConversatio
 
 /** The decision rounds that still need an answer, by round id. A decided
     round's delivery warning keeps its own row while the original wait goes
-    back to the seat. `tasks` carry the board summary and dismissal marks. */
-export function waitingRoundIds(tasks: readonly BoardTask[]): Set<string> {
-  return new Set(prototypeReviewNotices(tasks).filter((notice) => !notice.undelivered).map((notice) => notice.reviewId));
+    back to the seat. `tasks` carry the board summary and dismissal marks;
+    taskless forms carry the seat notices the board draws. */
+export function waitingRoundIds(tasks: readonly BoardTask[], seatDecisions: readonly PrototypeReviewNotice[] = []): Set<string> {
+  return new Set(prototypeReviewNotices(tasks, seatDecisions).filter((notice) => !notice.undelivered).map((notice) => notice.reviewId));
 }
 
 export interface AttentionRoutingInputs {

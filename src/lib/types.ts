@@ -148,6 +148,7 @@ export interface BridgeAsk {
 
 /** One sidebar entry returned by GET /api/files. */
 export interface FileEntry {
+  agentActivity?: import("./lifecycle/agentActivity").AgentActivityFacts;
   /** Current registry transport for this exact conversation. Presentation only;
       controls resolve and fence ownership again when the operator acts. */
   controlHost?: { conversationId: string; transport: "legacy" | "structured" };
@@ -459,6 +460,8 @@ export interface ProjectCatalogEntry {
 export interface FilesResponse {
   /** One waiting prototype review per task, for the orchestrator notice and needs-you count. */
   prototypeReviewNotices?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
+  /** The orchestrators' own open questions, which no task carries. */
+  seatDecisions?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
   /** Board-only read: execution bodies remain on targeted full endpoints. */
   readProjection?: "board-summary";
   files: FileEntry[];
