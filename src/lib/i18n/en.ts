@@ -19,7 +19,7 @@ export const en = {
   "workers.saveFailed": "Could not save. Try again.",
   "workers.readFailed": "Could not read. Reopen to retry.",
   "workers.settingsTitle": "Workers per project",
-  "workers.hereOwn": "Here: own limit {value}",
+  "workers.hereOwnRunning": "{here} here (own limit {value}) · {machine} on machine",
   "workers.hereRunning": "{here} here · {machine} on machine",
   "workers.machineRunning": "{machine} on machine",
 

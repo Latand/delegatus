@@ -1,7 +1,6 @@
 import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryState";
 import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
-import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 
 const RELAY_PLACEHOLDER = "{{prev.output}}";
 
@@ -35,12 +34,15 @@ export function renderStagePrompt(
   stage: PipelineStage,
   role: EffectivePipelineRole,
   previousOutput: string,
+  /** The live machine/project worker limit. Only server launch paths know it
+      (the store reads Viewer state), so the client previews pass nothing and
+      show the scaffold as persisted. */
+  workerLimit?: number,
 ): string {
   let body = replaceAll(stage.prompt, "{{task}}", pipeline.task);
   body = replaceAll(body, RELAY_PLACEHOLDER, previousOutput);
   let roleScaffold = role.promptScaffold ? replaceAll(role.promptScaffold, "{{task}}", pipeline.task) : null;
-  if (roleScaffold && role.roleId === "orchestrator") {
-    const workerLimit = effectiveWorkerLimit(pipeline.project).value;
+  if (roleScaffold && role.roleId === "orchestrator" && workerLimit !== undefined) {
     roleScaffold = replaceAll(roleScaffold, "{{maxWorkers}}", String(workerLimit));
     roleScaffold = roleScaffold.replace(/\bat most \d+ workers\b/gu, `at most ${workerLimit} workers`);
   }

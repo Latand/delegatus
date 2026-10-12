@@ -12,6 +12,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": null,
       "text": "workers 7 / 8",
       "overflow": false,
@@ -34,6 +35,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Worker limitfrom the machine default7 running · 19 on machineMachine default: ⋯ → Settings",
       "overflow": false,
@@ -56,6 +58,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": null,
       "text": "workers 7 / 8",
       "overflow": false,
@@ -78,6 +81,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Worker limitfrom the machine default7 running · 19 on machineMachine default: ⋯ → Settings",
       "overflow": false,
@@ -94,12 +98,29 @@
         12,
         260.5,
         222,
-        37
+        39
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 266,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 295.5
+      },
       "dot": null,
       "text": "Workers per project7 here · 19 on machine",
       "overflow": false,
@@ -107,7 +128,7 @@
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 39
       }
     },
     {
@@ -116,12 +137,29 @@
         7,
         36.5,
         232,
-        416
+        418
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 266,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 295.5
+      },
       "dot": null,
       "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project7 here · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
       "overflow": false,
@@ -129,7 +167,7 @@
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 418
       }
     },
     {
@@ -138,12 +176,29 @@
         12,
         217.5,
         222,
-        37
+        39
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 223,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 238.5,
+        "stateBottom": 252.5
+      },
       "dot": null,
       "text": "Workers per project19 on machine",
       "overflow": false,
@@ -151,7 +206,7 @@
         "x": 12,
         "y": 217.5,
         "width": 222,
-        "height": 37
+        "height": 39
       }
     },
     {
@@ -166,6 +221,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": [
         4,
         4
@@ -191,6 +247,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Worker limitown limit7 running · 19 on machineReset to machine default (8)Machine default: ⋯ → Settings",
       "overflow": false,
@@ -207,20 +264,37 @@
         12,
         260.5,
         222,
-        37
+        53
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Workers per projectHere: own limit 10",
+      "text": "Workers per project7 here (own limit 10) · 19 on machine",
       "overflow": false,
       "frameRect": {
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 53
       }
     },
     {
@@ -229,20 +303,37 @@
         7,
         36.5,
         232,
-        416
+        432
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per projectHere: own limit 10DictationVoice DelegatusLinked installsChat relayInstall ping",
+      "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project7 here (own limit 10) · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
       "overflow": false,
       "frameRect": {
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 432
       }
     },
     {
@@ -257,6 +348,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": [
         4,
         4
@@ -282,6 +374,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Worker limitown limit11 running · 19 on machineReset to machine default (8)Machine default: ⋯ → Settings",
       "overflow": false,
@@ -298,20 +391,37 @@
         12,
         260.5,
         222,
-        37
+        53
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Workers per projectHere: own limit 10",
+      "text": "Workers per project11 here (own limit 10) · 19 on machine",
       "overflow": false,
       "frameRect": {
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 53
       }
     },
     {
@@ -320,20 +430,37 @@
         7,
         36.5,
         232,
-        416
+        432
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per projectHere: own limit 10DictationVoice DelegatusLinked installsChat relayInstall ping",
+      "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project11 here (own limit 10) · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
       "overflow": false,
       "frameRect": {
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 432
       }
     },
     {
@@ -348,6 +475,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": null,
       "text": "workers 7 / 8",
       "overflow": false,
@@ -370,6 +498,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Worker limitfrom the machine default7 running · 19 on machineMachine default: ⋯ → Settings",
       "overflow": false,
@@ -392,6 +521,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": null,
       "text": "workers 7 / 8",
       "overflow": false,
@@ -414,6 +544,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Worker limitfrom the machine default7 running · 19 on machineMachine default: ⋯ → Settings",
       "overflow": false,
@@ -430,12 +561,29 @@
         12,
         260.5,
         222,
-        37
+        39
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 266,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 295.5
+      },
       "dot": null,
       "text": "Workers per project7 here · 19 on machine",
       "overflow": false,
@@ -443,7 +591,7 @@
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 39
       }
     },
     {
@@ -452,12 +600,29 @@
         7,
         36.5,
         232,
-        416
+        418
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 266,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 295.5
+      },
       "dot": null,
       "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project7 here · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
       "overflow": false,
@@ -465,7 +630,7 @@
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 418
       }
     },
     {
@@ -474,12 +639,29 @@
         12,
         217.5,
         222,
-        37
+        39
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 223,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 238.5,
+        "stateBottom": 252.5
+      },
       "dot": null,
       "text": "Workers per project19 on machine",
       "overflow": false,
@@ -487,7 +669,7 @@
         "x": 12,
         "y": 217.5,
         "width": 222,
-        "height": 37
+        "height": 39
       }
     },
     {
@@ -502,6 +684,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": [
         4,
         4
@@ -527,6 +710,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Worker limitown limit7 running · 19 on machineReset to machine default (8)Machine default: ⋯ → Settings",
       "overflow": false,
@@ -543,20 +727,37 @@
         12,
         260.5,
         222,
-        37
+        53
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Workers per projectHere: own limit 10",
+      "text": "Workers per project7 here (own limit 10) · 19 on machine",
       "overflow": false,
       "frameRect": {
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 53
       }
     },
     {
@@ -565,20 +766,37 @@
         7,
         36.5,
         232,
-        416
+        432
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per projectHere: own limit 10DictationVoice DelegatusLinked installsChat relayInstall ping",
+      "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project7 here (own limit 10) · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
       "overflow": false,
       "frameRect": {
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 432
       }
     },
     {
@@ -593,6 +811,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": [
         4,
         4
@@ -618,6 +837,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Worker limitown limit11 running · 19 on machineReset to machine default (8)Machine default: ⋯ → Settings",
       "overflow": false,
@@ -634,20 +854,37 @@
         12,
         260.5,
         222,
-        37
+        53
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Workers per projectHere: own limit 10",
+      "text": "Workers per project11 here (own limit 10) · 19 on machine",
       "overflow": false,
       "frameRect": {
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 53
       }
     },
     {
@@ -656,20 +893,37 @@
         7,
         36.5,
         232,
-        416
+        432
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per projectHere: own limit 10DictationVoice DelegatusLinked installsChat relayInstall ping",
+      "text": "Back·SettingsLanguage: EnglishENNotifications: offShared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project11 here (own limit 10) · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
       "overflow": false,
       "frameRect": {
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 432
       }
     },
     {
@@ -684,6 +938,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": null,
       "text": "воркери 7 / 8",
       "overflow": false,
@@ -706,6 +961,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Ліміт воркерівз глобальнихПрацюють 7 · на машині 19Глобальний: ⋯ → Налаштування",
       "overflow": false,
@@ -728,6 +984,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": null,
       "text": "воркери 7 / 8",
       "overflow": false,
@@ -750,6 +1007,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Ліміт воркерівз глобальнихПрацюють 7 · на машині 19Глобальний: ⋯ → Налаштування",
       "overflow": false,
@@ -766,12 +1024,29 @@
         12,
         260.5,
         222,
-        37
+        39
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 266,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 295.5
+      },
       "dot": null,
       "text": "Воркерів на проєкт7 тут · 19 на машині",
       "overflow": false,
@@ -779,7 +1054,7 @@
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 39
       }
     },
     {
@@ -788,12 +1063,29 @@
         7,
         36.5,
         232,
-        416
+        418
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 266,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 295.5
+      },
       "dot": null,
       "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт7 тут · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
       "overflow": false,
@@ -801,7 +1093,7 @@
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 418
       }
     },
     {
@@ -810,12 +1102,29 @@
         12,
         217.5,
         222,
-        37
+        39
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 223,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 238.5,
+        "stateBottom": 252.5
+      },
       "dot": null,
       "text": "Воркерів на проєкт19 на машині",
       "overflow": false,
@@ -823,7 +1132,7 @@
         "x": 12,
         "y": 217.5,
         "width": 222,
-        "height": 37
+        "height": 39
       }
     },
     {
@@ -838,6 +1147,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": [
         4,
         4
@@ -863,6 +1173,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Ліміт воркерівсвій лімітПрацюють 7 · на машині 19Скинути до глобального (8)Глобальний: ⋯ → Налаштування",
       "overflow": false,
@@ -879,20 +1190,37 @@
         12,
         260.5,
         222,
-        37
+        53
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Воркерів на проєктТут свій ліміт: 10",
+      "text": "Воркерів на проєкт7 тут (свій ліміт 10) · 19 на машині",
       "overflow": false,
       "frameRect": {
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 53
       }
     },
     {
@@ -901,20 +1229,37 @@
         7,
         36.5,
         232,
-        416
+        432
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєктТут свій ліміт: 10ДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт7 тут (свій ліміт 10) · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
       "overflow": false,
       "frameRect": {
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 432
       }
     },
     {
@@ -929,6 +1274,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": [
         4,
         4
@@ -954,6 +1300,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Ліміт воркерівсвій лімітПрацюють 11 · на машині 19Скинути до глобального (8)Глобальний: ⋯ → Налаштування",
       "overflow": false,
@@ -970,20 +1317,37 @@
         12,
         260.5,
         222,
-        37
+        53
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Воркерів на проєктТут свій ліміт: 10",
+      "text": "Воркерів на проєкт11 тут (свій ліміт 10) · 19 на машині",
       "overflow": false,
       "frameRect": {
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 53
       }
     },
     {
@@ -992,20 +1356,37 @@
         7,
         36.5,
         232,
-        416
+        432
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєктТут свій ліміт: 10ДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт11 тут (свій ліміт 10) · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
       "overflow": false,
       "frameRect": {
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 432
       }
     },
     {
@@ -1020,6 +1401,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": null,
       "text": "воркери 7 / 8",
       "overflow": false,
@@ -1042,6 +1424,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Ліміт воркерівз глобальнихПрацюють 7 · на машині 19Глобальний: ⋯ → Налаштування",
       "overflow": false,
@@ -1064,6 +1447,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": null,
       "text": "воркери 7 / 8",
       "overflow": false,
@@ -1086,6 +1470,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Ліміт воркерівз глобальнихПрацюють 7 · на машині 19Глобальний: ⋯ → Налаштування",
       "overflow": false,
@@ -1102,12 +1487,29 @@
         12,
         260.5,
         222,
-        37
+        39
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 266,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 295.5
+      },
       "dot": null,
       "text": "Воркерів на проєкт7 тут · 19 на машині",
       "overflow": false,
@@ -1115,7 +1517,7 @@
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 39
       }
     },
     {
@@ -1124,12 +1526,29 @@
         7,
         36.5,
         232,
-        416
+        418
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 266,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 295.5
+      },
       "dot": null,
       "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт7 тут · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
       "overflow": false,
@@ -1137,7 +1556,7 @@
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 418
       }
     },
     {
@@ -1146,12 +1565,29 @@
         12,
         217.5,
         222,
-        37
+        39
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 223,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 238.5,
+        "stateBottom": 252.5
+      },
       "dot": null,
       "text": "Воркерів на проєкт19 на машині",
       "overflow": false,
@@ -1159,7 +1595,7 @@
         "x": 12,
         "y": 217.5,
         "width": 222,
-        "height": 37
+        "height": 39
       }
     },
     {
@@ -1174,6 +1610,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": [
         4,
         4
@@ -1199,6 +1636,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Ліміт воркерівсвій лімітПрацюють 7 · на машині 19Скинути до глобального (8)Глобальний: ⋯ → Налаштування",
       "overflow": false,
@@ -1215,20 +1653,37 @@
         12,
         260.5,
         222,
-        37
+        53
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Воркерів на проєктТут свій ліміт: 10",
+      "text": "Воркерів на проєкт7 тут (свій ліміт 10) · 19 на машині",
       "overflow": false,
       "frameRect": {
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 53
       }
     },
     {
@@ -1237,20 +1692,37 @@
         7,
         36.5,
         232,
-        416
+        432
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєктТут свій ліміт: 10ДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт7 тут (свій ліміт 10) · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
       "overflow": false,
       "frameRect": {
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 432
       }
     },
     {
@@ -1265,6 +1737,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": null,
+      "row": null,
       "dot": [
         4,
         4
@@ -1290,6 +1763,7 @@
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 56,
+      "row": null,
       "dot": null,
       "text": "Ліміт воркерівсвій лімітПрацюють 11 · на машині 19Скинути до глобального (8)Глобальний: ⋯ → Налаштування",
       "overflow": false,
@@ -1306,20 +1780,37 @@
         12,
         260.5,
         222,
-        37
+        53
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 32,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Воркерів на проєктТут свій ліміт: 10",
+      "text": "Воркерів на проєкт11 тут (свій ліміт 10) · 19 на машині",
       "overflow": false,
       "frameRect": {
         "x": 12,
         "y": 260.5,
         "width": 222,
-        "height": 37
+        "height": 53
       }
     },
     {
@@ -1328,20 +1819,37 @@
         7,
         36.5,
         232,
-        416
+        432
       ],
       "clipped": [],
       "clippedControl": false,
       "overlappingText": [],
       "inputWidth": 48,
+      "row": {
+        "icon": 16,
+        "titleSize": 12,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 37,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 178,
+        "inputY": 273,
+        "inputH": 28,
+        "stateRight": 170,
+        "stateTop": 281.5,
+        "stateBottom": 309.5
+      },
       "dot": null,
-      "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєктТут свій ліміт: 10ДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "text": "Назад·НалаштуванняМова: УкраїнськаUKСповіщення: вимкненіСпільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт11 тут (свій ліміт 10) · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
       "overflow": false,
       "frameRect": {
         "x": 7,
         "y": 36.5,
         "width": 232,
-        "height": 416
+        "height": 432
       }
     }
   ],

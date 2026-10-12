@@ -19,7 +19,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "workers.saveFailed": "Не збережено. Спробуйте ще раз.",
   "workers.readFailed": "Не вдалося прочитати. Відкрийте знову.",
   "workers.settingsTitle": "Воркерів на проєкт",
-  "workers.hereOwn": "Тут свій ліміт: {value}",
+  "workers.hereOwnRunning": "{here} тут (свій ліміт {value}) · {machine} на машині",
   "workers.hereRunning": "{here} тут · {machine} на машині",
   "workers.machineRunning": "{machine} на машині",
 

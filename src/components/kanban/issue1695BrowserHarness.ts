@@ -186,6 +186,9 @@ export async function openFixture(
   return { context, page, pageErrors };
 }
 
+type WorkersRowReading = { icon: number; titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
+  inputWeight: number; inputAlign: string; inputX: number; inputY: number; inputH: number; stateRight: number; stateTop: number; stateBottom: number };
+
 /** Worker-limit frames shared by the board and phone drivers. The fixture
     serves invented counts and the frame's own operator language. */
 export async function captureWorkerLimitFrames(browser: Browser, base: string, out: string, phone: boolean) {
@@ -242,7 +245,16 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
         if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
       }
-      return { rect: [box.x, box.y, box.width, box.height], clipped, clippedControl: box.left < left - .5 || box.right > right + .5 || box.top < top - .5 || box.bottom > bottom + .5, overlappingText, inputWidth: input?.getBoundingClientRect().width ?? null, dot: dot ? [dot.width, dot.height] : null, text: element.textContent, overflow: document.documentElement.scrollWidth > innerWidth };
+      const titleEl = element.querySelector("[data-worker-limit-title]"), stateEl = element.querySelector("[data-worker-limit-state]"), iconEl = element.querySelector("[data-worker-limit-icon]");
+      const row = titleEl && stateEl && iconEl && input ? (() => {
+        const title = getComputedStyle(titleEl), state = getComputedStyle(stateEl), field = getComputedStyle(input);
+        const stateBox = stateEl.getBoundingClientRect(), inputBox = input.getBoundingClientRect();
+        return { icon: iconEl.getBoundingClientRect().width, titleSize: parseFloat(title.fontSize), titleWeight: Number(title.fontWeight), titleColor: title.color,
+          titleX: titleEl.getBoundingClientRect().left - box.left, stateWeight: Number(state.fontWeight), stateColor: state.color,
+          inputWeight: Number(field.fontWeight), inputAlign: field.textAlign, inputX: inputBox.left, inputY: inputBox.top, inputH: inputBox.height,
+          stateRight: stateBox.right, stateTop: stateBox.top, stateBottom: stateBox.bottom };
+      })() : null;
+      return { rect: [box.x, box.y, box.width, box.height], clipped, clippedControl: box.left < left - .5 || box.right > right + .5 || box.top < top - .5 || box.bottom > bottom + .5, overlappingText, inputWidth: input?.getBoundingClientRect().width ?? null, row, dot: dot ? [dot.width, dot.height] : null, text: element.textContent, overflow: document.documentElement.scrollWidth > innerWidth };
     });
     const dock = page.locator("[data-kanban-seat].side").first();
     const picture = expectedHostWidth !== undefined && selector.includes("popover")
@@ -260,7 +272,20 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
     if (measurement.overlappingText.length) failures.push(`${name}: popover overlaps transcript text ${measurement.overlappingText.map(item => item.text).join(" | ")}`);
     if (budget && measurement.rect[3]! > budget + 1) failures.push(`${name}: height ${measurement.rect[3]} exceeds ${budget}`);
     if (expectedHostWidth !== undefined && Math.abs((hostRect?.width ?? 0) - expectedHostWidth) > 1) failures.push(`${name}: dock width ${hostRect?.width ?? "missing"} does not match ${expectedHostWidth}px`);
-    if (selector === "[data-header-menu-workers]" && Math.abs((measurement.inputWidth ?? 0) - (phone ? 80 : 48)) > .5) failures.push(`${name}: wrong field width ${measurement.inputWidth}`);
+    if (selector === "[data-header-menu-workers]") {
+      if (Math.abs((measurement.inputWidth ?? 0) - 48) > .5) failures.push(`${name}: wrong field width ${measurement.inputWidth}`);
+      const row = measurement.row as WorkersRowReading | null;
+      const want = phone ? { icon: 18, title: 13, titleX: 46, stateWeight: 500 } : { icon: 16, title: 12, titleX: 32, stateWeight: 500 };
+      if (!row) failures.push(`${name}: row geometry missing`);
+      else {
+        if (Math.abs(row.icon - want.icon) > .5) failures.push(`${name}: icon ${row.icon}px, siblings ${want.icon}px`);
+        if (Math.abs(row.titleSize - want.title) > .5 || row.titleWeight !== 600) failures.push(`${name}: title ${row.titleSize}px/${row.titleWeight}`);
+        if (Math.abs(row.titleX - want.titleX) > .5) failures.push(`${name}: label x ${row.titleX}, siblings ${want.titleX}`);
+        if (row.stateWeight !== want.stateWeight || row.stateColor === row.titleColor) failures.push(`${name}: state line ${row.stateWeight}/${row.stateColor} is not the muted sibling word`);
+        if (row.inputWeight !== 400 || row.inputAlign !== "center") failures.push(`${name}: field number weight ${row.inputWeight}, align ${row.inputAlign}`);
+        if (row.inputX < row.stateRight - .5 && row.inputY < row.stateBottom - .5 && row.inputY + row.inputH > row.stateTop + .5) failures.push(`${name}: field overlaps the state line`);
+      }
+    }
     if (selector.includes("popover")) {
       const viewport = page.viewportSize()!;
       const [x, y, w, h] = measurement.rect as [number, number, number, number];
@@ -321,7 +346,8 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
       }
       await page.locator("[data-header-menu-workers] input").waitFor();
       await frame(page, "[data-header-menu-workers]", `${name}-settings-row`);
-      await frame(page, phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]", `${name}-settings`, phone ? 743 : 420);
+      /* The 232 px panel wraps the override line («7 here (own limit 10) · 19 on machine») onto a second state line: 14 px more than the machine scene. */
+      await frame(page, phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]", `${name}-settings`, phone ? 743 : 436);
       if (!phone && scene === "machine") {
         await page.keyboard.press("Escape");
         await page.locator("[data-rail-overview]").click();

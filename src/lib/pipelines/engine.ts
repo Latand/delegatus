@@ -106,6 +106,7 @@ import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipel
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
 import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
@@ -5836,7 +5837,7 @@ async function spawnRunStage(
     if (attempt.activation?.prepareInput || prepareInput) {
       const bound = attemptStage(stage, attempt);
       const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
-      if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
+      if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
       const expected = JSON.stringify(pipeline);
       const abort = new AbortController();
       const revalidate = () => {
@@ -6485,6 +6486,7 @@ async function tickRunStage(
         bound,
         attempt.effectiveRole,
         attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline),
+        effectiveWorkerLimit(pipeline.project).value,
       );
       const prompt = restartStagePrompt(stagePrompt, attempt);
       /* The retried attempt supersedes its predecessor's round (issue #383):

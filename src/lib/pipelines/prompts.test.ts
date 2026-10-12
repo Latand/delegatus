@@ -7,7 +7,7 @@ import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 
 import { convertNewLegacyReviewStages } from "./legacyReviewDefinition";
 import { buildPipeline } from "./store";
-import { setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
+import { effectiveWorkerLimit, setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderDecisionInput, renderStagePrompt } from "./prompts";
 import { parseStageVerdict } from "./verdict";
 import { pipelineRoleLookup, resolvePipelineRole } from "./roles";
@@ -43,7 +43,9 @@ test("persisted orchestrator scaffolds use the project's worker limit when each 
     expect(persisted.stages[0].effectiveRole.promptScaffold).toContain("at most 10 workers");
 
     setProjectWorkerLimit("one", 12, { kind: "operator", via: "test" }, null);
-    const prompt = renderStagePrompt(persisted, persisted.stages[0], persisted.stages[0].effectiveRole, "");
+    const prompt = renderStagePrompt(persisted, persisted.stages[0], persisted.stages[0].effectiveRole, "", effectiveWorkerLimit("one").value);
+    const preview = renderStagePrompt(persisted, persisted.stages[0], persisted.stages[0].effectiveRole, "");
+    expect(preview).toContain("at most 10 workers");
     expect(prompt).toContain("Keep at most 12 workers running.");
     expect(prompt).toContain("Legacy template: 12.");
     expect(prompt).not.toContain("at most 10 workers");
