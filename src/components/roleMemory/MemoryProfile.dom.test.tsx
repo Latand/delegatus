@@ -70,7 +70,7 @@ test("level cards follow the All rules order and a topic list says which topic i
   const base = profileView(reordered, "en", "sample", null);
   const overall = { scope: "overall", createdAt: "2026-01-01T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false,
     answer: { headline: "Clearer samples", text: "Agents check sample colors.", topics: [{ title: "Isolated tests", text: "Tests run apart.", ruleIds: ["one", "three"] }] } };
-  globalThis.fetch = (async () => Response.json({ ...base, overall })) as typeof fetch;
+  globalThis.fetch = (async () => Response.json({ ...base, overall })) as unknown as typeof fetch;
   try {
     flushSync(() => root.render(<MemoryProfile rules={reordered} renderRules={(scope, ids, heading) => { headings.push([scope.scope, heading?.title]); return <div data-rules-stub="">{ids?.join(",")}</div>; }} />));
     await tick(); await tick();
