@@ -2243,7 +2243,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.tool.end_conversation": "Завершую розмову",
   "voiceCompanion.tool.failed": "не вдалося прочитати",
   "voiceCompanion.settings.label": "Голосовий Delegatus",
-  "voiceCompanion.settings.enable": "Показувати на десктопі",
+  "voiceCompanion.settings.enable": "Показувати голос",
   "voiceCompanion.settings.explanation": "Плаваючий персонаж, з яким можна говорити голосом. Про дошку він відповідає сам, а оркестратору проєкту надсилає роботу одразу, щойно ви про це попросите. Перепитує голосом лише тоді, коли прохання критичне або він не певен, що вас зрозумів.",
   "voiceCompanion.settings.key": "Ключ OpenAI API",
   "voiceCompanion.settings.key.placeholder": "Вставте ключ",

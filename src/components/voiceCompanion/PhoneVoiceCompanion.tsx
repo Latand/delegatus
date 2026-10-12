@@ -428,6 +428,8 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   const plate = showWords ? <ClearedPage pane={shell.pane} held={[{ ...rest, width: HEAD, height: HEAD }]} /> : null;
   const pop = { left: side === "right" ? rest.x + HEAD - POPOVER_WIDTH : rest.x, top: lowHalf ? rest.y - EDGE : rest.y + HEAD + EDGE, transform: lowHalf ? "translateY(-100%)" : undefined };
   const settingsFailure = notice !== null && SETTINGS_FAILURES.has(notice.code) && onOpenSettings;
+  /* A live or starting call holds the microphone, so its sign stays above every layer a phone surface paints (the image
+     preview, search, full-screen dialogs) and below only the toasts; with no call the head keeps the dock's place. */
   const sheetState = shell.footer !== null ? "full" : sheetOpen ? "open" : undefined;
 
   return (
@@ -447,7 +449,7 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
         data-side={side}
         data-sheet={sheetState}
         data-call-start={callStart ?? undefined}
-        style={{ zIndex: sheetOpen ? LAYER.sheet + 1 : LAYER.dock, transform: "none", width: 0, height: 0 }}
+        style={{ zIndex: live ? LAYER.overlay + 1 : sheetOpen ? LAYER.sheet + 1 : LAYER.dock, transform: "none", width: 0, height: 0 }}
       >
         <style>{VOICE_COMPANION_CSS}</style>
         <style>{PHONE_VOICE_CSS}</style>

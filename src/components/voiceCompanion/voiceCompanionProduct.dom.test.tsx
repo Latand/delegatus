@@ -29,6 +29,7 @@ const { VoiceCompanionSetting } = await import("./VoiceCompanionSetting");
 const { COMPANION_SETTINGS_EVENT } = await import("./hostSurfaces");
 const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
 const { translate } = await import("@/lib/i18n/core");
+const { LAYER } = await import("@/components/layers");
 const { companionErrorMessage } = await import("@/lib/voiceCompanion/errors");
 const { PHONE_VOICE_STORAGE_KEY, readPhoneVoice, resetPhoneVoiceForTests, showPhoneVoice } = await import("./phoneVoiceStore");
 
@@ -1142,6 +1143,35 @@ test("phone: a project change, and a view with no project, keep the same head an
       expect(contexts.at(-1)?.body).toEqual({ action: "context", sessionId: "phone-call", project });
     }
   } finally { await unmountNow(); await live.release(); }
+});
+
+test("the switch that turns the voice on names no surface, in both languages", () => {
+  for (const language of ["en", "uk"] as const) expect(translate(language, "voiceCompanion.settings.enable")).not.toMatch(/desktop|десктоп|комп/iu);
+});
+
+test("phone: a live or starting call keeps the head above every layer a phone surface paints (image preview, search, full-screen dialogs); with no call it stays at the dock", async () => {
+  const live = await liveHarness();
+  let release = () => {};
+  live.holding.start = new Promise<void>((resolve) => { release = resolve; });
+  const level = () => Number(phoneHead()?.style.zIndex);
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    expect(level()).toBe(LAYER.dock);
+    await phoneRow("talk");
+    await pause(60);
+    expect(phoneHead()?.hasAttribute("data-starting")).toBe(true);
+    /* Starting already holds the microphone: the sign is above the preview (overlay) and below the toasts. */
+    expect(level()).toBeGreaterThan(LAYER.overlay);
+    expect(level()).toBeLessThan(LAYER.toast);
+    release();
+    await pause(200);
+    expect(phoneHead()?.dataset.phase).not.toBe("offline");
+    expect(level()).toBeGreaterThan(LAYER.overlay);
+    await phoneRow("end");
+    await pause(300);
+    expect(phoneHead()?.dataset.phase).toBe("offline");
+    expect(level()).toBe(LAYER.dock);
+  } finally { release(); await unmountNow(); await live.release(); }
 });
 
 test("phone: a tap on the head, a drag, Hide and Show start no call; only Talk does", async () => {

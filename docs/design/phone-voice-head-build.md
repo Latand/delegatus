@@ -62,7 +62,7 @@ platform defect is behind it. What it protected, and what this build does about 
 | **Scope.** The operator kept the phone out of #2519 "for now". | Lifted by the operator's own request and decision of 2026-10-12, for this behaviour only: the phone head, its Hide and its menu row. Nothing else of the desktop window (transcript panel, call cards, delegation card, spend footer) comes to the phone with it (see "Deferred"). |
 | **The page under an object that cannot be put away.** The desktop window places itself by searching a wide page for room free of text and controls (`placement.ts`), its block is 132 × 148 px with a 216–280 px lane, its buttons are 28 px, its state is a text label, and it "has no way to be dismissed" (`VoiceCompanion.tsx:52-53`). At 390 px every place holds text or a control, so it would have covered the conversation and could not be removed. | The phone gets its own presentation (variant 1): a 52 px head in a band the feed and the column are inset by, words on cleared page that hides whole messages or cards and never cuts one, 44 px rows, a dot instead of a label, and «Сховати». The desktop `VoiceCompanion` is never mounted on the phone. The driver measures 0 px² of the page's text and controls under the head and its words. |
 | **Nothing is spent or opened by being on the phone.** No settings read, no adapter, no poll, no microphone prompt. | Off in the settings: one settings read on load (the desktop already does it) and nothing mounted. Hidden: the same, plus no adapter, no store, no poll. Shown and on: mounting starts no call; a tap on the head opens its popover and never starts a call; only the popover's «Говорити» starts one, through the same `talk()` rules as the desktop (pre-flight refusals for no key, a reached cap or no project, before any microphone). |
-| **No live microphone the operator cannot see.** On the desktop the window cannot be dismissed, so a call always has a visible owner. | Hide ends the call (operator decision Q2): see "How Hide ends a call". The head is never under a sheet or another layer while it exists, and a full-height sheet keeps it visible (see "Placement"). |
+| **No live microphone the operator cannot see.** On the desktop the window cannot be dismissed, so a call always has a visible owner. | Hide ends the call (operator decision Q2): see "How Hide ends a call". While a call is live or starting, the head paints above every layer a phone surface uses (image preview, search, full-screen dialogs; see "Placement"), and a full-height sheet keeps it visible. With no call it keeps the dock's place and the layers above it cover it, since there is no microphone to show. |
 
 The PR states this table's left column as the reason for the gate and its right column as how each point is kept.
 
@@ -138,8 +138,9 @@ The head reads the phone shell's own boxes, as the prototype's `readShell` does:
   height.
 - **Sheet open** (`[data-mobile2-sheet]`, at most 88 % high): the head rides the dimmed strip above the sheet's top
   edge (y = sheet top − 8 − 52, at least 4), on the layer `LAYER.sheet + 1`; its plate lies under the sheet's dimming
-  (`LAYER.sheet − 1`). 0 px² of the head or its bubble on the sheet. Modals and popovers (`LAYER.modal` and up) stay
-  above it.
+  (`LAYER.sheet − 1`). 0 px² of the head or its bubble on the sheet. While the call is live or starting, the head leaves
+  this layer for `LAYER.overlay + 1` (above the image preview, below the toasts), so modals, popovers and the preview
+  never cover it; with no call, modals and popovers (`LAYER.modal` and up) stay above it.
 - **Full-height sheet** (`MobileSheet full`, the prototype review): no strip is left above it. The head stays visible,
   so a call is never hidden: it stands 8 px above the sheet's footer line (or the bottom safe area when the sheet has no
   footer), on `LAYER.sheet + 1`, and shows no bubble while such a sheet is open; the call goes on and is heard. This
@@ -239,8 +240,9 @@ appears on its side with no call, and nothing is requested but the settings read
 
 ## The ⋯ menu entry
 
-- Where: `PhoneMenu`'s first screen, the row directly above «Налаштування», on every phone screen whose bar has ⋯ (the
-  board, a conversation, the Overview).
+- Where: `PhoneMenu`'s first screen, the row directly above «Налаштування», on every phone screen whose bar has this ⋯ (the
+  board and the Overview). A conversation's bar has no such menu: after Hide inside a conversation the way back is a
+  board's ⋯.
 - When: only while `available && hidden`. While the head is shown, or the companion is off, the menu is exactly as
   today, so it grows by nothing.
 - Look: the menu's own `row()` (44 px, icon `AudioLines`, label «Показати голос» / "Show voice"), no trailing.

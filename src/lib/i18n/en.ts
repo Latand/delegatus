@@ -2298,7 +2298,7 @@ export const en = {
   "voiceCompanion.tool.end_conversation": "Ending the conversation",
   "voiceCompanion.tool.failed": "could not be read",
   "voiceCompanion.settings.label": "Voice Delegatus",
-  "voiceCompanion.settings.enable": "Show on the desktop",
+  "voiceCompanion.settings.enable": "Show the voice",
   "voiceCompanion.settings.explanation": "A floating character you talk to by voice. It answers about the board itself and sends work to the project's orchestrator as soon as you ask it to. It asks you first, by voice, only when the request is critical or it is unsure what you meant.",
   "voiceCompanion.settings.key": "OpenAI API key",
   "voiceCompanion.settings.key.placeholder": "Paste the key",
