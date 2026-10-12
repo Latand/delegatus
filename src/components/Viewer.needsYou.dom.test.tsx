@@ -324,7 +324,9 @@ test("desktop: a lane parked on a decision counts 1 on the island, in the tab ti
   const row = host.querySelector(`[data-attention-lane="${LANE}"]`) as HTMLElement | null;
   expect(row).not.toBeNull();
   expect(row!.textContent).toContain("Reconcile the ledger export");
-  expect(row!.querySelector("[data-attention-decision]")?.textContent).toContain(en("needs.laneDecision"));
+  /* The lane recorded no question, so the line says where to read it and what
+     answering does (docs/design/attention-auto-resolve.md). */
+  expect(row!.querySelector("[data-attention-decision]")?.textContent).toMatch(/asked for a decision without stating it here; open the lane/);
   expect(host.querySelector(`[data-needs-you-row="${LANE}"]`)!.getAttribute("data-needs-you-role")).toBe("builder");
   await click(row);
   await until(() => focused(host, LEDGER_CARD));

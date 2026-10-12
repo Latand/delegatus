@@ -69,8 +69,13 @@ export interface StructuredControlRequest {
   profileChanged?: boolean;
   /** `permission` only (#2215): allow once or deny. */
   decision?: string;
-  /** `permission` only: the request to answer; the oldest pending one when absent. */
+  /** `permission`: the request to answer; the oldest pending one when absent.
+      `answer`: the transcript tool use of the question or plan answered. */
   requestId?: string;
+  /** `answer` only: the resolution of the conversation's one pending native
+      question or plan, built from the exact request the caller read
+      (`nativeAnswerResolution`). */
+  resolution?: unknown;
   /** Who is making this request, for attributing an out-of-pool account choice.
       Absent means the operator: an agent is the only caller that can name
       itself here, exactly as `requireOperatorAuthority` reads a request. */
@@ -198,6 +203,56 @@ async function answerPermissionRequest(
   }
 }
 
+/**
+ * Answers a structured host's pending native question or plan
+ * (docs/design/attention-auto-resolve.md, acceptance 3), as the same durable
+ * `answer` operation the conversation's own question card submits. The caller
+ * names the transcript tool use it read; the answer goes only to the host
+ * request bound to that tool use, so a question or plan the host raised after
+ * it, or in place of one it cancelled, is never answered with what the caller
+ * built for the earlier one.
+ */
+async function answerNativeRequest(
+  request: StructuredControlRequest,
+  conversationId: `conversation_${string}`,
+  host: StructuredHostColumns,
+  dependencies: { client?: RuntimeHostClient | null; operationId?: () => string; kick?: () => void },
+): Promise<StructuredControlResult> {
+  if (request.resolution === undefined) return { status: 400, body: { error: "answer needs a resolution" } };
+  if (!request.requestId) return { status: 400, body: { error: "answer names the tool use it answers" } };
+  const open = new Set(host.pendingAttention ?? []);
+  const bound = (host.pendingToolUses ?? [])
+    .find((candidate) => candidate.toolUseId === request.requestId && open.has(candidate.id));
+  if (!bound) {
+    return {
+      status: 409,
+      body: { error: "that question or plan is not pending on this conversation's host; it was answered, withdrawn or replaced" },
+    };
+  }
+  const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
+  if (!client) {
+    return { status: 503, body: { error: "structured runtime host is unavailable", code: RUNTIME_HOST_UNAVAILABLE_CODE } };
+  }
+  const operationId = request.operationId ?? (dependencies.operationId ?? newOperationId)();
+  try {
+    const result = await client.command({
+      kind: "answer",
+      operationId,
+      idempotencyKey: operationId,
+      conversationId,
+      attentionId: bound.id,
+      resolution: request.resolution,
+    });
+    (dependencies.kick ?? kickStructuredDeliveryQueue)();
+    return {
+      status: result.receipt.status === "delivered" || result.receipt.status === "answered" ? 200 : 202,
+      body: { ok: true, structured: true, target: conversationId, operationId, receipt: result.receipt },
+    };
+  } catch (error) {
+    return { status: 503, body: { error: error instanceof Error ? error.message : String(error) } };
+  }
+}
+
 export async function dispatchStructuredControl(
   request: StructuredControlRequest,
   dependencies: {
@@ -249,6 +304,9 @@ export async function dispatchStructuredControl(
 
   if (request.action === "permission") {
     return await answerPermissionRequest(request, conversation.id, entry.structuredHost!, dependencies);
+  }
+  if (request.action === "answer") {
+    return await answerNativeRequest(request, conversation.id, entry.structuredHost!, dependencies);
   }
 
   if (!STRUCTURED_CONTROL_ACTIONS.has(request.action)) {

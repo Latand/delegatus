@@ -7,6 +7,7 @@ import { ArrowUpToLine, Check, FoldVertical, Loader2, Play, RotateCw, Square, Sq
 
 import { Hint } from "@/components/Hint";
 import { AttachTerminalDialog } from "@/components/AttachTerminalDialog";
+import { ComposerMenu, type SendMenuAction } from "@/components/ComposerBar";
 import { useConversationControl } from "@/hooks/useConversationControl";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { refreshRuntime } from "@/hooks/useRuntime";
@@ -222,8 +223,9 @@ function compactReceiptStatus(
 /**
  * Presentational unified control strip (issue #241). Pure — its control set,
  * disabled-with-tooltip vs. hidden treatment, 44px mobile targets, and busy
- * states are DOM-tested against capability fixtures. Mounted once by
- * `BranchPane`, above the composer (and even when the composer is hidden).
+ * states are DOM-tested against capability fixtures. Mounted by a pane that
+ * has no composer (a review round, a superseded one): where a composer is on
+ * screen the same actions sit in its bottom row instead (2026-10-11).
  */
 export function AgentControlStripView({
   t,
@@ -313,8 +315,8 @@ export function AgentControlStripView({
       t={t}
       isMobile={isMobile}
       cap={controls.terminal}
-      ariaLabel="attach.dialogTitle"
-      hint="attach.dialogTitle"
+      ariaLabel="attach.copyTerminalCommand"
+      hint="attach.copyTerminalCommandHint"
       onClick={onTerminal}
       className="hover:text-accent"
     >
@@ -381,7 +383,7 @@ export function AgentControlStripView({
  * capability matrix, the busy flags, the status line and the four actions live
  * here, and both the desktop strip and `MobileConversationMenu` read the same
  * hook. Neither surface owns a second copy of what Stop, Compact, Re-check or
- * Open in terminal do.
+ * Copy terminal command do.
  */
 export interface AgentControlActions {
   caps: StripCapabilities;
@@ -405,8 +407,16 @@ export interface AgentControlActions {
 }
 
 export function useAgentControlActions(file: FileEntry): AgentControlActions {
+  return useAgentControlActionsWith(file, useAgentCapabilities(file));
+}
+
+/** The same actions over a capability read the caller already holds — the
+    composer's, so its controls and its Send never tell two host stories. */
+export function useAgentControlActionsWith(
+  file: FileEntry,
+  { caps, attachMode, structuredSession }: Pick<ReturnType<typeof useAgentCapabilities>, "caps" | "attachMode" | "structuredSession">,
+): AgentControlActions {
   const { t } = useLocale();
-  const { caps, attachMode, structuredSession } = useAgentCapabilities(file);
 
   const interrupt = useConversationControl(caps.surface === "structured-subagent" && structuredSession
     ? { conversationId: structuredSession.session.conversationId }
@@ -580,6 +590,150 @@ export function useAgentControlActions(file: FileEntry): AgentControlActions {
     closeAttach: () => setAttachOpen(false),
     attachMode,
   };
+}
+
+/** What the mode chip says, for the surfaces whose routing it names. */
+function modeWord(t: TFunction, surface: StripSurface): string | null {
+  switch (surface) {
+    case "structured":
+      return null;
+    case "live-subagent":
+      return t("composer.root");
+    case "resume":
+      return t("strip.resume");
+    case "dead":
+      return t("strip.deadMode");
+    default:
+      return t("strip.live");
+  }
+}
+
+/**
+ * Stop, beside Send (operator, 2026-10-11: the third round's variant 2, and
+ * a separate button rather than Send turning into Stop): there only while the
+ * agent works, so Send stays Send and a message typed meanwhile queues behind
+ * the turn. The strip's own Stop rules apply: hidden where the surface has no
+ * Stop, disabled with its reason where it has one it cannot use. «⋯ More
+ * actions» keeps the same action for a turn the board does not see running.
+ */
+export function AgentInterruptButton({ actions, working }: { actions: AgentControlActions; working: boolean }) {
+  const { t } = useLocale();
+  const cap = actions.caps.controls.stop;
+  if (!visible(cap) || !working) return null;
+  const disabled = cap.state === "disabled";
+  const explain = disabled ? t(cap.reason) : cap.state === "enabled" && cap.note ? t(cap.note) : "";
+  return (
+    <Hint label={explain || `${t("composer.interrupt")} · Esc`} align="right">
+      <button
+        type="button"
+        data-composer-interrupt
+        aria-label={explain ? `${t("composer.interruptAria")} — ${explain}` : t("composer.interruptAria")}
+        aria-disabled={disabled || undefined}
+        disabled={disabled || actions.stopBusy}
+        onClick={actions.stop}
+        className="press-scale inline-flex shrink-0 items-center justify-center rounded-control border border-border bg-card p-2 text-secondary hover:border-danger/45 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+      >
+        {actions.stopBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Square className="h-4 w-4" fill="currentColor" aria-hidden />}
+      </button>
+    </Hint>
+  );
+}
+
+/**
+ * «⋯ More actions» at the end of the composer's bottom row: Interrupt the
+ * turn, Compact, Re-check and the terminal command, each a labelled row
+ * (operator, 2026-10-11, answer 4a). The mode the strip's chip named rides in
+ * the menu's heading, where it still says where a message goes.
+ */
+export function AgentMoreMenu({ actions }: { actions: AgentControlActions }) {
+  const { t } = useLocale();
+  const anchor = useRef<HTMLButtonElement>(null);
+  /* Where the menu opens and the document it opens in, read once on the
+     click: a docked or floating composer can live in another window. */
+  const [position, setPosition] = useState<{ bottom: number; right: number; owner: Document } | null>(null);
+  const { controls, surface } = actions.caps;
+  const mode = modeWord(t, surface);
+  const items: SendMenuAction[] = [
+    ...(visible(controls.stop) ? [{
+      id: "interrupt",
+      icon: Square,
+      label: t("composer.interruptTurn"),
+      description: controls.stop.state === "disabled" ? t(controls.stop.reason) : "Esc",
+      disabled: controls.stop.state === "disabled" || actions.stopBusy,
+      onSelect: actions.stop,
+    }] : []),
+    ...(visible(controls.compact) ? [{
+      id: "compact",
+      icon: FoldVertical,
+      label: t("mobile2.chat.menuCompact"),
+      description: controls.compact.state === "disabled" ? t(controls.compact.reason) : "/compact",
+      disabled: controls.compact.state === "disabled" || actions.compactBusy,
+      onSelect: () => actions.compact({ immediate: true }),
+    }] : []),
+    { id: "recheck", icon: RotateCw, label: t("mobile2.chat.menuRecheck"), disabled: actions.recheckBusy, onSelect: actions.recheck },
+    ...(visible(controls.terminal) ? [{
+      id: "terminal",
+      icon: SquareTerminal,
+      label: t("attach.copyTerminalCommand"),
+      description: controls.terminal.state === "disabled" ? t(controls.terminal.reason) : t("attach.copyTerminalCommandHint"),
+      disabled: controls.terminal.state === "disabled",
+      onSelect: actions.terminal,
+    }] : []),
+  ];
+  const toggle = () => {
+    const rect = anchor.current?.getBoundingClientRect();
+    const view = anchor.current?.ownerDocument.defaultView;
+    if (!rect || !view) return;
+    setPosition((open) => open ? null : {
+      bottom: Math.max(8, view.innerHeight - rect.top + 6),
+      right: Math.max(8, view.innerWidth - rect.right),
+      owner: view.document,
+    });
+  };
+  return (
+    <>
+      <Hint label={t("strip.moreActions")} align="right">
+        <button
+          ref={anchor}
+          type="button"
+          data-composer-more-actions
+          aria-label={t("strip.moreActions")}
+          aria-haspopup="menu"
+          aria-expanded={position !== null}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={toggle}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          {actions.compactBusy || actions.recheckBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <MoreHorizontal className="h-4 w-4" aria-hidden />}
+        </button>
+      </Hint>
+      {position ? (
+        <ComposerMenu
+          label={mode ? `${t("strip.moreActions")} · ${mode}` : t("strip.moreActions")}
+          actions={items}
+          onClose={() => setPosition(null)}
+          position={position}
+          owner={position.owner}
+          testId="composer-more-actions-menu"
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** The line an agent action answers on, under the composer's field. */
+export function AgentControlStatus({ status }: { status: AgentControlActions["status"] }) {
+  if (!status) return null;
+  return (
+    <span
+      role="status"
+      data-agent-control-status={status.kind}
+      aria-live={status.kind === "err" ? "assertive" : "polite"}
+      className={`truncate text-caption font-semibold ${status.kind === "ok" ? "text-success" : status.kind === "info" ? "text-warning" : "text-danger"}`}
+    >
+      {status.text}
+    </span>
+  );
 }
 
 /**

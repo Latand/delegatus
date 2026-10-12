@@ -46,6 +46,8 @@ export interface CodexQuotaProbe {
   rateLimits: AppServerRateLimits;
   /** Usage-limit reset credits reported beside the limits (issue #1373). */
   resetCredits: AppServerResetCredits | null;
+  /** See `AppServerRateLimitsRead.limitReached`. */
+  limitReached?: boolean;
   authenticated: boolean;
   envelope: AppServerEnvelope | null;
 }
@@ -421,8 +423,8 @@ export class ManagedCodexRuntime {
 
   private async probeQuotaFrom(client: CodexAppServerClient): Promise<CodexQuotaProbe> {
     const account = await client.readAccount();
-    const { rateLimits, resetCredits } = await client.readRateLimits();
-    return { account, rateLimits, resetCredits, authenticated: isSupportedChatGptAccount(account), envelope: client.inboundEnvelope() };
+    const { rateLimits, resetCredits, limitReached } = await client.readRateLimits();
+    return { account, rateLimits, resetCredits, ...(limitReached === undefined ? {} : { limitReached }), authenticated: isSupportedChatGptAccount(account), envelope: client.inboundEnvelope() };
   }
 
   /** Redeems one usage-limit reset credit for `account` (issue #1373) on a

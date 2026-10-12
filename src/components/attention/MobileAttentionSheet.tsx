@@ -24,9 +24,10 @@ import { openSelfUpdate } from "../selfUpdate/openSelfUpdate";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 
 import type { MobileAttentionEntry } from "./attentionQueue";
-import { decisionLine, reasonLine } from "./decision";
 import { sendDismissal } from "./dismissalOverlay";
-import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
+import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouSections, prototypeNoticeAsk } from "./needsYouPanel";
+import { NeedsYouAskText } from "./NeedsYouAskText";
+import { conversationOperatorAsk, laneOperatorAsk } from "./operatorAsk";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -41,13 +42,12 @@ import { PermissionActions } from "./PermissionActions";
  * nothing walks the operator.
  *
  * Rows are the sheet-row anatomy (`.mrow`): the role of the agent behind it
- * (the needs-you panel's role tag), the title, one meta
- * line, a chevron. The meta line of a conversation is its wait in the words
- * the desktop panel uses (`reasonLine`), then how long it has waited, the
- * engine glyph and the model; a lane's is the panel's lane line
- * (`needsYouLaneLine`, the card's `needLabel`) and its age, so one item reads
- * the same on both surfaces. The wait gives way to an ellipsis before the age
- * does: the age is the one fact on the line that must stay whole.
+ * (the needs-you panel's role tag), the title, what it asks, one meta line and
+ * a chevron. What it asks is the desktop panel's text
+ * (`NeedsYouAskText`, docs/design/attention-auto-resolve.md): the question in
+ * its author's words, its choices and the sentence saying what to choose and
+ * what happens next, wrapped rather than cut, so one item reads the same on
+ * both surfaces. The meta line keeps the age, the engine glyph and the model.
  *
  * A row is the phone's OPEN gesture (#1244): the conversation screen it pushes
  * stamps the card seen. Pipelines have a destination once lane 7 lands the
@@ -325,10 +325,12 @@ function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: n
 function ConversationRow({ item, now, current, onOpen, role }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void; role?: FrameRole }) {
   const { t } = useLocale();
   /* An orchestrator's question in the report log is its own title. */
+  const asksInTitle = Boolean(role && item.reason.report?.body);
   const title = (role && item.reason.report?.body) || cleanTitle(item.file.title, 90);
-  /* With the role on its own mark, the line is the wait alone. */
-  const decision = role ? reasonLine(t, item.reason) : decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
-  const headline = item.reason.kind === "memory" || (item.reason.kind === "permission" && Boolean(item.file.pendingPermission)) || (item.reason.kind === "ask" && Boolean(item.reason.header));
+  /* What it asks, whole, in the desktop panel's words
+     (docs/design/attention-auto-resolve.md): the question, its choices and
+     the sentence saying what to choose and what happens next. */
+  const ask = conversationOperatorAsk(t, item.reason, item.file);
   const row = (
     <button
       type="button"
@@ -344,20 +346,15 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
       {role ? null : <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         {role ? <RoleTag role={role} /> : null}
-        <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
-        {/* A permission headline (tool, command, reason) runs to hundreds of
-            characters, so it gets a line of its own that ends in an ellipsis
-            and the meta line keeps the age in view: the request is denied
-            at ten minutes (#2215). An agent's own sentence that asks the
-            operator gets the same line. */}
-        {headline ? <span data-attention-decision className={item.reason.kind === "memory" ? "min-w-0 whitespace-normal text-label font-medium text-muted [overflow-wrap:anywhere]" : "min-w-0 truncate text-label font-medium text-muted"}>{decision}</span> : null}
+        {/* An orchestrator's question is its own title, so it wraps whole. */}
+        <span
+          className={`min-w-0 ${asksInTitle ? "[overflow-wrap:anywhere]" : "truncate"} text-body font-semibold leading-[1.25] text-primary`}
+          data-needs-you-question-title={asksInTitle ? "" : undefined}
+        >
+          {title}
+        </span>
+        <NeedsYouAskText ask={ask} size="touch" />
         <span className={META}>
-          {headline ? null : (
-            <>
-              <span data-attention-decision className="min-w-0 truncate">{decision}</span>
-              {SEP}
-            </>
-          )}
           <span data-attention-age className="shrink-0">{fmtAgeSeconds(Math.max(0, now - item.since))}</span>
           {item.file.model ? (
             <>
@@ -406,6 +403,7 @@ function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; 
           <span className="min-w-0 truncate">{t(undelivered ? "proto.notice.undelivered" : notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
         </span>
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{notice.title}</span>
+        <NeedsYouAskText ask={prototypeNoticeAsk(t, notice)} size="touch" />
         {age === null ? null : (
           <span className={META}>
             <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
@@ -433,15 +431,12 @@ function PipelineRow({ row, age, current, onOpen, role }: { row: MobileBoardPipe
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         {role ? <RoleTag role={role} /> : null}
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{row.task}</span>
-        <span className={META}>
-          <span data-attention-decision className="min-w-0 truncate">{needsYouLaneLine(t, row.pipeline)}</span>
-          {age === null ? null : (
-            <>
-              {SEP}
-              <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
-            </>
-          )}
-        </span>
+        <NeedsYouAskText ask={laneOperatorAsk(t, row.pipeline)} size="touch" />
+        {age === null ? null : (
+          <span className={META}>
+            <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
+          </span>
+        )}
       </span>
       {onOpen ? <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden /> : null}
     </Tag>

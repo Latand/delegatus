@@ -252,6 +252,12 @@ export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
     features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
       ? [...features, RELAY_OWNER_TOOLS] : features };
 }
+/** The same request builder is used by polling and install wire captures. */
+export function relayClaimBody(relay: PairedRelay) {
+  return { wait_s: Math.min(25, relay.limits.max_wait_s),
+    ...relayClaimCapabilities(readRelayStore().relays.find(item => item.id === relay.id)),
+    slots: advertisedSlots(relay) };
+}
 /** The claim loop of a dark install makes no extra descriptor request. Enabled
  * installs refresh before their first claim, then with the existing five-minute
  * target cadence; the settings page reads it at most every five minutes too. */
@@ -301,11 +307,7 @@ async function poll(
         relay.api_base,
         "/requests/claim",
         "POST",
-        {
-          wait_s: Math.min(25, relay.limits.max_wait_s),
-          ...relayClaimCapabilities(readRelayStore().relays.find((item) => item.id === relay.id)),
-          slots: advertisedSlots(relay),
-        },
+        relayClaimBody(relay),
         relay.credential,
         {
           timeoutMs: (Math.min(25, relay.limits.max_wait_s) + 15) * 1000,

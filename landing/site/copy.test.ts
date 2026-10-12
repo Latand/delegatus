@@ -90,3 +90,18 @@ test("the demo's merge names the setting the FAQ says is off by default", () => 
   const html = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
   expect(html).toContain(`data-i18n="demo.c6">${en["demo.c6"]}</span>`);
 });
+
+test("a phone frame takes no touch outside full screen and no script scrolls the page for it", () => {
+  const main = fs.readFileSync(new URL("./main.js", import.meta.url), "utf8");
+  const demo = fs.readFileSync(new URL("./demo/demo.tsx", import.meta.url), "utf8");
+  /* The browser scrolls the page over a frame only while the frame is not the touch target. */
+  expect(main).toContain('const touchQuery = matchMedia("(hover: none) and (pointer: coarse)");');
+  expect(main).toContain('live.iframe.style.pointerEvents = phone && touchQuery.matches && !full ? "none" : "";');
+  expect(main).toContain('touchQuery.addEventListener("change", relayout);');
+  /* The forwarding that wrote the page's scroll position from a finger read inside a moving frame is gone. */
+  for (const source of [main, demo]) {
+    expect(source).not.toContain("dlg:vertical");
+    expect(source).not.toMatch(/scrollBy\(/);
+  }
+  expect(demo).not.toContain('"touchmove"');
+});

@@ -12,6 +12,8 @@ import { listFilesWithProjectCatalog, pinnedPathsFor } from "@/lib/scanner";
 import { ctxFor } from "@/lib/scanner/context";
 import { overlayOperatorAsks } from "@/lib/asks/overlay";
 import { overlayAttentionDismissals } from "@/lib/attention/dismissals";
+import { overlayAttentionRoutes, productionRoutingSources } from "@/lib/attention/routeOverlay";
+import { waitingRoundIds } from "@/lib/attention/routing";
 import { overlayBridgeAsks } from "@/lib/bridge/asks";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { bridgeAsksForSeats } from "@/lib/bridge/service";
@@ -864,6 +866,16 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      classifier recorded for each conversation. */
   overlayOperatorAsks(projected.files);
   markTiming("files-operator-asks");
+  /* Who answers each wait (docs/design/attention-auto-resolve.md): a worker's
+     ask, a parked lane and a stopped merge go to the project's designated seat
+     first, and the operator's list keeps what is theirs. Read after every
+     source above, so the stamp names the reason the board will draw. A wait
+     the seat escalated stays on its decision form while the form waits, as
+     the board draws it: undecided, undismissed, the task's newest round. */
+  const summarizedTasks = withPrototypeReviewSummaries(boardTasks);
+  overlayAttentionRoutes(projected.files, pipelines, waitingRoundIds(summarizedTasks), Date.now() / 1000,
+    productionRoutingSources(seatIdentityResolver(conversationLookup.canonicalConversationId)));
+  markTiming("files-attention-routes");
   const visibleProjects = [
     ...projected.files.map((file) => file.project),
     ...effectiveProjectCatalog.map((entry) => entry.project),
@@ -947,7 +959,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
        without them; the route keeps that answer in a scope of its own. */
     ...(agentRead
       ? { tasks: withoutPrototypeReviews(boardTasks) }
-      : { tasks: withPrototypeReviewSummaries(boardTasks), prototypeReviewNotices: prototypeReviewNotices(boardTasks) }),
+      : { tasks: summarizedTasks, prototypeReviewNotices: prototypeReviewNotices(boardTasks) }),
     /* #2059: map lookups against the forge cache only; the sweep, not this
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, boardTasks),

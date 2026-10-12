@@ -304,7 +304,7 @@ type Floater =
   | { kind: "answer"; key: string; delegation: DelegationView; answer: DelegationView["answers"][number]; settled: true }
   | { kind: "report"; key: string; report: CompanionState["orchestratorReports"][number]; settled: true }
   /* A failure, or a fact the operator needs before asking (no orchestrator here), in plain words. */
-  | { kind: "notice"; key: string; code: string; tone: "failure" | "note"; settled: true }
+  | { kind: "notice"; key: string; code: string; tone: "failure" | "note"; settled: true; resetsAt?: number | null }
   | { kind: "more"; key: string; count: number; settled: false };
 
 const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SPEECH_LINGER_MS, call: CALL_LINGER_MS, delegation: DELEGATION_LINGER_MS, answer: DELEGATION_LINGER_MS, report: DELEGATION_LINGER_MS, notice: NOTICE_LINGER_MS };
@@ -623,14 +623,15 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       ...state.orchestratorReports.map(report => ({ kind: "report" as const, key: `report:${report.reportId}`, report, settled: true as const })),
     ].sort((left, right) => (left.kind === "answer" ? left.answer.order : left.report.order) - (right.kind === "answer" ? right.answer.order : right.report.order));
     const notices: Floater[] = [];
-    const say = (source: string, code: string, tone: "failure" | "note" = "failure") => notices.push({ kind: "notice", key: `notice:${talks}:${source}:${code}`, code, tone, settled: true });
+    const say = (source: string, code: string, tone: "failure" | "note" = "failure", resetsAt?: number | null) => notices.push({ kind: "notice", key: `notice:${talks}:${source}:${code}`, code, tone, settled: true, resetsAt });
     if (refusedStart) say(`start${refusedStart.n}`, refusedStart.code);
     /* Until the session asked for is ready, an error the state still holds is the previous conversation's. */
-    if (state.error && !awaiting) say("error", state.error);
-    if (state.closure?.incomplete && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
+    if (state.error && !awaiting) say("error", state.error, "failure", state.errorResetsAt);
+    /* A retained reservation exists only for an API call. */
+    if (state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
     if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
     return [...speech, ...calls, ...deleg, ...reports, ...notices];
-  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.closure, paced, refusedStart, seat, talks, awaiting, charsOf]);
+  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, state.usage?.backend, paced, refusedStart, seat, talks, awaiting, charsOf]);
 
   /* When each element arrived and when it settled. The lane is ordered by arrival,
      and one not stamped yet is the newest there is. */
@@ -1147,7 +1148,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       return (
         <div className="vc-notice" role={floater.tone === "failure" ? "alert" : "status"} data-tone={floater.tone} data-code={floater.code} data-companion-notice>
           <span className="vc-notice-icon" aria-hidden><CircleAlert size={14} /></span>
-          <span className="vc-notice-text">{companionErrorMessage(floater.code, speechLocaleOf(locale))}</span>
+          <span className="vc-notice-text">{companionErrorMessage(floater.code, speechLocaleOf(locale), { resetsAt: floater.resetsAt })}</span>
           {onOpenSettings && SETTINGS_FAILURES.has(floater.code) ? <button type="button" className="vc-act" data-companion-open-settings onClick={onOpenSettings}><Settings size={13} aria-hidden />{t("voiceCompanion.openSettings")}</button> : null}
         </div>
       );
