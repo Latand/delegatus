@@ -182,7 +182,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
   44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
   45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
-  46: "d630d0891c8256105403f48aa850778fda0726f39b26a527e1586b84dc68f7a7",
+  46: "c363a703acc20da6821d09be8970c813e1383587a483f50c62f889dcd3d5746b",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -970,7 +970,7 @@ test("the mandate names linked seats and requires coordination before a shared r
 });
 
 test("the decision-form mandate upgrades every shipped pointer once and preserves bespoke wording", () => {
-  const directive = `Prototype review: every decision you need is a form: publish_prototype_review, 1–7 questions, taskId when a task exists; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
+  const directive = `Prototype review: every decision you need is a form: publish_prototype_review, 1–7 questions, taskId when a task exists; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After the answers, write "how I understood" (3–5 lines) in the task text and start.`;
   const questionnaire = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
   for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review.", `Coordinate.\n\n${questionnaire}`]) {
     const delivered = orchestratorMandateForDelivery(input);
