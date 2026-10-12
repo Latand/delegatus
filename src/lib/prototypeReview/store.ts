@@ -143,6 +143,8 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
     return existing;
   };
   const held = replay(); if (held) return held;
+  // The resolved task also covers a pipeline publication with no explicit taskId.
+  if (taskId !== null && input.questions && input.questions.length < 3) throw new PrototypeError("a task form needs 3–7 questions");
   await fs.mkdir(prototypeRoot(), { recursive: true, mode: 0o700 });
   return withFileTransaction(path.join(prototypeRoot(),"publication.lock"),"prototype publication is busy",async () => {
     const held = replay(); if (held) return held;

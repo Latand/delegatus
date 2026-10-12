@@ -73,10 +73,22 @@ test("only the project's designated seat may ask without a task, and only with q
   expect(loadSeatRounds()).toHaveLength(0);
 });
 
-test("one question is a round, with or without a task", async () => {
-  const response = await publishAs(operator, { clientRequestId: "one", taskId: "task-prototype", title: "Deploy now?", questions: one });
-  expect(response.status).toBe(200);
-  expect(loadTasks()[0]!.prototypeReviews![0]!.questions).toHaveLength(1);
+test("task forms need 3–7 questions, including a pipeline's inherited task", async () => {
+  const pipeline: PrototypeWorld = { ...seat, stage: () => ({ pipelineId: "pipeline-form", stageId: "build", project: "project-a", taskIds: ["task-prototype"], source: { conversationId: "conversation_seat" } }) };
+  for (const [world, taskId] of [[operator, "task-prototype"], [pipeline, undefined]] as const) {
+    for (const count of [1, 2]) {
+      const response = await publishAs(world, { clientRequestId: `short-${taskId ?? "pipeline"}-${count}`, ...(taskId ? { taskId } : {}), title: "Before work", questions: questions.slice(0, count) });
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain("a task form needs 3–7 questions");
+      expect(loadTasks()[0]!.prototypeReviews).toBeUndefined();
+      expect(loadSeatRounds()).toHaveLength(0);
+    }
+  }
+  for (const count of [3, 7]) {
+    const input = { clientRequestId: `bounded-${count}`, title: "Before work", questions: Array.from({ length: count }, (_, i) => ({ ...one[0]!, id: `question-${i}` })) };
+    expect((await publishAs(operator, { ...input, taskId: "task-prototype" })).status).toBe(200);
+    expect((await publishAs(seat, { ...input, clientRequestId: `seat-${count}` })).status).toBe(200);
+  }
 });
 
 test("the column lists the seat's questions and the tasks' waiting rounds; an answer reaches the seat as an operator decision", async () => {
@@ -212,8 +224,8 @@ test("an answer saved while the project had no seat is sent from its record once
 
 
 test("the decision column accepts task and seat answers while background sends are held", async () => {
-  const seatId = (await (await publishAs(seat, { clientRequestId: "seat-held", title: "Deploy now?", questions: one })).json()).reviewId as string;
-  const taskId = (await (await publishAs(operator, { clientRequestId: "task-held", taskId: "task-prototype", title: "Deploy now?", questions: one })).json()).reviewId as string;
+  const seatId = (await (await publishAs(seat, { clientRequestId: "seat-held", title: "Deploy now?", questions })).json()).reviewId as string;
+  const taskId = (await (await publishAs(operator, { clientRequestId: "task-held", taskId: "task-prototype", title: "Deploy now?", questions })).json()).reviewId as string;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const sent: string[] = [];
@@ -222,7 +234,7 @@ test("the decision column accepts task and seat answers while background sends a
   }, retry: async () => { throw new Error("nothing failed"); } };
   try {
     for (const reviewId of [seatId, taskId]) {
-      const response = await decisionsRoutePOST(request("/api/projects/decisions", { project: "project-a", reviewId, chosen: [], comment: "", answers: [{ questionId: "deploy", options: [0] }] }), operator, delivery);
+      const response = await decisionsRoutePOST(request("/api/projects/decisions", { project: "project-a", reviewId, chosen: [], comment: "", answers: questions.map(q => ({ questionId: q.id, options: [0] })) }), operator, delivery);
       expect(response.status).toBe(200);
       expect((await response.json() as OperatorDecisionsRead).decisions.some(round => round.id === reviewId)).toBe(false);
     }

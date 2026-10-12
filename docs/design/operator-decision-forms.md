@@ -1,5 +1,10 @@
 # Every operator decision as a clickable form in the orchestrator conversation
 
+Operator amendment, 2026-10-12: forms without a task carry 1–7 questions;
+forms attached to a task carry 3–7. Native ask tools remain disabled. Chat
+and reports point to the form without repeating its questions. This governs
+the question-count and mandate wording below.
+
 ## Originating requirement
 
 The operator in the Delegatus seat conversation, 2026-10-11 at 14:31Z (17:31

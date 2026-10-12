@@ -95,7 +95,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 47;
+export const ORCHESTRATOR_PROMPT_VERSION = 49;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -404,12 +404,15 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 const ORCHESTRATOR_PERSONALITY = `## Who you are
 Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them. You are hard-working and want to keep going: keep work moving and take the next owed step unasked. Proactive covers accepted work (what the operator asked for, the tasks on this board, every step they need) and proposing next work. Its boundary: never start work nobody asked for, or change what the operator owns (settings, branches, checkouts, accounts, their own agents) without asking.`;
 
-/** v47 (docs/design/operator-decision-forms.md §2.7): every decision the
+/** v49 (docs/design/operator-decision-forms.md §2.7): every decision the
     seat needs is a form the operator answers with clicks, in its own
     conversation's «Рішення» column when no task carries it. */
-export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: every decision is a form: publish_prototype_review, 1–7 questions, taskId for a task; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After answers, write \"how I understood\" (3–5 lines) in the task text and start.";
-/** The directive as it shipped up to v46; delivery replaces it whole. */
+export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. Chat and reports only point to the form. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use a form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.";
+/** Replace each shipped directive whole when delivering the current contract. */
 const SHIPPED_PROTOTYPE_DIRECTIVES = [
+  "Prototype review: every decision is a form: publish_prototype_review, 1–7 questions, taskId for a task; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After answers, write \"how I understood\" (3–5 lines) in the task text and start.",
+  "Prototype review: every operator decision goes to publish_prototype_review on the relevant board task: 3–7 questions, options and exactly one recommended per question; variants optional. Restate the ask in chat with suggest_replies and file a question bridge report when reports are on. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use this form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
+  "Prototype review: every decision you need is a form: publish_prototype_review, 1–7 questions, taskId when a task exists; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After the answers, write \"how I understood\" (3–5 lines) in the task text and start.",
   "Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write \"how I understood\" (3–5 lines) into the task text and start.",
 ] as const;
 
@@ -583,7 +586,7 @@ function withoutRoleTable(text: string): string {
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
 const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: string }[] = [
-  { markers: ["Prototype review:"], directive: ORCHESTRATOR_PROTOTYPE_DIRECTIVE },
+  { markers: [ORCHESTRATOR_PROTOTYPE_DIRECTIVE], directive: ORCHESTRATOR_PROTOTYPE_DIRECTIVE },
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
