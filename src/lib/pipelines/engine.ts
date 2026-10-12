@@ -285,6 +285,7 @@ export interface PipelinePorts {
   /** A held stage start waits in the shared bounded CPU queue; null admits. */
   cpuPressureHold?(key?: string): CpuPressureHold | null;
   cpuAdmissionReconcile?(): void;
+  cpuAdmissionSuspend?(key: string): void;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -1399,8 +1400,10 @@ export function defaultPipelinePorts(
       const waiting = machineCpuPressureGate()
         ? loadPipelines().filter(p => p.state === "running" && p.cursor && ["pending", "spawning"].includes(p.cursor.state)).map(cpuStageKey)
         : [];
-      machineCpuAdmissionQueue().reconcile(cpuStagePrefix(), new Set(waiting));
+      const active = new Set(waiting);
+      machineCpuAdmissionQueue().reconcile(cpuStagePrefix(), active, activeDrain() ? new Set() : active);
     },
+    cpuAdmissionSuspend: (key) => machineCpuAdmissionQueue().suspend(key),
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
@@ -6059,6 +6062,7 @@ async function spawnRunStage(
 function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): boolean {
   const hold = ports.drainHold?.();
   if (hold) {
+    ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
     const detail = `held for the automatic update to ${hold.target.slice(0, 7)} since ${hold.since}`;
     if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
     return true;

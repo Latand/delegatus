@@ -100,3 +100,20 @@ test("a proven stale command owner loses its ticket without discarding active st
   f.at(CPU_QUEUE_MAX_WAIT_MS);
   expect(q.check("stage:two", false)).toBeNull();
 });
+
+test("an update-held stage keeps its order and age across restart without starving heavy checks", () => {
+  const f = fixture(), q = f.open();
+  q.check("stage:one", false); q.check("stage:two", false);
+  q.reconcile("stage:", new Set(["stage:one", "stage:two"]), new Set());
+  q.close(); queues.splice(queues.indexOf(q), 1);
+  const restarted = f.open();
+  expect(restarted.check("command:check", true)).toBeNull();
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  restarted.reconcile("stage:", new Set(["stage:one", "stage:two"]));
+  expect(restarted.check("command:later", true)?.position).toBe(3);
+  expect(restarted.check("stage:two", false)).toMatchObject({ since: 0, position: 2 });
+  expect(restarted.check("stage:one", false)).toBeNull();
+  expect(restarted.check("stage:two", false)?.remainingMs).toBe(CPU_QUEUE_SPACING_MS);
+  f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
+  expect(restarted.check("stage:two", false)).toBeNull();
+});

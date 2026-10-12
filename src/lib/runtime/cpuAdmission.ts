@@ -74,15 +74,26 @@ export class CpuAdmissionQueue {
     this.db = new sqlite.Database(file, { create: true });
     fs.chmodSync(file, 0o600);
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
-    this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
+    this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
   }
   close(): void { this.db.close(); }
-  cancel(key: string): void { this.db.query("DELETE FROM tickets WHERE key = ?").run(key); }
+  cancel(key: string): void {
+    this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
+    this.db.query("DELETE FROM tickets WHERE key = ?").run(key);
+  }
+  /** Another admission fence may hold a stage for longer than the CPU bound.
+   * Retain its sequence and timestamp without blocking eligible heavy work. */
+  suspend(key: string): void {
+    this.db.query("INSERT OR IGNORE INTO suspended SELECT key FROM tickets WHERE key = ? AND owner IS NULL").run(key);
+  }
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
-  reconcile(prefix: string, active: ReadonlySet<string>): void {
+  reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
     this.db.transaction(() => {
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NULL").all()) {
-        if (row.key.startsWith(prefix) && !active.has(row.key)) this.cancel(row.key);
+        if (!row.key.startsWith(prefix)) continue;
+        if (!active.has(row.key)) this.cancel(row.key);
+        else if (!eligible.has(row.key)) this.suspend(row.key);
+        else this.db.query("DELETE FROM suspended WHERE key = ?").run(row.key);
       }
     }).immediate();
   }
@@ -94,8 +105,9 @@ export class CpuAdmissionQueue {
         if (processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)) this.cancel(row.key);
       }
       this.db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, now, owner ? JSON.stringify(owner) : null);
+      this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
       const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
-      const ahead = this.db.query<{ n: number; since: number | null }, [number, number]>("SELECT COUNT(*) AS n, MAX(CASE WHEN seq < ? THEN since END) AS since FROM tickets WHERE seq <= ?").get(ticket.seq, ticket.seq)!;
+      const ahead = this.db.query<{ n: number; since: number | null }, [number, number]>("SELECT COUNT(*) AS n, MAX(CASE WHEN seq < ? THEN since END) AS since FROM tickets WHERE seq <= ? AND key NOT IN (SELECT key FROM suspended)").get(ticket.seq, ticket.seq)!;
       const position = ahead.n;
       const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
