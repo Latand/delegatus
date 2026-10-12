@@ -22,20 +22,21 @@ const inProcess = (request: PrototypeDeliveryContext): request is Extract<Protot
     decision whose earlier message may already have reached the seat says it
     replaces that one. */
 export function prototypeDecisionText(task: { id: string; text: string } | null, round: PrototypeReviewRound,
-  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped">, amends?: { at: string }): string {
+  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped" | "rejected">, amends?: { at: string }): string {
   const amendment = amends ? ` (amended)\nThis replaces the decision of ${amends.at} on the same round.` : "";
   const header = task && round.taskId !== null ? `Prototype review decision${amendment}\nTask: ${task.id} — ${task.text.split("\n")[0]}`
     : `Operator decision${amendment}\nAsked: ${round.title}, ${round.createdAt.slice(11,16)} UTC`;
   const chosen = round.variants.filter(v => decision.chosen.includes(v.number)).map(v => `${v.number} — ${v.name}`).join(", ");
-  const footer = `\n\nComment:\n${decision.comment}\n\nEnd of prototype review decision.`;
-  if (!round.questions?.length) return `${header}\nChosen: ${chosen}${footer}`;
+  const rejection = `Rejected: none of the variants fits. Publish a new prototype round${round.taskId === null ? "" : " on this task"} that applies the corrections below; build no variant of this round.`;
+  const footer = `\n\n${decision.rejected ? "Corrections" : "Comment"}:\n${decision.comment}\n\nEnd of prototype review decision.`;
+  if (!round.questions?.length) return decision.rejected ? `${header}\nRound: ${round.title}\n${rejection}${footer}` : `${header}\nChosen: ${chosen}${footer}`;
   const answers = round.questions.map((q, i) => {
     const answer = decision.answers!.find(a => a.questionId === q.id)!;
     const selected = answer.options.map(index => `   ${String.fromCharCode(97 + index)}) ${q.options[index]!.label}${q.options[index]!.recommended ? " (recommended)" : ""}`);
     if (answer.other) selected.push("   Other: see the comment");
     return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n${selected.join("\n")}`;
   }).join("\n");
-  return `${header}\nRound: ${round.title}\n\nAnswers:${decision.skipped ? " skipped, use your recommendations." : ""}\n${answers}${round.variants.length ? `\n\nChosen: ${chosen || "none"}` : ""}${footer}`;
+  return `${header}\nRound: ${round.title}\n\nAnswers:${decision.skipped ? " skipped, use your recommendations." : ""}\n${answers}${decision.rejected ? `\n\n${rejection}` : round.variants.length ? `\n\nChosen: ${chosen || "none"}` : ""}${footer}`;
 }
 
 export interface PrototypeDeliveryResult { state: PrototypeDeliveryState; operationId?: string }
@@ -148,7 +149,11 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
       delete round.decision.delivery.failures; delete round.decision.delivery.failingSince;
       return round.decision.delivery.state !== "sent";
     }
-    if (!Array.isArray(input.chosen) || (!input.chosen.length && !round.questions?.length) || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length
+    if (input.reject !== undefined && input.reject !== true) throw new PrototypeError("invalid reject");
+    if (input.reject && !round.variants.length) throw new PrototypeError("reject: this round has no variants to reject");
+    if (input.reject && Array.isArray(input.chosen) && input.chosen.length) throw new PrototypeError("chosen: a rejection chooses no variant");
+    if (input.reject && (typeof input.comment !== "string" || !input.comment.trim())) throw new PrototypeError("comment: write or dictate what to redo");
+    if (!Array.isArray(input.chosen) || (!input.chosen.length && !round.questions?.length && !input.reject) || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length
       || input.chosen.some(n => !round.variants.some(v => v.number === n))) throw new PrototypeError("choose one or more declared variants");
     if (typeof input.comment !== "string" || input.comment.length > PROTOTYPE_LIMITS.comment) throw new PrototypeError("comment exceeds 20000 characters");
     const questionnaire = Boolean(round.questions?.length);
@@ -162,16 +167,16 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     const chosen = [...input.chosen].sort((a,b) => a-b);
     const prior = round.decision;
     if (prior && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
-      && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped) return false;
+      && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped && prior.rejected === input.reject) return false;
     if (prior && inProcess(request)) throw new PrototypeError("prototype round is already decided", 409);
     /* A record written before revisions existed may have been handed over
        without a mark, unless it never had anyone to go to. */
     const handedOver = prior && (prior.revision === undefined ? prior.delivery.state !== "no-orchestrator" : prior.delivery.dispatchedAt !== undefined);
     const revision = prior ? (prior.revision ?? 1) + 1 : 1;
     const recipient = world.orchestrator(task?.project ?? round.project);
-    const text = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped }, handedOver ? { at: prior.at } : undefined);
+    const text = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped, rejected: input.reject }, handedOver ? { at: prior.at } : undefined);
     if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
-    round.decision = { chosen, ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(),
+    round.decision = { chosen, ...(input.reject ? { rejected: true as const } : {}), ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(),
       decidedBy: decidedBy(request), revision, delivery: {
         state: recipient ? "pending" : "no-orchestrator", conversationId: recipient, clientMessageId: messageKey(reviewId, revision), text } };
     return true;

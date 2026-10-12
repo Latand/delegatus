@@ -2,11 +2,11 @@
   "readings": {
     "desktop-1440-en": {
       "inbox": [
+        "t-prio-cleanup",
         "t-prio-deploy",
         "t-prio-limits",
         "t-prio-notes",
         "t-prio-export",
-        "t-prio-cleanup",
         "t-prio-idea"
       ],
       "assigned": [
@@ -15,6 +15,10 @@
         "t-prio-docs"
       ],
       "marks": {
+        "t-prio-cleanup": [
+          "low",
+          "Low priority"
+        ],
         "t-prio-deploy": [
           "high",
           "High priority"
@@ -22,10 +26,6 @@
         "t-prio-limits": [
           "high",
           "High priority"
-        ],
-        "t-prio-cleanup": [
-          "low",
-          "Low priority"
         ],
         "t-prio-idea": [
           "low",
@@ -46,36 +46,34 @@
     "desktop-1440-en-menu": {
       "heads": [
         "Move to",
-        "Priority",
-        "Colour"
+        "Priority"
       ],
       "checked": [
         "Inbox",
-        "Normal",
-        ""
+        "Normal"
       ]
     },
     "desktop-1440-en-raised": [
+      "t-prio-cleanup",
       "t-prio-notes",
       "t-prio-deploy",
       "t-prio-limits",
       "t-prio-export",
-      "t-prio-cleanup",
       "t-prio-idea"
     ],
     "phone-390-en": {
       "inbox": [
+        "t-prio-cleanup",
         "t-prio-deploy",
         "t-prio-limits",
         "t-prio-notes",
         "t-prio-export",
-        "t-prio-cleanup",
         "t-prio-idea"
       ],
       "marks": {
+        "t-prio-cleanup": "low",
         "t-prio-deploy": "high",
         "t-prio-limits": "high",
-        "t-prio-cleanup": "low",
         "t-prio-idea": "low"
       },
       "overflowX": 0
@@ -102,11 +100,11 @@
     ],
     "desktop-1440-uk": {
       "inbox": [
+        "t-prio-cleanup",
         "t-prio-deploy",
         "t-prio-limits",
         "t-prio-notes",
         "t-prio-export",
-        "t-prio-cleanup",
         "t-prio-idea"
       ],
       "assigned": [
@@ -115,6 +113,10 @@
         "t-prio-docs"
       ],
       "marks": {
+        "t-prio-cleanup": [
+          "low",
+          "Низький пріоритет"
+        ],
         "t-prio-deploy": [
           "high",
           "Високий пріоритет"
@@ -122,10 +124,6 @@
         "t-prio-limits": [
           "high",
           "Високий пріоритет"
-        ],
-        "t-prio-cleanup": [
-          "low",
-          "Низький пріоритет"
         ],
         "t-prio-idea": [
           "low",
@@ -146,36 +144,34 @@
     "desktop-1440-uk-menu": {
       "heads": [
         "Перенести до",
-        "Пріоритет",
-        "Колір"
+        "Пріоритет"
       ],
       "checked": [
         "Вхідні",
-        "Звичайний",
-        ""
+        "Звичайний"
       ]
     },
     "desktop-1440-uk-raised": [
+      "t-prio-cleanup",
       "t-prio-notes",
       "t-prio-deploy",
       "t-prio-limits",
       "t-prio-export",
-      "t-prio-cleanup",
       "t-prio-idea"
     ],
     "phone-390-uk": {
       "inbox": [
+        "t-prio-cleanup",
         "t-prio-deploy",
         "t-prio-limits",
         "t-prio-notes",
         "t-prio-export",
-        "t-prio-cleanup",
         "t-prio-idea"
       ],
       "marks": {
+        "t-prio-cleanup": "low",
         "t-prio-deploy": "high",
         "t-prio-limits": "high",
-        "t-prio-cleanup": "low",
         "t-prio-idea": "low"
       },
       "overflowX": 0

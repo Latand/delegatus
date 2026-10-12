@@ -80,8 +80,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 50, and a v49 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(50);
+test("the default mandate is at version 51, and a v50 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(51);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -117,7 +117,8 @@ test("the default mandate is at version 50, and a v49 seat reads as stale", () =
      incident or an outside publication with `outcome`. v47 makes every decision
      a form (docs/design/operator-decision-forms.md §2.7). v48 denies native
      asks; v49 keeps forms without a task and asks 3–7 on a task. v50
-     shortens equivalent draft wording to keep the delivery reserve. */
+     shortens equivalent draft wording to keep the delivery reserve. v51
+     retains the reviewed branch's refreshing fence alongside those rules. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -138,7 +139,8 @@ test("the default mandate is at version 50, and a v49 seat reads as stale", () =
   expect(orchestratorMandateStale(47)).toBe(true);
   expect(orchestratorMandateStale(48)).toBe(true);
   expect(orchestratorMandateStale(49)).toBe(true);
-  expect(orchestratorMandateStale(50)).toBe(false);
+  expect(orchestratorMandateStale(50)).toBe(true);
+  expect(orchestratorMandateStale(51)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -194,8 +196,13 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   46: "2f8d1ef97f331cb982a32746575816ea2d1fe5a4869c17a6329f05033b3f15f1",
   47: "0a204f45fe2e477c20d14888313530363eece18a53e608f8a8f427fb5ef3241c",
   48: "b5ac29298046ae89343fee1ea5d7149bd9b26d2bc8b4270300e5ca7892dd2ce2",
+  // The reviewed refresh branch independently used v46 with fingerprint
+  // b5640fe536df8622b6e84e9500e27418742d6b25b830a7821d795e82d5651222,
+  // then v49 with 8c62ea15caffab8bcddd09e68756275fb21d82113f3e400c47e9496d5f8155c0.
+  // Keep main's version history; v51 combines both branches' mandate rules.
   49: "1fb19f7e3d633f95f46e7c2353fefa2cb2d00f74adfe3ace721c0d4c88336c47",
   50: "e693c187ca781f08d3612007ff7829e3baf4ec5f64c69d7e4966fd091cdb4cb8",
+  51: "16ededfd81b40430ab1f9d48abe8155b77411e725b5c478a28ae3d7d2a24d54b",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -207,7 +214,7 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("Merge bar: merge only on an APPROVE verdict");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("governs every automatic merge, yours included");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask.');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Red checks hold merging");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent");
@@ -1006,4 +1013,9 @@ test("the board walk clears only rows that ask nothing and replaces the shipped 
   const shipped = previous.replace(previous.split("\n")[0]!, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE.split("\n")[0]!);
   expect(orchestratorMandateForDelivery(shipped)).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(orchestratorMandateForDelivery(shipped.replace("Take its sections", "Walk its sections"))).toContain("Walk its sections");
+});
+
+
+test("the role table names the gated prototype lane", () => {
+  expect(orchestratorRoleTable(ROLE_DEFAULTS)).toContain("Prototype lane: prototype → critic → proto-fix (2 rounds) → publish");
 });

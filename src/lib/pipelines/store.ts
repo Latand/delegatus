@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isDismissedBy } from "@/lib/attention/dismissalTypes";
+import { pipelineHasPullRequest } from "@/lib/forge/resolve";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { effortScale } from "@/lib/agent/efforts";
@@ -754,14 +756,34 @@ function isDecisionAnswer(value: unknown): boolean {
     && isActor(answer.actor) && typeof answer.at === "string";
 }
 
-const MERGE_STATES = new Set(["queued", "checking", "waiting-checks", "updating", "merging", "merged", "blocked", "cancelled"]);
+const MERGE_STATES = new Set(["refreshing", "queued", "checking", "waiting-checks", "updating", "merging", "merged", "blocked", "cancelled"]);
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+function isRefreshOf(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const refresh = value as Record<string, unknown>;
+  return typeof refresh.pipelineId === "string" && !!refresh.pipelineId && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base);
+}
+
+function isMergeRefresh(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const refresh = value as Record<string, unknown>;
+  return Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
+    && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base)
+    && typeof refresh.head === "string" && /^[0-9a-f]{40}$/i.test(refresh.head)
+    && typeof refresh.key === "string" && !!refresh.key
+    && typeof refresh.digest === "string" && /^[0-9a-f]{64}$/i.test(refresh.digest)
+    && typeof refresh.requestedAt === "string" && Number.isFinite(Date.parse(refresh.requestedAt))
+    && isNullableString(refresh.pipelineId);
+}
 
 /** The merge runner's record (#2187 §4.4). */
 function isPipelineMerge(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const merge = value as Record<string, unknown>;
   return MERGE_STATES.has(String(merge.state))
+    && (merge.refresh === undefined || isMergeRefresh(merge.refresh))
+    && (merge.state !== "refreshing" || merge.refresh !== undefined)
     && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
     && typeof merge.repository === "string" && merge.repository.length > 0
     && ((Number.isSafeInteger(merge.prNumber) && (merge.prNumber as number) > 0)
@@ -816,6 +838,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
+    (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
     typeof pipeline.task === "string" &&
     Array.isArray(pipeline.taskIds) &&
     pipeline.taskIds.every((taskId) => typeof taskId === "string") &&
@@ -1479,8 +1502,8 @@ export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<
   return pipelineStore().boundedPatch(16, operation);
 }
 
-export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R): Promise<R> {
-  return refuseBusyBeforeAdmission((admitted) => pipelineStore().boundedPatchAsync(16, (tx) => {
+export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16): Promise<R> {
+  return refuseBusyBeforeAdmission((admitted) => pipelineStore().boundedPatchAsync(limit, (tx) => {
     admitted();
     return operation(tx);
   }, pipelineLockWaitMs()));
@@ -1502,7 +1525,7 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
     owner ? `target owned by ${owner.id} at epoch ${epoch}` : comparison ? "comparison requested; no active owner" : "target claimed", pipeline.srcConversationId);
 }
 
-export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false): Promise<Pipeline> {
+export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: { requireOwner?: boolean } = {}): Promise<Pipeline> {
   return withDeliveryMutationAsync((tx) => {
     if (pipeline.creationRequest) {
       const replay = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
@@ -1511,10 +1534,19 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
         return replay;
       }
     }
+    const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
+    if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
+      || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
+        ...(target.pr && pullRequestRepository ? { pullRequestRepository, prNumber: target.pr,
+          pullRequestMatches: (candidate, repository, number) => pipelineHasPullRequest(candidate as Pipeline, repository, number),
+        } : {}),
+      }))) {
+      throw new Error("target already owned or has unfinished PR work; Delegatus could not claim the refresh delivery branch");
+    }
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
     tx.put(pipeline);
     return pipeline;
-  });
+  }, options.requireOwner ? 4096 : 16);
 }
 
 export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {

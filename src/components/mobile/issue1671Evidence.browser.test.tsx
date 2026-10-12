@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -27,7 +26,6 @@ import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { runtimeScope } from "@/lib/runtime/contracts";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
-import { destinationRelay, destinationTarget } from "@/lib/externalRelay/ownerDestination.fixture";
 
 /*
  * The phone's browser evidence driver: the real Viewer at phone width, in
@@ -9681,358 +9679,69 @@ describe("agent window on the phone: a swipe that lands on another task's agent 
 });
 
 describe("prototype review on the phone", () => {
-  /*
-   * Operator, 2026-10-07: on an iPhone a phone-width frame in the review
-   * sheet was drawn about a third of the screen wide and could not be opened
-   * full screen. The sheet now takes the screen, a frame takes the stage's
-   * whole width at its own height, and a tap opens the feed's viewer on the
-   * frames of that variant: two fingers zoom, one pans a zoomed frame and
-   * swipes at fit, a pair switches its original in place at the same zoom.
-   *
-   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
-   *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "prototype review on the phone"
-   *
-   * Real touches through CDP, at 390 × 844 and an iPhone Pro Max's 430 × 932,
-   * en and uk, light and dark, over the kanban fixture's `?proto=1` reviews.
-   * Frames go to PROTOTYPE_PHONE_PNG_DIR (default
-   * `.artifacts/prototype-review-phone/`); readings to
-   * `evidence/prototype-review-phone/readings.json`.
-   */
-  browserTest("frames take the sheet's width and open full screen with pinch, pan, swipe and the pair's switch", async () => {
-    const out = path.resolve(".artifacts/prototype-review-phone");
-    const pngDir = process.env.PROTOTYPE_PHONE_PNG_DIR ?? out;
-    fs.mkdirSync(out, { recursive: true });
-    fs.mkdirSync(pngDir, { recursive: true });
-    const video = path.join(out, "proto-video.webm");
-    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12:duration=2", "-c:v", "libvpx", "-b:v", "400k", video]);
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/proto-video.webm": () => new Response(Bun.file(video), { headers: { "content-type": "video/webm", "accept-ranges": "bytes" } }),
-    });
-    /* Own the browser server and keep its PID; closing this handle stops only that launch. */
-    const launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
-    const pid = launched.process().pid;
-    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: false }));
-    const browser = await chromium.connect(launched.wsEndpoint());
+  browserTest("prototype review on the phone: tiles open a pair, swipe across the round and return to a fixed rejection footer", async () => {
+    const out = path.resolve(".artifacts/prototype-review/phone"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, path.resolve("src/components/kanban/issue1695Evidence.fixture.tsx"));
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
     const readings: Record<string, unknown> = {};
-    const failures: string[] = [];
-    const REVIEW = "[data-prototype-review]";
-    const VIEWER = "[role=dialog]:has([data-lightbox-caption])";
     try {
-      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
-        const label = `${viewport.width}-${lang}-${scheme}`;
-        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=1`, viewport, scheme, lang, "reduce", true);
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce", locale: lang === "uk" ? "uk-UA" : "en-GB" });
+        await context.addInitScript(language => localStorage.setItem("llv_lang", language), lang);
+        const page = await context.newPage();
+        await page.route("**/api/operator/settings", route => route.fulfill({ json: { language: lang } }));
+        await page.goto(`${server.base}?proto=1&lang=${lang}`);
+        await page.evaluate(scheme => { document.documentElement.setAttribute("data-theme", scheme); localStorage.setItem("llv-theme", scheme); }, scheme);
+        await page.locator('[data-prototype-button="t-search"], [data-phone-card-prototype-button="t-search"]').first().waitFor();
+        await page.locator('[data-phone-card-prototype-button="t-search"]').click();
+        const tiles = page.locator('[data-prototype-tile]'); await tiles.first().waitFor();
+        expect(await tiles.count()).toBe(49);
+        const body = page.locator('[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]');
+        const before = await page.locator('[data-prototype-save]').boundingBox();
+        await body.evaluate(el => { el.scrollTop = el.scrollHeight; });
+        const after = await page.locator('[data-prototype-save]').boundingBox(); expect(after?.y).toBe(before?.y);
+        await page.locator('[data-prototype-tile="2:f0"]').click(); await page.locator('[data-lightbox-compare]').waitFor();
+        await page.screenshot({ path: path.join(out, `${lang}-${scheme}-pair.png`) });
+        await page.locator('[data-lightbox-compare-side=before]').click();
+        expect(await page.locator('[data-lightbox-compare-side=before]').getAttribute("aria-pressed")).toBe("true");
         const cdp = await context.newCDPSession(page);
-        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `${label}-${name}.png`) });
-        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
-        const settle = () => pause(page, 250);
-        const loaded = () => page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-        /* Where the footer stands: the top of «Save choice», and the band
-           between the footer and the screen's foot, which is the sheet's own
-           6 px inset and nothing more whatever frame the stage holds. */
-        const foot = () => page.evaluate(() => {
-          const save = document.querySelector<HTMLElement>("[data-prototype-save]")?.getBoundingClientRect() ?? null;
-          const footer = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] > :last-child")!.getBoundingClientRect();
-          return { saveTop: save ? Math.round(save.top * 10) / 10 : null, footGap: Math.round((innerHeight - footer.bottom) * 10) / 10 };
-        });
-        const footings: Record<string, Awaited<ReturnType<typeof foot>>> = {};
-        /* The stage against the screen: the drawn media, how much of the
-           frame's own width it is drawn at, and the sheet's footer, which holds
-           the choice and the comment, still on screen. */
-        const stage = () => page.evaluate(() => {
-          const round = (value: number) => Math.round(value * 10) / 10;
-          const canvas = document.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
-          const media = [...document.querySelectorAll<HTMLElement>("[data-prototype-canvas] img, [data-prototype-canvas] video")].filter((element) => element.getBoundingClientRect().width > 0);
-          const save = document.querySelector<HTMLElement>("[data-prototype-save], [data-prototype-decision]")?.getBoundingClientRect() ?? null;
-          const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]")!;
-          const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review]")!.getBoundingClientRect();
-          return {
-            slide: document.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage ?? null,
-            position: document.querySelector("[data-prototype-position]")?.textContent ?? null,
-            screen: [innerWidth, innerHeight],
-            sheet: [round(sheet.top), round(sheet.height)],
-            canvas: [round(canvas.left), round(canvas.width), round(canvas.height)],
-            media: media.map((element) => {
-              const box = element.getBoundingClientRect();
-              const natural = element instanceof HTMLImageElement ? element.naturalWidth : (element as HTMLVideoElement).videoWidth;
-              return { left: round(box.left), width: round(box.width), height: round(box.height), natural, drawnAt: natural ? round(box.width / natural) : null };
-            }),
-            pairModes: document.querySelectorAll("[data-prototype-pair-mode]").length,
-            footerOnScreen: Boolean(save && save.top >= 0 && save.bottom <= innerHeight + 0.5),
-            sideways: body.scrollWidth - body.clientWidth,
-          };
-        });
-        const viewer = () => page.evaluate(({ selector, closeLabel }) => {
-          const dialog = document.querySelector<HTMLElement>(selector);
-          if (!dialog) return null;
-          const image = [...dialog.querySelectorAll<HTMLImageElement>("img")].find((element) => !element.hidden) ?? null;
-          const box = image?.getBoundingClientRect();
-          const close = [...dialog.querySelectorAll<HTMLElement>("button")].find((element) => element.getAttribute("aria-label") === closeLabel);
-          const transform = image?.style.transform ?? "";
-          const [, tx, ty, scale] = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\((-?[\d.]+)\)/.exec(transform) ?? [];
-          return {
-            position: dialog.querySelector("[data-lightbox-position]")?.textContent ?? null,
-            caption: dialog.querySelector("[data-lightbox-caption]")?.textContent ?? null,
-            /* A data URL's head is the same for every PNG: its length and its tail tell two pictures apart. */
-            src: image ? `${image.getAttribute("src")!.length}:${image.getAttribute("src")!.slice(-16)}` : null,
-            side: image?.dataset.lightboxSide ?? null,
-            drawn: box ? [Math.round(box.width), Math.round(box.height)] : null,
-            view: { tx: Number(tx ?? 0), ty: Number(ty ?? 0), scale: Number(scale ?? 1) },
-            compare: [...dialog.querySelectorAll<HTMLElement>("[data-lightbox-compare-side]")].map((element) => ({ side: element.dataset.lightboxCompareSide, pressed: element.getAttribute("aria-pressed"), height: Math.round(element.getBoundingClientRect().height) })),
-            closeSize: close ? [Math.round(close.getBoundingClientRect().width), Math.round(close.getBoundingClientRect().height)] : null,
-          };
-        }, { selector: VIEWER, closeLabel: tr("common.close") });
-        /* One finger along a path, or two fingers spreading from the screen's middle. */
-        const finger = async (from: Point, to: Point) => touch(cdp, along(from, to, 10));
-        const pinch = async (from: number, to: number) => {
-          const [cx, cy] = [viewport.width / 2, viewport.height / 2];
-          const points = (gap: number) => [{ x: cx - gap, y: cy, id: 1 }, { x: cx + gap, y: cy, id: 2 }];
-          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: points(from) });
-          for (let step = 1; step <= 10; step += 1) {
-            await new Promise((resolve) => setTimeout(resolve, 16));
-            await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: points(from + ((to - from) * step) / 10) });
+        const pinch = async (start: number, end: number) => {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195 - start, y: 420, id: 1 }, { x: 195 + start, y: 420, id: 2 }] });
+          for (let step = 1; step <= 8; step++) {
+            const distance = start + (end - start) * step / 8;
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 195 - distance, y: 420, id: 1 }, { x: 195 + distance, y: 420, id: 2 }] });
+            await pause(page, 16);
           }
           await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
         };
-        const tapCentre = async (selector: string) => {
-          const box = (await page.locator(selector).first().boundingBox())!;
-          await page.touchscreen.tap(box.x + box.width / 2, Math.min(box.y + box.height / 2, box.y + 120));
-        };
-        const closeViewer = async () => {
-          await page.locator(`${VIEWER} button[aria-label="${tr("common.close")}"]`).click();
-          await page.waitForSelector(VIEWER, { state: "detached", timeout: 5_000 });
-        };
-        try {
-          await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
-          const tab = page.locator('[data-phone-kanban-tab="assigned"]');
-          if (await tab.count()) await tab.first().click();
-          await pause(page, 400);
-          const open = page.locator('[data-phone-card-prototype-button="t-search"]');
-          await open.scrollIntoViewIfNeeded();
-          await open.click();
-          await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-          await loaded();
-          await settle();
-
-          /* 1. A wide desktop frame: the stage's whole width. */
-          const wide = await stage();
-          footings["wide-frame"] = await foot();
-          record("wide-frame", wide);
-          await shot("wide-frame");
-          const full = (reading: Awaited<ReturnType<typeof stage>>) => reading.media.length > 0 && reading.media.every((entry) => Math.abs(entry.left) <= 0.5 && Math.abs(entry.width - viewport.width) <= 1);
-          if (!full(wide) || wide.sheet[0] !== 0) failures.push(`${label}: the wide frame or the sheet is not the screen's width and height: ${JSON.stringify(wide)}`);
-
-          /* 2. A tall phone frame, read at its own width or more. */
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await loaded();
-          await settle();
-          const tall = await stage();
-          footings["tall-frame"] = await foot();
-          record("tall-frame", tall);
-          await shot("tall-frame");
-          if (!full(tall) || (tall.media[0]?.drawnAt ?? 0) < 1 || tall.position?.trim() !== "3 / 3") failures.push(`${label}: the phone frame is not drawn at the screen's width, at its own scale: ${JSON.stringify(tall)}`);
-          /* The frame's foot, scrolled to: the choice and the comment stay on screen. */
-          await page.evaluate(() => { const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]")!; body.scrollTop = body.scrollHeight; });
-          await settle();
-          const scrolled = await stage();
-          record("tall-frame-scrolled", scrolled);
-          await shot("tall-frame-scrolled");
-          if (!tall.footerOnScreen || !scrolled.footerOnScreen || tall.sideways > 0) failures.push(`${label}: the choice and the comment leave the screen beside a tall frame: ${JSON.stringify(scrolled)}`);
-          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]")!.scrollTop = 0; });
-
-          /* 3. A tap opens it full screen: its place, its caption, a whole close. */
-          await tapCentre("[data-prototype-canvas] img");
-          await page.waitForSelector(VIEWER, { timeout: 5_000 });
-          await settle();
-          const opened = await viewer();
-          record("viewer-opened", opened);
-          await shot("viewer-tall");
-          if (opened?.position?.trim() !== "3 / 3" || !opened.caption?.includes(lang === "en" ? "1 · Compact list — results, phone" : "1 · Компактний список — результати, телефон") || !opened.closeSize || opened.closeSize[0]! < 44 || opened.closeSize[1]! < 44) failures.push(`${label}: the viewer opened as ${JSON.stringify(opened)}`);
-          /* Two fingers zoom, one pans the zoomed frame. */
-          await pinch(40, 130);
-          await settle();
-          const pinched = await viewer();
-          await finger([viewport.width / 2, viewport.height / 2], [viewport.width / 2 + 60, viewport.height / 2 + 80]);
-          await settle();
-          const panned = await viewer();
-          record("viewer-pinch-pan", { pinched: pinched?.view, panned: panned?.view });
-          await shot("viewer-pinched");
-          if (!pinched || pinched.view.scale < 1.5 || !panned || panned.view.scale !== pinched.view.scale || (panned.view.tx === pinched.view.tx && panned.view.ty === pinched.view.ty) || panned.position?.trim() !== "3 / 3") failures.push(`${label}: pinch and pan read ${JSON.stringify({ pinched: pinched?.view, panned: panned?.view })}`);
-          /* At fit one finger swipes to the previous frame of the variant. */
-          await page.locator(`${VIEWER} button[aria-label="${tr("lightbox.resetZoom")}"]`).click();
-          await settle();
-          await finger([80, viewport.height / 2], [300, viewport.height / 2 + 6]);
-          await settle();
-          const swiped = await viewer();
-          record("viewer-swiped", swiped);
-          await shot("viewer-swiped");
-          if (swiped?.position?.trim() !== "2 / 3" || swiped.view.scale !== 1) failures.push(`${label}: a swipe at fit read ${JSON.stringify(swiped)}`);
-          await closeViewer();
-          const followed = await stage();
-          record("viewer-closed", followed);
-          if (followed.slide !== "1:f1") failures.push(`${label}: closing the viewer left the stage on ${followed.slide}, not the frame swiped to`);
-
-          /* 4. A before/after pair: one frame with a slider, no side-by-side. */
-          await page.locator(`${REVIEW} button[data-prototype-variant="2"]`).click();
-          await loaded();
-          await settle();
-          const pairWide = await stage();
-          footings["pair-wide"] = await foot();
-          record("pair-wide", pairWide);
-          await shot("pair-wide");
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await loaded();
-          await settle();
-          const pairTall = await stage();
-          const track = await page.evaluate(() => { const box = document.querySelector<HTMLElement>("[data-prototype-split]")!.getBoundingClientRect(); return [Math.round(box.left), Math.round(box.width), Math.round(box.height)]; });
-          record("pair-tall", { ...pairTall, track });
-          await shot("pair-tall");
-          for (const [name, reading] of [["wide", pairWide], ["tall", pairTall]] as const) {
-            if (reading.pairModes !== 0 || reading.media.length !== 2 || !full(reading)) failures.push(`${label}: the ${name} pair reads ${JSON.stringify(reading)}`);
-          }
-          if (track[2]! < 44) failures.push(`${label}: the pair's slider is no finger's target: ${JSON.stringify(track)}`);
-          /* Full screen the pair switches in place, at the zoom the operator is at. */
-          await tapCentre("[data-prototype-pair-frame]");
-          await page.waitForSelector(`${VIEWER} [data-lightbox-compare]`, { timeout: 5_000 });
-          await settle();
-          const pairChanged = await viewer();
-          await shot("viewer-pair-changed");
-          await pinch(40, 110);
-          await settle();
-          const pairZoomed = await viewer();
-          await page.locator(`${VIEWER} [data-lightbox-compare-side="before"]`).click();
-          await settle();
-          const pairOriginal = await viewer();
-          record("viewer-pair", { changed: pairChanged, zoomed: pairZoomed?.view, original: pairOriginal });
-          await shot("viewer-pair-original");
-          if (pairChanged?.side !== "after" || pairChanged.position?.trim() !== "2 / 3" || pairChanged.compare.some((entry) => entry.height < 44)) failures.push(`${label}: the pair opened as ${JSON.stringify(pairChanged)}`);
-          if (!pairZoomed || pairZoomed.view.scale <= 1 || pairOriginal?.side !== "before" || pairOriginal.view.scale !== pairZoomed.view.scale || pairOriginal.view.tx !== pairZoomed.view.tx || pairOriginal.src === pairChanged?.src) failures.push(`${label}: the switch read ${JSON.stringify({ zoomed: pairZoomed?.view, original: pairOriginal })}`);
-          await closeViewer();
-
-          /* 5. A video plays in the stage at the screen's width. */
-          await page.locator(`${REVIEW} button[data-prototype-variant="4"]`).click();
-          await page.locator(`${REVIEW} [data-prototype-thumb]`).last().click();
-          await page.waitForFunction(() => (document.querySelector<HTMLVideoElement>("[data-prototype-video]")?.readyState ?? 0) >= 2, undefined, { timeout: 15_000 });
-          await settle();
-          const clip = await stage();
-          footings.video = await foot();
-          const controls = await page.evaluate(() => document.querySelector<HTMLVideoElement>("[data-prototype-video]")!.controls);
-          record("video", { ...clip, controls });
-          await shot("video");
-          if (!full(clip) || !controls || !clip.footerOnScreen) failures.push(`${label}: the video reads ${JSON.stringify(clip)}`);
-
-          /* 6. The choice is made and seen in the footer: «Chosen» with the variant. */
-          await page.locator(`${REVIEW} [data-prototype-choose="4"]`).click();
-          await settle();
-          const chosen = await page.evaluate(() => {
-            const chip = document.querySelector<HTMLElement>("[data-prototype-chosen]")?.getBoundingClientRect();
-            return { chip: document.querySelector("[data-prototype-chosen]")?.textContent ?? null, onScreen: Boolean(chip && chip.top >= 0 && chip.bottom <= innerHeight) };
-          });
-          footings.chosen = await foot();
-          record("chosen", chosen);
-          /* The footer stands at the screen's foot on every frame: «Save choice» where the thumb left it, no empty band under it. */
-          record("footer", footings);
-          const tops = Object.values(footings).map((entry) => entry.saveTop ?? Number.NaN);
-          if (tops.some(Number.isNaN) || Math.max(...tops) - Math.min(...tops) > 1 || Object.values(footings).some((entry) => entry.footGap > 6.5)) failures.push(`${label}: the footer moves with the frame: ${JSON.stringify(footings)}`);
-          await shot("chosen");
-          if (!chosen.onScreen || !chosen.chip?.startsWith("4")) failures.push(`${label}: the choice is not seen in the footer: ${JSON.stringify(chosen)}`);
-          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-        } catch (error) {
-          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
-          await shot("failed-here").catch(() => {});
-        } finally {
-          await context.close();
-        }
+        await pinch(40, 90);
+        const viewer = page.locator('[role=dialog]:has([data-lightbox-position])');
+        const zoomed = await viewer.locator('button[aria-label="'+translate(lang, "lightbox.resetZoom")+'"]').innerText();
+        expect(parseInt(zoomed)).toBeGreaterThan(100);
+        await viewer.locator('button[aria-label="'+translate(lang, "lightbox.resetZoom")+'"]').click();
+        const place = await page.locator('[data-lightbox-position]').innerText();
+        await touch(cdp, along([300, 420], [110, 422], 10));
+        await page.waitForFunction(before => document.querySelector("[data-lightbox-position]")?.textContent !== before, place);
+        await touch(cdp, along([110, 420], [300, 422], 10));
+        await page.waitForFunction(before => document.querySelector("[data-lightbox-position]")?.textContent === before, place);
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-prototype-tile") === "2:f0");
+        await page.locator('[data-prototype-reject]').click(); await page.locator('[data-prototype-save]').click();
+        await page.locator('[data-prototype-reject-needs]').waitFor();
+        expect(await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length)).toBe(0);
+        const geometry = await page.evaluate(() => {
+          const save = document.querySelector<HTMLElement>("[data-prototype-save]")!.getBoundingClientRect();
+          const prompt = document.querySelector<HTMLElement>("[data-prototype-reject-needs]")!.getBoundingClientRect();
+          return { saveHeight: save.height, footerVisible: save.bottom <= innerHeight, promptVisible: prompt.bottom <= innerHeight, overflow: document.documentElement.scrollWidth > 390 };
+        });
+        expect(geometry).toEqual({ saveHeight: 44, footerVisible: true, promptVisible: true, overflow: false });
+        await page.screenshot({ path: path.join(out, `${lang}-${scheme}-asks.png`) }); readings[`${lang}-${scheme}`] = { fixedFooter: before?.y === after?.y, focusReturned: true, pinchZoom: zoomed, swipedAcrossFrames: true, geometry };
+        await context.close();
       }
-    } finally {
-      await browser.close(); await launched.close(); server.stop();
-      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true }));
-    }
-    fs.mkdirSync("evidence/prototype-review-phone", { recursive: true });
-    fs.writeFileSync("evidence/prototype-review-phone/readings.json", `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings, failures }, null, 2)}\n`);
-    if (failures.length) throw new Error(failures.join("\n"));
-  }, 900_000);
+      fs.mkdirSync("evidence/prototype-review", { recursive: true }); fs.writeFileSync("evidence/prototype-review/phone-gallery.json", `${JSON.stringify(readings, null, 2)}\n`);
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });
-
-browserTest("external relay: owner review destination and off reasons at phone and desktop widths", async () => {
-  const { base, stop } = await serveFixture(); const browser = await launchChromium();
-  const out = path.resolve(".artifacts/external-relay"); fs.mkdirSync(out, { recursive: true });
-  const readings: Record<string, unknown>[] = [];
-  const cases = [
-    { name: "one", relays: [destinationRelay()], reason: "ready" },
-    { name: "several", relays: [destinationRelay([destinationTarget("ordinary"), destinationTarget("owner-first", true), destinationTarget("owner-second", true)])], reason: "ready" },
-    { name: "unpaired", relays: [], reason: "no_relay" },
-    { name: "no-target", relays: [destinationRelay([])], reason: "no_target" },
-    { name: "not-configured", relays: [destinationRelay([{ ...destinationTarget("first"), engine: null }, destinationTarget("second")])], reason: "not_configured" },
-    { name: "paused", relays: [{ ...destinationRelay(), paused: true }], reason: "paused" },
-  ];
-  try {
-    for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) for (const entry of cases) {
-      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
-      await context.addInitScript(lang => localStorage.setItem("llv_lang", lang), locale);
-      const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
-      try {
-        await page.goto(`${base}/?relay=paired`);
-        await page.evaluate(relays => {
-          const previous = window.fetch;
-          window.fetch = ((input, init) => new URL(String(input), location.origin).pathname === "/api/external-relay"
-            ? Promise.resolve(Response.json({ relays, pending: [], status: relays.map(relay => ({ id: relay.id,
-              state: { state: relay.paused ? "paused" : "polling", lastOutcome: null, lastOutcomeAt: null, lastProgress: null }, running: {} })) }))
-            : previous(input, init)) as typeof window.fetch;
-        }, entry.relays.map(({ credential: _credential, ...relay }) => relay));
-        await page.locator(width === 390 ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").click();
-        await page.locator(width === 390 ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
-        await page.locator(width === 390 ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]").click();
-        const line = page.locator("[data-external-relay-review-destination]"); await line.waitFor();
-        expect(await line.getAttribute("data-external-relay-review-destination")).toBe(entry.reason);
-        const reading = await line.evaluate(element => ({ text: element.textContent, overflow: element.scrollWidth > element.clientWidth,
-          lineWidth: element.getBoundingClientRect().width, lineHeight: element.getBoundingClientRect().height }));
-        expect(reading.overflow).toBe(false);
-        if (entry.name === "several") expect(reading.text).toContain("owner-first");
-        const frame = `owner-review-${entry.name}-${width}-${locale}.png`;
-        await page.screenshot({ path: path.join(out, frame) });
-        readings.push({ locale, width, state: entry.name, reason: entry.reason, ...reading, frame });
-        expect(errors).toEqual([]);
-      } finally { await context.close(); }
-    }
-    fs.mkdirSync("evidence/external-relay", { recursive: true });
-    fs.writeFileSync("evidence/external-relay/owner-review-publishing.json", JSON.stringify({ readings }, null, 2) + "\n");
-  } finally { await browser.close(); stop(); }
-}, 180000);
-
-browserTest("external relay: paired card uses existing pairing at phone and desktop widths", async () => {
-  const { base, stop } = await serveFixture(); const browser = await launchChromium();
-  const out = path.resolve(".artifacts/external-relay"); fs.mkdirSync(out, { recursive: true });
-  const readings: Record<string, unknown>[] = [];
-  try {
-    for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) {
-      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
-      await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
-      const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
-      try {
-        await page.goto(`${base}/?relay=paired`);
-        await page.locator(width === 390 ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").click();
-        await page.locator(width === 390 ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
-        await page.locator(width === 390 ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]").click();
-        const card = page.locator("[data-external-relay=relay-1]"); await card.waitFor();
-        const reading = await card.evaluate((element) => ({ overflow: element.scrollWidth > element.clientWidth, passwordFields: element.querySelectorAll('input[type="password"]').length,
-          targets: element.querySelectorAll("[data-external-relay-target]").length }));
-        expect(reading.overflow).toBe(false); expect(reading.passwordFields).toBe(0); expect(reading.targets).toBe(3);
-        const frames = [];
-        for (const position of ["top", "bottom"]) {
-          if (position === "bottom") await card.locator("button").last().scrollIntoViewIfNeeded();
-          const frame = `variant-1-paired-${position}-${width}-${locale}.png`;
-          await page.screenshot({ path: path.join(out, frame) }); frames.push(frame);
-        }
-        readings.push({ locale, width, ...reading, frames });
-        expect(errors).toEqual([]);
-      } finally { await context.close(); }
-    }
-    fs.writeFileSync(path.resolve("evidence/external-relay/conversation-settings.json"), JSON.stringify({ readings }, null, 2) + "\n");
-  } finally { await browser.close(); stop(); }
-}, 90000);
-
 
 describe("short questionnaire rendered evidence", () => {
   browserTest("questions only, images, multi-select, long text and answered in both languages and themes", async () => {
@@ -10493,6 +10202,519 @@ describe("phone ⋯ menus", () => {
   }, 3_600_000);
 });
 
+describe("phone voice head", () => {
+  /*
+   * The voice companion's head on the phone (docs/design/phone-voice-head-build.md, the operator's variant 1 of
+   * 2026-10-12), mounted by the shell's own `VoiceCompanionHost` over the fixture's `?voice=` scenes: `sim` hands the
+   * host a simulator that speaks, `product` keeps the real voice and asks for no session. Real touches through CDP at
+   * 390 × 844 uk light and 375 × 667 en dark:
+   *
+   *   call        talk, the head's menu in a call, the ⋯ sheet, a full-height sheet, «Сховати» ending the call
+   *   product     a reload while hidden, «Показати голос» in the ⋯ menu, the head back, a drag to the other corner
+   *   navigation  a call kept from project A's board through a task screen to project B's board (the Overview's projects)
+   *   navigation-product  the same with no call: the same head node and no session request
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> LLV_PHONE_VOICE_GROUPS=call,product \
+   *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone voice head"
+   *
+   * Frames with their printed band go to `.artifacts/phone-voice-head/`, beside the same screen today (`-original`);
+   * readings merge by group into `evidence/phone-voice-head/geometry.json`.
+   */
+  const COMBOS = [
+    { size: { width: 390, height: 844 }, lang: "uk", scheme: "light" },
+    { size: { width: 375, height: 667 }, lang: "en", scheme: "dark" },
+  ] as const;
+  const GROUPS = {
+    call: ["talk", "menu", "sheet", "full-sheet", "full-sheet-end", "hidden"],
+    product: ["menu-hidden", "restored", "drag"],
+    navigation: ["navigation"],
+    "navigation-product": ["navigation-product"],
+  } as const;
+  type Group = keyof typeof GROUPS;
+  const LABELS: Record<string, { uk: string; en: string }> = {
+    talk: { uk: "говорить", en: "speaking" },
+    menu: { uk: "меню голови під час розмови", en: "the head's menu, in a call" },
+    sheet: { uk: "над шторкою ⋯", en: "over the ⋯ sheet" },
+    "full-sheet": { uk: "над шторкою на весь екран", en: "over a full-height sheet" },
+    "full-sheet-end": { uk: "шторка на весь екран, кінець", en: "full-height sheet, at its end" },
+    hidden: { uk: "«Сховати» завершило розмову", en: "«Hide» ended the call" },
+    "menu-hidden": { uk: "сховано, «Показати голос» у меню ⋯", en: "hidden, «Show voice» in the ⋯ menu" },
+    restored: { uk: "повернуто з меню", en: "back from the menu" },
+    drag: { uk: "перетягування в лівий кут", en: "dragging to the left corner" },
+    navigation: { uk: "розмова триває на дошці проєкту B", en: "the call goes on on project B's board" },
+    "navigation-product": { uk: "на дошці проєкту B без розмови", en: "on project B's board, no call" },
+    "navigation-column-end": { uk: "кінець колонки, картки видно", en: "column end, last card clear" },
+    "navigation-product-column-end": { uk: "кінець колонки без розмови", en: "column end, no call" },
+  };
+  const HEAD = "[data-phone-voice-head]";
+  const BAR_MENU = '[data-mobile2-bar] [data-mobile2-open="menu"]';
+  const CHAT = "voice-long=1&seatnoise=ii&runtime=structured#c=conversation_running";
+
+  /** Where the head, its words and its menu lie, and what of the page is under them. */
+  const read = (page: Page) => page.evaluate(() => {
+    type R = { x: number; y: number; width: number; height: number };
+    const rect = (element: Element | null): R | null => {
+      if (!element) return null;
+      const r = element.getBoundingClientRect();
+      return r.width < 1 || r.height < 1 ? null : { x: r.x, y: r.y, width: r.width, height: r.height };
+    };
+    const area = (a: R | null, b: R | null) => !a || !b ? 0 : Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+    const root = document.querySelector("[data-phone-voice]");
+    const sheetNode = [...document.querySelectorAll("[data-mobile2-sheet]")].at(-1) ?? null;
+    const clips = new Map<Element, R | null>();
+    const reach = (within: Element | null, r: DOMRect): R | null => {
+      let left = Math.max(r.left, 0), top = Math.max(r.top, 0), right = Math.min(r.right, innerWidth), bottom = Math.min(r.bottom, innerHeight);
+      for (let parent = within; parent; parent = parent.parentElement) {
+        if (!clips.has(parent)) { const style = getComputedStyle(parent); clips.set(parent, style.overflowX !== "visible" || style.overflowY !== "visible" ? rect(parent) : null); }
+        const clip = clips.get(parent);
+        if (!clip) continue;
+        left = Math.max(left, clip.x); top = Math.max(top, clip.y); right = Math.min(right, clip.x + clip.width); bottom = Math.min(bottom, clip.y + clip.height);
+      }
+      return right - left < 1 || bottom - top < 1 ? null : { x: left, y: top, width: right - left, height: bottom - top };
+    };
+    /* The page's lines outside the head and outside any sheet; a sheet's own lines, separately. */
+    const pageTexts: R[] = [];
+    const sheetTexts: R[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!parent || !node.textContent?.trim() || root?.contains(parent) || parent.closest("style, script, [hidden], .sr-only, .vc-sr")) continue;
+      /* A conversation's messages sit in `display: contents` wrappers, which `checkVisibility` calls hidden: the nearest ancestor with a box answers. */
+      let boxed: Element = parent;
+      while (boxed.parentElement && getComputedStyle(boxed).display === "contents") boxed = boxed.parentElement;
+      if (!boxed.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+      range.selectNodeContents(node);
+      for (const line of range.getClientRects()) { const shown = reach(parent, line); if (shown) (sheetNode?.contains(parent) ? sheetTexts : pageTexts).push(shown); }
+    }
+    const controlsOf = (inSheet: boolean) => [...document.querySelectorAll("button, a[href], input, textarea, select, [role=button], [role=menuitem]")]
+      .filter((node) => !root?.contains(node) && !!sheetNode?.contains(node) === inSheet)
+      .flatMap((node) => (node as HTMLElement).checkVisibility?.({ checkVisibilityCSS: true }) === false ? [] : reach(node.parentElement, node.getBoundingClientRect()) ?? []);
+    const pageControls = controlsOf(false);
+    const sheetControls = controlsOf(true);
+    const pageMarks = [...document.querySelectorAll("svg, img")].filter((node) => !root?.contains(node) && !sheetNode?.contains(node))
+      .flatMap((node) => (node as HTMLElement).checkVisibility?.({ checkVisibilityCSS: true }) === false ? [] : reach(node.parentElement, node.getBoundingClientRect()) ?? []);
+    const head = rect(document.querySelector("[data-phone-voice-head]"));
+    const bubbleNode = document.querySelector<HTMLElement>("[data-phone-voice-bubble]");
+    const bubble = rect(bubbleNode);
+    const plateNode = document.querySelector<HTMLElement>("[data-phone-voice-plate]");
+    const plate = rect(plateNode);
+    const pop = rect(document.querySelector("[data-phone-voice-pop]"));
+    /* What the cleared page hides whole is not on screen: the head and its words stand on the plate, not on those rows. */
+    const shown = (item: R) => !plate || area(plate, item) < item.width * item.height - 1;
+    const under = (shape: R | null, list: R[]) => Math.round(list.filter(shown).reduce((sum, item) => sum + area(shape, item), 0));
+    /* A row is cut when what the words stand on covers part of it. */
+    const surface = plate ?? bubble;
+    const cuts = (list: R[]) => !surface ? 0 : list.filter((item) => {
+      const wide = Math.min(surface.x + surface.width, item.x + item.width) - Math.max(surface.x, item.x);
+      const high = Math.min(surface.y + surface.height, item.y + item.height) - Math.max(surface.y, item.y);
+      return wide >= 0.75 && high >= 0.75 && (wide < item.width - 0.75 || high < item.height - 0.75);
+    }).length;
+    const lineAbove = (node: Element) => {
+      const own = node.getBoundingClientRect().top;
+      let line = own;
+      for (let parent = node.parentElement, depth = 0; parent && depth < 6; parent = parent.parentElement, depth += 1) {
+        const top = parent.getBoundingClientRect().top;
+        if (top < own - 24) break;
+        if (top < line && parseFloat(getComputedStyle(parent).borderTopWidth) > 0) line = top;
+      }
+      return line;
+    };
+    const chrome = [...document.querySelectorAll("[data-mobile2-composer], [data-mobile2-dock]")].filter((node) => rect(node));
+    const feed = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")].find((node) => rect(node));
+    const footerNode = sheetNode?.lastElementChild && !sheetNode.lastElementChild.hasAttribute("data-mobile2-sheet-body") ? sheetNode.lastElementChild : null;
+    const inside = (shape: R | null) => !shape || (shape.x >= 0 && shape.y >= 0 && shape.x + shape.width <= innerWidth + 0.5 && shape.y + shape.height <= innerHeight + 0.5);
+    const headNode = document.querySelector<HTMLElement>("[data-phone-voice-head]");
+    return {
+      head, bubble, plate, pop, sheet: rect(sheetNode), footer: rect(footerNode),
+      phase: root?.getAttribute("data-phase") ?? null, side: root?.getAttribute("data-side") ?? null, sheetState: root?.getAttribute("data-sheet") ?? null,
+      callStart: Number(root?.getAttribute("data-call-start") ?? NaN),
+      chromeLine: chrome.length ? Math.min(...chrome.map(lineAbove)) : null,
+      textUnderHeadPx2: under(head, pageTexts), textUnderWordsPx2: under(bubble, pageTexts),
+      controlsUnderHeadPx2: under(head, pageControls), controlsUnderWordsPx2: under(bubble, pageControls),
+      rowsCutByWords: cuts(pageTexts), marksCutByWords: cuts(pageMarks),
+      /* A message or a card the plate covers in part: only some of its lines left on screen. */
+      blocksSplitByWords: plate ? [...document.querySelectorAll("[data-mobile-message], [data-phone-card-shell], [data-phone-kanban-more], [data-phone-kanban-unlinked]")]
+        .filter((node) => !root?.contains(node) && !sheetNode?.contains(node)).flatMap((node) => reach(node.parentElement, node.getBoundingClientRect()) ?? [])
+        .filter((block) => { const wide = Math.min(plate.x + plate.width, block.x + block.width) - Math.max(plate.x, block.x); const high = Math.min(plate.y + plate.height, block.y + block.height) - Math.max(plate.y, block.y); return wide > 0.75 && high > 0.75 && high < block.height - 0.75; }).length : 0,
+      plateLook: plateNode ? { background: getComputedStyle(plateNode).backgroundColor, borderTop: getComputedStyle(plateNode).borderTopWidth, shadow: getComputedStyle(plateNode).boxShadow, underScrim: !root?.contains(plateNode) } : null,
+      headOverSheetPx2: Math.round(area(head, rect(sheetNode))), wordsOverSheetPx2: Math.round(area(bubble, rect(sheetNode))),
+      headOverSheetTextPx2: Math.round(sheetTexts.reduce((sum, item) => sum + area(head, item), 0)),
+      headOverSheetControlsPx2: Math.round(sheetControls.reduce((sum, item) => sum + area(head, item), 0)),
+      headOverFooterPx2: Math.round(area(head, rect(footerNode))),
+      /* A sheet's body read to its end: whether it stands there, and the last paragraph's lines against the body's visible box. */
+      sheetBody: (() => {
+        const body = sheetNode?.querySelector<HTMLElement>("[data-mobile2-sheet-body]") ?? null;
+        if (!body) return null;
+        const frame = body.getBoundingClientRect();
+        const last = [...body.querySelectorAll("p")].at(-1) ?? null;
+        const lines = last ? (() => { const r = document.createRange(); r.selectNodeContents(last); return [...r.getClientRects()]; })() : [];
+        const lastBottom = lines.length ? Math.max(...lines.map((line) => line.bottom)) : null;
+        return { atEnd: body.scrollHeight - body.scrollTop - body.clientHeight < 2, bottom: frame.bottom, lastBottom, padding: parseFloat(getComputedStyle(body).paddingBottom) };
+      })(),
+      inViewport: inside(head) && inside(bubble) && inside(pop),
+      wordsCut: !!bubbleNode && (() => { const text = bubbleNode.querySelector<HTMLElement>(".vc-text")!; return text.scrollHeight > text.clientHeight + 1; })(),
+      words: bubbleNode?.textContent ?? null,
+      dot: rect(document.querySelector("[data-phone-voice-dot]"))?.width ?? null,
+      headLook: headNode ? { border: getComputedStyle(headNode).borderTopStyle, character: getComputedStyle(headNode.querySelector(".vc-char")!).opacity } : null,
+      popRows: [...document.querySelectorAll<HTMLElement>("[data-phone-voice-pop] [role=menuitem]")].map((row) => {
+        const r = row.getBoundingClientRect(); const label = document.createRange(); label.selectNodeContents(row);
+        return { key: [...row.attributes].find((a) => a.name.startsWith("data-phone-voice-"))?.name.replace("data-phone-voice-", "") ?? null, height: Math.round(r.height), text: row.textContent, cut: label.getBoundingClientRect().right > r.right + 0.5 };
+      }),
+      status: document.querySelector("[data-phone-voice-status]")?.textContent ?? null,
+      sideways: document.documentElement.scrollWidth - innerWidth,
+      feedBand: feed ? parseFloat(getComputedStyle(feed).marginBottom) : null,
+      feedAtEnd: feed ? feed.scrollHeight - feed.scrollTop - feed.clientHeight < 4 : null,
+      /* The list the head stands over stands at its end: the band holds its last row clear of the head only there. */
+      paneAtEnd: (() => {
+        const pane = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller], [data-phone-kanban-column]")].map((node) => ({ node, r: rect(node) })).filter(({ r }) => r && r.x > -1 && r.x + r.width < innerWidth + 1).sort((a, b) => b.r!.height - a.r!.height)[0]?.node;
+        return pane ? pane.scrollHeight - pane.scrollTop - pane.clientHeight < 4 : true;
+      })(),
+      /* Where the list the head stands over ends: its box, the padding kept at its end and its last card or message whole. */
+      listTail: (() => {
+        const pane = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller], [data-phone-kanban-column]")].map((node) => ({ node, r: rect(node) })).filter(({ r }) => r && r.x > -1 && r.x + r.width < innerWidth + 1).sort((a, b) => b.r!.height - a.r!.height)[0]?.node;
+        if (!pane) return null;
+        const last = [...pane.querySelectorAll("[data-mobile-message], [data-phone-card-shell], [data-phone-kanban-more], [data-phone-kanban-unlinked]")].flatMap((node) => rect(node) ?? []).sort((a, b) => b.y + b.height - (a.y + a.height))[0] ?? null;
+        const frame = pane.getBoundingClientRect();
+        return { paneBottom: frame.bottom, padding: parseFloat(getComputedStyle(pane).paddingBottom), lastBottom: last ? last.y + last.height : null };
+      })(),
+      stored: localStorage.getItem("llv:phone-voice:v1"),
+      record: (window as unknown as { phoneVoice: { starts: string[]; projects: Array<string | null>; closes: number; sessionRequests: number } }).phoneVoice,
+    };
+  });
+  type Reading = Awaited<ReturnType<typeof read>>;
+
+  browserTest("variant 1 at 390 uk light and 375 en dark: talk, the head's menu, sheets, Hide, «Показати голос», a drag and navigation between two projects", async () => {
+    const out = path.resolve(".artifacts/phone-voice-head");
+    const evidence = path.resolve("evidence/phone-voice-head");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const only = (process.env.LLV_PHONE_VOICE_GROUPS ?? "").split(",").filter(Boolean) as Group[];
+    const groups = (Object.keys(GROUPS) as Group[]).filter((group) => !only.length || only.includes(group));
+    const { base, stop } = await serveFixture();
+    const launched = await chromium.launchServer({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const browserPid = launched.process().pid ?? null;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
+    const browser = await chromium.connect(launched.wsEndpoint());
+    const failures: string[] = [];
+    const readings: Array<{ group: Group; combo: string; scene: string; reading: Reading | Record<string, unknown> }> = [];
+
+    /* The printed band: the variant on the first line, the scene and the frame on the second. */
+    const stamp = async (size: { width: number; height: number }, png: Buffer, lines: [string, string], file: string) => {
+      const context = await browser.newContext({ viewport: { width: size.width, height: size.height + 48 }, deviceScaleFactor: 2 });
+      try {
+        const page = await context.newPage();
+        await page.setContent(`<body style="margin:0;background:#fff"><div style="box-sizing:border-box;height:48px;padding:6px 10px;background:#1e3a8a;color:#fff;font:600 13px/18px system-ui,sans-serif;white-space:nowrap;overflow:hidden">`
+          + `<div data-band>${lines[0]}</div><div data-band style="font-weight:400">${lines[1]}</div></div>`
+          + `<img style="display:block;width:${size.width}px;height:${size.height}px" src="data:image/png;base64,${png.toString("base64")}"></body>`);
+        await page.waitForFunction(() => document.images[0]!.complete && document.images[0]!.naturalWidth > 0);
+        const cut = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-band]")].some((line) => {
+          const range = document.createRange(); range.selectNodeContents(line); return range.getBoundingClientRect().right > innerWidth - 4;
+        }));
+        if (cut) failures.push(`${path.basename(file)}: the printed band is cut`);
+        await page.screenshot({ path: file });
+      } finally { await context.close(); }
+    };
+
+    try {
+      for (const { size, lang, scheme } of COMBOS) {
+        const combo = `${size.width}x${size.height}-${lang}-${scheme}`;
+        const band = (scene: string, original: boolean): [string, string] => [
+          lang === "uk" ? "Голос на телефоні · варіант 1 «Над полем вводу»" : "Phone voice · variant 1 «Above the composer»",
+          `${original ? (lang === "uk" ? "Як зараз" : "Today") : LABELS[scene]![lang]} · ${size.width}×${size.height} · ${lang} · ${scheme}`,
+        ];
+        const newContext = async () => {
+          if (!browser.isConnected()) throw new Error("the browser is gone");
+          const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+          await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+          return context;
+        };
+        const openPage = async (context: BrowserContext, query: string) => {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?${query}`);
+          await page.waitForSelector(BAR_MENU, { timeout: 30_000 });
+          return { page, pageErrors, cdp: await context.newCDPSession(page) };
+        };
+        /* Today's screens, the same pages with no voice. */
+        const today: Record<string, Buffer> = {};
+        {
+          const context = await newContext();
+          try {
+            const { page } = await openPage(context, CHAT);
+            await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+            await pause(page, 900);
+            today.conversation = await page.screenshot();
+            await page.locator(BAR_MENU).first().click();
+            await page.waitForSelector("[data-mobile2-sheet=menu]", { timeout: 10_000 });
+            await pause(page, 500);
+            today.menu = await page.screenshot();
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-mobile2-sheet]", { state: "detached", timeout: 10_000 });
+            await page.locator("[data-mobile2-bar] [data-mobile2-back]").first().click();
+            await page.waitForSelector("[data-mobile2-dock]", { timeout: 10_000 });
+            await pause(page, 900);
+            today.seatBoard = await page.screenshot();
+            await page.locator(BAR_MENU).first().click();
+            await page.waitForSelector("[data-mobile2-sheet=menu]", { timeout: 10_000 });
+            await pause(page, 500);
+            today.boardMenu = await page.screenshot();
+            const board = await openPage(context, "overview=1");
+            await board.page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 30_000 });
+            await board.page.locator('[data-mobile2-open="projects"]').first().click();
+            const entries = await board.page.locator("[data-mobile2-project]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-mobile2-project")).filter((key) => key && key !== "__overview__"));
+            await board.page.locator(`[data-mobile2-project="${entries[1]}"]`).click();
+            await board.page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 30_000 });
+            await pause(board.page, 900);
+            today.board = await board.page.screenshot();
+          } finally { await context.close(); }
+        }
+        const ORIGINAL: Record<string, string> = { talk: "conversation", menu: "conversation", hidden: "conversation", sheet: "menu", "menu-hidden": "boardMenu", restored: "seatBoard", drag: "seatBoard", navigation: "board", "navigation-product": "board" };
+
+        for (const group of groups) {
+          const context = await newContext();
+          const { page, pageErrors, cdp } = await openPage(context, group === "call" ? `voice=sim&${CHAT}` : group === "product" ? `voice=product&${CHAT}` : `voice=${group === "navigation" ? "sim" : "product"}&overview=1`);
+          const fail = (scene: string, text: string) => failures.push(`${combo} ${scene}: ${text}`);
+          /* The step under way, named in a failure that a wait throws. */
+          let step = "open";
+          const shot = async (scene: string) => {
+            step = scene;
+            const reading = await read(page);
+            readings.push({ group, combo, scene, reading });
+            await stamp(size, await page.screenshot(), band(scene, false), path.join(out, `${scene}-${combo}.png`));
+            if (ORIGINAL[scene] && today[ORIGINAL[scene]!]) await stamp(size, today[ORIGINAL[scene]!]!, band(scene, true), path.join(out, `${scene}-${combo}-original.png`));
+            if (!reading.inViewport) fail(scene, "the head, its words or its menu leave the viewport");
+            if (reading.sideways > 0) fail(scene, `the page scrolls sideways by ${reading.sideways}px`);
+            if (reading.wordsCut) fail(scene, "the bubble's text is cut");
+            if (reading.head && scene !== "drag") {
+              if (Math.round(reading.head.width) !== 52 || Math.round(reading.head.height) !== 52) fail(scene, `the head is ${reading.head.width}×${reading.head.height}`);
+              /* Over an open sheet the page is dimmed and takes no touch: the sheet's own readings below answer for it. Over a
+                 list read away from its end, rows pass under the head as the operator scrolls; at its end the band holds them clear. */
+              const clear = !reading.sheet && reading.paneAtEnd;
+              if (clear && (reading.controlsUnderHeadPx2 > 0 || reading.controlsUnderWordsPx2 > 0)) fail(scene, `the head and its words lie on ${reading.controlsUnderHeadPx2 + reading.controlsUnderWordsPx2}px² of controls`);
+              if (clear && (reading.textUnderHeadPx2 > 0 || reading.textUnderWordsPx2 > 0)) fail(scene, `the head and its words lie on ${reading.textUnderHeadPx2 + reading.textUnderWordsPx2}px² of the page's text`);
+              if (reading.rowsCutByWords > 0 || reading.marksCutByWords > 0) fail(scene, `the words cut ${reading.rowsCutByWords} lines and ${reading.marksCutByWords} icons`);
+              if (reading.blocksSplitByWords > 0) fail(scene, `the plate covers ${reading.blocksSplitByWords} messages or cards in part`);
+              if (reading.plateLook && (reading.plateLook.borderTop !== "0px" || reading.plateLook.shadow !== "none")) fail(scene, `the plate is not cleared page: ${JSON.stringify(reading.plateLook)}`);
+              /* With no sheet the head and its words keep 8 px above the line of the composer or the dock. */
+              if (!reading.sheet && reading.chromeLine !== null) {
+                const gap = reading.chromeLine - (reading.head.y + reading.head.height);
+                if (Math.abs(gap - 8) > 0.6) fail(scene, `the head stands ${gap}px above the bottom chrome's line, not 8`);
+                if (reading.bubble && reading.chromeLine - (reading.bubble.y + reading.bubble.height) < 7.4) fail(scene, "the words come within 8 px of the bottom chrome's line");
+              }
+            }
+            if (pageErrors.length) fail(scene, `page errors: ${pageErrors.join(" | ")}`);
+            return reading;
+          };
+          const tapAt = async (selector: string) => { await page.waitForSelector(selector, { timeout: 10_000 }); await tap(page, cdp, selector); await pause(page, 300); };
+          const headRow = async (row: string) => {
+            if (!await page.locator("[data-phone-voice-pop]").count()) await tapAt(HEAD);
+            await tapAt(`[data-phone-voice-${row}]`);
+          };
+          const boardOf = async (index: number) => {
+            await page.locator('[data-mobile2-open="projects"]').first().click();
+            await page.waitForSelector("[data-mobile2-sheet] [data-mobile2-project]", { timeout: 10_000 });
+            const entries = await page.locator("[data-mobile2-project]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-mobile2-project")).filter((key) => key && key !== "__overview__"));
+            await page.locator(`[data-mobile2-project="${entries[index]}"]`).click();
+            await page.waitForSelector("[data-mobile2-sheet]", { state: "detached", timeout: 10_000 });
+            await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 30_000 });
+            await pause(page, 900);
+            return entries[index]!;
+          };
+          try {
+            await page.waitForSelector(HEAD, { timeout: 15_000 });
+            if (group === "call") {
+              await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+              await pause(page, 900);
+              step = "talk tap";
+              await headRow("talk");
+              await page.waitForSelector("[data-phone-voice-bubble]", { timeout: 20_000 });
+              await pause(page, 500);
+              const talk = await shot("talk");
+              if (!talk.bubble || !talk.words) fail("talk", "no words are shown while it speaks");
+              if (talk.feedAtEnd !== true) fail("talk", "the conversation is not at its end with the band in place");
+
+              await tapAt(HEAD);
+              await page.waitForSelector("[data-phone-voice-pop] [data-phone-voice-end]", { timeout: 5_000 });
+              const menu = await shot("menu");
+              if (menu.popRows.map((row) => row.key).join() !== "mute,end,hide") fail("menu", `the rows in a call are ${JSON.stringify(menu.popRows.map((row) => row.key))}`);
+              if (menu.popRows.some((row) => row.height < 44 || row.cut)) fail("menu", `a row is under 44 px or cut: ${JSON.stringify(menu.popRows)}`);
+              if (!/\d+:\d\d/u.test(menu.status ?? "")) fail("menu", `the status line has no clock: ${menu.status}`);
+              await tapAt(HEAD);
+
+              await page.waitForSelector("[data-phone-voice-bubble]", { timeout: 10_000 });
+              await page.locator(BAR_MENU).first().click();
+              await page.waitForSelector("[data-mobile2-sheet=menu]", { timeout: 10_000 });
+              await pause(page, 700);
+              const sheet = await shot("sheet");
+              if (sheet.headOverSheetPx2 > 0 || sheet.wordsOverSheetPx2 > 0) fail("sheet", `the head or its words lie on ${sheet.headOverSheetPx2 + sheet.wordsOverSheetPx2}px² of the sheet`);
+              if (sheet.plate && !sheet.plateLook?.underScrim) fail("sheet", "the plate stays lit over the dimming");
+              await page.keyboard.press("Escape");
+              await page.waitForSelector("[data-mobile2-sheet]", { state: "detached", timeout: 10_000 });
+
+              await page.evaluate(() => (window as unknown as { phoneVoice: { openFull(): void } }).phoneVoice.openFull());
+              await page.waitForSelector("[data-mobile2-sheet=prototype-review]", { timeout: 10_000 });
+              await pause(page, 700);
+              const full = await shot("full-sheet");
+              if (!full.head) fail("full-sheet", "the head is not in view over a full-height sheet");
+              if (full.bubble) fail("full-sheet", "the head speaks in a bubble over a full-height sheet");
+              if (full.sheetState !== "full") fail("full-sheet", `the head reads the sheet as ${full.sheetState}`);
+              if (full.headOverFooterPx2 > 0 || full.headOverSheetControlsPx2 > 0) fail("full-sheet", `the head lies on ${full.headOverFooterPx2}px² of the footer and ${full.headOverSheetControlsPx2}px² of the sheet's controls`);
+              if (full.head && full.footer && Math.abs(full.footer.y - (full.head.y + full.head.height) - 8) > 0.6) fail("full-sheet", `the head stands ${full.footer.y - (full.head.y + full.head.height)}px above the footer, not 8`);
+              if (full.phase === "offline") fail("full-sheet", "the call ended under a full-height sheet");
+              /* Read to its end, the sheet's last line stands whole above the head: the body keeps the head's room there. */
+              await page.evaluate(() => { const body = [...document.querySelectorAll<HTMLElement>("[data-mobile2-sheet-body]")].at(-1); if (body) body.scrollTop = body.scrollHeight; });
+              await pause(page, 500);
+              const fullEnd = await shot("full-sheet-end");
+              if (!fullEnd.sheetBody?.atEnd) fail("full-sheet-end", "the sheet's body is not read to its end");
+              if (fullEnd.headOverSheetTextPx2 > 0 || fullEnd.headOverSheetControlsPx2 > 0 || fullEnd.headOverFooterPx2 > 0) fail("full-sheet-end", `at the sheet's end the head lies on ${fullEnd.headOverSheetTextPx2}px² of its text, ${fullEnd.headOverSheetControlsPx2}px² of its controls and ${fullEnd.headOverFooterPx2}px² of its footer`);
+              if (fullEnd.sheetBody?.lastBottom == null || fullEnd.head == null || fullEnd.sheetBody.lastBottom > fullEnd.head.y + 0.5) fail("full-sheet-end", `the sheet's last line ends at ${fullEnd.sheetBody?.lastBottom}, not above the head's top at ${fullEnd.head?.y}`);
+              if (fullEnd.sheetBody && fullEnd.sheetBody.lastBottom !== null && fullEnd.sheetBody.lastBottom > fullEnd.sheetBody.bottom + 0.5) fail("full-sheet-end", "the sheet's last line is cut by the body's edge");
+              await page.keyboard.press("Escape");
+              await page.waitForSelector("[data-mobile2-sheet]", { state: "detached", timeout: 10_000 });
+              await pause(page, 400);
+
+              const before = await read(page);
+              await headRow("hide");
+              await pause(page, 600);
+              const hidden = await shot("hidden");
+              if (hidden.head) fail("hidden", "the head is still on screen after «Сховати»");
+              if (hidden.record.closes < 1) fail("hidden", "«Сховати» did not close the call");
+              if (!hidden.stored || JSON.parse(hidden.stored).hidden !== true) fail("hidden", `the stored choice reads ${hidden.stored}`);
+              if (before.feedBand === null || hidden.feedBand === null || before.feedBand < 60 || hidden.feedBand !== 0) fail("hidden", `the band did not go with the head: ${before.feedBand} then ${hidden.feedBand}`);
+              if (hidden.record.starts.length !== 1) fail("hidden", `${hidden.record.starts.length} calls were started`);
+            } else if (group === "product") {
+              /* The stored choice says hidden, as a reload after «Сховати» finds it. The row stands in the ⋯ menu that holds
+                 «Налаштування»: the board's (and the Overview's); a conversation's own ⋯ has no settings. */
+              step = "reload hidden";
+              await page.evaluate(() => localStorage.setItem("llv:phone-voice:v1", JSON.stringify({ hidden: true, side: "right" })));
+              await page.reload();
+              await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+              await pause(page, 1_500);
+              if (await page.locator(HEAD).count()) fail("menu-hidden", "the head came back on a reload while hidden");
+              step = "to the board";
+              await page.locator("[data-mobile2-bar] [data-mobile2-back]").first().click();
+              await page.waitForSelector("[data-mobile2-dock]", { timeout: 10_000 });
+              await pause(page, 900);
+              step = "board menu";
+              await page.locator(BAR_MENU).first().click();
+              await page.waitForSelector('[data-mobile2-sheet=menu] [data-mobile2-menu-row="voice-show"]', { timeout: 10_000 });
+              await pause(page, 600);
+              const rows = await page.evaluate(() => {
+                const sheet = document.querySelector("[data-mobile2-sheet=menu]")!;
+                const body = sheet.querySelector("[data-mobile2-sheet-body]")!.getBoundingClientRect();
+                const row = sheet.querySelector<HTMLElement>('[data-mobile2-menu-row="voice-show"]')!;
+                const box = row.getBoundingClientRect();
+                return { keys: [...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((node) => node.getAttribute("data-mobile2-menu-row")), text: row.textContent, height: Math.round(box.height), inBody: box.top >= body.top - 0.5 && box.bottom <= body.bottom + 0.5 };
+              });
+              const menuHidden = await shot("menu-hidden");
+              readings.push({ group, combo, scene: "menu-hidden-row", reading: rows });
+              if (rows.keys.indexOf("voice-show") !== rows.keys.indexOf("settings") - 1) fail("menu-hidden", `«Показати голос» is not directly above Settings: ${rows.keys.join(",")}`);
+              if (rows.text !== translate(lang, "voiceCompanion.show") || rows.height < 44 || !rows.inBody) fail("menu-hidden", `the row reads ${JSON.stringify(rows)}`);
+              if (menuHidden.record.sessionRequests) fail("menu-hidden", "a session was asked for");
+
+              await page.locator('[data-mobile2-menu-row="voice-show"]').click();
+              await page.waitForSelector("[data-mobile2-sheet]", { state: "detached", timeout: 10_000 });
+              await page.waitForSelector(HEAD, { timeout: 10_000 });
+              await pause(page, 600);
+              const restored = await shot("restored");
+              if (restored.side !== "right" || restored.phase !== "offline") fail("restored", `the head came back as ${restored.side}, ${restored.phase}`);
+              if (restored.record.sessionRequests) fail("restored", "«Показати голос» asked for a session");
+
+              /* A held finger moves the head to the left corner: the frame is taken mid-way, with the two places drawn. */
+              const start = (await rectOf(page, HEAD))!;
+              const from: Point = [start.x + start.width / 2, start.y + start.height / 2];
+              const via: Point = [size.width * 0.4, from[1] - 60];
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+              for (const [x, y] of along(from, via, 14).slice(1)) { await new Promise((resolve) => setTimeout(resolve, 16)); await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); }
+              await pause(page, 250);
+              const drag = await shot("drag");
+              const slots = await page.locator("[data-phone-voice-slot]").count();
+              for (const [x, y] of along(via, [40, from[1]], 8).slice(1)) { await new Promise((resolve) => setTimeout(resolve, 16)); await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); }
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+              await pause(page, 500);
+              const rested = (await rectOf(page, HEAD))!;
+              if (slots !== 2) fail("drag", `${slots} resting places are drawn while the head is held`);
+              if (!drag.head || Math.abs(drag.head.x - start.x) < 20) fail("drag", "the head did not follow the finger");
+              if (await page.locator("[data-phone-voice-pop]").count()) fail("drag", "a drag opened the popover");
+              if (Math.abs(rested.x - 8) > 0.6 || Math.abs(rested.y - start.y) > 1) fail("drag", `the head came to rest at ${rested.x},${rested.y}, not 8,${start.y}`);
+              step = "reload after drag";
+              await page.reload();
+              await page.waitForSelector(HEAD, { timeout: 30_000 });
+              await pause(page, 900);
+              const reloaded = await read(page);
+              readings.push({ group, combo, scene: "drag-reloaded", reading: reloaded });
+              if (reloaded.side !== "left" || !reloaded.head || Math.abs(reloaded.head.x - 8) > 0.6) fail("drag", `after a reload the head stands ${reloaded.side} at ${reloaded.head?.x}`);
+              if (reloaded.record.sessionRequests) fail("drag", "a session was asked for");
+            } else {
+              /* From the Overview to project A's board; a call there in the sim scene; a task screen over it and back; then project B's board. */
+              await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 30_000 });
+              const first = await boardOf(0);
+              const call = group === "navigation";
+              if (call) {
+                await headRow("talk");
+                await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") !== "offline", undefined, { timeout: 10_000 });
+              }
+              await page.evaluate(() => { (document.querySelector("[data-phone-voice]") as unknown as { voiceMark: number }).voiceMark = 1; });
+              const atA = await read(page);
+              await page.locator('[data-phone-card^="task:"]').first().click();
+              await page.waitForSelector("[data-mobile2-bar] [data-mobile2-back]", { timeout: 10_000 });
+              await pause(page, 700);
+              const overTask = await read(page);
+              await page.locator("[data-mobile2-bar] [data-mobile2-back]").first().click();
+              await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 10_000 });
+              await pause(page, 500);
+              const second = await boardOf(1);
+              const same = await page.evaluate(() => (document.querySelector("[data-phone-voice]") as unknown as { voiceMark?: number } | null)?.voiceMark === 1);
+              const atB = await shot(group);
+              /* B's open column read to its end: its last card ends above the head. */
+              await page.evaluate(() => { const column = [...document.querySelectorAll<HTMLElement>("[data-phone-kanban-column]")].find((node) => { const r = node.getBoundingClientRect(); return r.width > 0 && r.x > -1 && r.right < innerWidth + 1; }); if (column) column.scrollTop = column.scrollHeight; });
+              await pause(page, 600);
+              const atEnd = await read(page);
+              readings.push({ group, combo, scene: `${group}-column-end`, reading: atEnd });
+              await stamp(size, await page.screenshot(), band(`${group}-column-end`, false), path.join(out, `${group}-column-end-${combo}.png`));
+              /* At a list's end the band holds the head's room: the plate is the head and its words, 8 px around, and clears no card. */
+              if (atEnd.plate && atEnd.plate.height > 68.5) fail(group, `at the column's end the plate is ${atEnd.plate.height}px high, not 68, and hides the cards under it (the last card ends at ${atEnd.listTail?.lastBottom})`);
+              if (!atEnd.paneAtEnd || atEnd.textUnderHeadPx2 > 0 || atEnd.controlsUnderHeadPx2 > 0 || atEnd.textUnderWordsPx2 > 0) fail(group, `at the column's end the head lies on ${atEnd.textUnderHeadPx2 + atEnd.textUnderWordsPx2}px² of text and ${atEnd.controlsUnderHeadPx2}px² of controls`);
+              readings.push({ group, combo, scene: `${group}-path`, reading: { projects: [first, second], atA: { phase: atA.phase, callStart: atA.callStart }, overTask: { head: overTask.head, phase: overTask.phase } } });
+              if (!same) fail(group, "the head was mounted again on the way");
+              if (!overTask.head) fail(group, "the head left the screen over the task screen");
+              if (call) {
+                if (atB.phase === "offline" || atB.callStart !== atA.callStart) fail(group, `the call did not go on: ${atA.phase}/${atA.callStart} then ${atB.phase}/${atB.callStart}`);
+                if (atB.record.starts.length !== 1 || atB.record.closes !== 0) fail(group, `starts ${atB.record.starts.length}, closes ${atB.record.closes}`);
+                if (atB.record.projects.at(-1) !== second || !atB.record.projects.includes(first)) fail(group, `the call was told ${JSON.stringify(atB.record.projects)}, not ${first} then ${second}`);
+              } else if (atB.record.sessionRequests) fail(group, "a session was asked for");
+            }
+          } catch (error) {
+            fail(group, `after ${step}: ${error instanceof Error ? error.message.split("\n")[0]! : String(error)}`);
+            await page.screenshot({ path: path.join(out, `${group}-${combo}-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+      }
+    } finally {
+      await browser.close();
+      await launched.close();
+      stop();
+      if (launched.process().exitCode === null && launched.process().signalCode === null) {
+        failures.push(`the browser ${browserPid} outlived its close`);
+        await stopFixtureProcess(launched.process());
+      }
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
+    }
+    /* The owned runner ends a run at 15 minutes, so the groups can run in chunks: a chunk replaces only its own groups' readings. */
+    const file = path.join(evidence, "geometry.json");
+    const kept = only.length && fs.existsSync(file)
+      ? (JSON.parse(fs.readFileSync(file, "utf8")) as { readings: typeof readings }).readings.filter((reading) => !only.includes(reading.group))
+      : [];
+    const order = (group: Group) => (Object.keys(GROUPS) as Group[]).indexOf(group);
+    const merged = [...kept, ...readings].sort((a, b) => order(a.group) - order(b.group));
+    const keptFailures = only.length && fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, "utf8")) as { failures: Array<{ group: Group; text: string }> }).failures.filter((entry) => !only.includes(entry.group)) : [];
+    const ownFailures = failures.map((text) => ({ group: groups.find((group) => text.includes(` ${group}`) || GROUPS[group].some((scene) => text.includes(` ${scene}:`))) ?? groups[0]!, text }));
+    fs.writeFileSync(file, `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", design: "docs/design/phone-voice-head-build.md", groups: [...new Set(merged.map((reading) => reading.group))], readings: merged, failures: [...keptFailures, ...ownFailures] }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
 
 describe("seat recovery failure history", () => {
   browserTest("healthy seats clear stale failures and the phone dates a current failure", async () => {

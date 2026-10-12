@@ -6,8 +6,12 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 import type { MessageSender } from "@/lib/team/contract";
 import { SenderLine } from "@/components/team/SenderLine";
+import { messageTextAttachmentFromText } from "@/lib/messageTextAttachment";
+import { resolveLink } from "@/lib/artifact/linkTarget";
+import { artifactContentUrl } from "@/components/preview/artifactResource";
+import { openArtifactPreview } from "@/components/preview/previewBus";
 
-import { ChevronUp, Layers } from "../icons";
+import { ChevronUp, FileText, Layers } from "../icons";
 import { stripTaskReferencePrelude, taskReferencesFromText } from "@/lib/selection/selectedContext";
 import { SelectedContextBadge } from "../SelectedContextBadge";
 import { TaskChipBadges } from "../orchestrator/TaskChipRow";
@@ -73,9 +77,14 @@ export function UserMessageRow({
   /* The seat's plain reference lines are what its record already says as chips:
      the row shows the operator's words and the chips, not both. */
   const tasks = selectedContext?.tasks ?? taskReferencesFromText(rawText);
-  const text = tasks?.length ? stripTaskReferencePrelude(rawText, tasks).replace(/^\n+/, "") : rawText;
-  const long = text.length > LONG_MESSAGE;
-  const gutter = action ?? <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
+  const body = tasks?.length ? stripTaskReferencePrelude(rawText, tasks).replace(/^\n+/, "") : rawText;
+  const attachment = messageTextAttachmentFromText(body);
+  const attachmentTarget = attachment ? resolveLink(attachment.path) : null;
+  /* A message that went as a file shows the operator's own opening words; the
+     footer names the file beside the count of their other attachments. */
+  const text = attachment ? attachment.excerpt ?? "" : body;
+  const long = !attachment && text.length > LONG_MESSAGE;
+  const gutter = action ?? <CopyButton text={copyText ?? body} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
   return (
     <div className="my-3 flex flex-col items-end" {...rowAttributes}>
       {sender ? <SenderLine sender={sender} mobile={isMobile} /> : null}
@@ -116,10 +125,31 @@ export function UserMessageRow({
               </summary>
               {mdBlocks(text)}
             </details>
+          ) : attachment ? (
+            text ? <span data-text-excerpt className="line-clamp-2 break-words">{text}</span> : null
           ) : (
             mdBlocks(text)
           )}
-          {bubbleFooter}
+          {attachment ? (
+            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+              {bubbleFooter ?? (attachment.operatorPaths.length ? (
+                <span className="text-caption font-semibold text-muted">
+                  {tr("composer.attachmentsCount", { count: attachment.operatorPaths.length })}
+                </span>
+              ) : null)}
+              <a data-text-attachment href={artifactContentUrl(attachment.path)}
+                onClick={(event) => {
+                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+                    || attachmentTarget?.kind !== "file") return;
+                  event.preventDefault();
+                  openArtifactPreview(attachment.path, attachmentTarget);
+                }}
+                className="inline-flex items-center gap-1 rounded border border-border bg-sunken px-2 py-1 text-caption font-semibold text-muted transition-[border-color,color] duration-150 hover:border-accent/50 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                <FileText className="h-3 w-3" aria-hidden />
+                {attachment.name}
+              </a>
+            </span>
+          ) : bubbleFooter}
         </div>
       </div>
       {/* The 44 px target keeps its size; the negative margins hand the part

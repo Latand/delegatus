@@ -1798,7 +1798,7 @@ async function unmergedPullRequests(context: {
     if (!lane || !isFinished(lane)) continue;
     /* #2187 §4.6: a pull request the merge runner is working on is the
        runner's, not the seat's; one it stopped on comes back with its reason. */
-    if (lane.merge && PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state)) continue;
+    if (lane.merge && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing")) continue;
     found.push({
       number: pullRequest.number,
       title: redactBounded(pullRequest.title, PULL_REQUEST_TITLE_LIMIT),

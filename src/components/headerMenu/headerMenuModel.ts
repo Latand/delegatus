@@ -33,8 +33,9 @@ const HELP_ITEMS = ["guide", "walk"] as const;
 /* The desktop has no board-menu home for the language, the QR and the bell, so
    they stand here; the phone keeps them as the three buttons in its drawer
    header, keeps sound and keep-awake in this menu, and signs out on the Team
-   page. The voice companion is a desktop surface; its settings on both surfaces
-   also show the last call and monthly spend. */
+   page. The voice companion is a window on the desktop and a head on the phone,
+   whose «Показати голос» row is drawn by the phone menu itself while the head is
+   hidden; its settings on both surfaces also show the last call and monthly spend. */
 export const HEADER_LAYOUTS: Record<HeaderSurface, HeaderLayout> = {
   desktop: {
     cells: CELLS,

@@ -26,6 +26,7 @@ import { act } from "react";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { type TFunction, translate } from "@/lib/i18n";
+import { artifactContentUrl } from "@/components/preview/artifactResource";
 
 const translator = (locale: "en" | "uk"): TFunction => (key, params) => translate(locale, key, params);
 
@@ -328,6 +329,76 @@ test("#1224 a bubble for a document-only submission names its attachment instead
   /* An images-only submission keeps the wording it always had. */
   const images = await bubble({ text: "", images: 2 }, SUBMITTED_AT + 1_000);
   expect(images.textContent).toContain(translate("en", "composer.imagesCount", { count: 2 }));
+});
+
+test("a converted long message shows its file chip and retains the original retry text", async () => {
+  const original = "я".repeat(30_000);
+  const text = "The full message is attached as message.txt. Read the file in full before responding.\n/inbox/files/fixture/message.txt";
+  const host = await bubble({ text: original, state: "delivered", textAttachment: {
+    name: "message.txt", path: "/inbox/files/fixture/message.txt", text,
+  } }, SUBMITTED_AT + 1_000);
+  expect(host.querySelector("[data-text-attachment]")?.textContent).toContain("message.txt");
+  expect(host.textContent).not.toContain(original);
+});
+
+test("the transcript's converted marker survives a following image path", async () => {
+  const text = "The full message is attached as message-2.txt. Read the file in full before responding.\n/inbox/files/fixture/notes.log\n/inbox/files/fixture/message-2.txt\n/inbox/image.png";
+  const host = await bubble({ text, state: "delivered", images: 1 }, SUBMITTED_AT + 1_000);
+  expect(host.querySelector("[data-text-attachment]")?.textContent).toContain("message-2.txt");
+});
+
+test("a converted message shows its chip for Windows drive and UNC inbox paths", async () => {
+  const slash = String.fromCharCode(92);
+  for (const pointer of [
+    ["C:", "inbox", "files", "message.txt"].join(slash),
+    slash.repeat(2) + ["files.example", "inbox", "message.txt"].join(slash),
+  ]) {
+    const text = `The full message is attached as message.txt. Read the file in full before responding.\n${pointer}`;
+    const host = await bubble({ text, state: "delivered" }, SUBMITTED_AT + 1_000);
+    const chip = host.querySelector("[data-text-attachment]");
+    expect(chip?.textContent).toContain("message.txt");
+    expect(chip?.getAttribute("href")).toBe(artifactContentUrl(pointer));
+  }
+});
+
+test("a converted message keeps the operator's own count beside the file chip, counting no file twice", async () => {
+  for (const counts of [{ files: 3, images: 0 }, { files: 0, images: 3 }]) {
+    const paths = [
+      ...Array.from({ length: counts.files }, (_, n) => `/inbox/files/fixture/notes-${n}.log`),
+      "/inbox/files/fixture/message.txt",
+    ];
+    const text = ["The full message is attached as message.txt. Read the file in full before responding.",
+      "The message begins: Привіт, це початок довгого експорту", ...paths].join("\n");
+    const host = await bubble({ text: "я".repeat(30_000), state: "delivered", ...counts,
+      textAttachment: { name: "message.txt", path: paths.at(-1)!, text } }, SUBMITTED_AT + 1_000);
+    const label = counts.files
+      ? translate("en", "composer.attachmentsCount", { count: 3 }) : translate("en", "composer.imagesCount", { count: 3 });
+    expect(host.textContent).toContain(label);
+    expect(host.textContent).not.toContain(translate("en", "composer.attachmentsCount", { count: 4 }));
+    expect(host.querySelector("[data-text-attachment]")?.textContent).toContain("message.txt");
+    expect(host.querySelectorAll("[data-text-attachment]")).toHaveLength(1);
+  }
+});
+
+test("a converted message shows the operator's opening words, never a bare counter", async () => {
+  const marker = ["The full message is attached as message.txt. Read the file in full before responding.",
+    "The message begins: Привіт, це початок довгого експорту", "/inbox/files/fixture/notes.log", "/inbox/files/fixture/message.txt"].join("\n");
+  /* A transcript row on another device: no outbox entry, only the marker. */
+  const host = await bubble({ text: marker, state: "delivered" }, SUBMITTED_AT + 1_000);
+  expect(host.querySelector("[data-text-excerpt]")?.textContent).toBe("Привіт, це початок довгого експорту");
+  expect(host.textContent).toContain(translate("en", "composer.attachmentsCount", { count: 1 }));
+  expect(host.querySelector("[data-text-attachment] svg")).not.toBeNull();
+  expect(host.querySelector("[data-text-attachment]")?.textContent?.trim()).toBe("message.txt");
+  expect(host.textContent).not.toContain("📎");
+  expect(host.textContent).not.toContain("The full message is attached");
+});
+
+test("a plain conversion has the excerpt and the chip and no counter", async () => {
+  const marker = ["The full message is attached as message.txt. Read the file in full before responding.",
+    "The message begins: Привіт", "/inbox/files/fixture/message.txt"].join("\n");
+  const host = await bubble({ text: marker, state: "delivered" }, SUBMITTED_AT + 1_000);
+  expect(host.querySelector("[data-text-excerpt]")?.textContent).toBe("Привіт");
+  expect(host.textContent).not.toContain("attachment");
 });
 
 /**

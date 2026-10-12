@@ -85,7 +85,7 @@ const TOOL_LINE = {
   conversation_messages: "voiceCompanion.tool.conversation_messages", end_conversation: "voiceCompanion.tool.end_conversation",
 } as const;
 /** Failures whose remedy is in the settings. */
-const SETTINGS_FAILURES = new Set(["NO_KEY", "CAP_REACHED", "KEY_FROM_ENV"]);
+export const SETTINGS_FAILURES = new Set(["NO_KEY", "CAP_REACHED", "KEY_FROM_ENV"]);
 /** The nominal speaking rate the bubbles of a playing line are paced by. A
     presentation pace only: no word is claimed to have been heard by it. */
 export const NOMINAL_MS_PER_CHAR = 58;
@@ -313,7 +313,7 @@ type Place = { top: number; height: number; width: number; left: number; far: nu
 
 /** A line's bubbles, `chars` long at the most. While the line still streams, its last bubble holds only the words
     no later cut can take from it, so a bubble never gives a word back and never keeps a line it emptied. */
-function bubblesOf(line: SpeechLine, chars: number): string[] {
+export function bubblesOf(line: SpeechLine, chars: number): string[] {
   const streams = !line.final && line.playback !== "cut";
   return splitSpeech(line.text, chars, streams);
 }
@@ -321,7 +321,7 @@ function bubblesOf(line: SpeechLine, chars: number): string[] {
 /** How many bubbles of a line are out: all of an operator's line and of a
     played one, none before its audio starts, and while it plays, those the
     nominal pace has reached. A cut line keeps those its audio reached. */
-function bubblesOut(line: SpeechLine, chunks: readonly string[], playedMs: number): number {
+export function bubblesOut(line: SpeechLine, chunks: readonly string[], playedMs: number): number {
   if (line.speaker === "operator" || line.playback === "played") return chunks.length;
   if (line.playback === "pending" || line.playback === "none") return 0;
   const played = line.playback === "cut" ? line.playedMs ?? 0 : playedMs;

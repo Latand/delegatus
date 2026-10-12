@@ -4,6 +4,8 @@
  * them back to say each one in the operator's language.
  */
 export const MERGE_REASONS = {
+  refreshClosed: "the refresh was closed before the PR merged",
+  refreshSameBase: "the refresh did not clear the conflict, and main has not moved since",
   conflict: "conflict with the base branch",
   noChecks: "no checks reported on this head",
   noPr: "no pull request is linked to this lane; open or attach its PR, then try the merge again",
@@ -24,6 +26,7 @@ export type MergeReasonKey = keyof typeof MERGE_REASONS;
 export const MERGE_REASON_PATTERNS = {
   check: /^check "(.+)" failed$/,
   refusedMerge: /^GitHub refused the merge: (.+)$/,
+  refusedRefresh: /^Delegatus could not start the refresh: (.+)$/,
   refusedUpdate: /^GitHub refused to update the branch: (.+)$/,
 } as const;
 

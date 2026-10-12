@@ -4652,3 +4652,12 @@ test("seat_tick_settings acknowledges auto-rotation and records the server-deriv
   const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-auto-verbose", verbose: true });
   expect(verbose.autoRotate).toMatchObject({ setBy: { kind: "manager", conversationId: TICK_SEAT }, why: "operator requested in chat" });
 });
+
+
+test("list_pipelines names the successor carrying an automatic refresh", async () => {
+  const pipeline = { ...pipelineCorpus(1)[0]!, id: "refresh-parent", project: "fixture", state: "completed",
+    merge: { state: "refreshing", reason: null, by: null, prNumber: 11, refresh: { pipelineId: "refresh-successor" } } } as Pipeline;
+  const bindings = viewerMcpBindings(undefined, undefined, { getPipelines: () => ({ pipelines: [pipeline] }) } as never);
+  const answer = await bindings.list_pipelines({ clientRequestId: "list-refresh-successor", compact: false, project: "fixture" });
+  expect(answer.pipelines).toMatchObject([{ id: "refresh-parent", merge: { state: "refreshing", refresh: "refresh-successor" } }]);
+});

@@ -174,3 +174,15 @@ at 2254, 1960, 1440 and 1000 px, en and uk, light and dark, with the needs-you
 panel closed and docked.
 
 Not done here: the Overview's bar keeps its own layout and its fixed island.
+
+## The Tasks control and its panel left the bar (2026-10-12)
+
+The operator rejected every redesign of the old Tasks panel and asked for it to go: the kanban is where tasks live. The panel group now holds `Orchestrator` and the recent agents; nothing replaces the `Tasks N` segment, the panel it opened, or the Board's `aside` slot that drew the panel under the bar. Row: name · accounts · «● N» ‖ [find | filter] · + · [Orchestrator │ recent agents] · ⋯ · ● Needs you N. What the panel alone reached has a place on the existing surfaces:
+
+- tasks the board does not draw (empty bands taken off the board, done tasks past their retention) are rows of the Hidden tray, the Hidden row of ⋯, each with «Show on board»;
+- creating a task is the `Task` row of `+`; search is the find field;
+- tasks of every project are the Overview's board;
+- crowned conversations are pinned atop the needs-you panel, with their crowns;
+- a task link from another project still switches the dashboard and frames the card.
+
+The stored `taskPanelOpen` flag stays in the board schema so stored boards and tabs of an older build keep loading; nothing reads it. The phone never mounted this panel and keeps its own task sheet.

@@ -75,7 +75,7 @@ export interface PhoneCard {
   finished: boolean;
   /** The agents line, when it says something the pipeline line does not: a
       card with no pipeline, or agents working outside the shown pipeline. */
-  agents: { working: number; conversations: number; atMs: number } | null;
+  agents: { working: number; conversations: number; atMs: number; worked: boolean } | null;
   /** The conversation a Not on a task row opens and «Open first agent» opens:
       a working one first, else the band's first. */
   firstAgent: FileEntry | null;
@@ -221,7 +221,7 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
   /* A conversation that asks draws its own line, which already names the
      agent and its age; the agents line then only adds agents still working. */
   const says = need?.kind === "conversation" ? working > 0 : !shown || outside > 0;
-  const agents = kind === "task" && says ? { working, conversations: card.conversations, atMs } : null;
+  const agents = kind === "task" && says ? { working, conversations: card.conversations, atMs, worked: card.lastAgentWorkAtMs > 0 } : null;
   const cleared = reasons.length ? null : card.cleared[0] ?? null;
   const waitsOnPrototype = kind === "task" && !reasons.length && prototypeWaits(card);
   return { key: card.id, kind, card, need, reasons, cleared, waitsOnPrototype, edge, shown, others, finished, agents, firstAgent: firstAgentOf(card) };

@@ -638,18 +638,18 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
 export async function capturePrototypeQuestions(page: Page, phone: boolean) {
   return page.evaluate((phone) => {
     const frame = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review]" : "[data-prototype-review] [role=dialog]")!;
-    const questions = document.querySelector<HTMLElement>("[data-prototype-questions]")!;
-    const stage = document.querySelector<HTMLElement>("[data-prototype-stage]");
+    const questions = frame.querySelector<HTMLElement>("[data-prototype-questions]")!;
+    const stage = frame.querySelector<HTMLElement>("[data-prototype-gallery]");
     const bounds = frame.getBoundingClientRect();
-    const options = [...document.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]")];
-    const pillOverflow = [...document.querySelectorAll<HTMLElement>("[data-prototype-recommended]")].filter(pill => {
+    const options = [...frame.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]")];
+    const pillOverflow = [...frame.querySelectorAll<HTMLElement>("[data-prototype-recommended]")].filter(pill => {
       const box = pill.getBoundingClientRect(); const row = pill.closest("button")!.getBoundingClientRect();
       return box.left < row.left || box.right > row.right + 0.5;
     }).length;
-    const actions = [...document.querySelectorAll<HTMLElement>("[data-prototype-save], [data-prototype-skip]")].map(button => {
+    const actions = [...frame.querySelectorAll<HTMLElement>("[data-prototype-save], [data-prototype-skip]")].map(button => {
       const b = button.getBoundingClientRect(); return { text: button.textContent, visible: b.top >= bounds.top && b.bottom <= bounds.bottom + 0.5, x: b.x, y: b.y, width: b.width };
     });
-    const marks = [...document.querySelectorAll<HTMLElement>("[data-prototype-mark]")].map(mark => {
+    const marks = [...frame.querySelectorAll<HTMLElement>("[data-prototype-mark]")].map(mark => {
       const box = mark.getBoundingClientRect();
       return { multiple: mark.closest("button")!.getAttribute("role") === "checkbox", radius: parseFloat(getComputedStyle(mark).borderTopLeftRadius), width: box.width };
     });
@@ -660,16 +660,16 @@ export async function capturePrototypeQuestions(page: Page, phone: boolean) {
       return button.getBoundingClientRect().height - Math.max(44, need);
     }));
     const unpicked = options.filter(o => o.getAttribute("aria-checked") === "false");
-    const decision = document.querySelector<HTMLElement>("[data-prototype-decision]");
-    return { heightExcess, markLetters: [...document.querySelectorAll("[data-prototype-mark]")].filter(m => (m.textContent ?? "").trim() !== "").length,
-      hints: document.querySelectorAll("[data-prototype-hint]").length,
+    const decision = frame.querySelector<HTMLElement>("[data-prototype-decision]");
+    return { heightExcess, markLetters: [...frame.querySelectorAll("[data-prototype-mark]")].filter(m => (m.textContent ?? "").trim() !== "").length,
+      hints: frame.querySelectorAll("[data-prototype-hint]").length,
       unpickedFaded: unpicked.length > 0 && unpicked.every(o => parseFloat(getComputedStyle(o).opacity) < 1),
       statusLine: decision ? decision.querySelector("span")?.textContent ?? null : null, decisionText: decision?.textContent ?? null,
-      title: document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review] h2" : "[role=dialog] header p")?.textContent ?? null,
+      title: frame.querySelector<HTMLElement>(phone ? "h2" : "header p")?.textContent ?? null,
       sideways: frame.scrollWidth - frame.clientWidth, questionWidth: questions.getBoundingClientRect().width,
-      stageWidth: stage?.getBoundingClientRect().width ?? null, questionCount: document.querySelectorAll("[data-prototype-question]").length,
+      stageWidth: stage?.getBoundingClientRect().width ?? null, questionCount: frame.querySelectorAll("[data-prototype-question]").length,
       optionHeight: Math.min(...options.map(o => o.getBoundingClientRect().height)), pillOverflow, marks, actions,
-      actionsWidth: document.querySelector<HTMLElement>("[data-prototype-actions]")?.getBoundingClientRect().width ?? null,
-      readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(document.querySelector("[data-prototype-skipped]")) };
+      actionsWidth: frame.querySelector<HTMLElement>("[data-prototype-actions]")?.getBoundingClientRect().width ?? null,
+      readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(frame.querySelector("[data-prototype-skipped]")) };
   }, phone);
 }
