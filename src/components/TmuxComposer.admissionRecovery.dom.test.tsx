@@ -393,6 +393,8 @@ test("a payload restored in a new tab binds bare admission for operation recover
     expect(admissionReads).toBeGreaterThan(0);
     expect(operationReads).toBeGreaterThan(0);
     expect(fixture.state.sends).toBe(1);
+    expect(fixture.host.querySelectorAll("[data-delivery-echo]")).toHaveLength(1);
+    expect(fixture.host.querySelector("[data-delivery-echo]")?.textContent).toContain("Synthetic confirmed message");
     expect((fixture.host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Draft from the new tab");
     expect(fixture.host.textContent).not.toContain(translate("uk", "composer.deliveryUnconfirmed"));
   });
