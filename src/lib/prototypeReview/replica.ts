@@ -21,7 +21,7 @@ const schema = z.object({
     variants: z.array(z.object({ number: z.number().int().min(1).max(9), name: z.string().min(1).max(60), description: z.string().max(300),
       frames: z.array(z.object({ image: media, original: media.optional(), caption, width: z.number().int().min(240).max(3840).optional(), lang: z.enum(["en", "uk"]).optional() }).strict()).max(240),
       videos: z.array(z.object({ media, caption }).strict()).max(240) }).strict()).max(9),
-    decision: z.object({ chosen, answers: z.array(z.object({ questionId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/), options: z.array(z.number().int().min(0).max(5)).max(6), other: z.literal(true).optional() }).strict()).min(3).max(7).optional(), skipped: z.literal(true).optional(), comment: z.string().max(20000), at: instant, delivery: z.object({ state, retryable: z.boolean() }).strict() }).strict().optional(),
+    decision: z.object({ chosen, answers: z.array(z.object({ questionId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/), options: z.array(z.number().int().min(0).max(5)).max(6), other: z.literal(true).optional() }).strict()).min(1).max(7).optional(), skipped: z.literal(true).optional(), comment: z.string().max(20000), at: instant, delivery: z.object({ state, retryable: z.boolean() }).strict() }).strict().optional(),
   }).strict()).max(1000),
 }).strict();
 

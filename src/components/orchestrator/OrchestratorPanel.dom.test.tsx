@@ -2109,6 +2109,20 @@ test.each(["en", "uk"] as const)("a failure recorded with the lock's own diagnos
   expect(host.querySelector("[data-orchestrator-intent-error]")?.textContent ?? "").not.toMatch(/9559|Codex|mutation/);
 });
 
+test.each(["en", "uk"] as const)("the desktop banner for a failed designation carries the failure's time under its title (%s)", async (lang) => {
+  setLocale(lang);
+  seatStatus = { seat: null, pending: null, lastFailure: failedCreation(INCIDENT_BUSY), exists: true };
+  const host = mount();
+  await settle();
+  flushSync(() => undefined);
+
+  const time = host.querySelector("[data-orchestrator-intent-error] [data-orchestrator-failure-time]");
+  expect(time?.getAttribute("datetime")).toBe("2026-10-05T09:01:18.000Z");
+  expect(time?.textContent ?? "").not.toMatch(/AM|PM/);
+  /* One line between the title and the error text. */
+  expect(time?.nextElementSibling?.hasAttribute("data-orchestrator-failure-text")).toBe(true);
+});
+
 test.each(["en", "uk"] as const)("lost response, then the launch times out: the pane leaves «creating» for one error with retry, and a reload agrees (%s)", async (lang) => {
   setLocale(lang);
   /* The request that began this designation never answered. */

@@ -296,8 +296,9 @@ once (`--shared-only`), all three at the same time. A caller that kills the
 push at a limit of its own hands the hook a Unix-millisecond deadline in
 `LLV_GATE_PUSH_DEADLINE`; the controller's publication sets it a minute before
 its fifteen-minute limit. The fetch of `origin/main`, a cold-cache Bun or Codex
-install (which waits for machine admission) and every step then end by it, and
-nothing starts once it has passed. A stopped step takes with it every process
+install and every step use that execution deadline. CPU queue waits extend it,
+including waits during installation and earlier steps; once the remaining
+execution budget is spent, nothing starts. A stopped step takes with it every process
 that inherited its environment and every scope `gate-slot.sh` gave it; one that
 survives fails the push with its PIDs. The shared native
 contracts, which the hosted `Bun runtime pin` workflow also runs, are stopped
@@ -313,15 +314,16 @@ Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 `LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
 (default `8G`), and a default Node heap of 6144 MB. The slot locks live in
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
-share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. On Linux a
-gate waits while CPU pressure is high (sampled again when it takes its slot),
-then runs in its own scope in
+share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage starts and gates share a durable FIFO CPU queue. After ten minutes,
+the head can start under sustained pressure, with two seconds between admissions.
+Queue waits are excluded from hook and command execution budgets. On Linux a
+gate then runs in its own scope in
 `delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
 systemd manager, or when the kernel shows no CPU quota on the gate's scope, it
 refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted. Linux commands run in a transient service with
-`KillMode=control-group`, a two-second TERM-to-KILL bound and a finite deadline
-(`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes). A recorded caller start
+`KillMode=control-group`, a two-second TERM-to-KILL bound and a finite execution deadline
+(`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
 Linux requires a reachable user systemd manager. macOS and Windows use an

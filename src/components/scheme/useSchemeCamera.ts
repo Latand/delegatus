@@ -113,7 +113,7 @@ export interface SchemeCamera {
   /** One-shot «task» tool: armed until the placing click or Esc. */
   taskTool: boolean;
   setTaskTool: (next: boolean) => void;
-  /** Glide a world rect into view (task panel rows, far-zoom inline edit). */
+  /** Glide a world rect into view (a task link, far-zoom inline edit). */
   centerOn: (rect: SchemeRect, zMin: number) => void;
   panning: boolean;
   glide: boolean;
@@ -510,7 +510,7 @@ export function useSchemeCamera({
 
   const glideTo = useCallback((next: Camera | ((c: Camera) => Camera)) => {
     /* Every explicit framing but the focus aim itself — fit, jump, Return, a
-       task-panel row — is the operator deciding where to look, and ends any
+       task link — is the operator deciding where to look, and ends any
        focus request still owed. */
     dropFocusAim();
     /* Reduced motion: skip the CSS transition — the move lands instantly. */

@@ -1922,6 +1922,7 @@ describe("MCP tool service", () => {
         "deployment_status",
         "resources",
         "conversation_migration",
+        "agent_fleet",
         "agent_activity",
         "lifecycle_events",
         "request_attention",
@@ -1949,7 +1950,7 @@ describe("MCP tool service", () => {
         "relay_owner_history",
         "issue_report",
       ]);
-      const optionalReadKeys = new Set(["relay_owner_history", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review"]);
+      const optionalReadKeys = new Set(["relay_owner_history", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");

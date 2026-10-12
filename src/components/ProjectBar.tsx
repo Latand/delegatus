@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Filter, History, ListTodo, MoreHorizontal, Plus, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Filter, History, MoreHorizontal, Plus, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
@@ -55,8 +55,7 @@ const BoardPaneContext = createContext<((pane: HTMLElement | null) => void) | nu
 /**
  * Where the board's columns are, for the Viewer's needs-you panel: it docks
  * beside the board only while the columns keep room, and the columns' own
- * pane is what a seat open beside them and the Tasks panel take their width
- * out of. The kanban board hands its pane in when it mounts.
+ * pane is what a seat open beside them takes its width out of. The kanban board hands its pane in when it mounts.
  */
 export function BoardPaneProvider({ onPane, children }: { onPane: (pane: HTMLElement | null) => void; children: ReactNode }) {
   return <BoardPaneContext.Provider value={onPane}>{children}</BoardPaneContext.Provider>;
@@ -90,8 +89,8 @@ export const BAR_WIDE_MIN = 1700;
  * a token the bar carries in `data-fit` once it is reached, and the bar's CSS
  * reads the tokens. The search field shrinks before any step, down to the
  * width that keeps its placeholder whole, and the project name never truncates
- * while a step is left: the account switches move into ⋯, Orchestrator and
- * Tasks keep their icons, the needs-you chip keeps its dot and count, the
+ * while a step is left: the account switches move into ⋯, Orchestrator
+ * keeps its icon, the needs-you chip keeps its dot and count, the
  * groups stand 8 px apart, and last the search may go under its placeholder.
  */
 export const BAR_FIT_STEPS = ["accounts", "labels", "chip", "tight", "find"] as const;
@@ -358,20 +357,21 @@ const SEAT_DOT_TONE: Record<string, string> = {
 };
 
 /**
- * The panel group, one segmented control: the orchestrator dock, the task
- * panel and, on the board, the recent agents (`tail`). Orchestrator and Tasks
- * carry their words while the row has room; the bar's `labels` step leaves
- * their icons (and the count), and the words stay in the tooltips.
+ * The panel group, one segmented control: the orchestrator dock and, on the
+ * board, the recent agents (`tail`). Orchestrator carries its word while the
+ * row has room; the bar's `labels` step leaves its icon, and the word stays in
+ * the tooltip. Tasks live on the kanban board itself; the old Tasks panel and
+ * its segment left the bar on 2026-10-12.
  */
-export function BarPanelToggles({ orchestrator, tasks, tail }: {
+export function BarPanelToggles({ orchestrator, tail }: {
   /** The group's last segment: the recent agents' control. */
   tail?: ReactNode;
   /** `dot`: the collapsed seat's state (#1841), drawn on the icon so it stays
       readable with the seat out of view. */
   orchestrator: { open: boolean; onToggle: () => void; dot?: { tone: string; label: string } | null } | null;
-  tasks: { open: boolean; count: number; onToggle: () => void };
 }) {
   const { t } = useLocale();
+  if (!orchestrator && !tail) return null;
   return (
     <div className="flex shrink-0 items-center" data-bar-group="panels">
       {orchestrator ? (
@@ -399,20 +399,6 @@ export function BarPanelToggles({ orchestrator, tasks, tail }: {
           <span data-fit-label="">{t("orchPanel.title")}</span>
         </button>
       ) : null}
-      <button
-        type="button"
-        onClick={tasks.onToggle}
-        aria-pressed={tasks.open}
-        aria-label={t("tasks.panelToggleAria")}
-        title={t("tasks.panelToggleAria")}
-        data-task-panel-toggle=""
-        data-bar-control=""
-        className={`${BAR_CONTROL} ${tasks.open ? BAR_PRESSED : BAR_OUTLINED}`}
-      >
-        <ListTodo className={BAR_ICON} aria-hidden />
-        <span data-fit-label="">{t("tasks.panelTitle")}</span>
-        {tasks.count ? <span className="font-normal text-muted tabular-nums">{tasks.count}</span> : null}
-      </button>
       {tail}
     </div>
   );

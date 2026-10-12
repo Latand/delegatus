@@ -4,6 +4,8 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { BOARD_CLOCK_MS, useNowSeconds } from "@/hooks/useNowSeconds";
+import { fileAgentActivity, type AgentActivity } from "@/lib/lifecycle/agentActivity";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
@@ -30,7 +32,7 @@ function ElapsedTimer({ startedAt, label, human = false }: { startedAt: number; 
 
 interface Props {
   file: WorkingSinceFile
-    & Partial<Pick<FileEntry, "mtime" | "pendingQuestion" | "waitingInput" | "rateLimit">>;
+    & Partial<Pick<FileEntry, "mtime" | "pendingQuestion" | "waitingInput" | "rateLimit" | "proc" | "agentActivity">>;
   workingLabel: string;
   workingIcon: LucideIcon;
   compact?: boolean;
@@ -71,7 +73,21 @@ function waitingStartedAt(file: Props["file"]): number | null {
  * rather than only at the mount site so no second mount can bring the row back
  * to a phone.
  */
-export function TurnStatusBar({ file, workingLabel, workingIcon: Icon, compact = false }: Props) {
+export function TurnStatusBar(props: Props) {
+  /* Only a file carrying the transcript's activity facts needs the board clock. */
+  return props.file.agentActivity && props.file.proc === "running" ? <ClockedTurnStatusBar {...props} /> : <TurnStatusBarView {...props} activity={null} />;
+}
+
+/* The transcript's own reading of a running agent: the bar agrees with the
+   board dot and the reader header instead of claiming plain work. */
+function ClockedTurnStatusBar(props: Props) {
+  const clock = useNowSeconds(BOARD_CLOCK_MS);
+  const { file } = props;
+  const activity = turnIsRunning(file) && file.agentActivity ? fileAgentActivity({ agentActivity: file.agentActivity, mtime: file.mtime ?? 0 }, clock * 1000) : null;
+  return <TurnStatusBarView {...props} activity={activity} />;
+}
+
+function TurnStatusBarView({ file, workingLabel, workingIcon: Icon, compact = false, activity }: Props & { activity: AgentActivity | null }) {
   const { t } = useLocale();
   const phone = useIsMobile();
   const waiting = Boolean(file.pendingQuestion || file.rateLimit || file.waitingInput);
@@ -107,12 +123,25 @@ export function TurnStatusBar({ file, workingLabel, workingIcon: Icon, compact =
     );
   }
 
+  if (activity?.state === "idle") {
+    return (
+      <div
+        data-turn-status="idle"
+        className={`flex shrink-0 items-center justify-center gap-2 border-t border-border ${pad} text-[12px] font-semibold text-muted`}
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-danger" aria-hidden />
+        <span className="min-w-0 truncate">{t("cardStatus.idle")} {t("cardStatus.idleMinutes", { n: Math.floor((activity.idleForMs ?? 0) / 60_000) })}</span>
+      </div>
+    );
+  }
+
   if (running) {
+    const checking = activity?.state === "checking";
     return (
       <div
         /* Deliberately NOT role="status": a live region would announce every
            1 Hz tick. The timer's own role="timer" keeps it silent but named. */
-        data-turn-status="running"
+        data-turn-status={checking ? "checking" : "running"}
         className={`flex shrink-0 items-center justify-center gap-2 border-t border-border ${pad} text-[12px] font-semibold text-success`}
       >
         <span className="flex items-center gap-0.5" aria-hidden>
@@ -121,7 +150,7 @@ export function TurnStatusBar({ file, workingLabel, workingIcon: Icon, compact =
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-success [animation-delay:300ms]" />
         </span>
         <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="min-w-0 truncate">{workingLabel}</span>
+        <span className="min-w-0 truncate">{checking ? t("cardStatus.checking") : workingLabel}</span>
         {since !== null ? (
           <>
             <span aria-hidden>·</span>

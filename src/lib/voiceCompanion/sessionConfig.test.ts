@@ -32,7 +32,7 @@ test("the Live configuration exposes the explicit read allowlist and the delegat
   expect(LIVE_MODEL).toBe("gpt-live-1");
   expect(COMPANION_TOOLS.map(tool => tool.name)).toEqual([
     "list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame",
-    "relay_owner_history", "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
+    "agent_fleet", "relay_owner_history", "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
   ]);
   for (const locale of ["en", "uk"] as const) {
     const config = liveSessionConfiguration(locale);

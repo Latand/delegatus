@@ -363,7 +363,7 @@ const cache = new Map<string, CachedLedger>();
  * uses cannot promise. Only complete lines are consumed; a replaced or
  * truncated file starts over. Null when the file cannot be read.
  */
-export async function readBackgroundTaskLedger(transcriptPath: string): Promise<BackgroundTaskLedger | null> {
+export async function readBackgroundTaskLedger(transcriptPath: string, options: { maxBytes?: number } = {}): Promise<BackgroundTaskLedger | null> {
   let handle: fs.promises.FileHandle | null = null;
   try {
     handle = await fs.promises.open(transcriptPath, "r");
@@ -374,11 +374,14 @@ export async function readBackgroundTaskLedger(transcriptPath: string): Promise<
     if (!cached || cached.dev !== stat.dev || cached.ino !== stat.ino || cached.offset > size) {
       cached = { dev: stat.dev, ino: stat.ino, offset: 0, ledger: emptyBackgroundTaskLedger() };
     }
+    // Bounded observers can use the existing incremental ledger, but never
+    // start an unbounded cold history read to classify one current turn.
     let { offset, ledger } = cached;
+    const through = Math.min(size, offset + Math.max(0, options.maxBytes ?? Infinity));
     let carry = Buffer.alloc(0);
     const buffer = Buffer.alloc(READ_CHUNK_BYTES);
-    while (offset < size) {
-      const read = await handle.read(buffer, 0, Math.min(READ_CHUNK_BYTES, size - offset), offset);
+    while (offset < through) {
+      const read = await handle.read(buffer, 0, Math.min(READ_CHUNK_BYTES, through - offset), offset);
       if (read.bytesRead === 0) break;
       offset += read.bytesRead;
       /* Split on the newline byte, so a multi-byte character across a chunk
@@ -405,7 +408,7 @@ export async function readBackgroundTaskLedger(transcriptPath: string): Promise<
     cache.delete(transcriptPath);
     cache.set(transcriptPath, { dev: stat.dev, ino: stat.ino, offset: consumed, ledger });
     while (cache.size > MAX_CACHED_TRANSCRIPTS) cache.delete(cache.keys().next().value!);
-    return ledger;
+    return options.maxBytes === undefined || consumed === size ? ledger : null;
   } catch {
     return null;
   } finally {

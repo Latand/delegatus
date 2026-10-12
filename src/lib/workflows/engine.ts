@@ -23,7 +23,9 @@ import { paneInfo, spawnAgentWithPrompt } from "@/lib/tmux";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { cpuPressureHoldDetail, isCpuPressureDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { cpuPressureHoldDetail, isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { machineCpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
+import { stateDir } from "@/lib/configDir";
 import { realExec, provisionWorktree, runFinish, setupStatus, startSetup, type ExecPort, type SetupStatus } from "./provision";
 import { fixerKickoff, prBody, stageKickoff } from "./prompts";
 import { buildWorkflow, loadTemplates, loadWorkflows, normalizeStages, saveWorkflows, setupExitPath, validateWorkflowLaunchModels } from "./store";
@@ -59,7 +61,9 @@ export interface WorkflowPorts {
   exec: ExecPort;
   startSetup(wf: Workflow): { pid: number | null; error?: string };
   /** A held setup or stage-agent start waits for CPU pressure to fall; null admits. */
-  cpuPressureHold?(): CpuPressureHold | null;
+  cpuPressureHold?(key: string): CpuPressureHold | null;
+  cpuAdmissionReconcile?(): void;
+  cpuAdmissionSuspend?(key: string): void;
   setupStatus(wf: Workflow): SetupStatus;
   spawnAgent(role: RoleConfig, cwd: string, prompt: string, accountId: string | null | undefined, title: string): Promise<StageSpawn>;
   /** The pane still hosts a non-shell foreground process. */
@@ -82,7 +86,9 @@ export function defaultPorts(): WorkflowPorts {
   return {
     exec: realExec,
     startSetup,
-    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
+    cpuPressureHold: (key) => machineCpuPressureGate()?.check(key) ?? null,
+    cpuAdmissionReconcile: reconcileCpuAdmission,
+    cpuAdmissionSuspend: (key) => machineCpuAdmissionQueue().suspend(key),
     setupStatus,
     spawnAgent: async (role, cwd, prompt, accountId, title) => {
       const account = accountManager.resolveSpawn(role.engine, accountId);
@@ -248,6 +254,36 @@ function advanceStage(wf: Workflow): void {
 const SETUP_HOLD_SUBJECT = "setup";
 const STAGE_HOLD_SUBJECT = "stage start";
 
+function cpuWorkflowPrefix(): string {
+  return `workflow:${crypto.createHash("sha256").update(stateDir()).digest("hex")}:`;
+}
+
+function cpuWorkflowKey(wf: Workflow, phase: "setup" | "stage"): string {
+  return `${cpuWorkflowPrefix()}${wf.id}:${phase === "setup" ? "setup" : `stage:${wf.stageIndex}`}`;
+}
+
+function cpuWorkflowPhase(wf: Workflow): "setup" | "stage" | null {
+  const phase = phaseOf(wf), run = currentRun(wf);
+  if (phase === "provisioning" && wf.template.setup && wf.setupPid == null) return "setup";
+  if ((phase === "implementing" || phase === "reviewing") && run && !run.startedAt && !run.doneAt) return "stage";
+  return null;
+}
+
+/** Parked work and update holds retain their place without blocking callers.
+ * Reconcile from durable records so a restart also removes superseded phases. */
+function reconcileCpuAdmission(): void {
+  const active = new Set<string>(), eligible = new Set<string>();
+  const drain = activeDrain();
+  if (machineCpuPressureGate()) for (const wf of loadWorkflows()) {
+    const phase = cpuWorkflowPhase(wf);
+    if (!phase) continue;
+    const key = cpuWorkflowKey(wf, phase);
+    active.add(key);
+    if (!PARKED_STATES.has(wf.state) && !(wf.mode === "auto" && drain)) eligible.add(key);
+  }
+  machineCpuAdmissionQueue().reconcile(cpuWorkflowPrefix(), active, eligible);
+}
+
 async function ensureStageAgent(
   wf: Workflow,
   run: WorkflowStageRun,
@@ -258,12 +294,10 @@ async function ensureStageAgent(
   persistCheckpoint: () => void,
 ): Promise<"spawning" | "waiting" | "ready"> {
   if (!run.startedAt) {
-    if (wf.mode === "auto" && activeDrain()) return "waiting";
-    // Only a fresh start asks; a stage whose start is stamped is observed and
-    // recovered below whatever the pressure reads.
-    const pressure = ports.cpuPressureHold?.();
-    if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, STAGE_HOLD_SUBJECT); return "waiting"; }
-    if (isCpuPressureDetail(wf.stateDetail, STAGE_HOLD_SUBJECT)) wf.stateDetail = null;
+    if (wf.mode === "auto" && activeDrain()) {
+      ports.cpuAdmissionSuspend?.(cpuWorkflowKey(wf, "stage"));
+      return "waiting";
+    }
     /* #1279: a workflow stage is a launch of the workflow's project's work, so
        it draws its account from that project's allowed set like every other
        one. An unbound project takes the branch this always took — the engine's
@@ -271,7 +305,8 @@ async function ensureStageAgent(
        of capacity PARKS with the reason, rather than reaching for the idle
        account it forbids. Resolved before `startedAt` is stamped so a parked
        stage re-enters this branch cleanly once the operator answers. */
-    if (!run.accountId) {
+    let accountId = run.accountId;
+    if (!accountId) {
       /* A damaged binding record throws out of the resolution rather than
          answering, and that refusal belongs to THIS stage: parked with the
          reason, like every other one, instead of thrown into the tick that
@@ -281,14 +316,22 @@ async function ensureStageAgent(
         resolution = accountManager.resolveProjectSpawn(role.engine, { project: wf.project, model: role.model });
       } catch (error) {
         park(wf, error instanceof Error ? error.message : String(error));
+        ports.cpuAdmissionSuspend?.(cpuWorkflowKey(wf, "stage"));
         return "waiting";
       }
       if (resolution.kind !== "available") {
         park(wf, projectAccountRefusalDetail(resolution, role.engine, wf.project));
+        ports.cpuAdmissionSuspend?.(cpuWorkflowKey(wf, "stage"));
         return "waiting";
       }
-      run.accountId = resolution.account.accountId;
+      accountId = resolution.account.accountId;
     }
+    // An unassigned account remains a fresh capacity observation on every
+    // poll; bind it only when the other launch gates admit the stage.
+    const pressure = ports.cpuPressureHold?.(cpuWorkflowKey(wf, "stage"));
+    if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, STAGE_HOLD_SUBJECT); return "waiting"; }
+    if (isCpuPressureDetail(wf.stateDetail, STAGE_HOLD_SUBJECT)) wf.stateDetail = null;
+    run.accountId = accountId;
     run.startedAt = ports.now();
     spawnsThisProcess.add(spawnKey(wf, run));
     persistCheckpoint();
@@ -361,7 +404,11 @@ async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheck
     if (wf.setupPid == null && ports.setupStatus(wf).status !== "done") {
       // Only the first launch asks; a setup that already started is observed
       // below whatever the pressure reads.
-      const pressure = ports.cpuPressureHold?.();
+      if (wf.mode === "auto" && activeDrain()) {
+        ports.cpuAdmissionSuspend?.(cpuWorkflowKey(wf, "setup"));
+        return;
+      }
+      const pressure = ports.cpuPressureHold?.(cpuWorkflowKey(wf, "setup"));
       if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, SETUP_HOLD_SUBJECT); return; }
       const started = ports.startSetup(wf);
       if (started.pid == null) {
@@ -549,21 +596,75 @@ interface TickResult {
 }
 
 export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts = defaultPorts()): Promise<TickResult> {
-  if (store.__llvWorkflowTick) return { workflows: loadWorkflows(), changed: false };
+  if (store.__llvWorkflowTick) {
+    ports.cpuAdmissionReconcile?.();
+    return { workflows: loadWorkflows(), changed: false };
+  }
   store.__llvWorkflowTick = true;
+  const entriesByPath = new Map(entries.map((entry) => [entry.path, entry]));
+  const running = new Set<string>();
+  const starts = new Map<string, Promise<void>>();
+  let admissionWork: Promise<void> | null = null, admissionChanged = false;
+  const serviceStarts = async () => {
+    ports.cpuAdmissionReconcile?.();
+    for (const snapshot of loadWorkflows()) {
+      // An earlier launch can await host setup while a later workflow is
+      // paused or closed. Observe that control before asking for admission.
+      const current = loadWorkflows();
+      const wf = current.find(item => item.id === snapshot.id);
+      if (!wf) continue;
+      const phase = cpuWorkflowPhase(wf);
+      if (!phase || running.has(wf.id) || PARKED_STATES.has(wf.state) || TERMINAL_STATES.has(wf.state)
+        || (phase === "setup" && !wf.baseRef) || (wf.mode === "auto" && activeDrain())) continue;
+      running.add(wf.id);
+      const work = (async () => {
+        if (await tickWorkflow(wf, entries, entriesByPath, ports, () => saveWorkflows(current))) {
+          admissionChanged = true;
+          saveWorkflows(current);
+        }
+      })().catch(error => { console.error("[workflows] CPU-admitted start failed", error); })
+        .finally(() => { running.delete(wf.id); starts.delete(wf.id); });
+      starts.set(wf.id, work);
+    }
+  };
+  // The controller serializes passes. Keep update holds observable while a
+  // finish command waits, and keep eligible starts polling that same queue.
+  const admissionWatch = ports.cpuAdmissionReconcile ? setInterval(() => {
+    if (admissionWork) return;
+    admissionWork = serviceStarts()
+      .catch(error => { console.error("[workflows] CPU admission reconciliation failed", error); })
+      .finally(() => { admissionWork = null; });
+  }, machineCpuPressurePollMs()) : null;
+  admissionWatch?.unref();
+  const stopAdmissionPolling = async () => {
+    // Host setup can wait after admission. Service later queue heads until
+    // every launch this pass owns settles, then leave no background work.
+    while (admissionWork || starts.size) await Promise.all([admissionWork, ...starts.values()]);
+    if (admissionWatch) clearInterval(admissionWatch);
+  };
   try {
+    ports.cpuAdmissionReconcile?.();
     const workflows = loadWorkflows();
-    const entriesByPath = new Map(entries.map((entry) => [entry.path, entry]));
     let changed = false;
-    for (const wf of workflows) {
+    for (let index = 0; index < workflows.length; index++) {
+      if (TERMINAL_STATES.has(workflows[index]!.state) || PARKED_STATES.has(workflows[index]!.state)) continue;
+      const wf = loadWorkflows().find(item => item.id === workflows[index]!.id);
+      if (!wf || running.has(wf.id)) continue;
+      workflows[index] = wf;
       if (TERMINAL_STATES.has(wf.state) || PARKED_STATES.has(wf.state)) continue;
-      if (await tickWorkflow(wf, entries, entriesByPath, ports, () => saveWorkflows(workflows))) changed = true;
+      running.add(wf.id);
+      try {
+        if (await tickWorkflow(wf, entries, entriesByPath, ports, () => saveWorkflows(workflows))) changed = true;
+      } finally { running.delete(wf.id); }
       if (changed) saveWorkflows(workflows);
     }
+    await stopAdmissionPolling();
     if (changed) saveWorkflows(workflows);
-    return { workflows, changed };
+    return { workflows: loadWorkflows(), changed: changed || admissionChanged };
   } finally {
+    await stopAdmissionPolling();
     store.__llvWorkflowTick = false;
+    ports.cpuAdmissionReconcile?.();
   }
 }
 
@@ -679,6 +780,7 @@ export async function patchWorkflow(
   }
 
   saveWorkflows(workflows);
+  ports.cpuAdmissionReconcile?.();
   return { workflow: wf };
 }
 

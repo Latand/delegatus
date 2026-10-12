@@ -368,7 +368,7 @@ test("the recent agents are the panel group's last segment: an icon with its nam
   await settle();
 
   const panels = bar(host).querySelector('[data-bar-group="panels"]') as HTMLElement;
-  expect(Array.from(panels.children).map((child) => child.hasAttribute("data-orchestrator-toggle") ? "orchestrator" : child.hasAttribute("data-task-panel-toggle") ? "tasks" : child.hasAttribute("data-bar-recent") ? "recent" : child.tagName)).toEqual(["orchestrator", "tasks", "recent"]);
+  expect(Array.from(panels.children).map((child) => child.hasAttribute("data-orchestrator-toggle") ? "orchestrator" : child.hasAttribute("data-bar-recent") ? "recent" : child.tagName)).toEqual(["orchestrator", "recent"]);
   const toggle = panels.querySelector("[data-bar-recent-toggle]") as HTMLElement;
   /* A quiet icon: no words in the row, its name in the tooltip and for assistive technology. */
   expect(text(toggle)).toBe("");
@@ -483,14 +483,13 @@ test("with room, every daily control is in the row, labelled where the row has w
 
   const inBar = bar(host);
   expect(inBar.getAttribute("data-fit")).toBe("");
-  for (const selector of ["[data-kanban-search]", "[data-bar-filter-toggle]", "[data-bar-create]", "[data-orchestrator-toggle]", "[data-task-panel-toggle]", "[data-bar-recent-toggle]", "[data-bar-more]", "[data-account-switch-engine]"]) {
+  for (const selector of ["[data-kanban-search]", "[data-bar-filter-toggle]", "[data-bar-create]", "[data-orchestrator-toggle]", "[data-bar-recent-toggle]", "[data-bar-more]", "[data-account-switch-engine]"]) {
     expect({ selector, found: inBar.querySelector(selector) !== null }).toEqual({ selector, found: true });
   }
   /* What left the row: the two create buttons, the Hidden pill and the view switch. */
   expect(inBar.querySelector("[data-new-task], [data-new-agent], [data-hidden-pill], [data-view-tab]")).toBeNull();
-  /* Orchestrator and Tasks say their names while the row has room. */
+  /* Orchestrator says its name while the row has room. */
   expect(text(inBar.querySelector("[data-orchestrator-toggle] [data-fit-label]"))).toBe(en["orchPanel.title"]);
-  expect(text(inBar.querySelector("[data-task-panel-toggle] [data-fit-label]"))).toBe(en["tasks.panelTitle"]);
 
   const menu = openMore(host);
   const rows = text(menu);
@@ -506,7 +505,7 @@ test("with room, every daily control is in the row, labelled where the row has w
   expect(menu.querySelector('[data-testid="sound-settings"]')).not.toBeNull();
 });
 
-test("a short row gives up the fewest things, in order: the accounts first, then the words of Orchestrator and Tasks", async () => {
+test("a short row gives up the fewest things, in order: the accounts first, then the word of Orchestrator", async () => {
   /* 100 px short: the accounts' 300 px are enough, and nothing else is given up. */
   barWidth = 1100;
   rowNeeds = 1200;
@@ -530,10 +529,9 @@ test("a short row gives up the fewest things, in order: the accounts first, then
   /* They are a section of ⋯ that opens in place, its rows mounted while it is closed. */
   expect(row.closest("[data-bar-menu-section]")!.getAttribute("data-bar-menu-section")).toBe("accounts");
   expect(menu.querySelector('[data-bar-menu-head="accounts"]')?.getAttribute("aria-expanded")).toBe("false");
-  /* The toggles keep their names for a pointer and for assistive technology at every step. */
+  /* The toggle keeps its name for a pointer and for assistive technology at every step. */
   expect(inBar.querySelector("[data-orchestrator-toggle]")!.getAttribute("aria-label")).toBe(en["orchPanel.toggleAria"]);
   expect(inBar.querySelector("[data-orchestrator-toggle]")!.getAttribute("title")).toBe(en["orchPanel.toggleAria"]);
-  expect(inBar.querySelector("[data-task-panel-toggle]")!.getAttribute("title")).toBe(en["tasks.panelToggleAria"]);
 });
 
 test("each further step is taken only when the one before it was not enough, and the row never wraps", async () => {
@@ -627,29 +625,30 @@ test("+ is one control: an icon in the control's own colour, never a glyph, open
   expect(control.getAttribute("aria-haspopup")).toBe("menu");
 });
 
-test("the Tasks panel opens under the Board's one bar, so the bar spans it and stays one row", async () => {
-  barWidth = 1032;
-  const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  await settle();
-  click(bar(host).querySelector("[data-task-panel-toggle]"));
-  expect(await waitFor(() => host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) !== null)).toBe(true);
-  await settle();
-
-  const panel = host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) as HTMLElement;
-  expect(host.querySelectorAll(`aside[aria-label="${en["tasks.panelTitle"]}"]`)).toHaveLength(1);
-  const board = host.querySelector("[data-kanban-board]") as HTMLElement;
-  /* The panel is inside the board, below the bar: the bar is the board's first row and the panel
-     sits in the row under it, beside the columns. */
-  expect(board.contains(panel)).toBe(true);
-  expect(board.firstElementChild).toBe(bar(host));
-  expect(bar(host).contains(panel)).toBe(false);
-  expect(panel.closest(".kb-body")?.previousElementSibling).toBe(bar(host));
-  expect(bar(host).querySelector("[data-task-panel-toggle]")!.getAttribute("aria-pressed")).toBe("true");
-
-  /* The toggle in the bar still closes it. */
-  click(bar(host).querySelector("[data-task-panel-toggle]"));
-  expect(await waitFor(() => host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) === null)).toBe(true);
+/* The old Tasks panel left the desktop board (2026-10-12): the kanban is where tasks live. The row
+   draws no control for it at full width or once it gave up its words, and a board stored with the
+   panel open draws no panel. Nothing takes its place in the panel group. */
+test("no Tasks panel control in the row and no task panel on the board, even when the stored board left it open", async () => {
+  for (const needs of [0, 1301]) {
+    barWidth = 1100;
+    rowNeeds = needs;
+    boards = { [PROJECT]: { ...seededBoard(), prefs: { ...seededBoard().prefs, taskPanelOpen: true } } };
+    const host = mount();
+    expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+    await settle();
+    const inBar = bar(host);
+    expect(inBar.querySelector("[data-task-panel-toggle]")).toBeNull();
+    expect(Array.from((inBar.querySelector('[data-bar-group="panels"]') as HTMLElement).children).map((child) => child.hasAttribute("data-orchestrator-toggle") ? "orchestrator" : child.hasAttribute("data-bar-recent") ? "recent" : child.tagName)).toEqual(["orchestrator", "recent"]);
+    expect(host.querySelector("[data-task-panel], .kb-aside")).toBeNull();
+    expect(text(inBar)).not.toContain(en["tasks.panelTitle"]);
+    expect(inBar.hasAttribute("data-bar-wrap")).toBe(false);
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    dom.document.body.replaceChildren();
+    projectCounter += 1;
+    PROJECT = `header-bar-${projectCounter}`;
+    resetSelectionSessionsForTest();
+  }
 });
 
 test("uk: the row's names and ⋯ read in Ukrainian, and who works is a number with its words in the tooltip", async () => {
@@ -828,7 +827,7 @@ test("`/` and `u` keep their meaning on the Viewer's controls the bar brought in
     await settle();
 
     const more = bar(host).querySelector("[data-bar-more]") as HTMLElement;
-    const toggle = bar(host).querySelector("[data-task-panel-toggle]") as HTMLElement;
+    const toggle = bar(host).querySelector("[data-orchestrator-toggle]") as HTMLElement;
     const islandButton = host.querySelector("[data-island-first]") as HTMLElement;
     for (const target of [more, toggle, islandButton]) {
       const before = slashesReachingViewer;
