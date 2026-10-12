@@ -114,6 +114,11 @@ function representation(value: unknown): FilesResponseWorkerWireRepresentation |
 function workerLaunch(cwd = process.cwd()): { executable: string; workerPath: string } {
   const source = path.join(cwd, "src/lib/filesResponse.worker.ts");
   const bundled = path.join(cwd, ".next/server/files-response-worker.js");
+  /* The candidate performance gate runs the Viewer from source and measures
+     the worker the same way; a bundle left by an earlier build is other code. */
+  if (fs.existsSync(source) && process.env.LLV_FILES_RESPONSE_WORKER_LAUNCH === "source") {
+    return { executable: process.versions.bun ? process.execPath : (process.env.LLV_BUN_EXECUTABLE || "bun"), workerPath: source };
+  }
   if (fs.existsSync(source) && fs.existsSync("/usr/local/bin/bun-container")) {
     return { executable: "/usr/local/bin/bun-container", workerPath: source };
   }

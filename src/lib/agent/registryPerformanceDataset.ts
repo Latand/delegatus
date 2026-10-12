@@ -39,6 +39,15 @@ export interface RegistryPerformanceDatasetShape {
   pendingDeliveries: number;
   uncertainDeliveries: number;
   outstandingReceipts: number;
+  /** The newest live entries that are structured hosts: a release hands each
+      one over to its successor, which re-hosts it. */
+  workers: number;
+  /** The newest entries whose conversations still have their transcripts. */
+  transcripts: number;
+  /** Working directories the history is spread over. The board shows the ten
+      most recently active projects, so a history that fits in them keeps
+      every row on the board whichever project a write makes the newest. */
+  projects: number;
 }
 
 /** The production-like default: 30,356 rows. */
@@ -57,6 +66,9 @@ export const REGISTRY_PERFORMANCE_SHAPE: RegistryPerformanceDatasetShape = Objec
   pendingDeliveries: 16,
   uncertainDeliveries: 8,
   outstandingReceipts: 12,
+  workers: 4,
+  transcripts: 320,
+  projects: 8,
 });
 
 /** A small shape with the same structure, for fast tests. */
@@ -78,6 +90,9 @@ export function scaledRegistryPerformanceShape(factor: number): RegistryPerforma
     pendingDeliveries: shape.pendingDeliveries,
     uncertainDeliveries: shape.uncertainDeliveries,
     outstandingReceipts: shape.outstandingReceipts,
+    workers: shape.workers,
+    transcripts: Math.min(shape.transcripts, scaled(shape.entries, 32)),
+    projects: shape.projects,
   };
 }
 
@@ -87,8 +102,10 @@ export interface RegistryPerformanceDataset {
   rows: number;
   coldRows: number;
   payloadBytes: number;
-  /** Entry rows a live host owns. They must stay hot and unchanged. */
+  /** Live entry rows the writers restamp. They must stay hot. */
   activeEntryKeys: string[];
+  /** Structured-host entries a running worker serves, with their transcripts. */
+  workers: Array<{ key: string; sessionId: string; transcript: string }>;
   /** Delivery ids whose evidence a release must never archive or rewrite. */
   pendingDeliveryIds: string[];
   uncertainDeliveryIds: string[];
@@ -97,8 +114,17 @@ export interface RegistryPerformanceDataset {
   /** Operation ids of cold and hot deliveries, for keyed lookups. */
   coldOperationIds: string[];
   hotOperationIds: string[];
+  /** Conversations whose transcripts exist under `sessionsRoot`, newest last. */
   conversationPaths: string[];
+  /** Each of those conversations' identity and the project the board files it under. */
+  conversations: Array<{ path: string; conversationId: string; cwd: string }>;
   seedMs: number;
+}
+
+export interface RegistryPerformanceDatasetOptions {
+  /** Where the transcripts go: a Codex sessions directory in a sandboxed home.
+      Without one every path is invented and nothing is written. */
+  sessionsRoot?: string;
 }
 
 const ROOT_GRANT = ["viewer", "telegram"];
@@ -112,8 +138,15 @@ const conversationId = (index: number) => `conversation_${uuid(index)}` as Regis
 export function buildRegistryPerformanceDataset(
   directory: string,
   shape: RegistryPerformanceDatasetShape = REGISTRY_PERFORMANCE_SHAPE,
+  options: RegistryPerformanceDatasetOptions = {},
 ): RegistryPerformanceDataset {
   const started = performance.now();
+  const sessionsRoot = options.sessionsRoot;
+  /* A Codex rollout name ends in its session id, which is how the scanner and
+     the registry agree on which conversation a transcript is. */
+  const transcriptOf = (index: number) => sessionsRoot
+    ? path.join(sessionsRoot, "2026", "10", "01", `rollout-2026-10-01T00-00-00-${uuid(index)}.jsonl`)
+    : `/sessions/${uuid(index)}.jsonl`;
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const seedPath = path.join(directory, "performance-seed.json");
   const seed = new AgentRegistry(seedPath, undefined, undefined, { sqliteMode: "off" });
@@ -145,9 +178,9 @@ export function buildRegistryPerformanceDataset(
     const root = isRoot(index);
     const generation = structuredClone(conversation.generations[0]!);
     generation.id = uuid(index);
-    generation.path = `/sessions/${uuid(index)}.jsonl`;
+    generation.path = transcriptOf(index);
     generation.launchProfile = {
-      ...emptyLaunchProfile({ cwd: `/repo/project-${index % 23}` }),
+      ...emptyLaunchProfile({ cwd: `/repo/project-${index % shape.projects}` }),
       title: `Synthetic conversation ${index}`,
       mcpServers: claims(index) ? [...ROOT_GRANT] : ["viewer"],
       parentConversationId: root ? null : conversationId(rootOf(index)),
@@ -168,31 +201,54 @@ export function buildRegistryPerformanceDataset(
     for (let index = total - 1; index >= 0 && picked.size < wanted; index--) if (claims(index % count)) picked.add(index);
     return picked;
   };
-  const activeIndexes = newestClaiming(shape.entries, shape.activeEntries);
+  const activeIndexes = newestClaiming(shape.entries, shape.activeEntries + shape.workers);
+  const workerIndexes = new Set([...activeIndexes].sort((left, right) => right - left).slice(0, shape.workers));
   const outstandingIndexes = newestClaiming(shape.receipts, shape.outstandingReceipts);
   const activeEntryKeys: string[] = [];
+  const workers: RegistryPerformanceDataset["workers"] = [];
   for (let index = 0; index < shape.entries; index++) {
     const sessionKey = { engine: "codex" as const, sessionId: uuid(index) };
     const key = `codex:${sessionKey.sessionId}`;
-    const active = activeIndexes.has(index);
+    const worker = workerIndexes.has(index);
+    const active = activeIndexes.has(index) && !worker;
     const parent = index % count;
     file.entries[key] = {
       key: sessionKey,
-      artifactPath: `/sessions/${sessionKey.sessionId}.jsonl`,
-      cwd: `/repo/project-${index % 23}`,
+      artifactPath: transcriptOf(index),
+      cwd: `/repo/project-${index % shape.projects}`,
       accountId: null,
       launchProfile: {
-        ...emptyLaunchProfile({ cwd: `/repo/project-${index % 23}` }),
+        ...emptyLaunchProfile({ cwd: `/repo/project-${index % shape.projects}` }),
         mcpServers: claims(parent) ? [...ROOT_GRANT] : ["viewer"],
       },
-      status: active ? "live" : "dead",
+      /* A worker's row is as the previous release left it: live, its turn
+         open, its engine gone with that release, for the Viewer that boots to
+         re-host. A live entry without a host is one between turns. */
+      status: worker ? "live" : active ? "idle" : "dead",
       host: null,
-      claimEpoch: active ? 1 : 0,
-      claimOwner: active ? `performance-host-${index}` : null,
+      ...(worker ? {
+        structuredHost: {
+          kind: "codex-app-server" as const,
+          endpoint: "stdio:retained",
+          process: null,
+          eventCursor: 0,
+          protocolVersion: "performance-fixture",
+          writerClaimEpoch: 0,
+          activeTurnRef: `performance-turn-${index}`,
+          pendingAttention: [],
+          activeFlags: [],
+        },
+      } : {}),
+      claimEpoch: 0,
+      claimOwner: null,
       pendingAction: null,
       updatedAt: conversation.updatedAt,
     };
     if (active) activeEntryKeys.push(key);
+    if (worker) {
+      workers.push({ key, sessionId: sessionKey.sessionId, transcript: transcriptOf(index) });
+      file.conversations[conversationId(index)]!.turn = { state: "busy", source: "lifecycle", terminalAt: null, observedAt: new Date(seededAt).toISOString() };
+    }
   }
   const grantSubjects: RegistryPerformanceDataset["grantSubjects"] = [];
   for (let index = 0; index < shape.receipts; index++) {
@@ -212,14 +268,14 @@ export function buildRegistryPerformanceDataset(
       requestDigest: "d".repeat(64),
       spawnCapabilityDigest: null,
       key: { engine: "codex", sessionId: uuid(target) },
-      artifactPath: `/sessions/${uuid(target)}.jsonl`,
+      artifactPath: transcriptOf(target),
       state: outstanding ? "path-pending" : index % 17 === 0 ? "failed" : "completed",
       agentRole: isRoot(target) ? "orchestrator" : "builder",
       delegationDepth: isRoot(target) ? 0 : 1,
       parentConversationId: isRoot(target) ? null : conversationId(contradicted ? rootOf(target) + every : rootOf(target)),
       telegramSeatGrant: claims(target),
       launchProfile: {
-        ...emptyLaunchProfile({ cwd: `/repo/project-${target % 23}` }),
+        ...emptyLaunchProfile({ cwd: `/repo/project-${target % shape.projects}` }),
         title: `Synthetic launch ${index}`,
         mcpServers: claims(target) ? [...ROOT_GRANT] : ["viewer"],
         parentConversationId: isRoot(target) ? null : conversationId(rootOf(target)),
@@ -279,7 +335,7 @@ export function buildRegistryPerformanceDataset(
       parentConversationId: conversationId(rootOf(child)),
       childSessionKey: null,
       parentSessionKey: null,
-      childArtifactPath: `/sessions/${uuid(child)}.jsonl`,
+      childArtifactPath: transcriptOf(child),
       parentArtifactPath: null,
       kind: "spawn",
       role: null,
@@ -304,13 +360,35 @@ export function buildRegistryPerformanceDataset(
       requestIds: [], evidence: null, stoppedAt: null,
     };
   }
-  for (const key of activeEntryKeys) {
+  for (const key of [...activeEntryKeys, ...workers.map((worker) => worker.key)]) {
     const entry = file.entries[key]!;
     grantSubjects.push({ collection: "entries", key, servers: [...(entry.launchProfile?.mcpServers ?? ["viewer"])] });
   }
   for (const index of outstandingIndexes) {
     const launchId = `performance-launch-${index}`;
     grantSubjects.push({ collection: "receipts", key: launchId, servers: [...file.receipts[launchId]!.launchProfile.mcpServers] });
+  }
+
+  /* The newest entries' conversations keep their transcripts, so a board
+     scope pinning one of them has a real conversation to show. */
+  const transcribed: RegistryPerformanceDataset["conversations"] = [];
+  if (sessionsRoot) {
+    const first = Math.max(0, Math.min(shape.entries, count) - shape.transcripts);
+    for (let index = first; index < Math.min(shape.entries, count); index++) {
+      const transcript = transcriptOf(index);
+      const cwd = `/repo/project-${index % shape.projects}`;
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      const stamp = new Date(seededAt - (Math.min(shape.entries, count) - index) * 60_000).toISOString();
+      /* A worker's turn is still open: it keeps writing once re-hosted. */
+      const open = workerIndexes.has(index);
+      fs.writeFileSync(transcript, [
+        { timestamp: stamp, type: "session_meta", payload: { id: uuid(index), timestamp: stamp, cwd, originator: "codex_cli_rs", cli_version: "0.0.0" } },
+        { timestamp: stamp, type: "event_msg", payload: { type: "user_message", message: `Synthetic conversation ${index}` } },
+        { timestamp: stamp, type: "event_msg", payload: { type: "agent_message", message: `Synthetic answer ${index}` } },
+        ...(open ? [] : [{ timestamp: stamp, type: "event_msg", payload: { type: "task_complete" } }]),
+      ].map((line) => JSON.stringify(line)).join("\n") + "\n", { mode: 0o600 });
+      transcribed.push({ path: transcript, conversationId: conversationId(index), cwd });
+    }
   }
 
   const filename = path.join(directory, "agent-registry.sqlite");
@@ -347,12 +425,14 @@ export function buildRegistryPerformanceDataset(
       coldRows: cold.rows,
       payloadBytes: total.bytes,
       activeEntryKeys,
+      workers,
       pendingDeliveryIds,
       uncertainDeliveryIds,
       grantSubjects,
       coldOperationIds,
       hotOperationIds,
-      conversationPaths: Array.from({ length: count }, (_, index) => `/sessions/${uuid(index)}.jsonl`),
+      conversationPaths: sessionsRoot ? transcribed.map((item) => item.path) : Array.from({ length: count }, (_, index) => transcriptOf(index)),
+      conversations: transcribed,
       seedMs: performance.now() - started,
     };
   } finally {

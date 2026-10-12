@@ -5,6 +5,7 @@ import type { ResumeSpec } from "@/lib/agent/cli";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type SpawnReceipt, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
+import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import { agentProcesses, argvEngine, pidAlive, pidWritesPath, readArgv, readPpid, type AgentProcess } from "@/lib/scanner/process";
@@ -636,7 +637,8 @@ function spawnReceiptReconciliationNeeded(
     if (entry.pendingAction !== null) return true;
     liveArtifactPaths.add(entry.artifactPath);
   }
-  return Object.values(snapshot.receipts).some((receipt) =>
+  /* A starting launch is never archived: only hot receipts can match (#2761). */
+  return hotRegistryRows(snapshot, "receipts").some(([, receipt]) =>
     receipt.state === "starting"
     && receipt.artifactPath !== null
     && liveArtifactPaths.has(receipt.artifactPath));
@@ -757,7 +759,8 @@ export function reconcileObservedTranscriptHosts(
      supplies fresh projection state for every browser tab, and a real
      mutation invalidates that cache synchronously. */
   if (mutated) snapshot = registry.readOnlySnapshot();
-  for (const [id, entry] of Object.entries(snapshot.entries)) {
+  /* An archived entry has no host, so only hot rows can still claim a pane. */
+  for (const [id, entry] of hotRegistryRows(snapshot, "entries")) {
     if (entry.host?.kind === "tmux" && !seen.has(id)) registry.markUnhosted(entry.key);
   }
   if (spawnReceiptReconciliationNeeded(snapshot, seen)) {

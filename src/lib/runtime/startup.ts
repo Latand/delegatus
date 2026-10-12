@@ -6,7 +6,8 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -766,7 +767,11 @@ function interruptionObligationDischarge(
   /* A stage's cut is its controller's to answer with one fresh attempt,
      whoever recorded it: a continuation would resume the attempt it replaces. */
   if (interruptionStageOf(snapshot.memberships, conversationId)) return STAGE_CUT_RESOLUTION;
-  const newerHeld = Object.values(snapshot.heldDeliveries).some((delivery) =>
+  /* The conversation's deliveries by index, under every id that resolves to
+     it; walking every retained delivery per obligation held the event loop
+     for most of a second each (#2761). */
+  const newerHeld = registryRowsMatching(snapshot, "heldDeliveries", "conversationId",
+    conversationIdsResolvingTo(snapshot, conversationId as ViewerConversationId)).some((delivery) =>
     registry.canonicalConversationId(delivery.conversationId) === conversationId
       && delivery.clientMessageId !== obligation.id
       && Date.parse(delivery.createdAt) > recordedAt);
@@ -960,8 +965,9 @@ function assertAdoptedHostsAreClaimed(
     candidate that reaches adoption in that window sees the old live process
     and must retry until demotion records and completes the handoff (#1296).
 
-    Only a live recorded engine process argues that window is open. A row whose
-    process is gone or already released has nothing left to hand over — its
+    A live recorded engine process argues that window is open, and so does a
+    row the demotion marked handed over and released after the adopter passed
+    it. Any other row whose process is gone has nothing left to hand over — its
     adoption attempt ran this pass and produced nothing, and rows with
     permanently pending work (a held delivery for a dead session) stay in that
     shape forever. Failing the pass for them replays full startup every minute
@@ -982,9 +988,13 @@ function assertEligibleHostsResolved(
       && !adoptedKeys.has(sessionKeyId(entry.key))
       && !claimed(entry.key));
   if (unresolved.length === 0) return;
+  /* A row the incumbent handed over while this pass ran is contested too: its
+     claim came free only after the adopter had passed it, and the next pass
+     adopts it. One whose adoption fails ends dead, so this cannot replay
+     startup without end the way a permanently pending row would (#1364). */
   const contested = unresolved.filter((entry) => {
     const process = entry.structuredHost?.process;
-    return Boolean(process && processAlive(process));
+    return Boolean(process && processAlive(process)) || (entry.pendingAction === "handoff" && entry.status !== "dead");
   });
   const abandoned = unresolved.filter((entry) => !contested.includes(entry));
   if (abandoned.length > 0) {
@@ -1018,7 +1028,9 @@ function rowsTheNudgeNeverAnswers(
   const answered = new Set([...held, ...found, ...settled]);
   for (const conversation of Object.values(snapshot.conversations)) {
     const generation = conversation.generations.at(-1);
-    if (generation && interruptionStageOf(snapshot.memberships, registry.canonicalConversationId(conversation.id))) {
+    /* Resolved against the snapshot in hand: a keyed transaction per retained
+       conversation held the event loop for a fifth of a second (#2761). */
+    if (generation && interruptionStageOf(snapshot.memberships, resolveConversationAlias(snapshot, conversation.id))) {
       answered.add(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }));
     }
   }
@@ -1050,7 +1062,7 @@ function interruptedCodexConversations(
     const interrupted = conversation.turn.state === "busy"
       || (conversation.turn.state === "unknown"
         && (Boolean(entry?.structuredHost?.activeTurnRef)
-          || runtimeRunningConversationIds.has(registry.canonicalConversationId(conversation.id))));
+          || runtimeRunningConversationIds.has(resolveConversationAlias(snapshot, conversation.id))));
     return interrupted && entry?.structuredHost && shouldAdopt(entry)
       ? [[sessionKeyId(key), conversation.id] as const]
       : [];
@@ -1346,7 +1358,9 @@ async function refreshStructuredTranscriptState(
   );
   await Promise.all(workers);
   assertActive();
-  if (observations.length > 0) registry.reconcileConversations(observations);
+  /* The refreshed rows are read back through the next snapshot; asking for a
+     copy of the whole registry here cost a retained history seconds (#2761). */
+  if (observations.length > 0) registry.reconcileConversations(observations, { snapshot: false });
   return unreadable;
 }
 
@@ -1481,6 +1495,11 @@ async function structuredStartupSignals(
 
 /** Like LLV_HOST_RETIREMENT_IDLE_HOURS, this bounds speculative host residency.
     Owed work and severed seats bypass this window. Invalid values use six hours. */
+/** A turn of the event loop: timers and socket I/O run before the next phase. */
+function startupTurn(): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 function startupTurnMaxAgeMs(): number {
   const hours = Number(process.env.LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS ?? 6);
   return (Number.isFinite(hours) && hours > 0 ? hours : 6) * 3_600_000;
@@ -1684,6 +1703,10 @@ export interface StructuredStartupDependencies {
       read. A stub that answers nothing reports nothing unreadable. */
   refreshTranscriptState?: (registry: AgentRegistry) => Promise<ReadonlySet<string> | void>;
   adopt?: typeof adoptCodexRegistryHosts;
+  /** Starts the engine of one adopted Codex row inside the production
+      adoption pass, whose selection, claims and hand-over refusals it keeps;
+      the candidate performance gate runs a synthetic engine through it. */
+  adoptCodexHost?: NonNullable<Parameters<typeof adoptCodexRegistryHosts>[5]>["adoptHost"];
   adoptClaude?: typeof adoptClaudeRegistryHosts;
   resolveCodexOwner?: (entry: AgentRegistryEntry) => { home: string; kind: "legacy" | "managed" } | null;
   resolveClaudeOwner?: (entry: AgentRegistryEntry) => ClaudeStartupOwner | null;
@@ -1918,6 +1941,7 @@ async function adoptStructuredHostsPass(
     ? dependencies.refreshTranscriptState(registry)
     : refreshStructuredTranscriptState(registry, assertActive, lastEventByHost, resumeDeferred))
     ?? new Set<string>();
+  await startupTurn();
   // Read under the existing lease, then release before any host or transcript I/O.
   // Each writer claim below re-resolves pipeline evidence in its own short hold.
   assertActive();
@@ -1926,8 +1950,9 @@ async function adoptStructuredHostsPass(
     available ? readEvidence() : pipelineStartupEvidence(registry, false));
   {
     assertActive();
-    const deferredHostKeys = new Set(Object.values(registry.readOnlySnapshot().conversations)
-      .filter((conversation) => pipelineEvidence.deferred.has(registry.canonicalConversationId(conversation.id)))
+    const deferralSnapshot = registry.readOnlySnapshot();
+    const deferredHostKeys = new Set(Object.values(deferralSnapshot.conversations)
+      .filter((conversation) => pipelineEvidence.deferred.has(resolveConversationAlias(deferralSnapshot, conversation.id)))
       .flatMap((conversation) => conversation.generations.map((generation) => sessionKeyId({ engine: conversation.engine, sessionId: generation.id }))));
     let orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
       registry,
@@ -2059,9 +2084,14 @@ async function adoptStructuredHostsPass(
     const claudeCandidateCount = adoptionCandidates.length - codexCandidateCount;
     let totalHosts = adoptionCandidates.length;
     let completedHosts = 0;
-    const reportProgress = (phase: StructuredHostStartupPhase) => {
+    /* Each phase starts on a turn of its own. Phases that settle without real
+       I/O ran back to back as one chain of microtasks, which held the Viewer's
+       event loop for seconds over a retained registry (#2761). */
+    const reportProgress = async (phase: StructuredHostStartupPhase) => {
       assertActive();
       if (!resumeDeferred) markStructuredHostStartupProgress({ phase, completedHosts, totalHosts });
+      await startupTurn();
+      assertActive();
     };
     // A later row may throw after earlier hosts have launched and acquired
     // writer claims. Keep each handle before the batch can reject, so the
@@ -2070,7 +2100,7 @@ async function adoptStructuredHostsPass(
       nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, [item]);
       rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     };
-    reportProgress("adopting Codex hosts");
+    await reportProgress("adopting Codex hosts");
     const resolveCodexOwner = dependencies.resolveCodexOwner ?? ((entry: AgentRegistryEntry) =>
       accountManager.resolveTranscriptOwner("codex", entry.artifactPath));
     const resolveClaudeOwner = dependencies.resolveClaudeOwner ?? ((entry: AgentRegistryEntry) =>
@@ -2122,12 +2152,12 @@ async function adoptStructuredHostsPass(
         totalHosts = Math.max(totalHosts, completedHosts);
         if (!resumeDeferred) markStructuredHostStartupProgress({ phase: "adopting Codex hosts", completedHosts, totalHosts });
       },
-      { onAdopted, claimHost },
+      { onAdopted, claimHost, ...(dependencies.adoptCodexHost ? { adoptHost: dependencies.adoptCodexHost } : {}) },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, codex);
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
-    reportProgress("adopting Claude hosts");
+    await reportProgress("adopting Claude hosts");
     const claude = resumeDeferred && claudeCandidateCount === 0 ? [] : await (dependencies.adoptClaude ?? adoptClaudeRegistryHosts)(
       registry,
       (entry) => {
@@ -2179,7 +2209,7 @@ async function adoptStructuredHostsPass(
           : false,
       dependencies.hostClaimed,
     );
-    reportProgress("reconciling structured hosts");
+    await reportProgress("reconciling structured hosts");
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
       registry,
       orchestratorRecoveries,
@@ -2279,7 +2309,7 @@ async function adoptStructuredHostsPass(
         && !neverNudged.has(sessionKeyId(item.key))
         && !heldHostKeys.has(sessionKeyId(item.key)),
     );
-    reportProgress("finalizing structured delivery");
+    await reportProgress("finalizing structured delivery");
     /* `controllerBoundEarly` is exactly "this pass has a runtime client", so the
        only way past it is a viewer that cannot host at all. Rebinding there would
        retire a publication this pass has no client to replace — and every spawn
@@ -2289,7 +2319,7 @@ async function adoptStructuredHostsPass(
       assertAdoptedHostsAreClaimed(nextAdoptedHosts, dependencies.hostClaimed);
     }
     if (client) {
-      reportProgress("recovering orchestrator deliveries");
+      await reportProgress("recovering orchestrator deliveries");
       /* Re-read: identity, a seat rotation or a message admitted while this
          pass adopted can each discharge an obligation it adopted for. The
          runtime's receipts are read again too — adoption can take tens of
@@ -2313,7 +2343,7 @@ async function adoptStructuredHostsPass(
       const continuationFailures = await deliverInterruptionContinuations(
         registry, client, interruptions, owedInterruptions, finalHostKeys,
       );
-      reportProgress("recovering interrupted deliveries");
+      await reportProgress("recovering interrupted deliveries");
       const codexContinuationFailures = await enqueueInterruptedCodexContinuations(
         registry,
         client,
@@ -2322,7 +2352,7 @@ async function adoptStructuredHostsPass(
         existingCodexContinuations,
         signals.pendingCodexContinuationConversationIds,
       );
-      reportProgress("kicking recovered deliveries");
+      await reportProgress("kicking recovered deliveries");
       await kickStructuredDeliveryQueue();
       /* The pass retries until every owed continuation is admitted; each retry
          replays the same key, so a slow admission never becomes a second one. */
@@ -2348,7 +2378,7 @@ async function adoptStructuredHostsPass(
       available ? readEvidence() : pipelineStartupEvidence(registry, false), "recovering pending spawns");
     const fencedReceipts = fencedPendingSpawnReceipts(registry, pipelineEvidence.deferred);
     if (client && fencedReceipts.length === 0) {
-      reportProgress("recovering pending spawns");
+      await reportProgress("recovering pending spawns");
       await recoverPendingStructuredSpawns(registry, client, { assertActive });
     }
     assertActive();

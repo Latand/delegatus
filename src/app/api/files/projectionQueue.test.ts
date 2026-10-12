@@ -68,3 +68,42 @@ test("a failed build releases the queue for the builds behind it", async () => {
   await expect(next).resolves.toMatchObject({ timing: expect.stringContaining("files-worker-build") });
   expect(queue.diagnostics().waiting).toBe(0);
 });
+
+test("a caller waiting behind a held build leaves at its deadline and frees its slot then", async () => {
+  const queue = createFilesProjectionQueue({ maxDepth: 1, maxWaitMs: 20 });
+  const held = gate();
+  const running = queue.run(async () => { await held.opened; return { timing: "" }; });
+  await Bun.sleep(0);
+  let ran = false;
+  const waiting = queue.run(async () => { ran = true; return { timing: "" }; });
+  const outcome = waiting.then(() => "resolved", (error: unknown) => error);
+  await Bun.sleep(60);
+  /* The build ahead is still held: the deadline alone answered the caller. */
+  expect(await Promise.race([outcome, Bun.sleep(0).then(() => "pending")])).toBeInstanceOf(FilesProjectionQueueError);
+  await expect(waiting).rejects.toMatchObject({ reason: "expired" });
+  expect(queue.diagnostics()).toMatchObject({ waiting: 0, expired: 1 });
+  /* Its slot is free while the predecessor still holds the worker. */
+  const next = queue.run(async () => ({ timing: "" }));
+  expect(queue.diagnostics()).toMatchObject({ waiting: 1, refused: 0 });
+  held.release();
+  await Promise.all([running, next]);
+  expect(ran).toBe(false);
+  expect(queue.diagnostics()).toMatchObject({ started: 2, expired: 1, waiting: 0 });
+});
+
+test("every finished build reaches an observer, beyond the bounded recent history", async () => {
+  let clock = 0;
+  const queue = createFilesProjectionQueue({ maxDepth: 4, maxWaitMs: 60_000, now: () => clock });
+  const samples: Array<{ sequence: number; buildMs: number }> = [];
+  const stop = queue.observe((sample) => samples.push(sample));
+  for (let index = 0; index < 100; index++) {
+    await queue.run(async () => { clock += index === 1 ? 2_500 : 5; return { timing: "" }; });
+  }
+  stop();
+  await queue.run(async () => ({ timing: "" }));
+  expect(samples.map((sample) => sample.sequence)).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
+  /* The slow second build left `recent` long ago; the observer kept it. */
+  expect(queue.diagnostics().recent).toHaveLength(64);
+  expect(Math.max(...queue.diagnostics().recent.map((build) => build.buildMs))).toBe(5);
+  expect(samples[1]).toMatchObject({ sequence: 2, buildMs: 2_500 });
+});

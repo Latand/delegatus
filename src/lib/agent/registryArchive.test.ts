@@ -609,7 +609,9 @@ test("external refresh leaves unrelated cold root grants warm", () => {
   expect(fresh.receipts["root-history-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
   console.info({ reads: metrics.reads, loads: metrics.loads, refreshMs: performance.now() - refreshStart });
   expect(metrics.loads).toBe(0);
-  expect(metrics.reads).toBe(2);
+  /* The unrelated archived root was normalized before the commit and its
+     version and pinned decision are unchanged, so it is not read again. */
+  expect(metrics.reads).toBe(1);
 });
 
 

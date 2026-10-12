@@ -59,6 +59,8 @@ type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "
 const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId" };
 const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
 const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
+const entryKeyReaders = new WeakMap<RegistryFile, (entryKey: string) => string[]>();
+const coldKeyReaders = new WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>();
 const projectionReaders = new WeakMap<object, (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>>();
 
 /**
@@ -138,6 +140,8 @@ class RegistryReaderViews {
     if (keyed) keyedReaders.set(frozen, keyed);
     const paths = pathReaders.get(file);
     if (paths) pathReaders.set(frozen, paths);
+    const entryKeys = entryKeyReaders.get(file);
+    if (entryKeys) entryKeyReaders.set(frozen, entryKeys);
     const projections = projectionReaders.get(file);
     if (projections) projectionReaders.set(frozen, projections);
     return frozen;
@@ -213,6 +217,40 @@ export function registryConversationsForPath(file: RegistryFile, path: string): 
     row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path));
 }
 
+/** The conversations that hold a generation of one entry row
+    (`engine:sessionId`), in collection order. Over SQLite this reads the
+    generation identity index rather than enumerating every conversation, cold
+    history included; a plain file is enumerated. */
+export function registryConversationsForEntryKey(file: RegistryFile, entryKey: string): RegistryFile["conversations"][string][] {
+  const keys = entryKeyReaders.get(file)?.(entryKey);
+  return keys ? keys.map(key => file.conversations[key]!).filter(Boolean) : Object.values(file.conversations).filter(row =>
+    row.generations.some(generation => `${row.engine}:${generation.id}` === entryKey));
+}
+
+/**
+ * The rows of one collection that are not archived, in collection order. An
+ * archive version is terminal by the archive's own rules (a dead entry with no
+ * host or claim, a delivery that was delivered, failed, cancelled or
+ * superseded, an operation owner with a terminal state), so a pass looking for
+ * open work finds all of it here without reading retained history. A plain
+ * file, or one this store did not assemble, yields every row.
+ */
+export function hotRegistryRows<C extends RowCollection>(file: RegistryFile, collection: C): Array<[string, RegistryFile[C][string]]> {
+  const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+  const cold = coldKeyReaders.get(file)?.(collection);
+  if (!cold?.size) return Object.entries(rows);
+  return Object.keys(rows).flatMap((key) => cold.has(key) ? [] : [[key, rows[key]!] as [string, RegistryFile[C][string]]]);
+}
+
+/** Whether entry-key lookups on this file read the generation identity index. */
+export function registryHasEntryKeyIndex(file: RegistryFile): boolean {
+  return entryKeyReaders.has(file);
+}
+
+const conversationEntryKeySql = (records: string) => `SELECT conversation_id FROM (
+  SELECT i.conversation_id, (SELECT r.row_order FROM ${records} r WHERE r.collection='conversations' AND r.row_key=i.conversation_id) AS row_order
+  FROM (SELECT DISTINCT conversation_id FROM registry_generation_identities WHERE entry_key=?) i) WHERE row_order IS NOT NULL ORDER BY row_order`;
+
 /* The owners of one transcript path, in collection order. Each owner's order
    is read by its key: joining the path index to the records view made SQLite
    expand every conversation of the view per lookup, 16 ms apiece over a
@@ -220,6 +258,11 @@ export function registryConversationsForPath(file: RegistryFile, path: string): 
 const conversationPathSql = (records: string) => `SELECT conversation_id FROM (
   SELECT p.conversation_id, (SELECT r.row_order FROM ${records} r WHERE r.collection='conversations' AND r.row_key=p.conversation_id) AS row_order
   FROM registry_conversation_paths p WHERE p.path=?) WHERE row_order IS NOT NULL ORDER BY row_order`;
+
+/** Stored bytes of archived rows a store keeps normalized between passes.
+    Retained conversations, entries, receipts and deliveries of a long-running
+    installation fit; operation owners, the largest payloads, stay per commit. */
+const COLD_STABLE_ROW_BYTES = 48 * 1024 * 1024;
 
 type StoredRow = { collection: string; row_key: string; value_json: string; row_order: number };
 type MetaRow = { key: string; value: string };
@@ -599,6 +642,13 @@ export class SqliteAgentRegistryStore {
   private snapshotChangeId = 0;
   private readOnlyHotFile: RegistryFile | null = null;
   private readonly coldReaderRows = new Map<number, { stamp: string; row: unknown }>();
+  /** Normalized archived rows whose reading depends on nothing but their
+      immutable version and, for a grant-bearing row, the decision pinned on
+      it. They outlive commits, which the stamped cache above cannot: one
+      writer committing every few dozen milliseconds left every pass over the
+      history parsing all of it again (#2761). Bounded by stored bytes. */
+  private readonly coldStableRows = new Map<number, { pinned: unknown; row: unknown; bytes: number }>();
+  private coldStableBytes = 0;
   /** Immutable grant/operation projections only, never archived payloads.
       Current cold versions bound this map; held views pin their own decisions. */
   private readonly coldRowProjections = new Map<number, { claimsGrant: boolean; operationId: string | null }>();
@@ -613,6 +663,12 @@ export class SqliteAgentRegistryStore {
   private coldViewCache: {
     signature: string;
     headers: readonly { collection: RowCollection; row_key: string; archive_id: number }[];
+    /** Derived from `headers` once: keys and version ids per collection. */
+    coldKeys: Map<RowCollection, Set<string>>;
+    coldIds: Map<RowCollection, Map<string, number>>;
+    /** Per collection, which archive versions it holds: a mapping change in
+        one collection leaves the others' built views reusable. */
+    coldSignatures: Map<RowCollection, string>;
     forgets: number;
     collections: Map<RowCollection, { hot: Map<string, unknown>; deliveries?: Map<string, unknown>; synthetic: string; built: Record<string, unknown> }>;
   } | null = null;
@@ -900,6 +956,8 @@ export class SqliteAgentRegistryStore {
     this.readOnlyCache = null;
     this.readOnlyHotFile = null;
     this.coldReaderRows.clear();
+    this.coldStableRows.clear();
+    this.coldStableBytes = 0;
     this.coldRowProjections.clear();
     this.coldGrantDecisions.clear();
     this.coldGrantTargets.clear();
@@ -1342,7 +1400,8 @@ export class SqliteAgentRegistryStore {
        whenever a version is archived, promoted or deleted. */
     const signature = this.changesReady ? JSON.stringify(this.db.query<{ count: number; total: number; largest: number }, []>(
       "SELECT COUNT(*) AS count,COALESCE(SUM(archive_id),0) AS total,COALESCE(MAX(archive_id),0) AS largest FROM registry_cold").get()) : "";
-    const cache = this.coldViewCache?.signature === signature ? this.coldViewCache : null;
+    const prior = this.coldViewCache;
+    const cache = prior?.signature === signature ? prior : null;
     const headers = cache ? cache.headers : this.changesReady ? this.db.query<{ collection: RowCollection; row_key: string; archive_id: number }, []>(
       "SELECT c.collection,c.row_key,c.archive_id FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id ORDER BY a.row_order").all() : [];
     if (!cache) this.rememberColdProjections(headers);
@@ -1358,14 +1417,38 @@ export class SqliteAgentRegistryStore {
       }
     }
     if (headers.length) this.grantDecisions = null;
-    const coldKeys = new Map<RowCollection, Set<string>>();
-    for (const header of headers) {
-      let keys = coldKeys.get(header.collection);
-      if (!keys) coldKeys.set(header.collection,keys = new Set());
-      keys.add(header.row_key);
-      if (cache) continue;
-      this.rowCache.get(header.collection)?.delete(header.row_key);
-      this.localRows.delete(grantDecisionKey(header.collection,header.row_key));
+    /* The archive's mapping changes rarely and commits often: what is derived
+       from the mapping alone is kept with it, so a refresh after another
+       writer's commit walks only the collections whose hot rows changed. */
+    let coldKeys = cache?.coldKeys;
+    let coldIds = cache?.coldIds;
+    let coldSignatures = cache?.coldSignatures;
+    if (!coldKeys || !coldIds || !coldSignatures) {
+      coldKeys = new Map<RowCollection, Set<string>>();
+      coldIds = new Map<RowCollection, Map<string, number>>();
+      coldSignatures = new Map<RowCollection, string>();
+      const currentIds = new Set<number>();
+      const tallies = new Map<RowCollection, { count: number; total: number; largest: number }>();
+      for (const header of headers) {
+        const tally = tallies.get(header.collection) ?? { count: 0, total: 0, largest: 0 };
+        tally.count += 1;
+        tally.total += header.archive_id;
+        tally.largest = Math.max(tally.largest, header.archive_id);
+        tallies.set(header.collection, tally);
+        let keys = coldKeys.get(header.collection);
+        if (!keys) coldKeys.set(header.collection,keys = new Set());
+        keys.add(header.row_key);
+        let ids = coldIds.get(header.collection);
+        if (!ids) coldIds.set(header.collection,ids = new Map());
+        ids.set(header.row_key,header.archive_id);
+        currentIds.add(header.archive_id);
+        this.rowCache.get(header.collection)?.delete(header.row_key);
+        this.localRows.delete(grantDecisionKey(header.collection,header.row_key));
+      }
+      for (const results of this.coldRowProjectionResults.values()) {
+        for (const id of results.keys()) if (!currentIds.has(id)) results.delete(id);
+      }
+      for (const [collection, tally] of tallies) coldSignatures.set(collection, `${tally.count}:${tally.total}:${tally.largest}`);
     }
     const hot = { ...snapshot.file };
     if (syntheticOwners.size) {
@@ -1392,19 +1475,22 @@ export class SqliteAgentRegistryStore {
     const sameRows = (left: Map<string, unknown> | undefined, right: Map<string, unknown>) =>
       left !== undefined && left.size === right.size && [...right].every(([key,row]) => left.get(key) === row);
     const synthetic = JSON.stringify([...syntheticOwners]);
-    const nextCache: NonNullable<typeof this.coldViewCache> = { signature,headers,forgets: this.coldGrantForgets,collections: new Map() };
+    const nextCache: NonNullable<typeof this.coldViewCache> = { signature,headers,coldKeys,coldIds,coldSignatures,forgets: this.coldGrantForgets,collections: new Map() };
     const reused = new Set<RowCollection>();
     const layered = [...new Set([...coldKeys.keys(),...(syntheticOwners.size ? ["deliveryOperationOwners" as const] : [])])];
     /* Read every hot side before any collection is replaced by a merged one. */
     const hotSides = new Map(layered.map(collection => [collection,hotRows(collection)] as const));
     const hotDeliveries = layered.includes("deliveryOperationOwners") ? hotRows("heldDeliveries") : undefined;
     for (const collection of layered) {
-      const previous = cache?.collections.get(collection);
+      /* Another writer's archive pass changed the mapping: a collection whose
+         own archived versions are the ones it held reuses its build. */
+      const source = cache ?? (prior?.coldSignatures.get(collection) === coldSignatures.get(collection) ? prior : null);
+      const previous = source?.collections.get(collection);
       const hot = hotSides.get(collection)!;
       const deliveries = collection === "deliveryOperationOwners" ? hotDeliveries : undefined;
       const reusable = previous && sameRows(previous.hot,hot) && previous.synthetic === synthetic
         && (!deliveries || sameRows(previous.deliveries,deliveries))
-        && (!READER_GRANT_COLLECTIONS.has(collection) || cache!.forgets === this.coldGrantForgets);
+        && (!READER_GRANT_COLLECTIONS.has(collection) || source!.forgets === this.coldGrantForgets);
       if (reusable) {
         (file as unknown as Record<string, unknown>)[collection] = previous.built;
         reused.add(collection);
@@ -1443,6 +1529,17 @@ export class SqliteAgentRegistryStore {
         // The immutable version id pins payload truth for an already-held view.
         if (databaseFileIdentity(this.filename) !== identity) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
         const stamp = snapshot.stamp;
+        /* An operation owner normalizes against its delivery, which commits
+           can change; every other archived row reads the same until its
+           pinned grant decision is replaced. */
+        const stable = collection !== "deliveryOperationOwners";
+        if (stable) {
+          const kept = this.coldStableRows.get(id);
+          if (kept && kept.pinned === pinnedGrants) {
+            this.coldStableRows.delete(id); this.coldStableRows.set(id,kept);
+            return kept.row;
+          }
+        }
         const cached = this.coldReaderRows.get(id);
         if (cached?.stamp === stamp) {
           this.coldReaderRows.delete(id); this.coldReaderRows.set(id,cached);
@@ -1466,6 +1563,18 @@ export class SqliteAgentRegistryStore {
           }
         }
         row = deepFreeze(row);
+        if (stable) {
+          const previous = this.coldStableRows.get(id);
+          if (previous) { this.coldStableBytes -= previous.bytes; this.coldStableRows.delete(id); }
+          this.coldStableRows.set(id,{ pinned: pinnedGrants,row,bytes: raw.value_json.length });
+          this.coldStableBytes += raw.value_json.length;
+          while (this.coldStableBytes > COLD_STABLE_ROW_BYTES && this.coldStableRows.size > 1) {
+            const [oldest,evicted] = this.coldStableRows.entries().next().value!;
+            this.coldStableRows.delete(oldest);
+            this.coldStableBytes -= evicted.bytes;
+          }
+          return row;
+        }
         this.coldReaderRows.delete(id);
         this.coldReaderRows.set(id,{ stamp,row });
         while (this.coldReaderRows.size > 128) this.coldReaderRows.delete(this.coldReaderRows.keys().next().value!);
@@ -1504,21 +1613,16 @@ export class SqliteAgentRegistryStore {
       return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM ${this.recordsSource} WHERE collection=? AND json_extract(value_json,'${LOOKUP_PATHS[field]}') IN (${values.map(() => "?").join(",")}) ORDER BY row_order`)
         .all(collection,...values).map(row => row.row_key);
     });
-    const coldIds = new Map<RowCollection, Map<string, number>>();
-    const currentIds = new Set<number>();
-    for (const header of headers) {
-      let ids = coldIds.get(header.collection);
-      if (!ids) coldIds.set(header.collection,ids = new Map());
-      ids.set(header.row_key,header.archive_id);
-      currentIds.add(header.archive_id);
-    }
-    for (const results of this.coldRowProjectionResults.values()) {
-      for (const id of results.keys()) if (!currentIds.has(id)) results.delete(id);
-    }
-    projectionReaders.set(file,(collection,projector) => this.projectRows(file,collection,projector,coldIds.get(collection),identity));
+    const ids = coldIds;
+    const keys = coldKeys;
+    coldKeyReaders.set(file,collection => keys.get(collection));
+    projectionReaders.set(file,(collection,projector) => this.projectRows(file,collection,projector,ids.get(collection),identity));
     if (this.changesReady) pathReaders.set(file,path => this.db.query<{ conversation_id: string }, [string]>(
       conversationPathSql(this.recordsSource))
       .all(path).map(row => row.conversation_id));
+    if (this.generationIdentitiesReady) entryKeyReaders.set(file,entryKey => this.db.query<{ conversation_id: string }, [string]>(
+      conversationEntryKeySql(this.recordsSource))
+      .all(entryKey).map(row => row.conversation_id));
     this.readOnlyCache = Object.freeze({ ...snapshot,file: Object.freeze(file) });
     return this.readOnlyCache;
   }
@@ -2331,6 +2435,18 @@ export class SqliteAgentRegistryStore {
       for (const key of dirtyRows.get("conversations") ?? []) {
         const row = file.conversations[key];
         if (row && (row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path))) keys.add(key); else keys.delete(key);
+      }
+      return [...keys];
+    });
+    if (this.generationIdentitiesReady) entryKeyReaders.set(file, entryKey => {
+      const owns = (row: RegistryFile["conversations"][string] | undefined) =>
+        Boolean(row?.generations.some(generation => `${row.engine}:${generation.id}` === entryKey));
+      if (reorderedCollections.has("conversations")) return Object.values(file.conversations).filter(owns).map(row => row.id);
+      const keys = new Set(this.db.query<{ conversation_id: string }, [string]>(
+        conversationEntryKeySql(this.recordsSource),
+      ).all(entryKey).map(row => row.conversation_id));
+      for (const key of dirtyRows.get("conversations") ?? []) {
+        if (owns(file.conversations[key])) keys.add(key); else keys.delete(key);
       }
       return [...keys];
     });

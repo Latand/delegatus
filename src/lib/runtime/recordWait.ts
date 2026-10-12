@@ -1,4 +1,5 @@
 import { ownsItsSettlement, type AgentRegistry, type DeliveryOperationOwner } from "@/lib/agent/registry";
+import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { migrationLaneRunning } from "@/lib/accounts/migration/lanes";
@@ -288,7 +289,8 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
     if (presence === "unknown") complete = false;
     return presence === "absent";
   };
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  /* Open work is never archived: only hot rows can be open (#2761). */
+  for (const [, delivery] of hotRegistryRows(file, "heldDeliveries")) {
     if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
     const operationId = delivery.command.operationId;
     if (!operationId || !missing(operationId)) continue;
@@ -298,7 +300,7 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
       sinceMs: Date.parse(delivery.createdAt),
     });
   }
-  for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+  for (const [operationId, owner] of hotRegistryRows(file, "deliveryOperationOwners")) {
     if (!ownsItsSettlement(owner) || owner.terminalState !== null || !missing(operationId)) continue;
     recordDirectWait(progress, registry, owner, { reason: "checking", detail: RESTORED_DETAIL, sinceMs: Date.parse(owner.createdAt) });
   }

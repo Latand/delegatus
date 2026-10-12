@@ -1,896 +1,1688 @@
 {
-  "commit": "bce36a2e08665dbc67e1fe4a358a331e21903bb2",
+  "commit": "f369848275e2eb02301bf4cf841535c49f498ff6",
   "dataset": {
     "rows": 30036,
     "coldRows": 27836,
-    "payloadBytes": 94615069
+    "payloadBytes": 96123013,
+    "transcripts": 320
   },
   "bounds": {
-    "readyMs": 60000,
+    "readyMs": 10000,
     "filesP95Ms": 5000,
     "filesMaxMs": 10000,
+    "apiMaxMs": 10000,
+    "bootLagMaxMs": 1000,
     "lagP95Ms": 50,
     "lagMaxMs": 500,
     "inputMs": 500
   },
   "writes": {
-    "count": 921,
-    "p95Ms": 11,
-    "maxMs": 42
+    "count": 943,
+    "p95Ms": 10,
+    "maxMs": 39
   },
   "views": [
     {
       "view": 0,
-      "readyMs": 41249,
-      "cards": 13,
+      "readyMs": 21699,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0,
+        "hash": "#c=<selected>"
+      },
       "files": {
-        "answered": 22,
+        "answered": 3,
         "errors": 0,
-        "heldByBrowserMaxMs": 195,
-        "abandoned": 21,
-        "p95Ms": 128,
-        "maxMs": 2080,
+        "p95Ms": 14041,
+        "maxMs": 14041,
+        "queuedMaxMs": 5870
+      },
+      "api": {
+        "requests": 54,
+        "maxMs": 18106,
         "slowest": [
           {
-            "query": "?view=summary&path=pinned",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 2080,
-            "sentMs": 195,
-            "firstByteMs": 2265,
-            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=911.5, files-worker-build;dur=196.3, files-source;dur=0.0, files-registry;dur=160.9, files-session-titles;dur=9.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=6.2, files-role-titles;dur=1.2, files-flows;dur=17.4, files-stores;dur=0.0, files-project-rate-limits;dur=7.6, files-project-catalog;dur=0.5, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=9.5, files-json;dur=3.0, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 18106,
+            "queuedMs": 12848,
+            "firstByteMs": 18104,
+            "at": 34699
           },
           {
-            "query": "?view=summary",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 128,
-            "sentMs": 0,
-            "firstByteMs": 123,
-            "timing": "files-clone;dur=0.8, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.1, files-worker-build;dur=351.9, files-source;dur=0.0, files-registry;dur=114.5, files-session-titles;dur=83.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.4, files-flow-restore;dur=0.1, files-task-store;dur=0.3, files-authorship;dur=14.7, files-role-titles;dur=1.4, files-flows;dur=100.9, files-stores;dur=0.0, files-project-rate-limits;dur=18.2, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.4, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=21.3, files-json;dur=11.8, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 15744,
+            "queuedMs": 9562,
+            "firstByteMs": 15743,
+            "at": 30700
           },
           {
-            "query": "?view=summary",
+            "route": "/api/orchestrator/seat",
+            "files": false,
             "status": 200,
-            "ms": 44,
-            "sentMs": 0,
-            "firstByteMs": 40,
-            "timing": "files-clone;dur=0.3, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.5, files-worker-build;dur=248.9, files-source;dur=0.0, files-registry;dur=161.5, files-session-titles;dur=21.0, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.5, files-authorship;dur=8.8, files-role-titles;dur=0.7, files-flows;dur=31.2, files-stores;dur=0.0, files-project-rate-limits;dur=9.1, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.5, files-projects;dur=11.7, files-json;dur=4.4, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 14894,
+            "queuedMs": 11004,
+            "firstByteMs": 14893,
+            "at": 35440
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 14041,
+            "queuedMs": 5870,
+            "firstByteMs": 14022,
+            "at": 2533
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 13720,
+            "queuedMs": 5218,
+            "firstByteMs": 13716,
+            "at": 30467
           }
         ],
-        "failures": [
+        "opening": [
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 93,
+            "queuedMs": 0,
+            "firstByteMs": 92,
+            "at": 2325
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 765,
+            "queuedMs": 1,
+            "firstByteMs": 763,
+            "at": 2407
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 779,
+            "queuedMs": 0,
+            "firstByteMs": 777,
+            "at": 2407
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 8091,
+            "queuedMs": 6648,
+            "firstByteMs": 8088,
+            "at": 2407
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 13341,
+            "queuedMs": 0,
+            "firstByteMs": 13337,
+            "at": 2407
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 503,
+            "ms": 887,
+            "queuedMs": 1,
+            "firstByteMs": 884,
+            "at": 2409
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 23,
+            "queuedMs": 6,
+            "firstByteMs": 21,
+            "at": 2411
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5242,
+            "queuedMs": 1,
+            "firstByteMs": 5232,
+            "at": 2411
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 900,
+            "queuedMs": 19,
+            "firstByteMs": 897,
+            "at": 2414
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 976,
+            "queuedMs": 747,
+            "firstByteMs": 972,
+            "at": 2424
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 988,
+            "queuedMs": 761,
+            "firstByteMs": 985,
+            "at": 2425
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 5974,
+            "queuedMs": 882,
+            "firstByteMs": 5972,
+            "at": 2430
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 6055,
+            "queuedMs": 924,
+            "firstByteMs": 6047,
+            "at": 2473
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 6089,
+            "queuedMs": 936,
+            "firstByteMs": 6083,
+            "at": 2474
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 7058,
+            "queuedMs": 901,
+            "firstByteMs": 7044,
+            "at": 2516
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 14041,
+            "queuedMs": 5870,
+            "firstByteMs": 14022,
+            "at": 2533
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 5623,
+            "queuedMs": 5092,
+            "firstByteMs": 5621,
+            "at": 3432
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 11974,
+            "queuedMs": 4657,
+            "firstByteMs": 11969,
+            "at": 3901
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 9294,
+            "queuedMs": 3117,
+            "firstByteMs": 9291,
+            "at": 6467
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5760,
+            "queuedMs": 5289,
+            "firstByteMs": 5754,
+            "at": 10472
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 3857,
+            "queuedMs": 3325,
+            "firstByteMs": 3854,
+            "at": 12424
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1871,
+            "queuedMs": 1759,
+            "firstByteMs": 1869,
+            "at": 14468
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 579,
+            "queuedMs": 0,
+            "firstByteMs": 564,
+            "at": 17160
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 4006,
+            "queuedMs": 0,
+            "firstByteMs": 4004,
+            "at": 17436
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4005,
+            "queuedMs": 35,
+            "firstByteMs": 3984,
+            "at": 17460
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 3989,
+            "queuedMs": 111,
+            "firstByteMs": 3963,
+            "at": 17492
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 5696,
+            "queuedMs": 3793,
+            "firstByteMs": 5672,
+            "at": 17563
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 5751,
+            "queuedMs": 3812,
+            "firstByteMs": 5749,
+            "at": 17628
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5405,
+            "queuedMs": 3458,
+            "firstByteMs": 5403,
+            "at": 17988
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5873,
+            "queuedMs": 2985,
+            "firstByteMs": 5868,
+            "at": 18471
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 5380,
+            "queuedMs": 80,
+            "firstByteMs": 5379,
+            "at": 21458
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 3887,
+            "queuedMs": 1726,
+            "firstByteMs": 3884,
+            "at": 21510
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5180,
+            "queuedMs": 1864,
+            "firstByteMs": 5176,
+            "at": 21515
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 10036,
+            "queuedMs": 5223,
+            "firstByteMs": 10032,
+            "at": 21515
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 5378,
+            "queuedMs": 1800,
+            "firstByteMs": 5376,
+            "at": 21592
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 6992,
+            "queuedMs": 4225,
+            "firstByteMs": 6991,
+            "at": 22467
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 3298,
+            "queuedMs": 899,
+            "firstByteMs": 3297,
+            "at": 23440
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 4673,
+            "queuedMs": 1499,
+            "firstByteMs": 4672,
+            "at": 23898
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 7838,
+            "queuedMs": 5082,
+            "firstByteMs": 7833,
+            "at": 26466
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 5667,
+            "queuedMs": 0,
+            "firstByteMs": 5665,
+            "at": 26841
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 9153,
+            "queuedMs": 0,
+            "firstByteMs": 9149,
+            "at": 26973
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 3527,
+            "queuedMs": 0,
+            "firstByteMs": 3517,
+            "at": 29081
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4820,
+            "queuedMs": 20,
+            "firstByteMs": 4818,
+            "at": 29440
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 13720,
+            "queuedMs": 5218,
+            "firstByteMs": 13716,
+            "at": 30467
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4986,
+            "queuedMs": 1808,
+            "firstByteMs": 4984,
+            "at": 30700
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 15744,
+            "queuedMs": 9562,
+            "firstByteMs": 15743,
+            "at": 30700
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 7831,
+            "queuedMs": 167,
+            "firstByteMs": 7829,
+            "at": 32432
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 9418,
+            "queuedMs": 1205,
+            "firstByteMs": 9416,
+            "at": 33101
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 13124,
+            "queuedMs": 10617,
+            "firstByteMs": 13123,
+            "at": 34467
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 18106,
+            "queuedMs": 12848,
+            "firstByteMs": 18104,
+            "at": 34699
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 14894,
+            "queuedMs": 11004,
+            "firstByteMs": 14893,
+            "at": 35440
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 10055,
+            "queuedMs": 5051,
+            "firstByteMs": 10054,
+            "at": 37468
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 4525,
+            "queuedMs": 1165,
+            "firstByteMs": 4524,
+            "at": 43022
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 6190,
+            "queuedMs": 1646,
+            "firstByteMs": 6188,
+            "at": 45876
+          }
+        ],
+        "unfinished": [
+          {
+            "route": "/api/streams",
+            "at": 2580
+          },
+          {
+            "route": "/api/streams",
+            "at": 8953
+          },
+          {
+            "route": "/api/accounts",
+            "at": 34699
+          },
+          {
+            "route": "/api/files",
+            "at": 36139
+          },
+          {
+            "route": "/api/attention",
+            "at": 38470
+          },
+          {
+            "route": "/api/accounts",
+            "at": 38700
+          },
+          {
+            "route": "/api/accounts",
+            "at": 38700
+          },
+          {
+            "route": "/api/attention",
+            "at": 42467
+          },
+          {
+            "route": "/api/accounts",
+            "at": 42700
+          },
+          {
+            "route": "/api/accounts",
+            "at": 42700
           }
         ]
       },
       "lag": {
-        "samples": 598,
-        "p95Ms": 3,
-        "maxMs": 132
+        "bootMaxMs": 595,
+        "samples": 612,
+        "p95Ms": 2,
+        "maxMs": 46
       },
-      "inputMs": 20,
-      "held": [
+      "inputMs": [
+        53,
+        31
+      ],
+      "failures": [
         {
-          "path": "/api/telemetry",
-          "ms": 34069
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/staging",
-          "ms": 34091
+          "route": "/api/orchestrator/seat",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/operator/settings",
-          "ms": 34118
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/external-relay/conversations",
-          "ms": 34178
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/attention",
-          "ms": 34141
-        },
-        {
-          "path": "/api/voice-companion/settings",
-          "ms": 34353
-        },
-        {
-          "path": "/api/attention",
-          "ms": 31223
-        },
-        {
-          "path": "/api/view/presence",
-          "ms": 35245
-        },
-        {
-          "path": "/api/attention",
-          "ms": 27320
-        },
-        {
-          "path": "/api/attention",
-          "ms": 23481
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         }
       ]
     },
     {
       "view": 1,
-      "readyMs": 41329,
-      "cards": 13,
+      "readyMs": 18026,
+      "cards": 2,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0,
+        "hash": "#c=<selected>"
+      },
       "files": {
-        "answered": 22,
+        "answered": 2,
         "errors": 0,
-        "heldByBrowserMaxMs": 251,
-        "abandoned": 19,
-        "p95Ms": 28,
-        "maxMs": 3450,
+        "p95Ms": 14568,
+        "maxMs": 14568,
+        "queuedMaxMs": 6180
+      },
+      "api": {
+        "requests": 53,
+        "maxMs": 23823,
         "slowest": [
           {
-            "query": "?view=summary&path=pinned",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 3450,
-            "sentMs": 251,
-            "firstByteMs": 3671,
-            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=2284.5, files-worker-build;dur=299.8, files-source;dur=0.0, files-registry;dur=244.1, files-session-titles;dur=17.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.4, files-role-titles;dur=0.7, files-flows;dur=26.3, files-stores;dur=0.0, files-project-rate-limits;dur=8.5, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.3, files-projects;dur=11.1, files-json;dur=3.3, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 23823,
+            "queuedMs": 20486,
+            "firstByteMs": 23822,
+            "at": 24583
           },
           {
-            "query": "?view=summary",
+            "route": "/api/attention",
+            "files": false,
             "status": 200,
-            "ms": 28,
-            "sentMs": 0,
-            "firstByteMs": 26,
-            "timing": "files-clone;dur=0.4, files-scan;dur=2797.0;desc=\"pinned generation 10\", files-worker-queue;dur=0.3, files-worker-build;dur=150.9, files-source;dur=0.0, files-registry;dur=91.5, files-session-titles;dur=19.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.3, files-authorship;dur=9.2, files-role-titles;dur=1.3, files-flows;dur=30.6, files-stores;dur=0.0, files-project-rate-limits;dur=12.0, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=14.0, files-json;dur=3.0, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 18959,
+            "queuedMs": 15039,
+            "firstByteMs": 18958,
+            "at": 30457
           },
           {
-            "query": "?view=summary",
+            "route": "/api/attention",
+            "files": false,
             "status": 200,
-            "ms": 24,
-            "sentMs": 0,
-            "firstByteMs": 15,
-            "timing": "files-clone;dur=1.3, files-scan;dur=3019.0;desc=\"pinned generation 9\", files-worker-queue;dur=0.4, files-worker-build;dur=168.2, files-source;dur=0.0, files-registry;dur=109.2, files-session-titles;dur=15.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=8.5, files-role-titles;dur=0.6, files-flows;dur=25.1, files-stores;dur=0.0, files-project-rate-limits;dur=8.7, files-project-catalog;dur=1.3, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.2, files-operator-asks;dur=0.0, files-project-cwds;dur=2.5, files-projects;dur=12.9, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 18563,
+            "queuedMs": 9438,
+            "firstByteMs": 18561,
+            "at": 26457
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 17906,
+            "queuedMs": 3370,
+            "firstByteMs": 17905,
+            "at": 17989
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 14802,
+            "queuedMs": 7990,
+            "firstByteMs": 14800,
+            "at": 24583
           }
         ],
-        "failures": [
+        "unfinished": [
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 2541
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 9410
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 18003
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 28582
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 28582
+          },
+          {
+            "route": "/api/files",
+            "at": 31965
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "at": 32443
+          },
+          {
+            "route": "/api/accounts",
+            "at": 32583
+          },
+          {
+            "route": "/api/accounts",
+            "at": 32583
+          },
+          {
+            "route": "/api/attention",
+            "at": 34458
           }
         ]
       },
       "lag": {
-        "samples": 601,
-        "p95Ms": 3,
-        "maxMs": 22
+        "bootMaxMs": 705,
+        "samples": 686,
+        "p95Ms": 2,
+        "maxMs": 53
       },
-      "inputMs": 21,
-      "held": [
+      "inputMs": [
+        39,
+        41
+      ],
+      "failures": [
         {
-          "path": "/api/telemetry",
-          "ms": 34155
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/staging",
-          "ms": 34180
+          "route": "/api/orchestrator/seat",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/operator/settings",
-          "ms": 34233
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/external-relay/conversations",
-          "ms": 34231
-        },
-        {
-          "path": "/api/attention",
-          "ms": 34160
-        },
-        {
-          "path": "/api/voice-companion/settings",
-          "ms": 34344
-        },
-        {
-          "path": "/api/attention",
-          "ms": 31214
-        },
-        {
-          "path": "/api/attention",
-          "ms": 27299
-        },
-        {
-          "path": "/api/view/presence",
-          "ms": 35183
-        },
-        {
-          "path": "/api/attention",
-          "ms": 23572
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         }
       ]
     },
     {
       "view": 2,
-      "readyMs": 41306,
-      "cards": 13,
+      "readyMs": 17662,
+      "cards": 2,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0,
+        "hash": "#c=<selected>"
+      },
       "files": {
-        "answered": 22,
+        "answered": 3,
         "errors": 0,
-        "heldByBrowserMaxMs": 141,
-        "abandoned": 19,
-        "p95Ms": 34,
-        "maxMs": 3302,
+        "p95Ms": 14074,
+        "maxMs": 14074,
+        "queuedMaxMs": 6192
+      },
+      "api": {
+        "requests": 53,
+        "maxMs": 22274,
         "slowest": [
           {
-            "query": "?view=summary&path=pinned",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 3302,
-            "sentMs": 141,
-            "firstByteMs": 3439,
-            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=2026.3, files-worker-build;dur=256.6, files-source;dur=0.0, files-registry;dur=205.1, files-session-titles;dur=13.0, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=6.2, files-role-titles;dur=0.6, files-flows;dur=20.3, files-stores;dur=0.0, files-project-rate-limits;dur=8.4, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=3.2, files-projects;dur=12.8, files-json;dur=3.1, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 22274,
+            "queuedMs": 13023,
+            "firstByteMs": 22273,
+            "at": 22737
           },
           {
-            "query": "?view=summary",
+            "route": "/api/tmux/targets",
+            "files": false,
             "status": 200,
-            "ms": 34,
-            "sentMs": 0,
-            "firstByteMs": 27,
-            "timing": "files-clone;dur=0.4, files-scan;dur=3476.0;desc=\"pinned generation 6\", files-worker-queue;dur=0.4, files-worker-build;dur=162.7, files-source;dur=0.0, files-registry;dur=104.9, files-session-titles;dur=16.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=8.7, files-role-titles;dur=0.6, files-flows;dur=26.3, files-stores;dur=0.0, files-project-rate-limits;dur=9.9, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=12.7, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 18185,
+            "queuedMs": 2087,
+            "firstByteMs": 18177,
+            "at": 17582
           },
           {
-            "query": "?view=summary",
+            "route": "/api/files",
+            "files": true,
             "status": 200,
-            "ms": 24,
-            "sentMs": 0,
-            "firstByteMs": 22,
-            "timing": "files-clone;dur=0.4, files-scan;dur=2869.7;desc=\"pinned generation 7\", files-worker-queue;dur=0.5, files-worker-build;dur=173.1, files-source;dur=0.0, files-registry;dur=108.1, files-session-titles;dur=16.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.7, files-authorship;dur=10.8, files-role-titles;dur=0.6, files-flows;dur=28.9, files-stores;dur=0.0, files-project-rate-limits;dur=15.8, files-project-catalog;dur=1.2, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.4, files-projects;dur=18.7, files-json;dur=4.1, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 14074,
+            "queuedMs": 6192,
+            "firstByteMs": 14047,
+            "at": 2508
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 13300,
+            "queuedMs": 29,
+            "firstByteMs": 13294,
+            "at": 2450
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 12060,
+            "queuedMs": 8174,
+            "firstByteMs": 12058,
+            "at": 37315
           }
         ],
-        "failures": [
+        "unfinished": [
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 2577
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 9413
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 17639
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 26738
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 26738
+          },
+          {
+            "route": "/api/attention",
+            "at": 30482
+          },
+          {
+            "route": "/api/accounts",
+            "at": 30739
+          },
+          {
+            "route": "/api/accounts",
+            "at": 30739
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "at": 32466
+          },
+          {
+            "route": "/api/attention",
+            "at": 34483
           }
         ]
       },
       "lag": {
-        "samples": 606,
-        "p95Ms": 3,
-        "maxMs": 40
+        "bootMaxMs": 323,
+        "samples": 697,
+        "p95Ms": 2,
+        "maxMs": 42
       },
-      "inputMs": 19,
-      "held": [
+      "inputMs": [
+        42,
+        41
+      ],
+      "failures": [
         {
-          "path": "/api/telemetry",
-          "ms": 34147
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/staging",
-          "ms": 34150
+          "route": "/api/accounts",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/operator/settings",
-          "ms": 34182
+          "route": "/api/orchestrator/seat",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/external-relay/conversations",
-          "ms": 34198
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/attention",
-          "ms": 34160
-        },
-        {
-          "path": "/api/voice-companion/settings",
-          "ms": 34349
-        },
-        {
-          "path": "/api/attention",
-          "ms": 31216
-        },
-        {
-          "path": "/api/attention",
-          "ms": 27272
-        },
-        {
-          "path": "/api/view/presence",
-          "ms": 35162
-        },
-        {
-          "path": "/api/attention",
-          "ms": 23547
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         }
       ]
     },
     {
       "view": 3,
-      "readyMs": 40934,
-      "cards": 13,
+      "readyMs": 18319,
+      "cards": 2,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0,
+        "hash": "#c=<selected>"
+      },
       "files": {
-        "answered": 28,
+        "answered": 2,
         "errors": 0,
-        "heldByBrowserMaxMs": 79,
-        "abandoned": 16,
-        "p95Ms": 187,
-        "maxMs": 1949,
+        "p95Ms": 14558,
+        "maxMs": 14558,
+        "queuedMaxMs": 6240
+      },
+      "api": {
+        "requests": 51,
+        "maxMs": 25514,
         "slowest": [
           {
-            "query": "?view=summary&path=pinned",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 1949,
-            "sentMs": 79,
-            "firstByteMs": 2016,
-            "timing": "files-clone;dur=0.2, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=246.5, files-worker-build;dur=417.9, files-source;dur=0.1, files-registry;dur=351.2, files-session-titles;dur=16.4, files-project-affinity;dur=0.8, files-flow-store;dur=0.3, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=7.4, files-role-titles;dur=0.7, files-flows;dur=25.8, files-stores;dur=0.0, files-project-rate-limits;dur=28.1, files-project-catalog;dur=1.0, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.2, files-operator-asks;dur=0.0, files-project-cwds;dur=3.0, files-projects;dur=32.6, files-json;dur=4.6, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 25514,
+            "queuedMs": 21035,
+            "firstByteMs": 25512,
+            "at": 26468
           },
           {
-            "query": "?view=summary",
+            "route": "/api/attention",
+            "files": false,
             "status": 200,
-            "ms": 187,
-            "sentMs": 0,
-            "firstByteMs": 183,
-            "timing": "files-clone;dur=0.5, files-scan;dur=2797.0;desc=\"pinned generation 10\", files-worker-queue;dur=0.3, files-worker-build;dur=150.9, files-source;dur=0.0, files-registry;dur=91.5, files-session-titles;dur=19.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.3, files-authorship;dur=9.2, files-role-titles;dur=1.3, files-flows;dur=30.6, files-stores;dur=0.0, files-project-rate-limits;dur=12.0, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=14.0, files-json;dur=3.0, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 20973,
+            "queuedMs": 15963,
+            "firstByteMs": 20972,
+            "at": 26522
           },
           {
-            "query": "?view=summary",
+            "route": "/api/tmux/targets",
+            "files": false,
             "status": 200,
-            "ms": 161,
-            "sentMs": 1,
-            "firstByteMs": 160,
-            "timing": "files-clone;dur=23.4, files-scan;dur=2797.0;desc=\"pinned generation 10\", files-worker-queue;dur=0.4, files-worker-build;dur=128.6, files-source;dur=0.0, files-registry;dur=86.9, files-session-titles;dur=9.3, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=5.7, files-role-titles;dur=0.4, files-flows;dur=15.8, files-stores;dur=0.0, files-project-rate-limits;dur=7.5, files-project-catalog;dur=0.5, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.3, files-projects;dur=9.5, files-json;dur=2.5, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 17750,
+            "queuedMs": 5123,
+            "firstByteMs": 17741,
+            "at": 18266
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 17682,
+            "queuedMs": 7844,
+            "firstByteMs": 17680,
+            "at": 26468
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 15448,
+            "queuedMs": 7196,
+            "firstByteMs": 15417,
+            "at": 27067
           }
         ],
-        "failures": [
+        "unfinished": [
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 2571
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 10490
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 18288
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 30469
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 30469
+          },
+          {
+            "route": "/api/attention",
+            "at": 30522
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "at": 32507
+          },
+          {
+            "route": "/api/accounts",
+            "at": 34474
+          },
+          {
+            "route": "/api/accounts",
+            "at": 34474
+          },
+          {
+            "route": "/api/attention",
+            "at": 34524
           }
         ]
       },
       "lag": {
-        "samples": 612,
+        "bootMaxMs": 289,
+        "samples": 688,
         "p95Ms": 3,
-        "maxMs": 22
+        "maxMs": 65
       },
-      "inputMs": 10,
-      "held": [
+      "inputMs": [
+        28,
+        41
+      ],
+      "failures": [
         {
-          "path": "/api/accounts/copilot",
-          "ms": 33789
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/telegram",
-          "ms": 33800
+          "route": "/api/accounts",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/runtime/snapshot",
-          "ms": 33904
+          "route": "/api/orchestrator/seat",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/onboarding",
-          "ms": 33916
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/staging",
-          "ms": 34135
-        },
-        {
-          "path": "/api/operator/settings",
-          "ms": 34143
-        },
-        {
-          "path": "/api/external-relay/conversations",
-          "ms": 34191
-        },
-        {
-          "path": "/api/telemetry",
-          "ms": 34281
-        },
-        {
-          "path": "/api/attention",
-          "ms": 34454
-        },
-        {
-          "path": "/api/voice-companion/settings",
-          "ms": 34464
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         }
       ]
     },
     {
       "view": 4,
-      "readyMs": 41207,
-      "cards": 13,
+      "readyMs": 17995,
+      "cards": 2,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0,
+        "hash": "#c=<selected>"
+      },
       "files": {
-        "answered": 26,
+        "answered": 2,
         "errors": 0,
-        "heldByBrowserMaxMs": 5,
-        "abandoned": 18,
-        "p95Ms": 103,
-        "maxMs": 2039,
+        "p95Ms": 14558,
+        "maxMs": 14558,
+        "queuedMaxMs": 6167
+      },
+      "api": {
+        "requests": 53,
+        "maxMs": 23896,
         "slowest": [
           {
-            "query": "?view=summary&path=pinned",
+            "route": "/api/attention",
+            "files": false,
             "status": 200,
-            "ms": 2039,
-            "sentMs": 1,
-            "firstByteMs": 2038,
-            "timing": "files-clone;dur=0.2, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=668.6, files-worker-build;dur=240.7, files-source;dur=0.1, files-registry;dur=202.1, files-session-titles;dur=9.5, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=5.8, files-role-titles;dur=0.6, files-flows;dur=16.2, files-stores;dur=0.0, files-project-rate-limits;dur=6.5, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.3, files-projects;dur=8.7, files-json;dur=2.7, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 23896,
+            "queuedMs": 21034,
+            "firstByteMs": 23894,
+            "at": 26436
           },
           {
-            "query": "?view=summary",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 103,
-            "sentMs": 0,
-            "firstByteMs": 102,
-            "timing": "files-clone;dur=0.4, files-scan;dur=2997.3;desc=\"pinned generation 8\", files-worker-queue;dur=0.4, files-worker-build;dur=272.1, files-source;dur=0.0, files-registry;dur=133.2, files-session-titles;dur=41.0, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=1.9, files-authorship;dur=35.0, files-role-titles;dur=0.8, files-flows;dur=78.9, files-stores;dur=0.0, files-project-rate-limits;dur=9.2, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.9, files-projects;dur=12.2, files-json;dur=3.9, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 23829,
+            "queuedMs": 17446,
+            "firstByteMs": 23827,
+            "at": 23642
           },
           {
-            "query": "?view=summary",
+            "route": "/api/tmux/targets",
+            "files": false,
             "status": 200,
-            "ms": 39,
-            "sentMs": 1,
-            "firstByteMs": 39,
-            "timing": "files-clone;dur=0.5, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.2, files-worker-build;dur=170.7, files-source;dur=0.0, files-registry;dur=115.1, files-session-titles;dur=15.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.5, files-role-titles;dur=0.5, files-flows;dur=24.1, files-stores;dur=0.0, files-project-rate-limits;dur=8.9, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.8, files-projects;dur=11.9, files-json;dur=3.4, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 17931,
+            "queuedMs": 3436,
+            "firstByteMs": 17926,
+            "at": 17917
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 16947,
+            "queuedMs": 13057,
+            "firstByteMs": 16945,
+            "at": 32420
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 14558,
+            "queuedMs": 3574,
+            "firstByteMs": 14552,
+            "at": 21553
           }
         ],
-        "failures": [
+        "unfinished": [
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 2460
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 9361
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 17958
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 27642
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 27642
+          },
+          {
+            "route": "/api/attention",
+            "at": 30439
+          },
+          {
+            "route": "/api/accounts",
+            "at": 31645
+          },
+          {
+            "route": "/api/accounts",
+            "at": 31645
+          },
+          {
+            "route": "/api/attention",
+            "at": 34436
+          },
+          {
+            "route": "/api/accounts",
+            "at": 35642
           }
         ]
       },
       "lag": {
-        "samples": 608,
-        "p95Ms": 4,
-        "maxMs": 77
+        "bootMaxMs": 561,
+        "samples": 698,
+        "p95Ms": 3,
+        "maxMs": 42
       },
-      "inputMs": 21,
-      "held": [
+      "inputMs": [
+        28,
+        41
+      ],
+      "failures": [
         {
-          "path": "/api/team",
-          "ms": 33909
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/telemetry",
-          "ms": 33931
+          "route": "/api/orchestrator/seat",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/onboarding",
-          "ms": 34078
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/staging",
-          "ms": 34095
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/operator/settings",
-          "ms": 34120
-        },
-        {
-          "path": "/api/external-relay/conversations",
-          "ms": 34164
-        },
-        {
-          "path": "/api/attention",
-          "ms": 34238
-        },
-        {
-          "path": "/api/voice-companion/settings",
-          "ms": 34359
-        },
-        {
-          "path": "/api/attention",
-          "ms": 31240
-        },
-        {
-          "path": "/api/view/presence",
-          "ms": 35238
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         }
       ]
     },
     {
       "view": 5,
-      "readyMs": 41225,
-      "cards": 13,
+      "readyMs": 17830,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0,
+        "hash": "#c=<selected>"
+      },
       "files": {
-        "answered": 23,
+        "answered": 2,
         "errors": 0,
-        "heldByBrowserMaxMs": 67,
-        "abandoned": 20,
-        "p95Ms": 83,
-        "maxMs": 3107,
+        "p95Ms": 14557,
+        "maxMs": 14557,
+        "queuedMaxMs": 6241
+      },
+      "api": {
+        "requests": 51,
+        "maxMs": 22240,
         "slowest": [
           {
-            "query": "?view=summary&path=pinned",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 3107,
-            "sentMs": 67,
-            "firstByteMs": 3161,
-            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=1635.2, files-worker-build;dur=388.9, files-source;dur=0.0, files-registry;dur=311.0, files-session-titles;dur=18.8, files-project-affinity;dur=6.2, files-flow-store;dur=0.3, files-flow-restore;dur=0.0, files-task-store;dur=0.9, files-authorship;dur=7.5, files-role-titles;dur=0.8, files-flows;dur=34.5, files-stores;dur=0.0, files-project-rate-limits;dur=8.6, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.9, files-projects;dur=11.8, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 22240,
+            "queuedMs": 17439,
+            "firstByteMs": 22238,
+            "at": 28088
           },
           {
-            "query": "?view=summary",
+            "route": "/api/attention",
+            "files": false,
             "status": 200,
-            "ms": 83,
-            "sentMs": 0,
-            "firstByteMs": 82,
-            "timing": "files-clone;dur=0.4, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.1, files-worker-build;dur=351.9, files-source;dur=0.0, files-registry;dur=114.5, files-session-titles;dur=83.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.4, files-flow-restore;dur=0.1, files-task-store;dur=0.3, files-authorship;dur=14.7, files-role-titles;dur=1.4, files-flows;dur=100.9, files-stores;dur=0.0, files-project-rate-limits;dur=18.2, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.4, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=21.3, files-json;dur=11.8, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 19038,
+            "queuedMs": 13761,
+            "firstByteMs": 19033,
+            "at": 26488
           },
           {
-            "query": "?view=summary",
+            "route": "/api/tmux/targets",
+            "files": false,
             "status": 200,
-            "ms": 80,
-            "sentMs": 0,
-            "firstByteMs": 65,
-            "timing": "files-clone;dur=0.4, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.3, files-worker-build;dur=254.4, files-source;dur=0.0, files-registry;dur=146.8, files-session-titles;dur=32.1, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.8, files-role-titles;dur=0.6, files-flows;dur=40.8, files-stores;dur=0.0, files-project-rate-limits;dur=29.2, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=32.0, files-json;dur=4.0, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 18558,
+            "queuedMs": 4018,
+            "firstByteMs": 18550,
+            "at": 17518
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 17261,
+            "queuedMs": 14399,
+            "firstByteMs": 17260,
+            "at": 33093
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 14557,
+            "queuedMs": 3737,
+            "firstByteMs": 14552,
+            "at": 21567
           }
         ],
-        "failures": [
+        "unfinished": [
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 2577
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 9459
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 17573
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/attention",
+            "at": 30490
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 32092
+          },
+          {
+            "route": "/api/accounts",
+            "at": 32092
+          },
+          {
+            "route": "/api/attention",
+            "at": 34489
+          },
+          {
+            "route": "/api/tmux/targets",
+            "at": 36070
+          },
+          {
+            "route": "/api/accounts",
+            "at": 36087
+          },
+          {
+            "route": "/api/accounts",
+            "at": 36087
           }
         ]
       },
       "lag": {
-        "samples": 611,
+        "bootMaxMs": 237,
+        "samples": 703,
         "p95Ms": 3,
-        "maxMs": 56
+        "maxMs": 78
       },
-      "inputMs": 17,
-      "held": [
+      "inputMs": [
+        42,
+        41
+      ],
+      "failures": [
         {
-          "path": "/api/accounts/copilot",
-          "ms": 33873
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/telegram",
-          "ms": 33867
+          "route": "/api/accounts",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/runtime/snapshot",
-          "ms": 33878
+          "route": "/api/orchestrator/seat",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/onboarding",
-          "ms": 33914
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/staging",
-          "ms": 34172
-        },
-        {
-          "path": "/api/operator/settings",
-          "ms": 34168
-        },
-        {
-          "path": "/api/external-relay/conversations",
-          "ms": 34158
-        },
-        {
-          "path": "/api/telemetry",
-          "ms": 34242
-        },
-        {
-          "path": "/api/attention",
-          "ms": 34413
-        },
-        {
-          "path": "/api/voice-companion/settings",
-          "ms": 34415
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         }
       ]
     },
     {
       "view": 6,
-      "readyMs": 41248,
-      "cards": 13,
+      "readyMs": 18259,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0,
+        "hash": "#c=<selected>"
+      },
       "files": {
-        "answered": 22,
+        "answered": 2,
         "errors": 0,
-        "heldByBrowserMaxMs": 160,
-        "abandoned": 21,
-        "p95Ms": 161,
-        "maxMs": 2725,
+        "p95Ms": 14566,
+        "maxMs": 14566,
+        "queuedMaxMs": 6832
+      },
+      "api": {
+        "requests": 52,
+        "maxMs": 27238,
         "slowest": [
           {
-            "query": "?view=summary&path=pinned",
+            "route": "/api/attention",
+            "files": false,
             "status": 200,
-            "ms": 2725,
-            "sentMs": 160,
-            "firstByteMs": 2884,
-            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=1359.0, files-worker-build;dur=273.9, files-source;dur=0.0, files-registry;dur=212.8, files-session-titles;dur=15.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=12.4, files-role-titles;dur=0.7, files-flows;dur=29.5, files-stores;dur=0.0, files-project-rate-limits;dur=9.7, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.4, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=2.1, files-projects;dur=13.2, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 27238,
+            "queuedMs": 22821,
+            "firstByteMs": 27236,
+            "at": 26548
           },
           {
-            "query": "?view=summary",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 161,
-            "sentMs": 0,
-            "firstByteMs": 160,
-            "timing": "files-clone;dur=0.5, files-scan;dur=2797.0;desc=\"pinned generation 10\", files-worker-queue;dur=0.3, files-worker-build;dur=150.9, files-source;dur=0.0, files-registry;dur=91.5, files-session-titles;dur=19.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.3, files-authorship;dur=9.2, files-role-titles;dur=1.3, files-flows;dur=30.6, files-stores;dur=0.0, files-project-rate-limits;dur=12.0, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=14.0, files-json;dur=3.0, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 24038,
+            "queuedMs": 20324,
+            "firstByteMs": 24037,
+            "at": 27164
           },
           {
-            "query": "?view=summary",
+            "route": "/api/external-relay/conversations",
+            "files": false,
             "status": 200,
-            "ms": 25,
-            "sentMs": 0,
-            "firstByteMs": 23,
-            "timing": "files-clone;dur=0.4, files-scan;dur=2869.7;desc=\"pinned generation 7\", files-worker-queue;dur=0.5, files-worker-build;dur=203.2, files-source;dur=0.1, files-registry;dur=124.6, files-session-titles;dur=18.3, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.0, files-role-titles;dur=0.6, files-flows;dur=34.2, files-stores;dur=0.0, files-project-rate-limits;dur=19.4, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.8, files-projects;dur=22.2, files-json;dur=3.7, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 21226,
+            "queuedMs": 16809,
+            "firstByteMs": 21225,
+            "at": 32532
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 17697,
+            "queuedMs": 4961,
+            "firstByteMs": 17694,
+            "at": 18244
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 16121,
+            "queuedMs": 7133,
+            "firstByteMs": 16120,
+            "at": 27163
           }
         ],
-        "failures": [
+        "unfinished": [
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 2564
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 9519
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 18281
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/attention",
+            "at": 30548
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 31163
+          },
+          {
+            "route": "/api/accounts",
+            "at": 31163
+          },
+          {
+            "route": "/api/attention",
+            "at": 34548
+          },
+          {
+            "route": "/api/accounts",
+            "at": 35168
+          },
+          {
+            "route": "/api/accounts",
+            "at": 35169
+          },
+          {
+            "route": "/api/tmux/targets",
+            "at": 35942
           }
         ]
       },
       "lag": {
-        "samples": 614,
-        "p95Ms": 3,
-        "maxMs": 23
+        "bootMaxMs": 321,
+        "samples": 704,
+        "p95Ms": 2,
+        "maxMs": 15
       },
-      "inputMs": 19,
-      "held": [
+      "inputMs": [
+        30,
+        41
+      ],
+      "failures": [
         {
-          "path": "/api/team",
-          "ms": 33807
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/telemetry",
-          "ms": 33752
+          "route": "/api/accounts",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/onboarding",
-          "ms": 33924
+          "route": "/api/orchestrator/seat",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/staging",
-          "ms": 33937
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/operator/settings",
-          "ms": 33956
-        },
-        {
-          "path": "/api/external-relay/conversations",
-          "ms": 33980
-        },
-        {
-          "path": "/api/attention",
-          "ms": 34078
-        },
-        {
-          "path": "/api/voice-companion/settings",
-          "ms": 34224
-        },
-        {
-          "path": "/api/attention",
-          "ms": 31109
-        },
-        {
-          "path": "/api/view/presence",
-          "ms": 35119
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         }
       ]
     },
     {
       "view": 7,
-      "readyMs": 41129,
-      "cards": 13,
+      "readyMs": 17928,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0,
+        "hash": "#c=<selected>"
+      },
       "files": {
-        "answered": 24,
+        "answered": 2,
         "errors": 0,
-        "heldByBrowserMaxMs": 89,
-        "abandoned": 20,
-        "p95Ms": 35,
-        "maxMs": 2567,
+        "p95Ms": 14561,
+        "maxMs": 14561,
+        "queuedMaxMs": 6864
+      },
+      "api": {
+        "requests": 55,
+        "maxMs": 23992,
         "slowest": [
           {
-            "query": "?view=summary&path=pinned",
+            "route": "/api/accounts",
+            "files": false,
             "status": 200,
-            "ms": 2567,
-            "sentMs": 89,
-            "firstByteMs": 2638,
-            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=1105.6, files-worker-build;dur=250.9, files-source;dur=0.1, files-registry;dur=210.1, files-session-titles;dur=14.0, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=6.6, files-role-titles;dur=0.5, files-flows;dur=21.5, files-stores;dur=0.0, files-project-rate-limits;dur=6.0, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=8.4, files-json;dur=2.9, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 23992,
+            "queuedMs": 19725,
+            "firstByteMs": 23990,
+            "at": 25334
           },
           {
-            "query": "?view=summary",
+            "route": "/api/attention",
+            "files": false,
             "status": 200,
-            "ms": 35,
-            "sentMs": 0,
-            "firstByteMs": 28,
-            "timing": "files-clone;dur=0.3, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.4, files-worker-build;dur=209.0, files-source;dur=0.1, files-registry;dur=146.0, files-session-titles;dur=15.3, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=8.6, files-role-titles;dur=0.6, files-flows;dur=24.7, files-stores;dur=0.0, files-project-rate-limits;dur=19.9, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.4, files-projects;dur=22.3, files-json;dur=3.6, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 23756,
+            "queuedMs": 19876,
+            "firstByteMs": 23755,
+            "at": 26559
           },
           {
-            "query": "?view=summary",
+            "route": "/api/external-relay/conversations",
+            "files": false,
             "status": 200,
-            "ms": 31,
-            "sentMs": 0,
-            "firstByteMs": 30,
-            "timing": "files-clone;dur=0.3, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.7, files-worker-build;dur=342.3, files-source;dur=0.2, files-registry;dur=256.6, files-session-titles;dur=19.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.4, files-role-titles;dur=0.9, files-flows;dur=36.4, files-stores;dur=0.0, files-project-rate-limits;dur=9.4, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.6, files-projects;dur=12.0, files-json;dur=8.0, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 21202,
+            "queuedMs": 15046,
+            "firstByteMs": 21201,
+            "at": 32541
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 18139,
+            "queuedMs": 3651,
+            "firstByteMs": 18115,
+            "at": 17671
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 15740,
+            "queuedMs": 8132,
+            "firstByteMs": 15736,
+            "at": 25334
           }
         ],
-        "failures": [
+        "unfinished": [
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 2579
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 9550
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/streams",
+            "at": 17708
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 29337
           },
           {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
+            "route": "/api/accounts",
+            "at": 29337
+          },
+          {
+            "route": "/api/attention",
+            "at": 30560
+          },
+          {
+            "route": "/api/accounts",
+            "at": 33335
+          },
+          {
+            "route": "/api/accounts",
+            "at": 33335
+          },
+          {
+            "route": "/api/attention",
+            "at": 34561
+          },
+          {
+            "route": "/api/tmux/targets",
+            "at": 35789
           }
         ]
       },
       "lag": {
-        "samples": 616,
-        "p95Ms": 4,
-        "maxMs": 18
+        "bootMaxMs": 420,
+        "samples": 709,
+        "p95Ms": 3,
+        "maxMs": 46
       },
-      "inputMs": 20,
-      "held": [
+      "inputMs": [
+        28,
+        31
+      ],
+      "failures": [
         {
-          "path": "/api/accounts/copilot",
-          "ms": 33890
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/telegram",
-          "ms": 33889
+          "route": "/api/accounts",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/runtime/snapshot",
-          "ms": 33896
+          "route": "/api/orchestrator/seat",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/onboarding",
-          "ms": 33902
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         },
         {
-          "path": "/api/staging",
-          "ms": 34145
-        },
-        {
-          "path": "/api/operator/settings",
-          "ms": 34148
-        },
-        {
-          "path": "/api/external-relay/conversations",
-          "ms": 34158
-        },
-        {
-          "path": "/api/telemetry",
-          "ms": 34206
-        },
-        {
-          "path": "/api/attention",
-          "ms": 34434
-        },
-        {
-          "path": "/api/voice-companion/settings",
-          "ms": 34438
+          "route": "/api/files",
+          "error": "net::ERR_ABORTED"
         }
       ]
     }
   ],
-  "failures": []
+  "failures": [
+    "view 0 drew its board in 21699ms, past 10000ms",
+    "view 0 /api/files p95 14041ms from issue",
+    "view 0 /api/files max 14041ms from issue",
+    "view 0 waited 18106ms for /api/accounts",
+    "view 1 drew its board in 18026ms, past 10000ms",
+    "view 1 /api/files p95 14568ms from issue",
+    "view 1 /api/files max 14568ms from issue",
+    "view 1 waited 23823ms for /api/accounts",
+    "view 2 drew its board in 17662ms, past 10000ms",
+    "view 2 /api/files p95 14074ms from issue",
+    "view 2 /api/files max 14074ms from issue",
+    "view 2 waited 22274ms for /api/accounts",
+    "view 3 drew its board in 18319ms, past 10000ms",
+    "view 3 /api/files p95 14558ms from issue",
+    "view 3 /api/files max 14558ms from issue",
+    "view 3 waited 25514ms for /api/accounts",
+    "view 4 drew its board in 17995ms, past 10000ms",
+    "view 4 /api/files p95 14558ms from issue",
+    "view 4 /api/files max 14558ms from issue",
+    "view 4 waited 23896ms for /api/attention",
+    "view 5 drew its board in 17830ms, past 10000ms",
+    "view 5 /api/files p95 14557ms from issue",
+    "view 5 /api/files max 14557ms from issue",
+    "view 5 waited 22240ms for /api/accounts",
+    "view 6 drew its board in 18259ms, past 10000ms",
+    "view 6 /api/files p95 14566ms from issue",
+    "view 6 /api/files max 14566ms from issue",
+    "view 6 waited 27238ms for /api/attention",
+    "view 7 drew its board in 17928ms, past 10000ms",
+    "view 7 /api/files p95 14561ms from issue",
+    "view 7 /api/files max 14561ms from issue",
+    "view 7 waited 23992ms for /api/accounts"
+  ]
 }

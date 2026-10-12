@@ -188,9 +188,11 @@
  * candidate performance gate's synthetic registry, about 30,000 rows of
  * retained history (#2761), in eight real browser views that each pin their
  * own conversation, while two writer processes keep writing grant-bearing
- * rows. Every view must draw its board, keep its main thread answering, keep
- * receiving `/api/files` answers inside the gate's request bounds with none
- * failing, and still answer an input once the writers stop.
+ * rows. From navigation, every view must draw its board within ten seconds,
+ * keep its selected conversation, receive `/api/files` answers for its own
+ * scope inside the gate's request bounds counted from the moment the page
+ * issued them, keep its main thread answering, and answer input while the
+ * writers run.
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -7518,19 +7520,24 @@ async function hydrationMain(): Promise<void> {
 
 const REGISTRY_HISTORY_VIEWS = 8;
 const REGISTRY_HISTORY_WINDOW_MS = 30_000;
-/* The board's own half of the candidate gate's bounds (docs/design/candidate-performance-gate.md). */
-/* `files` bounds the server's answer, from the request leaving the browser to
-   its last byte. Time the browser held a request for a free connection is
-   recorded beside it: eight views opening at once hold every connection of a
-   page with their scans' generation waits, which is the client's doing. */
-const REGISTRY_HISTORY_BOUNDS = { readyMs: 60_000, filesP95Ms: 5_000, filesMaxMs: 10_000, lagP95Ms: 50, lagMaxMs: 500, inputMs: 500 };
+/* The board's half of the candidate gate's bounds (docs/design/candidate-performance-gate.md),
+   all measured from navigation. A request's time runs from the page issuing it
+   to its last byte, so a wait for a free browser connection counts: the
+   operator waits through it too. Main-thread delay is bounded apart for the
+   boot (navigation to a drawn board) and for operation after it. */
+const REGISTRY_HISTORY_BOUNDS = {
+  readyMs: 10_000, filesP95Ms: 5_000, filesMaxMs: 10_000, apiMaxMs: 10_000,
+  bootLagMaxMs: 1_000, lagP95Ms: 50, lagMaxMs: 500, inputMs: 500,
+};
 
 async function registryHistoryMain(): Promise<void> {
   const { tasks, reviewers } = seedHome();
   seedState(PROJECT_NAME, tasks, reviewers);
   process.env.LLV_STATE_DIR = STATE_DIR;
   const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
-  const dataset = buildRegistryPerformanceDataset(STATE_DIR);
+  /* The selected conversations' transcripts live in the sandboxed home, so
+     each view's pin names a conversation the board can open. */
+  const dataset = buildRegistryPerformanceDataset(STATE_DIR, undefined, { sessionsRoot: path.join(HOME, ".codex", "sessions") });
   SERVER_EXTRA_ENV.LLV_AGENT_REGISTRY_SQLITE = "sqlite";
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -7540,15 +7547,20 @@ async function registryHistoryMain(): Promise<void> {
   };
   const report: {
     commit: string;
-    dataset: { rows: number; coldRows: number; payloadBytes: number };
+    dataset: { rows: number; coldRows: number; payloadBytes: number; transcripts: number };
     bounds: typeof REGISTRY_HISTORY_BOUNDS;
     writes: { count: number; p95Ms: number; maxMs: number };
     views: Record<string, unknown>[];
     failures: string[];
-  } = { commit: captureCommit(), dataset: { rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes }, bounds: REGISTRY_HISTORY_BOUNDS, writes: { count: 0, p95Ms: 0, maxMs: 0 }, views: [], failures: [] };
+  } = {
+    commit: captureCommit(),
+    dataset: { rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length },
+    bounds: REGISTRY_HISTORY_BOUNDS, writes: { count: 0, p95Ms: 0, maxMs: 0 }, views: [], failures: [],
+  };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const writers: ChildProcess[] = [];
+  const writerStop = path.join(BASE, "history-writers-stop");
   try {
     server = startServer(port);
     await waitForServer(baseUrl, server);
@@ -7568,60 +7580,67 @@ async function registryHistoryMain(): Promise<void> {
         localStorage.setItem("llvSound", "0");
         localStorage.setItem("llvSchemeMode", "select");
       });
-      /* The page's own clock: a 50 ms timer that runs late by however long the main thread was busy. */
+      /* The page's own clock from the first script: a 50 ms timer that runs
+         late by however long the main thread was busy, each sample stamped. */
       await context.addInitScript(() => {
-        const probe = { lags: [] as number[] };
+        const probe = { lags: [] as Array<[number, number]> };
         (window as unknown as { __historyProbe: typeof probe }).__historyProbe = probe;
         let expected = performance.now() + 50;
-        const tick = () => { const now = performance.now(); probe.lags.push(Math.max(0, now - expected)); expected = now + 50; setTimeout(tick, 50); };
+        const tick = () => { const now = performance.now(); probe.lags.push([now, Math.max(0, now - expected)]); expected = now + 50; setTimeout(tick, 50); };
         setTimeout(tick, 50);
       });
       const page = await context.newPage();
-      /* Every board request, read once the board is up: the first load is bounded by readyMs. */
-      const files: { query: string; status: number; ms: number; sentMs: number; firstByteMs: number; timing: string }[] = [];
-      const failed: { query: string; error: string }[] = [];
-      /* Requests of any route that stayed open past five seconds, by path. */
-      const held: { path: string; ms: number }[] = [];
-      let measuring = false;
-      /* The scope a request asked for; the pinned path itself stays out of the record. */
-      const scopeOf = (url: URL) => {
-        const scope = new URLSearchParams(url.search);
-        if (scope.has("path")) scope.set("path", "pinned");
-        return `?${scope.toString()}`;
-      };
-      page.on("requestfinished", async (request) => {
+      const selected = dataset.conversations[(index * 7 + 3) % dataset.conversations.length]!;
+      const pinned = selected.path;
+      /* The page names the conversation it opened by its title. */
+      const title = `Synthetic conversation ${Number(/(\d+)\.jsonl$/.exec(pinned)?.[1] ?? -1)}`;
+      /* Every API request from navigation on: its whole time and the part
+         the browser held it for a free connection. */
+      const requests: { route: string; files: boolean; status: number; ms: number; queuedMs: number; firstByteMs: number; at: number }[] = [];
+      const failed: { route: string; error: string }[] = [];
+      let navigatedAt = 0;
+      /* Requests the page started and never finished: what can hold a connection. */
+      const open = new Map<object, { route: string; at: number }>();
+      page.on("request", (request) => {
         const url = new URL(request.url());
-        const spent = request.timing().responseEnd;
-        if (url.pathname.startsWith("/api/") && spent > 5_000) held.push({ path: url.pathname, ms: Math.round(spent) });
-        if (!measuring || !url.pathname.startsWith("/api/files")) return;
-        const response = await request.response();
+        if (url.pathname.startsWith("/api/")) open.set(request, { route: url.pathname, at: Date.now() - navigatedAt });
+      });
+      page.on("requestfailed", (request) => { open.delete(request); });
+      page.on("requestfinished", async (request) => {
+        open.delete(request);
+        const url = new URL(request.url());
+        if (!url.pathname.startsWith("/api/")) return;
         const timing = request.timing();
-        /* Sent and first byte apart from the whole: a request the browser
-           held for a free connection is not the server being slow. */
-        files.push({ query: scopeOf(url), status: response?.status() ?? 0,
-          ms: Math.round(timing.responseEnd > 0 ? timing.responseEnd - Math.max(0, timing.requestStart) : 0),
-          sentMs: Math.round(timing.requestStart), firstByteMs: Math.round(timing.responseStart),
-          timing: (await response?.allHeaders())?.["server-timing"] ?? "" });
+        const response = await request.response();
+        requests.push({
+          route: url.pathname,
+          files: url.pathname === "/api/files",
+          status: response?.status() ?? 0,
+          ms: Math.round(Math.max(0, timing.responseEnd)),
+          queuedMs: Math.round(Math.max(0, timing.requestStart)),
+          firstByteMs: Math.round(Math.max(0, timing.responseStart)),
+          at: Math.round(timing.startTime - navigatedAt),
+        });
       });
       page.on("requestfailed", (request) => {
         const url = new URL(request.url());
-        if (measuring && url.pathname.startsWith("/api/files")) failed.push({ query: scopeOf(url), error: request.failure()?.errorText ?? "failed" });
+        if (url.pathname.startsWith("/api/")) failed.push({ route: url.pathname, error: request.failure()?.errorText ?? "failed" });
       });
-      const pinned = dataset.conversationPaths[(index * 7) % dataset.conversationPaths.length]!;
+      navigatedAt = Date.now();
       const started = performance.now();
       await page.goto(`${baseUrl}/#f=${encodeURIComponent(pinned)}`, { waitUntil: "domcontentloaded" });
-      const drawn = await page.waitForSelector("[data-kanban-board]", { timeout: REGISTRY_HISTORY_BOUNDS.readyMs }).then(() => true, () => false);
+      const drawn = await page.waitForSelector("[data-kanban-board]", { timeout: 60_000 }).then(() => true, () => false);
       const readyMs = drawn ? Math.round(performance.now() - started) : Number.POSITIVE_INFINITY;
-      measuring = true;
-      await page.evaluate(() => { (window as unknown as { __historyProbe: { lags: number[] } }).__historyProbe.lags.length = 0; });
-      return { index, context, page, files, failed, held, readyMs };
+      const drawnAt = await page.evaluate(() => performance.now());
+      return { index, context, page, pinned, conversationId: selected.conversationId, title, requests, failed, open, readyMs, drawnAt, staleSeen: 0, lostSeen: 0, inputs: [] as number[] };
     }));
-    const keys = dataset.grantSubjects.filter((subject) => subject.collection === "entries");
+    const keys = dataset.grantSubjects.filter((subject) => subject.collection === "entries"
+      && !dataset.workers.some((worker) => worker.key === subject.key));
     for (const half of [0, 1]) {
-      const writer = spawn(CAPTURE_BUN, ["src/runtime-host/candidatePerformanceRun.ts", "--writer",
+      const writer = spawn(CAPTURE_BUN, ["src/runtime-host/candidatePerformanceRun.ts", "--writer", "--owner", String(process.pid),
         "--registry", dataset.filename,
         "--keys", JSON.stringify(keys.filter((_, index) => index % 2 === half).map(({ key, servers }) => ({ key, servers }))),
-        "--duration-ms", String(REGISTRY_HISTORY_WINDOW_MS)], { cwd: repoRoot, env: buildEnvironment(0), stdio: ["ignore", "pipe", "inherit"] });
+        "--stop", writerStop], { cwd: repoRoot, env: buildEnvironment(0), stdio: ["ignore", "pipe", "inherit"] });
       writers.push(writer);
     }
     const written = Promise.all(writers.map((writer) => new Promise<number[]>((resolve) => {
@@ -7631,45 +7650,92 @@ async function registryHistoryMain(): Promise<void> {
         try { resolve((JSON.parse(output.trim().split("\n").at(-1) ?? "{}") as { latencies?: number[] }).latencies ?? []); } catch { resolve([]); }
       });
     })));
-    await Bun.sleep(REGISTRY_HISTORY_WINDOW_MS);
-    const writes = (await written).flat();
-    report.writes = { count: writes.length, p95Ms: percentile(writes, 0.95), maxMs: Math.round(Math.max(0, ...writes)) };
-    for (const view of views) {
+    /* While the writers run: each view keeps its selection, never falls back
+       to the missing-conversation notice, and answers an input. */
+    const input = async (view: (typeof views)[number]) => {
       const inputStarted = performance.now();
       await view.page.mouse.wheel(0, 240);
       await view.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
-      const inputMs = Math.round(performance.now() - inputStarted);
-      const lags = await view.page.evaluate(() => (window as unknown as { __historyProbe: { lags: number[] } }).__historyProbe.lags);
+      view.inputs.push(Math.round(performance.now() - inputStarted));
+    };
+    /* The page opens the pin and then names it canonically, `#c=<id>`. */
+    const holdsSelection = async (view: (typeof views)[number]) => {
+      const hash = await view.page.evaluate(() => decodeURIComponent(location.hash));
+      const named = hash.includes(`c=${view.conversationId}`) || hash.includes(`f=${view.pinned}`);
+      return named && await view.page.getByText(view.title, { exact: true }).count() > 0;
+    };
+    for (const until = performance.now() + REGISTRY_HISTORY_WINDOW_MS; performance.now() < until;) {
+      await Promise.all(views.map(async (view) => {
+        if (await view.page.locator("[data-stale-focus-notice]").count()) view.staleSeen += 1;
+        if (!await holdsSelection(view)) view.lostSeen += 1;
+      }));
+      if (views[0]!.inputs.length < 2 && performance.now() > until - REGISTRY_HISTORY_WINDOW_MS * (views[0]!.inputs.length ? 0.33 : 0.66)) {
+        await Promise.all(views.map(input));
+      }
+      await Bun.sleep(2_000);
+    }
+    fs.writeFileSync(writerStop, "1");
+    const writes = (await written).flat();
+    report.writes = { count: writes.length, p95Ms: percentile(writes, 0.95), maxMs: Math.round(Math.max(0, ...writes)) };
+    for (const view of views) {
+      const lags = await view.page.evaluate(() => (window as unknown as { __historyProbe: { lags: Array<[number, number]> } }).__historyProbe.lags);
+      const bootLags = lags.filter(([at]) => at <= view.drawnAt).map(([, lag]) => lag);
+      const operatingLags = lags.filter(([at]) => at > view.drawnAt).map(([, lag]) => lag);
       const cards = await view.page.locator("[data-kanban-card]").count();
-      const answered = view.files.filter((file) => file.status >= 200 && file.status < 400).map((file) => file.ms);
+      const hash = await view.page.evaluate(() => decodeURIComponent(location.hash));
+      const stillSelected = await holdsSelection(view);
+      if (await view.page.locator("[data-stale-focus-notice]").count()) view.staleSeen += 1;
+      const answered = view.requests.filter((request) => request.files && request.status >= 200 && request.status < 400);
+      const answeredDuringWrites = answered.filter((request) => request.at > view.drawnAt).length;
+      const apiTimes = view.requests.map((request) => request.ms);
       /* A poll the page itself abandons for a newer one is the client's choice. */
-      const errors = view.files.filter((file) => file.status >= 500).length + view.failed.filter((failure) => failure.error !== "net::ERR_ABORTED").length;
+      const errors = view.requests.filter((request) => request.files && request.status >= 500).length
+        + view.failed.filter((failure) => failure.route === "/api/files" && failure.error !== "net::ERR_ABORTED").length;
       const reading = {
         view: view.index,
         readyMs: view.readyMs,
         cards,
-        files: { answered: answered.length, errors, heldByBrowserMaxMs: Math.max(0, ...view.files.map((file) => file.sentMs)), abandoned: view.failed.length - view.failed.filter((failure) => failure.error !== "net::ERR_ABORTED").length,
-          p95Ms: percentile(answered, 0.95), maxMs: Math.max(0, ...answered),
-          slowest: [...view.files].sort((a, b) => b.ms - a.ms).slice(0, 3), failures: view.failed.slice(0, 5) },
-        lag: { samples: lags.length, p95Ms: percentile(lags, 0.95), maxMs: Math.round(Math.max(0, ...lags)) },
-        inputMs,
-        held: view.held.slice(0, 10),
+        selection: { stillSelected, checksLost: view.lostSeen, staleNoticeSeen: view.staleSeen, hash: hash.replace(view.conversationId, "<selected>").replace(view.pinned, "<selected>") },
+        files: {
+          answered: answered.length, errors,
+          p95Ms: percentile(answered.map((request) => request.ms), 0.95), maxMs: Math.max(0, ...answered.map((request) => request.ms)),
+          queuedMaxMs: Math.max(0, ...view.requests.filter((request) => request.files).map((request) => request.queuedMs)),
+        },
+        api: {
+          requests: view.requests.length, maxMs: Math.max(0, ...apiTimes), slowest: [...view.requests].sort((a, b) => b.ms - a.ms).slice(0, 5),
+          /* The first view's opening requests in order, to read what holds its connections. */
+          ...(view.index === 0 ? { opening: [...view.requests].sort((a, b) => a.at - b.at).slice(0, 60) } : {}),
+          unfinished: [...view.open.values()].sort((a, b) => a.at - b.at).slice(0, 10),
+        },
+        lag: {
+          bootMaxMs: Math.round(Math.max(0, ...bootLags)),
+          samples: operatingLags.length, p95Ms: percentile(operatingLags, 0.95), maxMs: Math.round(Math.max(0, ...operatingLags)),
+        },
+        inputMs: view.inputs,
+        failures: view.failed.slice(0, 5),
       };
       report.views.push(reading);
       const name = `view ${view.index}`;
-      if (!answered.length) report.failures.push(`${name} received no /api/files answer`);
+      const bounds = REGISTRY_HISTORY_BOUNDS;
+      if (!Number.isFinite(reading.readyMs) || reading.readyMs > bounds.readyMs) report.failures.push(`${name} drew its board in ${reading.readyMs}ms, past ${bounds.readyMs}ms`);
+      if (!stillSelected || view.lostSeen) report.failures.push(`${name} lost its selected conversation in ${view.lostSeen} check(s)`);
+      if (view.staleSeen) report.failures.push(`${name} showed the missing-conversation notice ${view.staleSeen} time(s)`);
+      if (!answeredDuringWrites) report.failures.push(`${name} received no board answer while the writers ran`);
       if (errors) report.failures.push(`${name} saw ${errors} failed /api/files request(s)`);
-      if (reading.files.p95Ms > REGISTRY_HISTORY_BOUNDS.filesP95Ms) report.failures.push(`${name} /api/files p95 ${reading.files.p95Ms}ms`);
-      if (reading.files.maxMs > REGISTRY_HISTORY_BOUNDS.filesMaxMs) report.failures.push(`${name} /api/files max ${reading.files.maxMs}ms`);
-      if (reading.lag.p95Ms > REGISTRY_HISTORY_BOUNDS.lagP95Ms) report.failures.push(`${name} main-thread lag p95 ${reading.lag.p95Ms}ms`);
-      if (reading.lag.maxMs > REGISTRY_HISTORY_BOUNDS.lagMaxMs) report.failures.push(`${name} main-thread lag max ${reading.lag.maxMs}ms`);
-      if (!Number.isFinite(reading.readyMs)) report.failures.push(`${name} drew no board within ${REGISTRY_HISTORY_BOUNDS.readyMs}ms`);
-      if (inputMs > REGISTRY_HISTORY_BOUNDS.inputMs) report.failures.push(`${name} answered a wheel in ${inputMs}ms`);
+      if (reading.files.p95Ms > bounds.filesP95Ms) report.failures.push(`${name} /api/files p95 ${reading.files.p95Ms}ms from issue`);
+      if (reading.files.maxMs > bounds.filesMaxMs) report.failures.push(`${name} /api/files max ${reading.files.maxMs}ms from issue`);
+      if (reading.api.maxMs > bounds.apiMaxMs) report.failures.push(`${name} waited ${reading.api.maxMs}ms for ${reading.api.slowest[0]?.route}`);
+      if (reading.lag.bootMaxMs > bounds.bootLagMaxMs) report.failures.push(`${name} main-thread lag ${reading.lag.bootMaxMs}ms before its board drew`);
+      if (reading.lag.p95Ms > bounds.lagP95Ms) report.failures.push(`${name} main-thread lag p95 ${reading.lag.p95Ms}ms`);
+      if (reading.lag.maxMs > bounds.lagMaxMs) report.failures.push(`${name} main-thread lag max ${reading.lag.maxMs}ms`);
+      if (view.inputs.length < 2) report.failures.push(`${name} answered ${view.inputs.length} input(s) while the writers ran`);
+      for (const inputMs of view.inputs) if (inputMs > bounds.inputMs) report.failures.push(`${name} answered a wheel in ${inputMs}ms`);
       await view.page.screenshot({ path: path.join(OUT_DIR, `registry-history-view-${view.index}.png`) });
       await view.context.close();
     }
     if (!report.writes.count) report.failures.push("the writers recorded no writes");
   } finally {
+    fs.writeFileSync(writerStop, "1");
     for (const writer of writers) if (writer.exitCode === null && writer.signalCode === null) writer.kill("SIGTERM");
     await browser?.close();
     await stop(server);

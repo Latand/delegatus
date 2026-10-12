@@ -217,9 +217,11 @@ PRs build only when image install, build or runtime inputs change.
 `verify-candidate` also runs the candidate performance gate
 (`src/runtime-host/candidatePerformanceRun.ts`, bounds and reasons in
 `docs/design/candidate-performance-gate.md`) in another throwaway container:
-a synthetic registry of about 30,000 rows of retained history, first boot,
-two concurrent writers, eight board scopes and a successor release. A breached
-bound refuses the candidate and the serving release keeps serving. Run it
+a synthetic registry of about 30,000 rows of retained history, two Viewer
+releases as their own processes, live workers handed from one to the other
+through the real demotion and startup adoption, two concurrent writers and
+eight board scopes. A breached bound, a missing measurement or a successor that
+fails refuses the candidate and the serving release keeps serving. Run it
 locally with `bun scripts/verify-viewer-runtime.ts --performance`; an empty
 registry proves nothing about a release that has to read history.
 

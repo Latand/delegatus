@@ -10,7 +10,7 @@ import type {
   ViewerRuntimeHostStartupPhase,
 } from "@/lib/runtime/contracts";
 
-import { CANDIDATE_PERFORMANCE_BOUNDS, candidatePerformanceBreaches, type CandidatePerformanceEvidence } from "./candidatePerformance";
+import { CANDIDATE_PERFORMANCE_BOUNDS, candidatePerformanceBreaches, type CandidatePerformanceEvidence, type CandidatePerformanceMeasurements } from "./candidatePerformance";
 import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
 import { promotedViewerReadinessPhase } from "./deploymentHealth";
 import { PROMOTE_ACTION_TIMEOUT_MS } from "./deploymentHotState";
@@ -403,22 +403,32 @@ test("a refused runtime-host rehearsal carries its reason and the failing genera
 /* #2761: the performance gate's verdict crosses into the durable record, and a
    refused gate refuses the candidate whatever the rest of the evidence says. */
 test("a refused candidate performance gate reaches the record and refuses the candidate", async () => {
-  const measured = {
-    dataset: { rows: 30_036, coldRows: 27_836, payloadBytes: 94_000_000, seedMs: 7_000 },
-    firstBoot: { registryOpenMs: 80, firstSnapshotMs: 2_100, coldProjectionMs: 4_200 },
-    grantWrites: { count: 40, p50Ms: 610, p95Ms: 640, maxMs: 700, mismatches: 0, failures: 0 },
+  const measured: CandidatePerformanceMeasurements = {
+    dataset: { scale: 1, rows: 30_036, coldRows: 27_836, payloadBytes: 94_000_000, transcripts: 320, seedMs: 7_000 },
+    firstBoot: { registryOpenMs: 80, firstSnapshotMs: 600, coldProjectionMs: 4_200, firstUsableMs: 4_900, eventLoopMaxMs: 600, coldBuild: { sequence: 1, buildMs: 2_500 } },
+    activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900 },
+    grantWrites: { count: 60, p50Ms: 610, p95Ms: 640, maxMs: 700, mismatches: 0, failures: 0 },
     externalWrites: { count: 300, p50Ms: 3, p95Ms: 7, maxMs: 30, mismatches: 0, failures: 0 },
     keyedOperationReads: { count: 100, p50Ms: 1, p95Ms: 2, maxMs: 4 },
     eventLoop: { p95Ms: 620, maxMs: 700 },
     projection: { warmBuilds: { count: 60, p50Ms: 300, p95Ms: 500, maxMs: 900 }, queueWait: { count: 61, p50Ms: 900, p95Ms: 2_000, maxMs: 2_400 } },
     scopeRequests: { count: 120, p50Ms: 140, p95Ms: 600, maxMs: 2_500, scopes: 8, failures: 0, maxQueueDepth: 8, refused: 0, expired: 0 },
     worker: { spawns: 1, timeoutRetirements: 0, pidStable: true },
-    handover: { successorReadyMs: 6_000, successorSnapshotMs: 2_800, successorArchived: 2_000, grantMismatches: 0 },
+    stability: { rounds: 20, responses: 160, emptyResponses: 0, missingRows: 0, extraRows: 0, reattributedRows: 0, missingPins: 0 },
+    handover: {
+      successor: {
+        completed: true, exitCode: 0, signal: null, readyMs: 6_000, registryOpenMs: 90, snapshotMs: 700, firstProjectionMs: 4_000,
+        archived: 250, grantMismatches: 0, adoptionMs: 3_500, adopted: 4,
+      },
+      switched: true,
+      demotionExitCode: 0,
+      servingRelease: "successor",
+      serving: { requests: 104, failures: 0 },
+    },
+    workers: { count: 4, rehosted: 4, answering: 4, progressGapMaxMs: 4_000, lostProgress: 0, repeatedProgress: 0, failedPings: 0 },
     sqliteBusy: 0,
     runtimeTimeouts: 0,
     deliveryEvidence: { pending: 16, uncertain: 8, preserved: true },
-    activeWorkers: { entries: 24, preserved: true },
-    stableProjection: true,
   };
   const breaches = candidatePerformanceBreaches(measured);
   const performance: CandidatePerformanceEvidence = {

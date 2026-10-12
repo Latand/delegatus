@@ -16,7 +16,7 @@ import { markBoardViewed } from "@/lib/links/boardPresence";
 import { buildFilesResponse } from "./response";
 import { cachedFileScan } from "@/lib/scanner/scanCache";
 import { buildFilesResponseInWorker, filesResponseWorkerEnabled } from "@/lib/scanner/filesResponseWorker";
-import { createFilesProjectionQueue, FilesProjectionQueueError, type FilesProjectionQueue, type FilesProjectionQueueDiagnostics } from "./projectionQueue";
+import { createFilesProjectionQueue, FilesProjectionQueueError, type FilesProjectionBuildSample, type FilesProjectionQueue, type FilesProjectionQueueDiagnostics } from "./projectionQueue";
 
 
 function generationHeader(request: Request, name: string): number | undefined {
@@ -294,6 +294,11 @@ function projectionQueue(): FilesProjectionQueue {
 
 export function filesProjectionQueueDiagnostics(): FilesProjectionQueueDiagnostics {
   return projectionQueue().diagnostics();
+}
+
+/** Every build this process finishes from now on, for the candidate gate. */
+export function observeFilesProjectionBuilds(observer: (sample: FilesProjectionBuildSample) => void): () => void {
+  return projectionQueue().observe(observer);
 }
 
 /** Resolves once every build queued so far, and any queued behind it while
