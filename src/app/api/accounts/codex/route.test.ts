@@ -72,7 +72,7 @@ test("existing managed accounts expose retry and cancel without tmux", async () 
   setManagedCodexRuntimeForTests(new ManagedCodexRuntime({
     startClient: async (home) => {
       const child = new FakeChild(); children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   }));
   const created = await POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -97,7 +97,7 @@ test("#2166: Main signs in and cancels from the route without a label or a secon
     startClient: async (home) => {
       homes.push(home);
       const child = new FakeChild(); children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   }));
   const post = (body: unknown) => POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -122,7 +122,7 @@ test("managed account creation returns an app-server challenge without the tmux 
     startClient: async (home) => {
       const child = new FakeChild();
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   }));
   const response = await POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -148,7 +148,7 @@ test("managed Codex removal cannot bypass device login with force", async () => 
     startClient: async (home) => {
       const child = new FakeChild();
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   }));
   const created = await POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -336,7 +336,7 @@ test("a delayed real login blocks removal and competing login, then releases its
   const child = new FakeChild();
   setManagedCodexRuntimeForTests(new ManagedCodexRuntime({ startClient: async (home) => {
     entered(); await held;
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } }));
   const request = (action: string) => new NextRequest("http://127.0.0.1/api/accounts/codex", {
     method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action, id: account.id }),
@@ -367,7 +367,7 @@ test("cancel keeps removal fenced after the runtime marks its attempt canceled",
     if (message.method !== "account/login/cancel") { originalWrite(message); return; }
     entered(); void held.then(() => child.respond(message.id as number, { status: "canceled" }));
   };
-  const runtime = new ManagedCodexRuntime({ startClient: (home) => CodexAppServerClient.start({ home, spawn: () => child as never }) });
+  const runtime = new ManagedCodexRuntime({ startClient: (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   setManagedCodexRuntimeForTests(runtime);
   await runtime.startLogin(account);
   const cancel = POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -404,7 +404,7 @@ for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`man
   process.env.LLV_STATE_DIR = path.join(SANDBOX, `contention-create-${kind}`, "state");
   const runtime = new ManagedCodexRuntime({ startClient: async (home) => {
     const child = new FakeChild();
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   setManagedCodexRuntimeForTests(runtime);
   try {

@@ -45,7 +45,8 @@ export function ContextToggle({ on, auto, disabledReason, onPress }: {
         ) : (
           <>
             <Layers className="h-3.5 w-3.5" aria-hidden />
-            <span>{t("composer.context.toggle")}</span>
+            {/* A narrow composer row keeps the glyph and the mode; the name and the hint keep the word. */}
+            <span className="@max-[36rem]:hidden">{t("composer.context.toggle")}</span>
             {auto ? <span className="font-normal text-muted">{t("composer.context.autoBadge")}</span> : null}
           </>
         )}

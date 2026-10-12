@@ -9,6 +9,7 @@ import {
   type ExternalRelayTarget,
 } from "./protocol";
 import type { PairedRelay } from "./store";
+import { recordPublishedRelayReference } from "./publishedReferences";
 
 export class ExternalRelayError extends Error {
   constructor(
@@ -23,7 +24,7 @@ export class ExternalRelayError extends Error {
 const bare = (host: string) => host.replace(/^\[|\]$/g, "");
 const loopback = (address: string) =>
   address === "::1" || (net.isIP(address) === 4 && address.startsWith("127."));
-async function target(input: string): Promise<{ url: URL; address: string }> {
+async function target(input: string, options: { query?: boolean } = {}): Promise<{ url: URL; address: string }> {
   let url: URL;
   try {
     url = new URL(input);
@@ -34,7 +35,7 @@ async function target(input: string): Promise<{ url: URL; address: string }> {
     !["http:", "https:"].includes(url.protocol) ||
     url.username ||
     url.password ||
-    url.search ||
+    (url.search && !options.query) ||
     url.hash
   )
     throw new ExternalRelayError("invalid_address");
@@ -154,6 +155,8 @@ export async function relayCall<T = unknown>(
             );
             return;
           }
+          try { recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed); }
+          catch { reject(new ExternalRelayError("publication_context_unavailable")); return; }
           resolve({ status, body: parsed as T });
         });
       },
@@ -165,11 +168,15 @@ export async function relayCall<T = unknown>(
     request.end(encoded ?? undefined);
   });
 }
-/** Bounded JSON transport with DNS pinning and redirect refusal, without credentials. */
-export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
-  const { url, address } = await target(urlInput);
+/**
+ * Bounded GET with DNS pinning and redirect refusal, without credentials.
+ * `query` admits and sends a query string, for an image the relay hands out
+ * as a signed or parameterized URL; the relay's own documents are read without.
+ */
+export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, options: { query?: boolean } = {}): Promise<Buffer> {
+  const { url, address } = await target(urlInput, options);
   const transport = url.protocol === "https:" ? https : http;
-  const descriptor = await new Promise<unknown>((resolve, reject) => {
+  return await new Promise<Buffer>((resolve, reject) => {
     const request = transport.request(
       {
         hostname: address,
@@ -177,7 +184,7 @@ export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
         servername: net.isIP(bare(url.hostname))
           ? undefined
           : bare(url.hostname),
-        path: url.pathname,
+        path: url.pathname + (options.query ? url.search : ""),
         method: "GET",
         agent: false,
         headers: { host: url.host, "Delegatus-Relay-Version": "1" },
@@ -193,17 +200,11 @@ export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
-          if (size > 1_048_576)
+          if (size > maxBytes)
             response.destroy(new ExternalRelayError("too_large"));
           else chunks.push(chunk);
         });
-        response.on("end", () => {
-          try {
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          } catch {
-            reject(new ExternalRelayError("malformed"));
-          }
-        });
+        response.on("end", () => resolve(Buffer.concat(chunks)));
       },
     );
     request.on("error", reject);
@@ -212,7 +213,15 @@ export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
     );
     request.end();
   });
-  return descriptor;
+}
+/** Bounded JSON transport with DNS pinning and redirect refusal, without credentials. */
+export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
+  const bytes = await readRelayBytesUrl(urlInput);
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new ExternalRelayError("malformed");
+  }
 }
 export async function readRelayDescriptor(originInput: string): Promise<{ origin: string; descriptor: ExternalRelayDescriptor }> {
   const origin = await relayOrigin(originInput);

@@ -5,12 +5,13 @@ import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
 import { publishPrototype } from "./store";
 import { readPrototypeReviews } from "./read";
-import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery } from "./decision";
+import { decidePrototype, prototypeDelivery, type PrototypeDelivery } from "./decision";
+import { deliverPrototypeDecision } from "./deliveryWorker";
 import { prototypeWorld, taskForPrototype, type PrototypeWorld } from "./world";
 import type { DecidePrototypeInput } from "./types";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { runsElsewhere } from "@/lib/links/linked";
 import { canonicalProject } from "@/lib/projects/aliases";
+import { postPrototypeReviewToTelegram } from "./telegramPost";
 
 export function prototypeFailure(error: unknown): NextResponse {
   return NextResponse.json({ error: error instanceof PrototypeError ? error.message : "prototype review is unavailable" }, { status: error instanceof PrototypeError ? error.status : 503 });
@@ -65,26 +66,21 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
     const input = parsePrototypeInput(await request.json());
     const { caller, stage, taskId } = publicationTarget(request,input.taskId,world);
     const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId });
+    void postPrototypeReviewToTelegram(round);
     return NextResponse.json({ reviewId: round.id, taskId, title: round.title, variants: round.variants.length,
       ...(round.questions ? { questions: round.questions.length } : {}),
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });
   } catch (error) { return prototypeFailure(error); }
 }
-export async function reviewGET(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery): Promise<NextResponse> {
+/** A read reports the decision's delivery as the background delivery last left it, and never waits on it. */
+export async function reviewGET(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
-    const caller = world.caller(request);
-    let task = taskForPrototype(taskId,caller);
-    // Remote installations only read the replicated decision; they cannot drive its delivery.
-    if (!runsElsewhere(task)) {
-      for (const round of task.prototypeReviews ?? []) await refreshPrototypeDelivery(taskId,round.id,delivery);
-      task = taskForPrototype(taskId,caller);
-    }
-    return NextResponse.json(readPrototypeReviews(task),{ headers: { "cache-control": "private, no-store" } });
+    return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,world.caller(request))),{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error); }
 }
-export async function reviewPOST(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery): Promise<NextResponse> {
+export async function reviewPOST(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery,now: () => number = Date.now): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
   const operator = directOperatorActivityAuthority(request);
   if (!operator.ok || request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return NextResponse.json({ error: "only the operator may decide prototypes" },{ status: 403 });
@@ -95,7 +91,9 @@ export async function reviewPOST(request: NextRequest,taskId: string,world: Prot
     taskForPrototype(taskId,caller,true);
     const body = await request.json() as DecidePrototypeInput | { reviewId: string; retry: true };
     if (!body || typeof body !== "object" || typeof body.reviewId !== "string" || ("retry" in body && body.retry !== true)) throw new PrototypeError("invalid decision");
-    await decidePrototype(request,taskId,body,world,delivery);
+    /* The decision is durable before the answer, and the answer never waits
+       for the seat: its message goes from the background delivery. */
+    if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now });
     return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,caller)),{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error); }
 }

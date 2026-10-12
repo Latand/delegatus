@@ -19,7 +19,7 @@ const noop = () => undefined;
 /**
  * The orchestrator's REAL conversation, in the dock column (PRD #976 decision 2:
  * `LogFeed` + `TmuxComposer`, never a bespoke chat renderer). Composed exactly
- * as `BranchPane` composes them — the same feed, the same control strip, the
+ * as `BranchPane` composes them — the same feed, the same agent controls, the
  * same dead-host recovery, the same composer — so a message typed here takes
  * the composer's ordinary delivery path and a dead conversation is RESUMED by
  * that machinery rather than replaced by a second spawn.
@@ -71,7 +71,9 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
           )}
         </div>
         {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
-        <AgentControlStrip file={file} />
+        {/* The agent's controls sit in the composer's bottom row (2026-10-11);
+            the strip is left for a seat whose composer stands down. */}
+        {sendCap.state === "hidden" ? <AgentControlStrip file={file} /> : null}
         <div ref={setStepsMount} className="contents" />
         <TmuxComposer
           file={file}

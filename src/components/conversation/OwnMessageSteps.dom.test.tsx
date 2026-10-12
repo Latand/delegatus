@@ -35,12 +35,14 @@ Object.assign(globalThis, {
   cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
 
-const { OwnMessageStepRow, useOwnMessageSteps } = await import("./OwnMessageSteps");
+const { OwnMessageStepControl, OwnMessageStepRow, useOwnMessageSteps } = await import("./OwnMessageSteps");
 
 interface Pane {
   id: string; own: number; pending?: boolean; identity?: string;
   /** Own messages in loaded history above the page, and whether more is unloaded. */
   olderOwn?: number; olderUnloaded?: boolean; operatorWrote?: boolean; atTail?: boolean;
+  /** The navigator as the composer's row draws it (2026-10-11), not the row. */
+  control?: boolean;
 }
 const reader: Record<string, number[]> = {};
 const reveals: Record<string, number> = {};
@@ -54,7 +56,7 @@ const geometry: Record<string, { gap: number; viewport: number }> = {};
 const LANDING_GAP = 8;
 let frameAtCommit: (() => void) | null = null;
 
-function Harness({ id, own, pending = false, identity = id, olderOwn = 0, olderUnloaded = false, operatorWrote = false, atTail = false }: Pane) {
+function Harness({ id, own, pending = false, identity = id, olderOwn = 0, olderUnloaded = false, operatorWrote = false, atTail = false, control = false }: Pane) {
   const scroller = useRef<HTMLDivElement | null>(null);
   const [mount, setMount] = useState<HTMLDivElement | null>(null);
   const steps = useOwnMessageSteps({
@@ -91,7 +93,7 @@ function Harness({ id, own, pending = false, identity = id, olderOwn = 0, olderU
         ))}
       </div>
       <div ref={setMount} />
-      {steps.shown && mount ? createPortal(<OwnMessageStepRow steps={steps} phone={false} />, mount) : null}
+      {steps.shown && mount ? createPortal(control ? <OwnMessageStepControl steps={steps} phone={false} /> : <OwnMessageStepRow steps={steps} phone={false} />, mount) : null}
       <textarea />
     </section>
   );
@@ -306,14 +308,14 @@ test("a deadline between commit and passive effects cannot restore a different c
   } finally { frameAtCommit = null; timer.mockRestore(); }
 });
 
-test("a button disabled by an empty step keeps Alt+arrow in its pane", async () => {
+test.each([["the row", false], ["the composer's row", true]] as const)("a button disabled by an empty step keeps Alt+arrow in its pane, in %s", async (_, control) => {
   geometry.a = { gap: 100, viewport: 500 };
   geometry.b = { gap: 1000, viewport: 500 };
-  await render({ id: "a", own: 2, olderUnloaded: true, atTail: true }, { id: "b", own: 3 });
+  await render({ id: "a", own: 2, olderUnloaded: true, atTail: true, control }, { id: "b", own: 3, control });
   for (const element of host().querySelectorAll("section")) (element as HTMLElement).getClientRects = () => [{}] as unknown as DOMRectList;
   previousOf("a").focus();
   await act(async () => { previousOf("a").click(); });
-  await render({ id: "a", own: 2 }, { id: "b", own: 3 });
+  await render({ id: "a", own: 2, control }, { id: "b", own: 3, control });
   expect(document.activeElement?.hasAttribute("data-own-steps")).toBe(true);
   await scrollTo("a", 100);
   expect((await pressKey("ArrowUp")).defaultPrevented).toBe(true);

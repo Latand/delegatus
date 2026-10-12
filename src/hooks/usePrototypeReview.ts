@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import { layerPrototypeDismissal, sendDismissal } from "@/components/attention/dismissalOverlay";
 import { prototypeReviewNotices, prototypeReviewSummary } from "@/lib/prototypeReview/model";
-import type { DecidePrototypeInput, PrototypeReviewNotice, PrototypeReviewRead } from "@/lib/prototypeReview/types";
+import type { DecidePrototypeInput, PrototypeReviewNotice, PrototypeReviewRead, PrototypeRoundRead } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
 export const OPEN_PROTOTYPE_REVIEW_EVENT = "llv:open-prototype-review";
@@ -33,6 +33,21 @@ export function usePrototypeReviewNotices(tasks: readonly BoardTask[],project?: 
     return { notices, needsYouCount: notices.length };
   },[tasks,project]);
 }
+type DecisionWrite = DecidePrototypeInput | { reviewId: string; retry: true };
+/** What the review shows the moment the operator presses retry on a saved
+    decision, before the server answers: its message on its way. The server's
+    answer replaces it. A new decision gets no such reading: it reads as saved
+    only once the server has written it, because until then closing the review
+    would lose it. */
+export function optimisticPrototypeRead(data: PrototypeReviewRead, body: DecisionWrite): PrototypeReviewRead {
+  if (!("retry" in body)) return data;
+  const round = data.rounds.find(entry => entry.id === body.reviewId);
+  if (!round?.decision || round.decision.delivery.state === "sent") return data;
+  const decision: PrototypeRoundRead["decision"] = { ...round.decision, delivery: { ...round.decision.delivery, phase: round.decision.delivery.state === "no-orchestrator" ? "waiting-seat" : "delivering" } };
+  return { ...data, rounds: data.rounds.map(entry => entry.id === round.id ? { ...entry, decision } : entry) };
+}
+/** A write's outcome: saved, or refused with the server's reason. */
+export type PrototypeWriteResult = { ok: true } | { ok: false; error: string };
 export function usePrototypeReview(taskId: string | null,enabled = true) {
   const [snapshot,setSnapshot] = useState<{ taskId: string | null; data: PrototypeReviewRead | null; error: string | null; saving: boolean }>({ taskId, data: null, error: null, saving: false });
   const { data,error,saving } = snapshot.taskId === taskId ? snapshot : { data: null, error: null, saving: false };
@@ -59,10 +74,15 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
     const timer = setInterval(() => { void refresh(controller.signal); },2000);
     return () => { controller.abort(); clearInterval(timer); };
   },[taskId,enabled,refresh]);
-  const write = useCallback(async (body: DecidePrototypeInput | { reviewId: string; retry: true }): Promise<boolean> => {
-    if (!taskId) return false;
+  const write = useCallback(async (body: DecisionWrite): Promise<PrototypeWriteResult> => {
+    if (!taskId) return { ok: false, error: "Prototype decision could not be saved" };
     writing.current = taskId;
-    setSnapshot(previous => ({ taskId,data: previous.taskId === taskId ? previous.data : null,error: null,saving: true }));
+    /* A retry answers the press at once; a refusal puts back what was there and says why. */
+    let before: PrototypeReviewRead | null = null;
+    setSnapshot(previous => {
+      before = previous.taskId === taskId ? previous.data : null;
+      return { taskId,data: before ? optimisticPrototypeRead(before,body) : null,error: null,saving: true };
+    });
     ++sequence.current;
     try {
       const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/prototypes`,{
@@ -71,10 +91,11 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "Prototype decision could not be saved");
       if (active.current === taskId) { ++sequence.current; setSnapshot({ taskId,data: result,error: null,saving: false }); }
-      fireTasksChanged(); return true;
+      fireTasksChanged(); return { ok: true };
     } catch (error) {
-      if (active.current === taskId) setSnapshot(previous => ({ ...previous,error: error instanceof Error ? error.message : "Prototype decision could not be saved",saving: false }));
-      return false;
+      const message = error instanceof Error ? error.message : "Prototype decision could not be saved";
+      if (active.current === taskId) setSnapshot(previous => ({ ...previous,data: before ?? previous.data,error: message,saving: false }));
+      return { ok: false, error: message };
     } finally { if (writing.current === taskId) writing.current = null; }
   },[taskId]);
   const retry = useCallback((reviewId: string) => write({ reviewId,retry: true }),[write]);

@@ -1,0 +1,418 @@
+{
+  "floor": 0.6,
+  "frames": {
+    "seat-rest-1440-uk": {
+      "column": 600,
+      "feed": 483,
+      "share": 0.804,
+      "form": 118,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Не доставлено: 3"
+      },
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-list-open-1440-uk": {
+      "column": 600,
+      "feed": 360,
+      "share": 0.6,
+      "form": 240,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Не доставлено: 3"
+      },
+      "list": true,
+      "firstFailed": {
+        "found": true,
+        "whole": true,
+        "header": "Повторити невдалі (2)"
+      },
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-six-line-draft-1440-uk": {
+      "column": 600,
+      "feed": 399,
+      "share": 0.664,
+      "form": 202,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Не доставлено: 3"
+      },
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "window-rest-1440-uk": {
+      "column": 760,
+      "feed": 614,
+      "share": 0.808,
+      "form": 120,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": null,
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "window-six-line-draft-1440-uk": {
+      "column": 760,
+      "feed": 530,
+      "share": 0.698,
+      "form": 204,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": null,
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-rest-1000-uk": {
+      "column": 450,
+      "feed": 333,
+      "share": 0.739,
+      "form": 118,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Не доставлено: 3"
+      },
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-list-open-1000-uk": {
+      "column": 450,
+      "feed": 270,
+      "share": 0.6,
+      "form": 180,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Не доставлено: 3"
+      },
+      "list": true,
+      "firstFailed": {
+        "found": true,
+        "whole": true,
+        "header": "Повторити невдалі (2)"
+      },
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-six-line-draft-1000-uk": {
+      "column": 450,
+      "feed": 270,
+      "share": 0.6,
+      "form": 180,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Не доставлено: 3"
+      },
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "window-rest-1000-uk": {
+      "column": 608,
+      "feed": 462,
+      "share": 0.76,
+      "form": 120,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": null,
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "window-six-line-draft-1000-uk": {
+      "column": 608,
+      "feed": 378,
+      "share": 0.622,
+      "form": 204,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": null,
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-rest-1440-en": {
+      "column": 600,
+      "feed": 483,
+      "share": 0.804,
+      "form": 118,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Not delivered: 3"
+      },
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-list-open-1440-en": {
+      "column": 600,
+      "feed": 360,
+      "share": 0.6,
+      "form": 240,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Not delivered: 3"
+      },
+      "list": true,
+      "firstFailed": {
+        "found": true,
+        "whole": true,
+        "header": "Retry failed (2)"
+      },
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-six-line-draft-1440-en": {
+      "column": 600,
+      "feed": 399,
+      "share": 0.664,
+      "form": 202,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Not delivered: 3"
+      },
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "window-rest-1440-en": {
+      "column": 760,
+      "feed": 614,
+      "share": 0.808,
+      "form": 120,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": null,
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "window-six-line-draft-1440-en": {
+      "column": 760,
+      "feed": 530,
+      "share": 0.698,
+      "form": 204,
+      "seat": 675,
+      "stop": {
+        "beside": true
+      },
+      "chip": null,
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-rest-1000-en": {
+      "column": 450,
+      "feed": 333,
+      "share": 0.739,
+      "form": 118,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Not delivered: 3"
+      },
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-list-open-1000-en": {
+      "column": 450,
+      "feed": 270,
+      "share": 0.6,
+      "form": 180,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Not delivered: 3"
+      },
+      "list": true,
+      "firstFailed": {
+        "found": true,
+        "whole": true,
+        "header": "Retry failed (2)"
+      },
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "seat-six-line-draft-1000-en": {
+      "column": 450,
+      "feed": 270,
+      "share": 0.6,
+      "form": 180,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": {
+        "inRow": true,
+        "text": "Not delivered: 3"
+      },
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "window-rest-1000-en": {
+      "column": 608,
+      "feed": 462,
+      "share": 0.76,
+      "form": 120,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": null,
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    },
+    "window-six-line-draft-1000-en": {
+      "column": 608,
+      "feed": 378,
+      "share": 0.622,
+      "form": 204,
+      "seat": 525,
+      "stop": {
+        "beside": true
+      },
+      "chip": null,
+      "list": false,
+      "firstFailed": null,
+      "more": true,
+      "eyeChip": false,
+      "strayStrip": false,
+      "collisions": [],
+      "overflowX": 0
+    }
+  },
+  "failures": []
+}
