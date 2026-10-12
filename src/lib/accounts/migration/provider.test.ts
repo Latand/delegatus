@@ -297,6 +297,46 @@ test.each(["codex", "claude"] as const)("%s account migration refreshes an adopt
   expect(receivedProfile?.learnedRules).toEqual({ project, roleId: "orchestrator" });
 });
 
+test.each(["codex", "claude"] as const)("%s migration keeps an undesignated pipeline orchestrator's memory fence", async (engine) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), `llv-provider-pipeline-orchestrator-${engine}-`));
+  roots.push(base);
+  const target = accountRoot(engine, base, "target");
+  const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  const begun = beginLegacySpawnFixture(registry, {
+    engine, cwd: base, role: "orchestrator", explicitProject: "pipeline-project",
+    launchProfile: { cleanMemory: true, learnedRules: { project: "pipeline-project", roleId: "builder" } },
+    memberships: [{ kind: "pipeline", containerId: "pipeline-run", role: "orchestrator", slot: "review:1",
+      stageId: "review", stageOrder: 1, round: 1, parentConversationId: null }],
+  });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const nativeId = crypto.randomUUID();
+  const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+  let receivedProfile: import("./contracts").LaunchProfile | undefined;
+  const capture = async (input: { profile: import("./contracts").LaunchProfile }) => { receivedProfile = input.profile; return async () => {}; };
+  const provider = new RegisteredSuccessorProvider({
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => target },
+    startCodex: async () => { throw new Error("unexpected Codex client"); },
+    claudeStatus: async () => ({ loggedIn: true }), registry,
+    ...(engine === "codex" ? { publishCodexHost: capture } : { publishClaudeHost: capture }),
+    now: () => "2026-10-12T09:00:02.000Z",
+  });
+  const receipt: ProviderReceipt = {
+    operationId: `pipeline-migration-${engine}`, nativeId, path: transcript, continuityPaths: [], historyHash: "history",
+    host: engine === "codex"
+      ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-12T09:00:02.000Z" }
+      : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-12T09:00:02.000Z" },
+  };
+  await provider.publishHost(receipt, {
+    engine, conversationId: begun.receipt.conversationId, targetAccountId: target.accountId,
+    launchProfile: begun.receipt.launchProfile,
+  });
+  expect(receivedProfile).toMatchObject({ cleanMemory: true, learnedRules: { project: "pipeline-project", roleId: "builder" } });
+  const { learnedRulesForLaunchProfile } = await import("@/lib/memory/roleLaunch");
+  expect(learnedRulesForLaunchProfile(receivedProfile)).toBeUndefined();
+});
+
 test("Claude successor cleanup releases its published broker owner", async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-published-claude-host-"));
   roots.push(base);

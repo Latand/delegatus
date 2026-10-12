@@ -10,16 +10,18 @@ import { roleMemoryEnabled } from "./settings";
 /** Leave headroom below Linux's single-argument ceiling, including the notice. */
 export const LEARNED_RULES_MAX_BYTES = 120_000;
 
-/** Rebuild the text-free selector from durable conversation identity. Legacy
-    seat profiles predate the selector, while an adopted stage may carry the
-    selector and clean flag of its former role. */
+/** Rebuild the text-free selector only after durable seat membership proves
+    adoption. A stage can use a seat role name and still retain its own clean
+    memory fence and selector. */
 export function roleMemoryProfileForIdentity(
   profile: LaunchProfile | null | undefined,
   roleId: "orchestrator" | "maintainer" | null | undefined,
   project: string | null | undefined,
+  designatedSeat = false,
 ): LaunchProfile | null | undefined {
   if (!profile || !roleId || !project || project === "*") return profile;
   if (roleId !== "orchestrator" && roleId !== "maintainer") return profile;
+  if (!designatedSeat) return profile;
   return {
     ...profile,
     cleanMemory: false,

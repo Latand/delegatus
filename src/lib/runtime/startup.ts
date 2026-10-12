@@ -2093,13 +2093,16 @@ async function adoptStructuredHostsPass(
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
-        const seatProject = conversation
-          ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === "orchestrator")?.containerId
+        const seatMembership = conversation
+          ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
           : null;
+        const seatProject = seatMembership?.containerId ?? null;
+        const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? entry.launchProfile?.project;
         const launchProfile = roleMemoryProfileForIdentity(
           entry.launchProfile,
           memoryRole,
-          conversation?.projectOwnership?.project ?? seatProject ?? entry.launchProfile?.project,
+          memoryProject,
+          Boolean(seatMembership && seatMembership.containerId === memoryProject),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
         const capability = registry.rotateSpawnCapabilityForPath(entry.artifactPath);
@@ -2152,13 +2155,16 @@ async function adoptStructuredHostsPass(
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
-        const seatProject = conversation
-          ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === "orchestrator")?.containerId
+        const seatMembership = conversation
+          ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
           : null;
+        const seatProject = seatMembership?.containerId ?? null;
+        const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? entry.launchProfile?.project;
         const launchProfile = roleMemoryProfileForIdentity(
           entry.launchProfile,
           memoryRole,
-          conversation?.projectOwnership?.project ?? seatProject ?? entry.launchProfile?.project,
+          memoryProject,
+          Boolean(seatMembership && seatMembership.containerId === memoryProject),
         ) ?? undefined;
         const options = {
           ...claudeStartupHostOptions(

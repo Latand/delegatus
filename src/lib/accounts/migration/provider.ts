@@ -1509,13 +1509,16 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
         ? conversation.agentRole
         : null;
-      const seatProject = conversation
-        ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === "orchestrator")?.containerId
+      const seatMembership = conversation
+        ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
         : null;
+      const seatProject = seatMembership?.containerId ?? null;
+      const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? input.launchProfile.project;
       const profile = roleMemoryProfileForIdentity(
         input.launchProfile,
         memoryRole,
-        conversation?.projectOwnership?.project ?? seatProject ?? input.launchProfile.project,
+        memoryProject,
+        Boolean(seatMembership && seatMembership.containerId === memoryProject),
       ) ?? input.launchProfile;
       const publicationInput = {
         receipt,

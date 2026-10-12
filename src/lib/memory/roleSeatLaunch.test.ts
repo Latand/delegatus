@@ -47,7 +47,32 @@ test.each(["codex", "claude"] as const)("%s legacy seat resumes gain their selec
   }
   fs.writeFileSync(file, JSON.stringify(legacy));
   const resumedRegistry = new AgentRegistry(file, undefined, undefined, { sqliteMode: "off" });
+  resumedRegistry.stampOrchestratorSeatIdentity({ project: "owned-project", seatEpoch: 1,
+    conversationId: begun.receipt.conversationId, predecessorConversationId: null,
+    designatedAt: "2026-10-12T09:00:00.000Z", activatedAt: "2026-10-12T09:00:01.000Z" });
   const resumed = beginLegacySpawnFixture(resumedRegistry, { engine, cwd: sandbox, purpose: "resume-successor", conversationId: begun.receipt.conversationId, expectedArtifactPath: transcript, role: "builder" });
   if (resumed.kind !== "created") throw new Error("fixture resume admission failed");
   expect(resumed.receipt.launchProfile.learnedRules).toEqual({ project: "owned-project", roleId: "orchestrator" });
+});
+
+test.each(["codex", "claude"] as const)("%s undesignated pipeline orchestrator keeps its clean memory fence on resume", async engine => {
+  const file = path.join(sandbox, `${engine}-pipeline-orchestrator.json`);
+  const registry = new AgentRegistry(file, undefined, undefined, { sqliteMode: "off" });
+  const selector = { project: "pipeline-project", roleId: "builder" };
+  const begun = beginLegacySpawnFixture(registry, {
+    engine, cwd: sandbox, role: "orchestrator", explicitProject: "pipeline-project",
+    launchProfile: { cleanMemory: true, learnedRules: selector },
+    memberships: [{ kind: "pipeline", containerId: "pipeline-run", role: "orchestrator", slot: "review:1",
+      stageId: "review", stageOrder: 1, round: 1, parentConversationId: null }],
+  });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const sessionId = crypto.randomUUID();
+  const transcript = path.join(sandbox, `${sessionId}-pipeline.jsonl`);
+  fs.writeFileSync(transcript, JSON.stringify(engine === "codex" ? { type: "session_meta", payload: { id: sessionId } } : { sessionId }) + "\n");
+  registry.completeSpawn(begun.receipt.launchId, { key: { engine, sessionId }, artifactPath: transcript, cwd: sandbox, accountId: "account", status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  const resumed = beginLegacySpawnFixture(registry, { engine, cwd: sandbox, purpose: "resume-successor", conversationId: begun.receipt.conversationId, expectedArtifactPath: transcript });
+  if (resumed.kind !== "created") throw new Error("fixture resume failed");
+  expect(resumed.receipt.launchProfile).toMatchObject({ cleanMemory: true, learnedRules: selector });
+  const { learnedRulesForLaunchProfile } = await import("@/lib/memory/roleLaunch");
+  expect(learnedRulesForLaunchProfile(resumed.receipt.launchProfile)).toBeUndefined();
 });

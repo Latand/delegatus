@@ -5789,13 +5789,18 @@ export class AgentRegistry {
          resume successors re-derive their launch flags from a denying profile. */
       if (isSpawnDeniedRole(existingConversation?.agentRole)) profile.allowSubagents = false;
       const memoryRole = existingConversation?.agentRole ?? role;
-      const memoryProject = explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
-      const adoptedSeatRole = existingConversation?.agentRole === "orchestrator" || existingConversation?.agentRole === "maintainer";
-      if (adoptedSeatRole) {
+      const designatedSeatMembership = (file.memberships[existingConversation?.id ?? ""] ?? []).find((row) => row.kind === "orchestrator"
+        && row.role === memoryRole) ?? null;
+      const memoryProject = designatedSeatMembership?.containerId
+        ?? explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
+      if (designatedSeatMembership && memoryProject
+        && (memoryRole === "orchestrator" || memoryRole === "maintainer")) {
         /* Designation is an explicit role transition. A conversation adopted
-           from a stage must shed that stage's selector and clean-memory flag. */
+           from a stage must shed that stage's selector and clean-memory flag.
+           The role label alone is insufficient: pipeline stages may use the
+           orchestrator role while retaining their clean-memory fence. */
         profile.cleanMemory = false;
-        if (memoryProject) profile.learnedRules = { project: memoryProject, roleId: memoryRole };
+        profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       } else if (roleIsClean(memoryRole)) {
         profile.cleanMemory = true;
       } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
