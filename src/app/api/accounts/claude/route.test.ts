@@ -72,6 +72,7 @@ beforeEach(() => {
     pidStartToken: () => "start-4312",
     isExpectedClaude: () => true,
     waitForExit: async () => true,
+    observeSignedIn: async () => {},
     status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
     now: () => 1_000,
     setTimeout: (callback, ms) => { if (ms <= 2_000) callback(); return {} as NodeJS.Timeout; },
@@ -304,6 +305,7 @@ test("a failed legacy retry returns a sanitized, retryable error and never leaks
     pidStartToken: () => null, // fails the launch fence
     isExpectedClaude: () => true,
     waitForExit: async () => true,
+    observeSignedIn: async () => {},
     status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
     now: () => 1_000,
     setTimeout: (callback, ms) => { if (ms <= 2_000) callback(); return {} as NodeJS.Timeout; },

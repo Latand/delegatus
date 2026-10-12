@@ -1516,8 +1516,10 @@ browserTest("agent-delivered seat message keeps its author at desktop and phone 
           await page.waitForSelector("[data-agent-author]", { timeout: 15_000 });
           await page.waitForSelector("[data-user-bubble]", { timeout: 15_000 });
           const label = await page.locator("[data-agent-author]").first().innerText();
-          const roleLabel = locale === "uk" ? "Агент · Оркестратор" : "Agent · Orchestrator";
-          if (!label.includes(roleLabel) || !label.includes("wardrobe-agent")) throw new Error(`agent label missing: ${label}`);
+          /* The sender's costume says "an agent"; the label names the role alone (docs/design/role-avatars.md). */
+          const roleLabel = locale === "uk" ? "Оркестратор" : "Orchestrator";
+          if (!label.startsWith(roleLabel) || !label.includes("wardrobe-agent")) throw new Error(`agent label missing: ${label}`);
+          if (!await page.locator('[data-role-avatar="orchestrator"]').first().isVisible()) throw new Error("the sender's costume is missing");
           const projectName = page.locator("[data-agent-project]").first();
           if (await projectName.textContent() !== " · wardrobe-agent") throw new Error("sender project name changed");
           if (await projectName.evaluate((element) => getComputedStyle(element).whiteSpace) !== "nowrap") throw new Error("sender project name can split across lines");
@@ -1590,7 +1592,7 @@ browserTest("messages delivered mid-turn show once, in place, with their senders
           const [voice, builder, operator, tick] = rows as Array<Exclude<(typeof rows)[number], { count: 0 }>>;
           expect(voice!.voice).toBe(translate(locale, "render.voiceDelegatusLabel"));
           expect(builder!.agentRole).toBe("builder");
-          expect(builder!.agentLabel).toBe(`${translate(locale, "render.agentLabel")} · ${translate(locale, "render.senderRoleBuilder")}`);
+          expect(builder!.agentLabel).toBe(translate(locale, "roleCopy.builder.name"));
           expect(operator!.bubble).toBe(true);
           expect(tick!.agentRole).toBe("seat-tick");
           expect(tick!.agentLabel).toBe(`${translate(locale, "render.agentLabel")} · Delegatus`);
@@ -10072,4 +10074,319 @@ describe("short questionnaire rendered evidence", () => {
       fs.writeFileSync("evidence/prototype-review-phone/questions.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
   }, 900_000);
+});
+
+/*
+ * Every phone «…» menu keeps the page and its own sheet from scrolling sideways
+ * (docs/design/mobile-menu-overflow-brief.md). Each menu opens through
+ * `MobileSheet`, so the case opens all of them, and every fold or page inside,
+ * at 390 and 360, in en and uk, light and dark, and reads on every animation
+ * frame of opening and closing:
+ *
+ *   - the document's scrollWidth against its clientWidth, and scrollX after
+ *     `window.scrollTo(200, 0)`;
+ *   - the sheet body's scrollWidth against its clientWidth;
+ *   - every box inside the sheet whose edge passes the sheet's own edge by more
+ *     than half a pixel and that no horizontal scroller in the sheet holds.
+ *     `overflow-x: hidden` on the body would hide an overflow from the first
+ *     two readings; this one names the line that causes it.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone ⋯ menus"
+ *
+ * Frames (390 only) go to `$HOME/Pictures/delegatus-review/phone-menu-overflow/`,
+ * readings to `evidence/phone-menu-overflow/readings.json`.
+ */
+
+/** Runs inside the page (serialized into it), so it names nothing from this file. */
+function readMenuSurface(name: string | null, probeScroll: boolean) {
+  const doc = document.documentElement;
+  if (probeScroll) window.scrollTo(200, 0);
+  const sheet = name ? document.querySelector<HTMLElement>(`[data-mobile2-sheet="${name}"]`) : null;
+  const body = sheet?.querySelector<HTMLElement>("[data-mobile2-sheet-body]") ?? null;
+  const offenders: string[] = [];
+  let phraseOver = 0;
+  let labelCut = 0;
+  let retryOffset = 0;
+  if (sheet) {
+    const edge = sheet.getBoundingClientRect();
+    const held = (node: Element) => {
+      for (let up = node.parentElement; up && up !== sheet; up = up.parentElement) {
+        const overflow = getComputedStyle(up).overflowX;
+        if (overflow === "auto" || overflow === "scroll") return true;
+      }
+      return false;
+    };
+    for (const node of sheet.querySelectorAll("*")) {
+      const rect = node.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden" || style.position === "fixed") continue;
+      if ((rect.right > edge.right + 0.5 || rect.left < edge.left - 0.5) && !held(node)) {
+        offenders.push(`${node.tagName.toLowerCase()}${node.getAttribute("data-mobile2-menu-row") ? `[${node.getAttribute("data-mobile2-menu-row")}]` : ""} ${Math.round(rect.left * 10) / 10}..${Math.round(rect.right * 10) / 10} of ${Math.round(edge.left * 10) / 10}..${Math.round(edge.right * 10) / 10} «${(node.textContent ?? "").trim().slice(0, 30)}»`);
+      }
+    }
+    /* The conversation menu's state phrase never truncates: the text itself, not its box, sits inside the sheet. */
+    const phrase = sheet.querySelector("[data-mobile2-chat-identity]")?.children[1];
+    if (phrase) {
+      const range = document.createRange();
+      range.selectNodeContents(phrase);
+      for (const rect of range.getClientRects()) phraseOver = Math.max(phraseOver, rect.right - edge.right);
+    }
+    /* A refused row names its action in full: its label is not cut, and the reason beside it wraps. */
+    const compactLabel = sheet.querySelector('[data-mobile2-menu-row="compact"]')?.querySelector<HTMLElement>(":scope > span:not(:first-child)");
+    if (compactLabel) labelCut = Math.max(0, compactLabel.scrollWidth - compactLabel.clientWidth);
+    /* The retry link starts where the share row's text starts. */
+    const shareRow = sheet.querySelector("[data-share-project]");
+    const retry = shareRow?.nextElementSibling;
+    const shareLabel = shareRow?.querySelector("span");
+    if (retry instanceof HTMLButtonElement && shareLabel) {
+      const range = document.createRange();
+      range.selectNodeContents(retry);
+      retryOffset = Math.abs(range.getBoundingClientRect().left - shareLabel.getBoundingClientRect().left);
+    }
+  }
+  return {
+    sheet: sheet !== null,
+    doc: doc.scrollWidth - doc.clientWidth,
+    scrollX: window.scrollX,
+    inner: window.innerWidth,
+    bodyOver: body ? body.scrollWidth - body.clientWidth : 0,
+    phraseOver,
+    labelCut,
+    retryOffset,
+    offenders: offenders.slice(0, 6),
+  };
+}
+type MenuReading = ReturnType<typeof readMenuSurface>;
+
+describe("phone ⋯ menus", () => {
+  browserTest("every menu and every fold keeps the page and the sheet from scrolling sideways, at 390 and 360 in en and uk, light and dark", async () => {
+    const frames = path.join(os.homedir(), "Pictures/delegatus-review/phone-menu-overflow");
+    const evidence = path.resolve("evidence/phone-menu-overflow");
+    fs.mkdirSync(frames, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const { base, stop } = await serveFixture({
+      "/api/tts/backend": { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] },
+    });
+    const launched = await chromium.launchServer({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const browser = await chromium.connect(launched.wsEndpoint());
+    const failures: string[] = [];
+    const rows: Array<Record<string, unknown>> = [];
+    const BAR_MENU = '[data-mobile2-bar] [data-mobile2-open="menu"]';
+    const row = (sheet: string, key: string) => `[data-mobile2-sheet="${sheet}"] [data-mobile2-menu-row="${key}"]`;
+    const fold = (id: string) => `[data-mobile2-menu-section="${id}"]`;
+    type Gesture = (page: Page, cdp: CDPSession) => Promise<void>;
+    interface Scene {
+      name: string;
+      url: string;
+      /** The screen the opener is on. */
+      reach?: Gesture;
+      /** Opens the sheet this scene reads. */
+      open: Gesture;
+      sheet: string;
+      /** In order: a selector to click, or "reopen" to close the sheet and open it again. */
+      steps?: readonly string[];
+      /** Steps that may be missing without failing the scene (a row the fixture does not always draw). */
+      optional?: readonly string[];
+      /** Text each language must show once the steps have run. */
+      expect?: ReadonlyArray<{ selector: string; text: (lang: "en" | "uk") => string }>;
+    }
+    const card = (page: Page, id: string) => page.locator(`[data-phone-card="task:${id}"]`).click({ timeout: 20_000 });
+    const boardUp = async (page: Page) => { await page.waitForSelector('[data-phone-card="task:t-many"]', { timeout: 20_000 }); };
+    const barMenu = async (page: Page) => { await page.locator(BAR_MENU).first().click({ timeout: 20_000 }); };
+    const taskScreen: Gesture = async (page) => { await boardUp(page); await card(page, "t-many"); await page.waitForSelector(BAR_MENU, { timeout: 20_000 }); };
+    const pipelineScreen: Gesture = async (page, cdp) => {
+      await taskScreen(page, cdp);
+      await page.locator('[data-phone-task-lane="lane-many-pill"] [data-open-stages]').click({ timeout: 20_000 });
+      await page.waitForSelector('[data-mobile2-pipeline="lane-many-pill"]', { timeout: 20_000 });
+    };
+    const chatScreen: Gesture = async (page) => { await page.waitForSelector(BAR_MENU, { timeout: 20_000 }); await page.waitForSelector("[data-mobile-message=agent]", { timeout: 20_000 }); };
+    const CHAT = "/?runtime=structured#c=conversation_running";
+    const CONVERSATION_FOLDS = [fold("subagents"), fold("turn"), fold("manage"), fold("end")] as const;
+    const scenes: Scene[] = [
+      { name: "board-menu", url: "/?kanban=1#p=atlas", reach: boardUp, open: barMenu, sheet: "menu",
+        steps: [row("menu", "settings"), row("menu", "memory"), row("menu", "back"), row("menu", "key"), row("menu", "back"), row("menu", "back"), row("menu", "help"), row("menu", "back"), row("menu", "rules"), row("menu", "back")],
+        optional: [row("menu", "memory"), row("menu", "key"), row("menu", "rules")] },
+      { name: "overview-menu", url: "/?overview=1", reach: async (page) => { await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 }); }, open: barMenu, sheet: "menu" },
+      { name: "conversation-menu", url: CHAT, reach: chatScreen, open: barMenu, sheet: "menu", steps: CONVERSATION_FOLDS, optional: [fold("subagents"), fold("end")] },
+      { name: "seat-conversation-menu", url: `/?seatnoise=ii&runtime=structured#c=conversation_running`, reach: chatScreen, open: barMenu, sheet: "menu", steps: CONVERSATION_FOLDS, optional: [fold("subagents"), fold("end")] },
+      { name: "stage-conversation-menu", url: "/?kanban=1&stage-agent=running#p=atlas",
+        reach: async (page) => {
+          await page.locator('[data-phone-card="task:t-data"]').click({ timeout: 20_000 });
+          await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click({ timeout: 20_000 });
+          await page.locator('[data-mobile2-pipeline="lane-decision"] .pb-stage[data-stage="design"] [data-open-conversation="design"]').click({ timeout: 20_000 });
+          await page.waitForSelector(BAR_MENU, { timeout: 20_000 });
+          await pause(page, 600);
+        },
+        open: barMenu, sheet: "menu", steps: CONVERSATION_FOLDS, optional: [fold("subagents"), fold("end")] },
+      { name: "task-menu", url: "/?kanban=1#p=atlas", reach: taskScreen, open: barMenu, sheet: "menu",
+        steps: ['[data-phone-task-menu="priority"]', "reopen", '[data-phone-task-menu="colour"]'] },
+      { name: "task-status", url: "/?kanban=1#p=atlas", reach: taskScreen, sheet: "status",
+        open: async (page) => { await page.locator("[data-phone-task-status-pill]").click({ timeout: 20_000 }); } },
+      { name: "lane-menu", url: "/?kanban=1#p=atlas", reach: taskScreen, sheet: "lane",
+        open: async (page) => { await page.locator('[data-phone-task-lane="lane-many-pill"] [data-pipeline-menu]').click({ timeout: 20_000 }); } },
+      { name: "pipeline-menu", url: "/?kanban=1#p=atlas", reach: pipelineScreen, open: barMenu, sheet: "menu" },
+      { name: "stage-sheet", url: "/?kanban=1#p=atlas", reach: pipelineScreen, sheet: "stage",
+        open: async (page) => { await page.locator("[data-stage-configure]").first().click({ timeout: 20_000 }); } },
+      { name: "seat-sheet", url: "/?kanban=1&bot=postonly", reach: async (page) => { await page.waitForSelector("[data-mobile2-seat-controls]", { timeout: 20_000 }); }, sheet: "seat",
+        open: async (page) => { await page.locator("[data-mobile2-seat-controls]").first().click({ timeout: 20_000 }); } },
+      { name: "card-sheet", url: "/?kanban=1#p=atlas", reach: boardUp, sheet: "card",
+        open: async (page, cdp) => {
+          /* A held finger, driven the way the column-pager case does it. */
+          const box = await rectOf(page, '[data-phone-card="task:t-many"]');
+          if (!box) throw new Error("no card to hold");
+          const at: Point = [box.x + box.width / 2, box.y + 18];
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at[0], y: at[1] }] });
+          await pause(page, 700);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        } },
+      { name: "background-sheet", url: `/?chrome=3&seatnoise=ii&runtime=structured#c=conversation_running`, reach: chatScreen, sheet: "background",
+        open: async (page) => { await barMenu(page); await page.locator(row("menu", "background")).click({ timeout: 20_000 }); },
+        steps: ["[data-mobile2-task-menu]"] },
+      { name: "pinned-sheet", url: `/?chrome=3&seatnoise=ii&runtime=structured#c=conversation_running`, reach: chatScreen, sheet: "pinned",
+        open: async (page) => { await barMenu(page); await page.locator(row("menu", "pinned")).click({ timeout: 20_000 }); } },
+      /* The longest words the conversation menu has to hold. */
+      { name: "limit-menu", url: "/?menu-state=limit&runtime=structured#c=conversation_running", reach: chatScreen, open: barMenu, sheet: "menu",
+        steps: [fold("turn")], expect: [{ selector: "[data-mobile2-chat-identity]", text: () => "reserve-account-7" }] },
+      { name: "held-menu", url: "/?menu-state=held&runtime=structured#c=conversation_running", reach: chatScreen, open: barMenu, sheet: "menu",
+        steps: [fold("turn")], expect: [{ selector: "[data-mobile2-chat-identity]", text: () => "12" }] },
+      { name: "compact-refused-menu", url: "/?menu-state=compact&runtime=structured#c=conversation_running", reach: chatScreen, open: barMenu, sheet: "menu",
+        steps: [fold("turn")], expect: [{ selector: row("menu", "compact"), text: (lang) => translate(lang, "strip.compactHostUnsupported") }] },
+    ];
+    /* LLV_PHONE_MENU_SCENES=a,b narrows a debugging run; the readings file lists the scenes it ran. */
+    const only = (process.env.LLV_PHONE_MENU_SCENES ?? "").split(",").filter(Boolean);
+    const run = only.length ? scenes.filter((scene) => only.includes(scene.name)) : scenes;
+    const frameSource = readMenuSurface.toString();
+    /** One reading per animation frame for 1.3 s, started before the gesture that opens or closes the sheet. */
+    const startFrames = (page: Page, sheet: string) => page.evaluate(({ source, sheet }) => {
+      const read = new Function(`return (${source})`)() as (name: string | null, probe: boolean) => unknown;
+      const samples: unknown[] = [];
+      (window as unknown as { __menuFrames: unknown[] }).__menuFrames = samples;
+      const started = performance.now();
+      const tick = () => {
+        samples.push({ at: Math.round(performance.now() - started), ...(read(sheet, false) as object) });
+        if (performance.now() - started < 1300) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }, { source: frameSource, sheet });
+    const readNow = (page: Page, sheet: string) => page.evaluate(({ source, sheet }) => {
+      const read = new Function(`return (${source})`)() as (name: string | null, probe: boolean) => unknown;
+      return read(sheet, true);
+    }, { source: frameSource, sheet }) as Promise<MenuReading>;
+    const collectFrames = async (page: Page) => {
+      await pause(page, 1500);
+      return page.evaluate(() => (window as unknown as { __menuFrames: unknown[] }).__menuFrames) as Promise<Array<MenuReading & { at: number }>>;
+    };
+    const bad = (reading: MenuReading) => {
+      const problems: string[] = [];
+      if (reading.doc !== 0) problems.push(`the document is ${reading.doc}px wider than the window`);
+      if (reading.scrollX !== 0) problems.push(`scrollX reads ${reading.scrollX}`);
+      if (reading.bodyOver !== 0) problems.push(`the sheet body scrolls ${reading.bodyOver}px sideways`);
+      if (reading.phraseOver > 0.5) problems.push(`the state phrase passes the sheet by ${reading.phraseOver}px`);
+      if (reading.labelCut > 0.5) problems.push(`the Compact label is cut by ${reading.labelCut}px`);
+      if (reading.retryOffset > 0.5) problems.push(`the retry link starts ${reading.retryOffset}px from the share row's text`);
+      if (reading.offenders.length) problems.push(`past the sheet's edge: ${reading.offenders.join(" | ")}`);
+      return problems;
+    };
+    try {
+      for (const width of [390, 360] as const) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+        const viewport = { width, height: width === 390 ? 844 : 740 };
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          for (const scene of run) {
+            const key = `${width}-${lang}-${scheme}-${scene.name}`;
+            const fail = (text: string) => failures.push(`${key}: ${text}`);
+            const page = await context.newPage();
+            const pageErrors: string[] = [];
+            page.on("pageerror", (error) => pageErrors.push(error.message));
+            try {
+              const cdp = await context.newCDPSession(page);
+              await page.goto(`${base}${scene.url}`);
+              await scene.reach?.(page, cdp);
+              await pause(page, 500);
+              await startFrames(page, scene.sheet);
+              await scene.open(page, cdp);
+              await page.waitForSelector(`[data-mobile2-sheet="${scene.sheet}"]`, { timeout: 10_000 });
+              const opening = await collectFrames(page);
+              const withSheet = opening.filter((frame) => frame.sheet);
+              if (withSheet.length < 3) fail(`only ${withSheet.length} frames had the sheet while it opened`);
+              for (const frame of opening) for (const problem of bad(frame)) fail(`opening, ${frame.at} ms: ${problem}`);
+              const reads: Array<{ step: string; reading: MenuReading }> = [];
+              const read = async (step: string) => {
+                await pause(page, 350);
+                const reading = await readNow(page, scene.sheet);
+                reads.push({ step, reading: reading as MenuReading });
+                if (width === 390) await page.screenshot({ path: path.join(frames, `${lang}-${scheme}-${scene.name}${step === "rest" ? "" : `-${reads.length - 1}`}.png`) });
+              };
+              await read("rest");
+              const skipped: string[] = [];
+              for (const step of scene.steps ?? []) {
+                if (step === "reopen") {
+                  await page.locator(`[data-mobile2-sheet="${scene.sheet}"] [data-mobile2-close]`).click();
+                  await page.waitForSelector(`[data-mobile2-sheet="${scene.sheet}"]`, { state: "detached", timeout: 10_000 });
+                  await pause(page, 400);
+                  await scene.open(page, cdp);
+                  await page.waitForSelector(`[data-mobile2-sheet="${scene.sheet}"]`, { timeout: 10_000 });
+                  continue;
+                }
+                const target = page.locator(step).first();
+                if (!(await target.count())) {
+                  if (scene.optional?.includes(step)) { skipped.push(step); continue; }
+                  fail(`step ${step} has nothing to click`);
+                  continue;
+                }
+                await target.click({ timeout: 10_000 });
+                await read(step);
+              }
+              for (const { step, reading } of reads) for (const problem of bad(reading)) fail(`${step}: ${problem}`);
+              for (const wanted of scene.expect ?? []) {
+                const text = await page.locator(wanted.selector).first().innerText().catch(() => "");
+                if (!text.includes(wanted.text(lang))) fail(`${wanted.selector} reads ${JSON.stringify(text)}, expected «${wanted.text(lang)}»`);
+              }
+              await startFrames(page, scene.sheet);
+              await page.locator(`[data-mobile2-sheet="${scene.sheet}"] [data-mobile2-close]`).click();
+              const closing = await collectFrames(page);
+              for (const frame of closing) for (const problem of bad(frame)) fail(`closing, ${frame.at} ms: ${problem}`);
+              if (await page.locator(`[data-mobile2-sheet="${scene.sheet}"]`).count()) fail("the sheet stayed open after its close button");
+              if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+              rows.push({
+                key, width, lang, scheme, scene: scene.name,
+                reads: reads.map(({ step, reading }) => ({ step, ...reading })),
+                skipped,
+                frames: { opening: opening.length, closing: closing.length, worstDocument: Math.max(...[...opening, ...closing].map((frame) => frame.doc)), worstBody: Math.max(...[...opening, ...closing].map((frame) => frame.bodyOver)) },
+              });
+            } catch (error) {
+              fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+              await page.screenshot({ path: path.join(frames, `${lang}-${scheme}-${scene.name}-failed.png`) }).catch(() => {});
+            } finally {
+              await page.close();
+            }
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      const browserPid = launched.process().pid;
+      await browser.close();
+      await launched.close();
+      stop();
+      if (launched.process().exitCode === null && launched.process().signalCode === null) {
+        failures.push(`the browser ${browserPid} outlived its close`);
+        await stopFixtureProcess(launched.process());
+      }
+    }
+    /* The owned runner ends a test run at 15 minutes, so the matrix runs in chunks of scenes; a chunk replaces
+       only its own scenes' readings and the file keeps the rest. */
+    const file = path.join(evidence, "readings.json");
+    const kept = only.length && fs.existsSync(file)
+      ? (JSON.parse(fs.readFileSync(file, "utf8")) as { readings: Array<{ scene: string }> }).readings.filter((reading) => !only.includes(reading.scene))
+      : [];
+    const order = (reading: { scene: string }) => scenes.findIndex((scene) => scene.name === reading.scene);
+    const merged = [...kept, ...rows as Array<{ scene: string }>].sort((a, b) => order(a) - order(b));
+    fs.writeFileSync(file, `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", scenes: scenes.filter((scene) => merged.some((reading) => reading.scene === scene.name)).map((scene) => scene.name), readings: merged, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 3_600_000);
 });

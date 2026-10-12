@@ -1,0 +1,1428 @@
+{
+  "commit": "11fdddaa5b501110aa2b144000e191406e263bda",
+  "1440-en-light": {
+    "polls": 13,
+    "held": {
+      "value": "fixture-code#state",
+      "focusable": true,
+      "link": "https://claude.ai/oauth/authorize?state=fixture",
+      "group": {
+        "x": 228.6875,
+        "y": 616.765625,
+        "w": 398,
+        "h": 109.625
+      },
+      "surface": {
+        "x": 227.6875,
+        "y": 320,
+        "w": 400,
+        "h": 641.21875
+      },
+      "targets": [
+        {
+          "name": "Open claude.ai sign-in",
+          "w": 117.359375,
+          "h": 15.9375
+        },
+        {
+          "name": "Authorization code",
+          "w": 263.984375,
+          "h": 32
+        },
+        {
+          "name": "Submit code",
+          "w": 88.015625,
+          "h": 32
+        },
+        {
+          "name": "Cancel",
+          "w": 54.078125,
+          "h": 21.9375
+        }
+      ],
+      "text": "Open claude.ai sign-inSubmit codeAfter signing in, copy the code claude.ai shows and paste it here.Cancel"
+    },
+    "expired": {
+      "shown": true,
+      "retry": "Retry"
+    },
+    "before": {
+      "text": "Account Baccount-bsigning in…RefreshVerifying…CancelCopy CLIRemove",
+      "badgeText": [
+        ""
+      ],
+      "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Account Baccount-bsigning in…",
+          "box": {
+            "x": 228.6875,
+            "y": 313.75,
+            "w": 398,
+            "h": 44.015625
+          }
+        },
+        {
+          "text": "Refresh",
+          "box": {
+            "x": 547.4375,
+            "y": 357.765625,
+            "w": 65.25,
+            "h": 24
+          }
+        },
+        {
+          "text": "Cancel",
+          "box": {
+            "x": 560.609375,
+            "y": 385.765625,
+            "w": 54.078125,
+            "h": 21.9375
+          }
+        },
+        {
+          "text": "Copy CLI",
+          "box": {
+            "x": 258.6875,
+            "y": 415.703125,
+            "w": 78.09375,
+            "h": 28
+          }
+        },
+        {
+          "text": "Remove",
+          "box": {
+            "x": 543.828125,
+            "y": 415.703125,
+            "w": 68.859375,
+            "h": 28
+          }
+        }
+      ],
+      "card": {
+        "x": 228.6875,
+        "y": 313.75,
+        "w": 398,
+        "h": 138.953125
+      },
+      "panel": {
+        "x": 227.6875,
+        "y": 61,
+        "w": 400,
+        "h": 669.34375
+      },
+      "footer": {
+        "x": 0,
+        "y": 331,
+        "w": 247,
+        "h": 26
+      },
+      "footerText": "Account Bno data yet",
+      "overflow": false
+    },
+    "after": {
+      "text": "Account Baccount-bmaxAuthenticated69%activeChecked · 11:37Refresh5h93%leftWeek69%leftCopy CLIRemove",
+      "badgeText": [
+        "",
+        "max",
+        "Authenticated",
+        "69%",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5h",
+          "labelOverflow": false,
+          "gap": 48.328125,
+          "clipped": [],
+          "text": "5h93%left"
+        },
+        {
+          "label": "Week",
+          "labelOverflow": false,
+          "gap": 34.046875,
+          "clipped": [],
+          "text": "Week69%left"
+        }
+      ],
+      "weeklyFigures": 2,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Account Baccount-bmaxAuthenticated69%active",
+          "box": {
+            "x": 228.6875,
+            "y": 313.75,
+            "w": 398,
+            "h": 50.25
+          }
+        },
+        {
+          "text": "Refresh",
+          "box": {
+            "x": 547.4375,
+            "y": 364,
+            "w": 65.25,
+            "h": 24
+          }
+        },
+        {
+          "text": "Copy CLI",
+          "box": {
+            "x": 258.6875,
+            "y": 427.5,
+            "w": 78.09375,
+            "h": 28
+          }
+        },
+        {
+          "text": "Remove",
+          "box": {
+            "x": 543.828125,
+            "y": 427.5,
+            "w": 68.859375,
+            "h": 28
+          }
+        }
+      ],
+      "card": {
+        "x": 228.6875,
+        "y": 313.75,
+        "w": 398,
+        "h": 150.75
+      },
+      "panel": {
+        "x": 227.6875,
+        "y": 61,
+        "w": 400,
+        "h": 669.34375
+      },
+      "footer": {
+        "x": 0,
+        "y": 331,
+        "w": 247,
+        "h": 26
+      },
+      "footerText": "Account Bweek 69%",
+      "overflow": false
+    },
+    "successAccountReads": 1,
+    "successLimitsReads": 1,
+    "phoneFooter": null
+  },
+  "1440-en-dark": {
+    "polls": 13,
+    "held": {
+      "value": "fixture-code#state",
+      "focusable": true,
+      "link": "https://claude.ai/oauth/authorize?state=fixture",
+      "group": {
+        "x": 228.6875,
+        "y": 616.765625,
+        "w": 398,
+        "h": 109.625
+      },
+      "surface": {
+        "x": 227.6875,
+        "y": 320,
+        "w": 400,
+        "h": 641.21875
+      },
+      "targets": [
+        {
+          "name": "Open claude.ai sign-in",
+          "w": 117.359375,
+          "h": 15.9375
+        },
+        {
+          "name": "Authorization code",
+          "w": 263.984375,
+          "h": 32
+        },
+        {
+          "name": "Submit code",
+          "w": 88.015625,
+          "h": 32
+        },
+        {
+          "name": "Cancel",
+          "w": 54.078125,
+          "h": 21.9375
+        }
+      ],
+      "text": "Open claude.ai sign-inSubmit codeAfter signing in, copy the code claude.ai shows and paste it here.Cancel"
+    },
+    "expired": {
+      "shown": true,
+      "retry": "Retry"
+    },
+    "before": {
+      "text": "Account Baccount-bsigning in…RefreshVerifying…CancelCopy CLIRemove",
+      "badgeText": [
+        ""
+      ],
+      "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Account Baccount-bsigning in…",
+          "box": {
+            "x": 228.6875,
+            "y": 313.75,
+            "w": 398,
+            "h": 44.015625
+          }
+        },
+        {
+          "text": "Refresh",
+          "box": {
+            "x": 547.4375,
+            "y": 357.765625,
+            "w": 65.25,
+            "h": 24
+          }
+        },
+        {
+          "text": "Cancel",
+          "box": {
+            "x": 560.609375,
+            "y": 385.765625,
+            "w": 54.078125,
+            "h": 21.9375
+          }
+        },
+        {
+          "text": "Copy CLI",
+          "box": {
+            "x": 258.6875,
+            "y": 415.703125,
+            "w": 78.09375,
+            "h": 28
+          }
+        },
+        {
+          "text": "Remove",
+          "box": {
+            "x": 543.828125,
+            "y": 415.703125,
+            "w": 68.859375,
+            "h": 28
+          }
+        }
+      ],
+      "card": {
+        "x": 228.6875,
+        "y": 313.75,
+        "w": 398,
+        "h": 138.953125
+      },
+      "panel": {
+        "x": 227.6875,
+        "y": 61,
+        "w": 400,
+        "h": 669.34375
+      },
+      "footer": {
+        "x": 0,
+        "y": 331,
+        "w": 247,
+        "h": 26
+      },
+      "footerText": "Account Bno data yet",
+      "overflow": false
+    },
+    "after": {
+      "text": "Account Baccount-bmaxAuthenticated69%activeChecked · 11:38Refresh5h93%leftWeek69%leftCopy CLIRemove",
+      "badgeText": [
+        "",
+        "max",
+        "Authenticated",
+        "69%",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5h",
+          "labelOverflow": false,
+          "gap": 48.328125,
+          "clipped": [],
+          "text": "5h93%left"
+        },
+        {
+          "label": "Week",
+          "labelOverflow": false,
+          "gap": 34.046875,
+          "clipped": [],
+          "text": "Week69%left"
+        }
+      ],
+      "weeklyFigures": 2,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Account Baccount-bmaxAuthenticated69%active",
+          "box": {
+            "x": 228.6875,
+            "y": 313.75,
+            "w": 398,
+            "h": 50.25
+          }
+        },
+        {
+          "text": "Refresh",
+          "box": {
+            "x": 547.4375,
+            "y": 364,
+            "w": 65.25,
+            "h": 24
+          }
+        },
+        {
+          "text": "Copy CLI",
+          "box": {
+            "x": 258.6875,
+            "y": 427.5,
+            "w": 78.09375,
+            "h": 28
+          }
+        },
+        {
+          "text": "Remove",
+          "box": {
+            "x": 543.828125,
+            "y": 427.5,
+            "w": 68.859375,
+            "h": 28
+          }
+        }
+      ],
+      "card": {
+        "x": 228.6875,
+        "y": 313.75,
+        "w": 398,
+        "h": 150.75
+      },
+      "panel": {
+        "x": 227.6875,
+        "y": 61,
+        "w": 400,
+        "h": 669.34375
+      },
+      "footer": {
+        "x": 0,
+        "y": 331,
+        "w": 247,
+        "h": 26
+      },
+      "footerText": "Account Bweek 69%",
+      "overflow": false
+    },
+    "successAccountReads": 1,
+    "successLimitsReads": 1,
+    "phoneFooter": null
+  },
+  "1440-uk-light": {
+    "polls": 13,
+    "held": {
+      "value": "fixture-code#state",
+      "focusable": true,
+      "link": "https://claude.ai/oauth/authorize?state=fixture",
+      "group": {
+        "x": 228.6875,
+        "y": 632.515625,
+        "w": 398,
+        "h": 109.625
+      },
+      "surface": {
+        "x": 227.6875,
+        "y": 320,
+        "w": 400,
+        "h": 641.21875
+      },
+      "targets": [
+        {
+          "name": "Відкрити вхід claude.ai",
+          "w": 125.234375,
+          "h": 15.9375
+        },
+        {
+          "name": "Код авторизації",
+          "w": 252.546875,
+          "h": 32
+        },
+        {
+          "name": "Надіслати код",
+          "w": 99.453125,
+          "h": 32
+        },
+        {
+          "name": "Скасувати",
+          "w": 74.6875,
+          "h": 21.9375
+        }
+      ],
+      "text": "Відкрити вхід claude.aiНадіслати кодПісля входу скопіюй код зі сторінки claude.ai і встав його сюди.Скасувати"
+    },
+    "expired": {
+      "shown": true,
+      "retry": "Повторити"
+    },
+    "before": {
+      "text": "Account Baccount-bвхід…ОновитиПеревіряємо…СкасуватиКопіювати CLIВидалити",
+      "badgeText": [
+        ""
+      ],
+      "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Account Baccount-bвхід…",
+          "box": {
+            "x": 228.6875,
+            "y": 298.5,
+            "w": 398,
+            "h": 44.015625
+          }
+        },
+        {
+          "text": "Оновити",
+          "box": {
+            "x": 541.40625,
+            "y": 342.515625,
+            "w": 71.28125,
+            "h": 24
+          }
+        },
+        {
+          "text": "Скасувати",
+          "box": {
+            "x": 540,
+            "y": 370.515625,
+            "w": 74.6875,
+            "h": 21.9375
+          }
+        },
+        {
+          "text": "Копіювати CLI",
+          "box": {
+            "x": 258.6875,
+            "y": 400.453125,
+            "w": 106.640625,
+            "h": 28
+          }
+        },
+        {
+          "text": "Видалити",
+          "box": {
+            "x": 533.421875,
+            "y": 400.453125,
+            "w": 79.265625,
+            "h": 28
+          }
+        }
+      ],
+      "card": {
+        "x": 228.6875,
+        "y": 298.5,
+        "w": 398,
+        "h": 138.953125
+      },
+      "panel": {
+        "x": 227.6875,
+        "y": 59,
+        "w": 400,
+        "h": 669.34375
+      },
+      "footer": {
+        "x": 0,
+        "y": 329,
+        "w": 247,
+        "h": 26
+      },
+      "footerText": "Account Bпоки немає даних",
+      "overflow": false
+    },
+    "after": {
+      "text": "Account Baccount-bmaxАвторизовано69%активнийПеревірено · 11:38Оновити5 год93%лишилосьТиждень69%лишилосьКопіювати CLIВидалити",
+      "badgeText": [
+        "",
+        "max",
+        "Авторизовано",
+        "69%",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5 год",
+          "labelOverflow": false,
+          "gap": 35.296875,
+          "clipped": [],
+          "text": "5 год93%лишилось"
+        },
+        {
+          "label": "Тиждень",
+          "labelOverflow": false,
+          "gap": 16.9375,
+          "clipped": [],
+          "text": "Тиждень69%лишилось"
+        }
+      ],
+      "weeklyFigures": 2,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Account Baccount-bmaxАвторизовано69%активний",
+          "box": {
+            "x": 228.6875,
+            "y": 298.5,
+            "w": 398,
+            "h": 50.25
+          }
+        },
+        {
+          "text": "Оновити",
+          "box": {
+            "x": 541.40625,
+            "y": 348.75,
+            "w": 71.28125,
+            "h": 24
+          }
+        },
+        {
+          "text": "Копіювати CLI",
+          "box": {
+            "x": 258.6875,
+            "y": 412.25,
+            "w": 106.640625,
+            "h": 28
+          }
+        },
+        {
+          "text": "Видалити",
+          "box": {
+            "x": 533.421875,
+            "y": 412.25,
+            "w": 79.265625,
+            "h": 28
+          }
+        }
+      ],
+      "card": {
+        "x": 228.6875,
+        "y": 298.5,
+        "w": 398,
+        "h": 150.75
+      },
+      "panel": {
+        "x": 227.6875,
+        "y": 59,
+        "w": 400,
+        "h": 669.34375
+      },
+      "footer": {
+        "x": 0,
+        "y": 329,
+        "w": 247,
+        "h": 26
+      },
+      "footerText": "Account Bтиждень 69%",
+      "overflow": false
+    },
+    "successAccountReads": 1,
+    "successLimitsReads": 1,
+    "phoneFooter": null
+  },
+  "1440-uk-dark": {
+    "polls": 13,
+    "held": {
+      "value": "fixture-code#state",
+      "focusable": true,
+      "link": "https://claude.ai/oauth/authorize?state=fixture",
+      "group": {
+        "x": 228.6875,
+        "y": 632.515625,
+        "w": 398,
+        "h": 109.625
+      },
+      "surface": {
+        "x": 227.6875,
+        "y": 320,
+        "w": 400,
+        "h": 641.21875
+      },
+      "targets": [
+        {
+          "name": "Відкрити вхід claude.ai",
+          "w": 125.234375,
+          "h": 15.9375
+        },
+        {
+          "name": "Код авторизації",
+          "w": 252.546875,
+          "h": 32
+        },
+        {
+          "name": "Надіслати код",
+          "w": 99.453125,
+          "h": 32
+        },
+        {
+          "name": "Скасувати",
+          "w": 74.6875,
+          "h": 21.9375
+        }
+      ],
+      "text": "Відкрити вхід claude.aiНадіслати кодПісля входу скопіюй код зі сторінки claude.ai і встав його сюди.Скасувати"
+    },
+    "expired": {
+      "shown": true,
+      "retry": "Повторити"
+    },
+    "before": {
+      "text": "Account Baccount-bвхід…ОновитиПеревіряємо…СкасуватиКопіювати CLIВидалити",
+      "badgeText": [
+        ""
+      ],
+      "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Account Baccount-bвхід…",
+          "box": {
+            "x": 228.6875,
+            "y": 298.5,
+            "w": 398,
+            "h": 44.015625
+          }
+        },
+        {
+          "text": "Оновити",
+          "box": {
+            "x": 541.40625,
+            "y": 342.515625,
+            "w": 71.28125,
+            "h": 24
+          }
+        },
+        {
+          "text": "Скасувати",
+          "box": {
+            "x": 540,
+            "y": 370.515625,
+            "w": 74.6875,
+            "h": 21.9375
+          }
+        },
+        {
+          "text": "Копіювати CLI",
+          "box": {
+            "x": 258.6875,
+            "y": 400.453125,
+            "w": 106.640625,
+            "h": 28
+          }
+        },
+        {
+          "text": "Видалити",
+          "box": {
+            "x": 533.421875,
+            "y": 400.453125,
+            "w": 79.265625,
+            "h": 28
+          }
+        }
+      ],
+      "card": {
+        "x": 228.6875,
+        "y": 298.5,
+        "w": 398,
+        "h": 138.953125
+      },
+      "panel": {
+        "x": 227.6875,
+        "y": 59,
+        "w": 400,
+        "h": 669.34375
+      },
+      "footer": {
+        "x": 0,
+        "y": 329,
+        "w": 247,
+        "h": 26
+      },
+      "footerText": "Account Bпоки немає даних",
+      "overflow": false
+    },
+    "after": {
+      "text": "Account Baccount-bmaxАвторизовано69%активнийПеревірено · 11:38Оновити5 год93%лишилосьТиждень69%лишилосьКопіювати CLIВидалити",
+      "badgeText": [
+        "",
+        "max",
+        "Авторизовано",
+        "69%",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5 год",
+          "labelOverflow": false,
+          "gap": 35.296875,
+          "clipped": [],
+          "text": "5 год93%лишилось"
+        },
+        {
+          "label": "Тиждень",
+          "labelOverflow": false,
+          "gap": 16.9375,
+          "clipped": [],
+          "text": "Тиждень69%лишилось"
+        }
+      ],
+      "weeklyFigures": 2,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Account Baccount-bmaxАвторизовано69%активний",
+          "box": {
+            "x": 228.6875,
+            "y": 298.5,
+            "w": 398,
+            "h": 50.25
+          }
+        },
+        {
+          "text": "Оновити",
+          "box": {
+            "x": 541.40625,
+            "y": 348.75,
+            "w": 71.28125,
+            "h": 24
+          }
+        },
+        {
+          "text": "Копіювати CLI",
+          "box": {
+            "x": 258.6875,
+            "y": 412.25,
+            "w": 106.640625,
+            "h": 28
+          }
+        },
+        {
+          "text": "Видалити",
+          "box": {
+            "x": 533.421875,
+            "y": 412.25,
+            "w": 79.265625,
+            "h": 28
+          }
+        }
+      ],
+      "card": {
+        "x": 228.6875,
+        "y": 298.5,
+        "w": 398,
+        "h": 150.75
+      },
+      "panel": {
+        "x": 227.6875,
+        "y": 59,
+        "w": 400,
+        "h": 669.34375
+      },
+      "footer": {
+        "x": 0,
+        "y": 329,
+        "w": 247,
+        "h": 26
+      },
+      "footerText": "Account Bтиждень 69%",
+      "overflow": false
+    },
+    "successAccountReads": 1,
+    "successLimitsReads": 1,
+    "phoneFooter": null
+  },
+  "390-en-light": {
+    "polls": 6,
+    "held": {
+      "value": "fixture-code#state",
+      "focusable": true,
+      "link": "https://claude.ai/oauth/authorize?state=fixture",
+      "group": {
+        "x": 24,
+        "y": 184,
+        "w": 350,
+        "h": 171.75
+      },
+      "surface": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "targets": [
+        {
+          "name": "Open claude.ai sign-in",
+          "w": 117.359375,
+          "h": 44
+        },
+        {
+          "name": "Authorization code",
+          "w": 215.984375,
+          "h": 44
+        },
+        {
+          "name": "Submit code",
+          "w": 88.015625,
+          "h": 44
+        },
+        {
+          "name": "Cancel",
+          "w": 54.078125,
+          "h": 44
+        }
+      ],
+      "text": "Open claude.ai sign-inSubmit codeAfter signing in, copy the code claude.ai shows and paste it here.Cancel"
+    },
+    "expired": {
+      "shown": true,
+      "retry": "Retry"
+    },
+    "before": {
+      "text": "Account Bsigning inVerifying…Cancel",
+      "badgeText": [
+        "",
+        "signing in"
+      ],
+      "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Cancel",
+          "box": {
+            "x": 307.921875,
+            "y": 184,
+            "w": 54.078125,
+            "h": 44
+          }
+        }
+      ],
+      "card": {
+        "x": 12,
+        "y": 140,
+        "w": 366,
+        "h": 96
+      },
+      "panel": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "footer": null,
+      "footerText": null,
+      "overflow": false
+    },
+    "after": {
+      "text": "Account BactiveMax plan·checked 11:385h93% leftWeek69% leftRefresh",
+      "badgeText": [
+        "",
+        "active"
+      ],
+      "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5h",
+          "labelOverflow": false,
+          "gap": 75.15625,
+          "clipped": [],
+          "text": "5h93% left"
+        },
+        {
+          "label": "Week",
+          "labelOverflow": false,
+          "gap": 59.453125,
+          "clipped": [],
+          "text": "Week69% left"
+        }
+      ],
+      "weeklyFigures": 1,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Refresh",
+          "box": {
+            "x": 24,
+            "y": 186,
+            "w": 80.6875,
+            "h": 44
+          }
+        }
+      ],
+      "card": {
+        "x": 12,
+        "y": 90,
+        "w": 366,
+        "h": 146
+      },
+      "panel": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "footer": null,
+      "footerText": null,
+      "overflow": false
+    },
+    "successAccountReads": 1,
+    "successLimitsReads": 0,
+    "phoneFooter": "The phone has no sidebar footer; the active card carries its weekly summary."
+  },
+  "390-en-dark": {
+    "polls": 6,
+    "held": {
+      "value": "fixture-code#state",
+      "focusable": true,
+      "link": "https://claude.ai/oauth/authorize?state=fixture",
+      "group": {
+        "x": 24,
+        "y": 184,
+        "w": 350,
+        "h": 171.75
+      },
+      "surface": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "targets": [
+        {
+          "name": "Open claude.ai sign-in",
+          "w": 117.359375,
+          "h": 44
+        },
+        {
+          "name": "Authorization code",
+          "w": 215.984375,
+          "h": 44
+        },
+        {
+          "name": "Submit code",
+          "w": 88.015625,
+          "h": 44
+        },
+        {
+          "name": "Cancel",
+          "w": 54.078125,
+          "h": 44
+        }
+      ],
+      "text": "Open claude.ai sign-inSubmit codeAfter signing in, copy the code claude.ai shows and paste it here.Cancel"
+    },
+    "expired": {
+      "shown": true,
+      "retry": "Retry"
+    },
+    "before": {
+      "text": "Account Bsigning inVerifying…Cancel",
+      "badgeText": [
+        "",
+        "signing in"
+      ],
+      "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Cancel",
+          "box": {
+            "x": 307.921875,
+            "y": 184,
+            "w": 54.078125,
+            "h": 44
+          }
+        }
+      ],
+      "card": {
+        "x": 12,
+        "y": 140,
+        "w": 366,
+        "h": 96
+      },
+      "panel": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "footer": null,
+      "footerText": null,
+      "overflow": false
+    },
+    "after": {
+      "text": "Account BactiveMax plan·checked 11:395h93% leftWeek69% leftRefresh",
+      "badgeText": [
+        "",
+        "active"
+      ],
+      "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5h",
+          "labelOverflow": false,
+          "gap": 75.15625,
+          "clipped": [],
+          "text": "5h93% left"
+        },
+        {
+          "label": "Week",
+          "labelOverflow": false,
+          "gap": 59.453125,
+          "clipped": [],
+          "text": "Week69% left"
+        }
+      ],
+      "weeklyFigures": 1,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Refresh",
+          "box": {
+            "x": 24,
+            "y": 186,
+            "w": 80.6875,
+            "h": 44
+          }
+        }
+      ],
+      "card": {
+        "x": 12,
+        "y": 90,
+        "w": 366,
+        "h": 146
+      },
+      "panel": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "footer": null,
+      "footerText": null,
+      "overflow": false
+    },
+    "successAccountReads": 1,
+    "successLimitsReads": 0,
+    "phoneFooter": "The phone has no sidebar footer; the active card carries its weekly summary."
+  },
+  "390-uk-light": {
+    "polls": 6,
+    "held": {
+      "value": "fixture-code#state",
+      "focusable": true,
+      "link": "https://claude.ai/oauth/authorize?state=fixture",
+      "group": {
+        "x": 24,
+        "y": 184,
+        "w": 350,
+        "h": 171.75
+      },
+      "surface": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "targets": [
+        {
+          "name": "Відкрити вхід claude.ai",
+          "w": 125.234375,
+          "h": 44
+        },
+        {
+          "name": "Код авторизації",
+          "w": 204.546875,
+          "h": 44
+        },
+        {
+          "name": "Надіслати код",
+          "w": 99.453125,
+          "h": 44
+        },
+        {
+          "name": "Скасувати",
+          "w": 74.6875,
+          "h": 44
+        }
+      ],
+      "text": "Відкрити вхід claude.aiНадіслати кодПісля входу скопіюй код зі сторінки claude.ai і встав його сюди.Скасувати"
+    },
+    "expired": {
+      "shown": true,
+      "retry": "Повторити"
+    },
+    "before": {
+      "text": "Account Bвхід триваєПеревіряємо…Скасувати",
+      "badgeText": [
+        "",
+        "вхід триває"
+      ],
+      "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Скасувати",
+          "box": {
+            "x": 287.3125,
+            "y": 184,
+            "w": 74.6875,
+            "h": 44
+          }
+        }
+      ],
+      "card": {
+        "x": 12,
+        "y": 140,
+        "w": 366,
+        "h": 96
+      },
+      "panel": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "footer": null,
+      "footerText": null,
+      "overflow": false
+    },
+    "after": {
+      "text": "Account Bактивнийплан Max·перевірено 11:395 год93% лишилосьТиждень69% лишилосьОновити",
+      "badgeText": [
+        "",
+        "активний"
+      ],
+      "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5 год",
+          "labelOverflow": false,
+          "gap": 60.828125,
+          "clipped": [],
+          "text": "5 год93% лишилось"
+        },
+        {
+          "label": "Тиждень",
+          "labelOverflow": false,
+          "gap": 40.625,
+          "clipped": [],
+          "text": "Тиждень69% лишилось"
+        }
+      ],
+      "weeklyFigures": 1,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Оновити",
+          "box": {
+            "x": 24,
+            "y": 186,
+            "w": 87.921875,
+            "h": 44
+          }
+        }
+      ],
+      "card": {
+        "x": 12,
+        "y": 90,
+        "w": 366,
+        "h": 146
+      },
+      "panel": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "footer": null,
+      "footerText": null,
+      "overflow": false
+    },
+    "successAccountReads": 1,
+    "successLimitsReads": 0,
+    "phoneFooter": "The phone has no sidebar footer; the active card carries its weekly summary."
+  },
+  "390-uk-dark": {
+    "polls": 6,
+    "held": {
+      "value": "fixture-code#state",
+      "focusable": true,
+      "link": "https://claude.ai/oauth/authorize?state=fixture",
+      "group": {
+        "x": 24,
+        "y": 184,
+        "w": 350,
+        "h": 171.75
+      },
+      "surface": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "targets": [
+        {
+          "name": "Відкрити вхід claude.ai",
+          "w": 125.234375,
+          "h": 44
+        },
+        {
+          "name": "Код авторизації",
+          "w": 204.546875,
+          "h": 44
+        },
+        {
+          "name": "Надіслати код",
+          "w": 99.453125,
+          "h": 44
+        },
+        {
+          "name": "Скасувати",
+          "w": 74.6875,
+          "h": 44
+        }
+      ],
+      "text": "Відкрити вхід claude.aiНадіслати кодПісля входу скопіюй код зі сторінки claude.ai і встав його сюди.Скасувати"
+    },
+    "expired": {
+      "shown": true,
+      "retry": "Повторити"
+    },
+    "before": {
+      "text": "Account Bвхід триваєПеревіряємо…Скасувати",
+      "badgeText": [
+        "",
+        "вхід триває"
+      ],
+      "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Скасувати",
+          "box": {
+            "x": 287.3125,
+            "y": 184,
+            "w": 74.6875,
+            "h": 44
+          }
+        }
+      ],
+      "card": {
+        "x": 12,
+        "y": 140,
+        "w": 366,
+        "h": 96
+      },
+      "panel": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "footer": null,
+      "footerText": null,
+      "overflow": false
+    },
+    "after": {
+      "text": "Account Bактивнийплан Max·перевірено 11:395 год93% лишилосьТиждень69% лишилосьОновити",
+      "badgeText": [
+        "",
+        "активний"
+      ],
+      "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5 год",
+          "labelOverflow": false,
+          "gap": 60.828125,
+          "clipped": [],
+          "text": "5 год93% лишилось"
+        },
+        {
+          "label": "Тиждень",
+          "labelOverflow": false,
+          "gap": 40.625,
+          "clipped": [],
+          "text": "Тиждень69% лишилось"
+        }
+      ],
+      "weeklyFigures": 1,
+      "retry": false,
+      "targets": [
+        {
+          "text": "Оновити",
+          "box": {
+            "x": 24,
+            "y": 186,
+            "w": 87.921875,
+            "h": 44
+          }
+        }
+      ],
+      "card": {
+        "x": 12,
+        "y": 90,
+        "w": 366,
+        "h": 146
+      },
+      "panel": {
+        "x": 0,
+        "y": 52,
+        "w": 390,
+        "h": 792
+      },
+      "footer": null,
+      "footerText": null,
+      "overflow": false
+    },
+    "successAccountReads": 1,
+    "successLimitsReads": 0,
+    "phoneFooter": "The phone has no sidebar footer; the active card carries its weekly summary."
+  },
+  "failures": []
+}

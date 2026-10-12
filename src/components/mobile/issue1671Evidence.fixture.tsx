@@ -154,6 +154,10 @@ const AGENT_LABEL = new URLSearchParams(location.search).has("agent-label");
 const CHROME_PARAM = new URLSearchParams(location.search).get("chrome");
 const CHROME = CHROME_PARAM === null ? null : Number(CHROME_PARAM);
 const CHROME_PIN = CHROME !== null && !new URLSearchParams(location.search).has("nopin");
+/* `?menu-state=<limit|held|compact>`: the running conversation in the state whose words are the longest ones the
+   phone conversation menu has to hold — the account wall with a 17-character account name in it, twelve messages
+   held for an account switch, and a compact the host cannot take (no context meter, so the refusal fills the row). */
+const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
 
 const files: FileEntry[] = [
   conversation(RUNNING_PATH, AGENT_LABEL ? "Orchestrator" : "Rebuild the board status projection", {
@@ -163,6 +167,8 @@ const files: FileEntry[] = [
     model: "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
+    ...(MENU_STATE === "limit" ? { rateLimit: { source: "account", accountId: "reserve-account-7", window: "session", resetAt: now + 40 * 60 } } : {}),
+    ...(MENU_STATE === "held" ? { migration: { intentId: "intent-menu-held", trigger: "manual", phase: "waiting-turn", targetAccountId: "relief", heldDeliveries: 12, failure: null } } : {}),
     /* `?launch=1`: the running conversation waits on an answer, so the focus
        view's own fallback (the most attention-worthy node) picks it over a
        freshly launched agent, the way a real operator's open question does. */
@@ -1495,7 +1501,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       schemaVersion: 1, snapshotSeq: (snapshotReads += 1), retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
       sessions: [{
-        conversationId: SEAT_NOISE !== null ? files[0]!.conversationId : "conversation_running", sessionKey: { engine: SEAT_NOISE !== null || CONTEXT_MODE !== null ? files[0]!.engine : "claude", sessionId: "running-session" }, hostKind: (SEAT_NOISE !== null || CONTEXT_MODE !== null) && files[0]!.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
+        conversationId: SEAT_NOISE !== null ? files[0]!.conversationId : "conversation_running", sessionKey: { engine: SEAT_NOISE !== null || CONTEXT_MODE !== null ? files[0]!.engine : "claude", sessionId: "running-session" }, hostKind: MENU_STATE === "compact" ? "codex-app-server" : (SEAT_NOISE !== null || CONTEXT_MODE !== null) && files[0]!.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
         turn: CONTEXT_MODE !== null ? evidence.contextTurn : queueRecovery ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [],
         recentReceipts: CONTEXT_MODE !== null ? evidence.contextReceipts : [], accountId: ACCOUNT,
         parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: SEAT_NOISE !== null ? files[0]!.path : RUNNING_PATH,
