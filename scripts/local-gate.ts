@@ -260,16 +260,21 @@ export async function codexFixture(root: string, cache: string, version: string,
 }
 /** Brings origin/main up to date unless the deadline comes first; planning
     then uses the origin/main already present. */
-export async function fetchMain(root: string, until: number): Promise<"fetched" | "failed" | "stopped"> {
+export async function fetchMain(root: string, until: number, deadline?: PushDeadline): Promise<"fetched" | "failed" | "stopped"> {
   const budget = cpuWaitBudget(process.env);
   try {
     const outcome = await execute(["git", "fetch", "origin", "main", "--quiet"], root, budget.env, until, null);
     if (outcome.leaked) throw new ContainmentFailed("fetching origin/main", outcome.leaked);
     return outcome.stopped ? "stopped" : outcome.code === 0 ? "fetched" : "failed";
-  } finally { budget.close(); }
+  } finally {
+    // Planning starts a fresh ledger; retain this completed wait before its
+    // markers are removed, without changing the original execution budget.
+    if (deadline) deadline.cpuWaitMs = (deadline.cpuWaitMs ?? 0) + budget.elapsed();
+    budget.close();
+  }
 }
 
-export interface PushDeadline { at: number; startedAt: number }
+export interface PushDeadline { at: number; startedAt: number; cpuWaitMs?: number }
 
 /** `LLV_GATE_PUSH_DEADLINE` (Unix ms) is set by a bounded caller such as the
     publication controller. Fetch, installs and checks use that execution
@@ -508,7 +513,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
   try {
     // A stopped step is deferred when the hosted job also runs it, and is a
     // missing verdict otherwise.
-    const until = deadline?.at ?? Infinity;
+    const until = deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Infinity;
     const settle = (step: Step, outcome: Outcome) => {
       if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked);
       if (!outcome.stopped || !deadline) return outcome.code === 0;
@@ -601,7 +606,7 @@ async function main(mode: Mode): Promise<void> {
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   const until = deadline?.at ?? Infinity;
   if (mode === "pre-push") {
-    const fetch = await fetchMain(root, until);
+    const fetch = await fetchMain(root, until, deadline ?? undefined);
     if (fetch === "failed") console.warn("pre-push: fetch failed; using the last origin/main (base resolution must still succeed)");
     if (fetch === "stopped") console.warn("pre-push: fetch stopped at the push deadline; using the last origin/main");
     base = git(root, ["merge-base", "HEAD", "origin/main"]);

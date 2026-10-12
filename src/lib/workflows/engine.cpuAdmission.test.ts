@@ -8,7 +8,9 @@ import { setMachineCpuPressureForTests } from "@/lib/runtime/cpuPressure";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { defaultPorts, patchWorkflow, tickWorkflows, type WorkflowPorts } from "./engine";
 import { buildWorkflow, loadWorkflows, saveWorkflows } from "./store";
+import { defaultPipelinePorts } from "../pipelines/engine";
 import type { Workflow } from "./types";
+import { accountManager } from "@/lib/accounts/manager";
 
 const queueSymbol = Symbol.for("delegatus.cpuAdmission");
 const globals = globalThis as typeof globalThis & { [queueSymbol]?: { file: string; queue: ReturnType<typeof machineCpuAdmissionQueue> } };
@@ -80,6 +82,42 @@ function harness() {
 
 const transitions = (["setup", "stage", "review"] as const).flatMap(phase =>
   (["pause", "close", "needs_decision"] as const).map(action => ({ phase, action })));
+
+test.each(["stage", "review"] as const)("an unassigned %s account refusal parks before CPU admission", async phase => {
+  const h = harness(), one = workflow("one", phase);
+  one.stageRuns[one.stageIndex]!.accountId = null;
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-example"] });
+  try {
+    saveWorkflows([one, workflow("two", "stage")]);
+    await tickWorkflows([], h.ports);
+    expect(loadWorkflows()[0]!.state).toBe("needs_decision");
+    expect(h.keys).toHaveLength(1);
+    expect(h.ports.cpuPressureHold!(h.keys[0]!)?.queue?.position).toBe(1);
+    now += CPU_QUEUE_MAX_WAIT_MS;
+    await tickWorkflows([], h.ports);
+    expect(h.starts).toEqual(["stage"]);
+  } finally { resolve.mockRestore(); }
+});
+
+test("a workflow rechecks unassigned account capacity while waiting for CPU", async () => {
+  const h = harness(), one = workflow("one", "stage");
+  one.stageRuns[0]!.accountId = null;
+  let available = true;
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => available
+    ? { kind: "available", account: { accountId: "account-example" } as never }
+    : { kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-example"] });
+  try {
+    saveWorkflows([one, workflow("two", "stage")]);
+    await tickWorkflows([], h.ports);
+    expect(loadWorkflows()[0]!.stageRuns[0]!.accountId).toBeNull();
+    available = false;
+    await tickWorkflows([], h.ports);
+    expect(loadWorkflows()[0]!.state).toBe("needs_decision");
+    now += CPU_QUEUE_MAX_WAIT_MS;
+    await tickWorkflows([], h.ports);
+    expect(h.starts).toEqual(["stage"]);
+  } finally { resolve.mockRestore(); }
+});
 test.each(transitions)("$action releases a waiting $phase ticket for later stages and commands", async ({ phase, action }) => {
   const h = harness();
   saveWorkflows([workflow("one", phase)]);
@@ -282,4 +320,90 @@ test("an eligible workflow reaches admission while an earlier workflow awaits a 
     setMachineCpuPressureForTests(null);
   } finally { release(); await pending; }
   expect(h.starts).toEqual(["one:setup"]);
+});
+
+test.each(["pause", "close"] as const)("a timer re-reads workflow %s after awaiting an earlier stage launch", async action => {
+  const h = harness();
+  saveWorkflows([workflow("one", "stage"), workflow("two", "stage")]);
+  await tickWorkflows([], h.ports);
+  const finishing = workflow("finish", "stage");
+  finishing.state = "finishing";
+  saveWorkflows([finishing, ...loadWorkflows()]);
+  let releaseFinish!: () => void, releaseSpawn!: () => void;
+  const finishHeld = new Promise<void>(resolve => { releaseFinish = resolve; });
+  const spawnHeld = new Promise<void>(resolve => { releaseSpawn = resolve; });
+  h.ports.exec = async () => { await finishHeld; return { code: 1, stdout: "", stderr: "finish probe completed" }; };
+  h.ports.spawnAgent = async () => {
+    h.starts.push("stage");
+    await spawnHeld;
+    return { paneId: "pane", panePid: 123, transcript: null };
+  };
+  now += CPU_QUEUE_MAX_WAIT_MS;
+  setMachineCpuPressureForTests(undefined, 10);
+  const pending = tickWorkflows([], h.ports);
+  try {
+    const until = performance.now() + 2_000;
+    while (!h.starts.length && performance.now() < until) await Bun.sleep(10);
+    expect(h.starts).toHaveLength(1);
+    expect((await patchWorkflow("two", { action }, h.ports)).error).toBeUndefined();
+    now += CPU_QUEUE_SPACING_MS;
+    releaseSpawn();
+    await Bun.sleep(100);
+    expect(h.starts).toHaveLength(1);
+    expect(loadWorkflows().find(wf => wf.id === "two")!.stageRuns[0]!.startedAt).toBeNull();
+  } finally { releaseSpawn(); releaseFinish(); await pending; }
+});
+
+test("pressure off retains FIFO and spacing for pipeline and workflow starts", async () => {
+  process.env.DELEGATUS_CPU_PRESSURE = "off";
+  restart();
+  machineCpuAdmissionQueue().check("command:earlier", false);
+  const pipelinePorts = defaultPipelinePorts();
+  expect(pipelinePorts.cpuPressureHold!("stage:later")).toMatchObject({ queue: { position: 2 } });
+  const h = harness();
+  saveWorkflows([workflow("one", "setup")]);
+  await tickWorkflows([], h.ports);
+  expect(h.starts).toEqual([]);
+  expect(h.ports.cpuPressureHold!(h.keys[0]!)).toMatchObject({ queue: { position: 3 } });
+  expect(machineCpuAdmissionQueue().check("command:earlier", true)).toBeNull();
+  expect(pipelinePorts.cpuPressureHold!("stage:later")).not.toBeNull();
+  now += CPU_QUEUE_SPACING_MS;
+  expect(pipelinePorts.cpuPressureHold!("stage:later")).toBeNull();
+  await tickWorkflows([], h.ports);
+  expect(h.starts).toEqual([]);
+  now += CPU_QUEUE_SPACING_MS;
+  await tickWorkflows([], h.ports);
+  expect(h.starts).toEqual(["one:setup"]);
+});
+
+test("a slow workflow launch keeps the next expired head polling while the finish tick is held", async () => {
+  const h = harness();
+  saveWorkflows([workflow("one", "stage"), workflow("two", "stage")]);
+  await tickWorkflows([], h.ports);
+  const finishing = workflow("finish", "stage");
+  finishing.state = "finishing";
+  saveWorkflows([finishing, ...loadWorkflows()]);
+  let releaseFinish!: () => void, releaseSpawn!: () => void;
+  const finishHeld = new Promise<void>(resolve => { releaseFinish = resolve; });
+  const spawnHeld = new Promise<void>(resolve => { releaseSpawn = resolve; });
+  h.ports.exec = async () => { await finishHeld; return { code: 1, stdout: "", stderr: "finish probe completed" }; };
+  h.ports.spawnAgent = async () => {
+    h.starts.push("stage");
+    if (h.starts.length === 1) await spawnHeld;
+    return { paneId: "pane", panePid: 123, transcript: null };
+  };
+  now += CPU_QUEUE_MAX_WAIT_MS;
+  setMachineCpuPressureForTests(undefined, 10);
+  let finished = false;
+  const pending = tickWorkflows([], h.ports).finally(() => { finished = true; });
+  try {
+    const firstDeadline = performance.now() + 2_000;
+    while (!h.starts.length && performance.now() < firstDeadline) await Bun.sleep(10);
+    expect(h.starts).toHaveLength(1);
+    now += CPU_QUEUE_SPACING_MS;
+    const nextDeadline = performance.now() + 2_000;
+    while (h.starts.length < 2 && performance.now() < nextDeadline) await Bun.sleep(10);
+    expect(h.starts).toHaveLength(2);
+    expect(finished).toBe(false);
+  } finally { releaseSpawn(); releaseFinish(); await pending; }
 });

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CpuAdmissionQueue, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS } from "./cpuAdmission";
+import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS } from "./cpuAdmission";
 import { cpuQueueDetail, ordinal, parseCpuQueueDetail } from "./cpuQueueText";
 import { captureProcessIdentity } from "../processIdentity";
 
@@ -16,6 +16,18 @@ function fixture() {
   const open = () => { const q = new CpuAdmissionQueue(file, () => now); queues.push(q); return q; };
   return { open, at: (value: number) => { now = value; } };
 }
+
+test("a direct test invocation resolves its default queue inside its chosen state", () => {
+  const environment = { ...process.env }, directory = fs.mkdtempSync(path.join(os.tmpdir(), "cpu-test-routing-"));
+  directories.push(directory);
+  try {
+    delete process.env.LLV_GATE_LOCK_DIR;
+    process.env.LLV_STATE_DIR = directory;
+    expect(cpuAdmissionFile()).toBe(path.join(directory, "cpu-gate", "admission.sqlite"));
+    process.env.LLV_GATE_LOCK_DIR = path.join(directory, "explicit");
+    expect(cpuAdmissionFile()).toBe(path.join(directory, "explicit", "admission.sqlite"));
+  } finally { process.env = environment; }
+});
 
 test("persistent high pressure admits the ten-minute head, then one at a time in FIFO order", () => {
   const f = fixture(), q = f.open();
@@ -48,6 +60,25 @@ test("a restarted Viewer preserves timestamps and order alongside command ticket
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
   expect(restarted.check("command:two", true)).toBeNull();
   expect(f.open().check("stage:three", true)).not.toBeNull(); // spacing survives reopening too
+});
+
+test.each(["stage", "workflow"])("a %s admission survives a restart before the stage checkpoint", prefix => {
+  const f = fixture(), q = f.open(), one = `${prefix}:one`, two = `${prefix}:two`;
+  q.check(one, false); f.at(10); q.check(two, false);
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  expect(q.check(one, false)).toBeNull();
+  // CPU admission committed, but the controller's durable row is still pending.
+  q.close(); queues.splice(queues.indexOf(q), 1);
+  const restarted = f.open();
+  restarted.reconcile(`${prefix}:`, new Set([one, two]));
+  expect(restarted.check(one, false)).toMatchObject({ since: 0, position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  expect(restarted.check(two, false)?.position).toBe(2);
+  f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
+  expect(restarted.check(one, false)).toBeNull();
+  // The start checkpoint now owns the reservation, so the queue can settle it.
+  restarted.reconcile(`${prefix}:`, new Set([two]));
+  f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS * 2);
+  expect(restarted.check(two, false)).toBeNull();
 });
 
 test("a stage and a heavy check share FIFO, even when pressure is low or sampling failed", () => {
@@ -87,6 +118,8 @@ test("slot readiness leaves the head durable until claim; cancellation frees onl
 test("queue details carry remaining whole minutes and English ordinals", () => {
   expect(cpuQueueDetail(2, 61_000)).toBe("Waiting for the CPU queue · 2nd · up to 2 min");
   expect(parseCpuQueueDetail(cpuQueueDetail(12, 0))).toEqual({ position: 12, minutes: 0 });
+  expect(parseCpuQueueDetail(`${cpuQueueDetail(2, 61_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 2, minutes: 2 });
+  expect(parseCpuQueueDetail(`${cpuQueueDetail(2, 61_000)} · unknown detail`)).toBeNull();
   expect([1, 2, 3, 4, 11, 12, 13, 21].map(ordinal)).toEqual(["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st"]);
 });
 

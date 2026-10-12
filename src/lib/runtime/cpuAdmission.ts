@@ -44,19 +44,34 @@ const nativeHome = globalThis as typeof globalThis & { [homeSymbol]?: string };
 function machineHome(): string {
   if (nativeHome[homeSymbol]) return nativeHome[homeSymbol]!;
   // Bun's userInfo delegates to homedir, which reads HOME/USERPROFILE first.
-  // A tiny synchronous child uses the native account/profile fallback without
-  // changing the Viewer's environment. NSS remains intact inside the image.
+  // Bun caches homedir at startup, so remove the overrides before launch.
   const env = { ...process.env };
   delete env.HOME; delete env.USERPROFILE;
-  const result = spawnSync(process.execPath, ["-e", 'process.stdout.write(require("node:os").userInfo().homedir)'], {
-    env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
+  const script = 'process.stdout.write(require("node:os").userInfo().homedir)';
+  const probe = (runtime: string, source: string, childEnv: NodeJS.ProcessEnv) => spawnSync(runtime, ["-e", source], {
+    env: childEnv, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
   });
+  let result = probe(process.execPath, script, env);
+  // Local Compose supports host UIDs absent from the image's passwd file.
+  // Its installed Bun shim can resolve that UID in the host's account table.
+  if ((result.status !== 0 || !path.isAbsolute(result.stdout ?? "")) && process.env.LLV_DOCKER_NSENTER_SHIMS === "1") {
+    // The shim needs HOME to find host Bun; that Bun launches its native probe
+    // with overrides removed before startup, just as the in-container probe.
+    const hostScript = `const env = { ...process.env }; delete env.HOME; delete env.USERPROFILE; const result = require("node:child_process").spawnSync(process.execPath, ["-e", ${JSON.stringify(script)}], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 4000 }); if (result.status !== 0) process.exit(1); process.stdout.write(result.stdout);`;
+    result = probe("bun", hostScript, process.env);
+  }
   if (result.status !== 0 || !path.isAbsolute(result.stdout ?? "")) throw new Error("CPU admission could not resolve the native user home");
   return nativeHome[homeSymbol] = result.stdout;
 }
 
 /** Shared by the Viewer and gate-slot, including children with sandboxed HOME. */
 export function cpuAdmissionFile(): string {
+  if (!process.env.LLV_GATE_LOCK_DIR && /\.test\.[cm]?[jt]sx?$/.test(process.argv[1] ?? "")) {
+    // Bun's test process names its first file as argv[1]. Gate helpers name
+    // their own script, so the outer heavy command still shares machine FIFO.
+    if (!process.env.LLV_STATE_DIR) throw new Error("Test CPU admission requires an isolated LLV_STATE_DIR or LLV_GATE_LOCK_DIR");
+    return path.join(process.env.LLV_STATE_DIR, "cpu-gate", "admission.sqlite");
+  }
   // The passwd home is stable when agent/test commands sandbox HOME. It is
   // mounted writable into the Viewer image; /var/tmp there is read-only.
   return path.join(process.env.LLV_GATE_LOCK_DIR || path.join(machineHome(), ".cache", "delegatus-cpu"), "admission.sqlite");
@@ -75,9 +90,11 @@ export class CpuAdmissionQueue {
     fs.chmodSync(file, 0o600);
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
     this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
+    this.db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
   }
   close(): void { this.db.close(); }
   cancel(key: string): void {
+    this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
     this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
     this.db.query("DELETE FROM tickets WHERE key = ?").run(key);
   }
@@ -92,8 +109,13 @@ export class CpuAdmissionQueue {
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NULL").all()) {
         if (!row.key.startsWith(prefix)) continue;
         if (!active.has(row.key)) this.cancel(row.key);
-        else if (!eligible.has(row.key)) this.suspend(row.key);
-        else this.db.query("DELETE FROM suspended WHERE key = ?").run(row.key);
+        else {
+          // A pending durable row has not checkpointed its start. Replay the
+          // original ticket after a crash, preserving both sequence and age.
+          this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(row.key);
+          if (!eligible.has(row.key)) this.suspend(row.key);
+          else this.db.query("DELETE FROM suspended WHERE key = ?").run(row.key);
+        }
       }
     }).immediate();
   }
@@ -106,8 +128,9 @@ export class CpuAdmissionQueue {
       }
       this.db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, now, owner ? JSON.stringify(owner) : null);
       this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
+      this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
       const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
-      const ahead = this.db.query<{ n: number; since: number | null }, [number, number]>("SELECT COUNT(*) AS n, MAX(CASE WHEN seq < ? THEN since END) AS since FROM tickets WHERE seq <= ? AND key NOT IN (SELECT key FROM suspended)").get(ticket.seq, ticket.seq)!;
+      const ahead = this.db.query<{ n: number; since: number | null }, [number, number]>("SELECT COUNT(*) AS n, MAX(CASE WHEN seq < ? THEN since END) AS since FROM tickets WHERE seq <= ? AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").get(ticket.seq, ticket.seq)!;
       const position = ahead.n;
       const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
@@ -117,7 +140,11 @@ export class CpuAdmissionQueue {
       const priorBudget = ahead.since === null ? 0 : Math.max(0, this.maxWaitMs - (now - ahead.since));
       if (position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
         if (consume) {
-          this.cancel(key);
+          // Commands settle at their kernel slot claim. Stages retain a
+          // recoverable admission until their own start checkpoint is read.
+          if (!owner && (key.startsWith("stage:") || key.startsWith("workflow:"))) {
+            this.db.query("INSERT OR IGNORE INTO stage_admissions VALUES (?)").run(key);
+          } else this.cancel(key);
           this.db.query("UPDATE admission SET last = ? WHERE id = 1").run(now);
         }
         return null;

@@ -1521,7 +1521,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = "Waiting for the CPU queue · 2nd · up to 7 min";
+  waiting.stateDetail = "Waiting for the CPU queue · 2nd · up to 7 min · Viewer publication: owner; owner viewer, epoch 1";
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }
@@ -2933,7 +2933,7 @@ function fixtureWorkLinks(): FilesWorkLinks {
   }
   return out;
 }
-const workLinks = WORK_LINKS || SCENARIO === "task-motion" ? fixtureWorkLinks() : null;
+const workLinks = WORK_LINKS || CPU_QUEUE || SCENARIO === "task-motion" ? fixtureWorkLinks() : null;
 
 /* The «Needs you» filter's board. Six tasks: `t-nf-ask` holds a conversation
    that asks a question, `t-nf-lane` a lane parked on a decision, `t-nf-cleared`

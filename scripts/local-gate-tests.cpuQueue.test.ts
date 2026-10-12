@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 import { touchedTests } from "./local-gate-tests";
+import { CpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
 
 const directories: string[] = [];
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -21,9 +22,9 @@ function fixture() {
 test("nested queue waits exceed the old per-file wall cap and leave the next file its execution budget", () => {
   const f = fixture(), repo = path.resolve(import.meta.dir, "..");
   const source = `import { expect, test } from "bun:test";
-import { CpuAdmissionQueue } from ${JSON.stringify(path.join(repo, "src/lib/runtime/cpuAdmission.ts"))};
+import { CpuAdmissionQueue, cpuAdmissionFile } from ${JSON.stringify(path.join(repo, "src/lib/runtime/cpuAdmission.ts"))};
 test("queued heavy command", async () => {
-  const queue = new CpuAdmissionQueue(${JSON.stringify(path.join(f.env.LLV_GATE_LOCK_DIR!, "admission.sqlite"))});
+  const queue = new CpuAdmissionQueue(cpuAdmissionFile());
   queue.check("stage:predecessor", false);
   const release = setTimeout(() => queue.cancel("stage:predecessor"), 8000);
   try {
@@ -37,6 +38,24 @@ test("queued heavy command", async () => {
   const result = touchedTests(f.dir, f.base, ["a.test.ts", "b.test.ts"], { cache: f.cache, env: f.env, log: () => {}, budgets: { fileMs: 2000, runMs: 4000 } });
   expect(Date.now() - started).toBeGreaterThan(8000);
   expect(result.introduced).toHaveLength(0);
+}, 30000);
+
+test("a touched test cannot leave a synthetic stage head in its outer gate queue", () => {
+  const f = fixture(), repo = path.resolve(import.meta.dir, "..");
+  const file = path.join(f.env.LLV_GATE_LOCK_DIR!, "admission.sqlite"), outer = new CpuAdmissionQueue(file);
+  try {
+    outer.check("stage:outer", false);
+    writeFileSync(path.join(f.dir, "example.test.ts"), `import { expect, test } from "bun:test";
+import { CpuAdmissionQueue, cpuAdmissionFile } from ${JSON.stringify(path.join(repo, "src/lib/runtime/cpuAdmission.ts"))};
+test("synthetic workflow ticket", () => {
+  const file = cpuAdmissionFile(), queue = new CpuAdmissionQueue(file);
+  try { queue.check("workflow:synthetic", false); expect(file).not.toBe(${JSON.stringify(file)}); }
+  finally { queue.close(); }
+});`);
+    const result = touchedTests(f.dir, f.base, ["example.test.ts"], { cache: f.cache, env: f.env, log: () => {} });
+    expect(result.introduced).toHaveLength(0);
+    expect(outer.check("command:later", false)?.position).toBe(2);
+  } finally { outer.close(); }
 }, 30000);
 
 test("a touched test still expires when execution spends its budget without a CPU wait", () => {

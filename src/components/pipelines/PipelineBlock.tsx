@@ -602,7 +602,12 @@ export function PipelineBlock(props: PipelineBlockProps) {
     const aside = props.aside ? <span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span> : null;
     return (
       <span className="pblock" {...root} data-managed={props.managedOn ? "" : undefined}>
-        {cpuWaiting ? <span className="pb-line sub" data-cpu-queue>{progress}</span> : <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />}
+        {cpuWaiting ? (
+          <span className="pb-line sub">
+            <span className="min-w-0 [overflow-wrap:anywhere]" data-cpu-queue>{progress}</span>
+            <span className="pb-grow" />{text}
+          </span>
+        ) : <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />}
         {aside ? (
           <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
         ) : reasonLine}
@@ -700,6 +705,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           {controls}
         </div>
       )}
+      {cpuWaiting ? <p className="pb-line sub" data-cpu-queue>{progress}</p> : null}
       {graphOpen ? (
         <>
           <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
@@ -708,7 +714,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
         </>
       ) : (
         <div className={!managed && finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
-          {cpuWaiting ? <span className="pb-line sub" data-cpu-queue>{progress}</span> : <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />}
+          <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
           {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
           {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
           {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
@@ -1001,10 +1007,12 @@ function ScreenBlock(props: PipelineBlockProps & {
   const hasLinks = Boolean(links?.links.length || links?.noPr);
   const hasFlag = finishFlagShown(pipeline, props.taskId);
   const diskWait = pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null;
+  const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   return (
     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
       {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
       {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
+      {cpuWaiting ? <p className="pb-reason" data-cpu-queue>{pipelineProgress(t, summary, nameOf)}</p> : null}
       {hasLinks || hasFlag ? (
         <div className="pb-links-row">
           <FinishFlag pipeline={pipeline} taskId={props.taskId} />

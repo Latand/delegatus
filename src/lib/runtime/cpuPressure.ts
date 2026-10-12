@@ -111,21 +111,20 @@ export async function waitForCpuPressure(gate: CpuStartGate | null, options: {
 }
 
 const globalGate = globalThis as unknown as { __llvCpuPressureGate?: CpuStartGate | null; __llvCpuPressurePollMs?: number };
-/** The process-wide gate over /proc/pressure/cpu; null when turned off. */
+/** The process-wide FIFO; pressure off skips sampling and keeps admission. */
 export function machineCpuPressureGate(): CpuStartGate | null {
   if (globalGate.__llvCpuPressureGate !== undefined) return globalGate.__llvCpuPressureGate;
   const policy = cpuPressurePolicy();
-  if (!policy) return globalGate.__llvCpuPressureGate = null;
-  const pressure = new CpuPressureGate(policy, {
+  const pressure = policy ? new CpuPressureGate(policy, {
     sample: () => { try { return parseCpuPressure(fs.readFileSync("/proc/pressure/cpu", "utf8")); } catch { return null; } },
     now: Date.now,
-  });
+  }) : null;
   return globalGate.__llvCpuPressureGate = {
     check: (key = `command:${process.pid}`) => {
-      const held = pressure.check();
+      const held = pressure?.check();
       const durable = key.startsWith("stage:") || key.startsWith("workflow:");
       const queue = machineCpuAdmissionQueue().check(key, !held, durable ? undefined : cpuCommandOwner());
-      return queue ? { since: queue.since, avg10: held?.avg10 ?? 0, deferred: false, policy, queue } : null;
+      return queue ? { since: queue.since, avg10: held?.avg10 ?? 0, deferred: false, policy: policy ?? DEFAULT_CPU_PRESSURE_POLICY, queue } : null;
     },
     cancel: (key) => machineCpuAdmissionQueue().cancel(key),
   };

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -120,6 +121,34 @@ test("pre-push keeps completed admission waits outside its budget across later s
     expect(await waiting).toEqual([]);
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("one\ntwo\n");
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await waiting?.catch(() => {}); f.close(); }
+}, 20_000);
+
+test("pre-push carries fetch admission time into the check deadline", async () => {
+  const f = fixture();
+  let pending: ReturnType<typeof realExec> | undefined;
+  const env: NodeJS.ProcessEnv = { ...f.env, LLV_GATE_SLOT_LEASE: "", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.test" };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GIT_CONFIG") || ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"].includes(key)) delete env[key];
+  }
+  const remote = path.join(f.dir, "remote.git"), work = path.join(f.dir, "work"), upload = path.join(f.dir, "upload.sh");
+  const git = (...args: string[]) => execFileSync("git", args, { env, stdio: "pipe" });
+  try {
+    git("init", "-q", "-b", "main", work);
+    fs.writeFileSync(path.join(work, "note.txt"), "fixture\n");
+    git("-C", work, "add", "note.txt");
+    git("-C", work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture");
+    git("clone", "-q", "--bare", work, remote);
+    git("-C", work, "remote", "add", "origin", remote);
+    fs.writeFileSync(upload, '#!/bin/bash\nexec bash "$CPU_FETCH_GATE" git upload-pack "$@"\n', { mode: 0o755 });
+    git("-C", work, "config", "remote.origin.uploadpack", upload);
+    const script = `import { fetchMain, runSteps } from ${JSON.stringify(path.join(process.cwd(), "scripts/local-gate.ts"))}; const deadline = { startedAt: Date.now(), at: Date.now() + 2000 }; if (await fetchMain(${JSON.stringify(work)}, deadline.at, deadline) !== "fetched") throw new Error("fetch failed"); await runSteps("pre-push", [{ name: "after fetch", command: ["bash", "-c", 'echo checked > "$CPU_QUEUE_OUTPUT"'] }], { root: ${JSON.stringify(work)}, deadline, logDir: ${JSON.stringify(f.dir)}, say: () => {}, prepare: step => ({ command: step.command, env: process.env }) });`;
+    pending = realExec(process.execPath, ["-e", script], process.cwd(), { ...env, CPU_FETCH_GATE: path.join(process.cwd(), "scripts/gate-slot.sh") }, { timeoutMs: 10_000 });
+    await until(() => f.count() === 1);
+    await Bun.sleep(2500); f.age();
+    const result = await pending;
+    expect(result.code, result.stderr).toBe(0);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("checked\n");
+  } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await Promise.resolve(pending).catch(() => {}); f.close(); }
 }, 20_000);
 
 test("the owned runner keeps a nested queue wait outside its execution deadline", async () => {

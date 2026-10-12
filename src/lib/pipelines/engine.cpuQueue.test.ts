@@ -3,7 +3,8 @@ import path from "node:path";
 import { CpuAdmissionQueue, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS } from "../runtime/cpuAdmission";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "../runtime/cpuPressure";
 import { createPipelineFromRequest, tickPipelines, type PipelinePorts } from "./engine";
-import { loadPipelines, savePipelines } from "./store";
+import { loadPipelines, savePipelines, withDeliveryPublicationDetail } from "./store";
+import { parseCpuQueueDetail } from "../runtime/cpuQueueText";
 import { registerPipelineTick } from "./controllerSignal";
 
 registerPipelineTick(async () => {});
@@ -47,6 +48,14 @@ test("stage activation uses stable FIFO tickets, persists the card reason and la
     await tickPipelines([], ports); await tickPipelines([], ports);
     const held = loadPipelines();
     expect(held.map(p => p.stateDetail)).toEqual(["Waiting for the CPU queue · 1st · up to 10 min", "Waiting for the CPU queue · 2nd · up to 11 min"]);
+    const projected = withDeliveryPublicationDetail({ ...held[0]!, delivery: {
+      target: { repository: "fixture", remote: "origin", branch: "refs/heads/main" },
+      disposition: "owner", ownerId: "viewer", epoch: 1, publish: "enabled",
+      active: true, journal: [],
+    } });
+    expect(projected.stateDetail).toContain(" · Viewer publication:");
+    expect(parseCpuQueueDetail(projected.stateDetail)).toEqual({ position: 1, minutes: 10 });
+    expect(loadPipelines()[0]!.stateDetail).not.toContain("Viewer publication:");
     expect(launches).toHaveLength(0);
     draining = true;
     await tickPipelines([], ports);

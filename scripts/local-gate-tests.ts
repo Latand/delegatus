@@ -213,6 +213,10 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
     const filter = options.sites ? testNameFilter(options.sites.filter(site => site.file === file)) : [];
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
     const env = isolatedEnvironment(privateRoot, inherited);
+    // The outer heavy gate retains its shared machine admission. Synthetic
+    // stage tickets created inside a test belong only to that test's sandbox.
+    env.LLV_GATE_LOCK_DIR = path.join(privateRoot, "cpu-gate");
+    mkdirSync(env.LLV_GATE_LOCK_DIR, { recursive: true });
     env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
@@ -322,7 +326,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     // Scope ids and journal descriptors change on each gate-slot invocation;
     // they do not change the test inputs. Keep semantic environment in the key.
     const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "LLV_GATE_SLOT_LEASE", "LLV_CPU_WAIT_ROOTS", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM", "LLV_OWNED_TEST_RUNNER_PID", "LLV_OWNED_TEST_RUN_CGROUP", "LLV_OWNED_RUN_PARENT_IDENTITY", "LLV_FIXTURE_PARENT_IDENTITY"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
-    const identity = digest(JSON.stringify(["per-file-junit-v9-inherited-slot-admissions", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment, budgets]));
+    const identity = digest(JSON.stringify(["per-file-junit-v10-private-test-cpu-queue", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment, budgets]));
     const cache = options.cache ?? path.join(gateTemporaryRoot(), `delegatus-test-baselines-${process.getuid?.() ?? "user"}`);
     prepareCache(cache);
     const entry = path.join(cache, `${identity}.json`);

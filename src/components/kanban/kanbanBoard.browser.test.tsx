@@ -79,15 +79,40 @@ describe("CPU admission queue", () => {
           await line.waitFor(); await target.scrollIntoViewIfNeeded();
           const text = lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
           expect(await line.textContent()).toBe(text);
+          expect(await target.textContent()).toContain("#2190");
           expect(await target.locator('[data-motion="working"]').count()).toBe(0);
           const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
           expect(geometry.clipped).toBe(false);
           expect(pageErrors).toEqual([]);
           await target.screenshot({ path: path.join(out, `variant-1-${width}-${lang}.png`) });
           readings.push({ lang, viewport: width, ...geometry });
+          if (width === 390) {
+            await target.click();
+            const lane = page.locator('[data-phone-task-lane="p-search"]');
+            for (const surface of ["task", "stages"] as const) {
+              if (surface === "stages") await lane.locator("[data-open-stages]").click();
+              const panel = surface === "task" ? lane : page.locator('[data-mobile2-pipeline="p-search"]');
+              const reason = panel.locator("[data-cpu-queue]");
+              await reason.waitFor({ timeout: 5000 });
+              expect(await reason.innerText()).toBe(text);
+              const box = await reason.evaluate(element => {
+                const rect = element.getBoundingClientRect(), range = document.createRange();
+                range.selectNodeContents(element);
+                const ink = range.getBoundingClientRect();
+                return { clipped: element.scrollWidth > element.clientWidth + 1 || ink.right > rect.right + 1, visible: rect.top >= 0 && rect.bottom <= window.innerHeight, text: element.textContent };
+              });
+              expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
+              expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+              expect(pageErrors).toEqual([]);
+              await page.screenshot({ path: path.join(out, `phone-${surface}-${lang}.png`) });
+              readings.push({ lang, viewport: width, surface, ...box });
+            }
+          }
         } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+      fs.mkdirSync("evidence/cpu-queue", { recursive: true });
+      fs.writeFileSync("evidence/cpu-queue/readings.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 60_000);
 });
