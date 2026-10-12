@@ -20,7 +20,7 @@ import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/di
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
-import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
+import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
@@ -43,7 +43,8 @@ import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
-import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import { fireTasksChanged } from "@/components/tasks/taskApi";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -140,16 +141,27 @@ const FEED_CONTINUITY = SCENARIO === "feed-continuity";
    `&sendlost=1` loses the first Send on its way to the Viewer, as a dropped request does.
    `&mount=product` leaves the companion to the shell's own mount: the fixture answers the settings routes from
    memory (off by default; `&usage=<usd>` and `&keysource=env|file|missing` set what they report) and the
-   driver turns the companion on through the settings dialog. `&transcript=1` (item 6 of
+   driver turns the companion on through the settings dialog. `&backend=codex` starts with Codex V3 chosen: the
+   settings report the last Codex call with its plan window (`&nocall=1` leaves none), the transcript record carries
+   a Codex call's usage, and a start reaches the session route, which refuses it at the plan limit with its reset
+   two hours after the page loaded, so no call starts. `&transcript=1` (item 6 of
    docs/design/voice-delegatus-live-feedback.md) lets the companion read a whole session's transcript record, as the
    live adapter does from the session route, and the conversation view a tap on the character opens. Desktop only. */
 const VOICE = SCENARIO === "voice-companion";
 const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount") === "product";
-const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
+/* The plan window a fixture Codex call ran on: the primary window resets two hours after the page loaded, to the
+   minute, and the weekly one four days on, so the footer and the settings show a time and a date. The driver reads
+   `voiceCompanion.loaded` back rather than its own clock, which may have passed the next minute. */
+const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
+const voice = { loaded: VOICE_LOADED, delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
   /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
-  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], settingsOpened: 0 };
+  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
+const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, observedAt: VOICE_LOADED * 1000,
+  primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
+const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
 const voiceSettings = {
-  enabled: false, monthlyCapUsd: 20,
+  enabled: false, backend: (VOICE_CODEX ? "codex" : "api") as "api" | "codex", monthlyCapUsd: 20,
+  ...(new URLSearchParams(location.search).get("nocall") === "1" ? {} : { lastCodexSession: { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan: voicePlan() } }),
   keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
   lastSession: { usd: 0.4, seconds: 471, endedAt: Date.UTC(2026, 9, 10), incomplete: false },
   month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
@@ -489,10 +501,10 @@ function structuredSnapshot() {
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
     }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
       conversationId: orchestrator.conversationId, sessionKey: { engine: orchestrator.engine, sessionId: `${orchestrator.name}-session` }, hostKind: orchestrator.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: seatUndelivered(), accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }] : []), ...(STREAMING ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path).map((file) => ({
+    }] : []), ...(STREAMING || SEAT_UNDELIVERED ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path && (STREAMING || file === exportImpl)).map((file) => ({
       conversationId: file.conversationId, sessionKey: { engine: file.engine, sessionId: `${file.name}-session` }, hostKind: "claude-broker", host: "hosted",
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: file.path,
@@ -542,6 +554,29 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
   plan: { current: "Watching the search fix" },
   ...(SEAT_HEAD ? { model: "claude-opus-4-5-1m", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } } : {}),
 })));
+
+/* `&undelivered=N` (2026-10-11): the seat's composer holds N sends the host refused, the newest one
+   with its arrival unconfirmed, so the undelivered chip and its list can be measured in the seat; and
+   t-export's implementer runs on a structured host mid-turn, so its agent window shows the agent's
+   controls in the composer's bottom row. */
+const SEAT_UNDELIVERED = Math.max(0, Number(new URLSearchParams(location.search).get("undelivered") ?? 0));
+const SEAT_UNDELIVERED_TEXT = [
+  "Check why the search lane has been stuck for two hours.",
+  "One more: the composer prototypes are needed today.",
+  "Something broke again after the deploy, look at the logs.",
+];
+let seatUndeliveredReceipts: Record<string, unknown>[] | null = null;
+function seatUndelivered(): Record<string, unknown>[] {
+  return seatUndeliveredReceipts ??= Array.from({ length: SEAT_UNDELIVERED }, (_, index) => {
+    const unconfirmed = index === SEAT_UNDELIVERED - 1 && SEAT_UNDELIVERED > 1;
+    return {
+      operationId: `seat-undelivered-${index}`, idempotencyKey: `seat-undelivered-key-${index}`, conversationId: orchestrator.conversationId,
+      kind: "send", status: unconfirmed ? "uncertain" : "failed", text: SEAT_UNDELIVERED_TEXT[index % SEAT_UNDELIVERED_TEXT.length],
+      at: iso(300 - index * 60), admittedAt: iso(320 - index * 60), revision: 1,
+      ...(unconfirmed ? { resend: "verify-first", reason: "recipient evidence unavailable" } : { reason: "dead-host" }),
+    };
+  });
+}
 
 /* The seat-panel noise cases (docs/design/seat-panel-noise.md). The launch facts are what the board's
    projection hands the panel: a launch the runtime is still recovering carries no reason, a stopped one
@@ -2727,7 +2762,9 @@ const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
   const summary = prototypeReviewSummary(rounds)!;
   const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
-  return { ...summary, ...(waitingDismissal ? { waitingDismissal } : {}) };
+  /* As the Viewer's own read: a decision this installation delivers carries its delivery's phase on the card too. */
+  const phase = rounds.at(-1)?.decision?.delivery.phase;
+  return { ...summary, ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -2817,7 +2854,25 @@ if (PROTO) {
     protoRounds["t-export"] = [answered];
   }
   protoPublish();
-  Object.assign(window, { protoPosts });
+  /* A driver's hands on the background delivery (`&proto=1`): `protoSavePhase`
+     answers a save as the Viewer does, its message saved or on its way;
+     `protoHoldSave()` keeps the next save unwritten and unanswered
+     until `protoReleaseSave()`, so a frame shows the review before the server
+     has written the decision; `protoPhase(task, phase)` moves a decided round's delivery. */
+  let releaseSave: (() => void) | null = null;
+  Object.assign(window, {
+    protoPosts,
+    protoHoldSave: () => { (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave = new Promise<void>((resolve) => { releaseSave = resolve; }); },
+    protoReleaseSave: () => { releaseSave?.(); releaseSave = null; delete (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave; },
+    protoPhase: (taskId: string, phase: PrototypeDeliveryPhase) => {
+      const decided = protoRounds[taskId]?.at(-1);
+      if (!decided?.decision) return;
+      const state: PrototypeDeliveryState = phase === "delivered" ? "sent" : phase === "attention" ? "failed" : phase === "waiting-seat" ? "no-orchestrator" : "pending";
+      decided.decision = { ...decided.decision, delivery: { state, retryable: state !== "sent", phase } };
+      protoPublish();
+      fireTasksChanged();
+    },
+  });
 }
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
@@ -3061,12 +3116,12 @@ if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: nu
 Object.assign(window, { launchRun });
 
 /* The account picker's driver block (kanbanBoard.browser.test.tsx, "account chips with the weekly limit left"):
-   `&accountpicker=1` gives any scenario the accounts the build's brief names. Each session window is looser than
-   its weekly one, so the sidebar footer's line (the tightest window) and the chip name the same number. */
+   `&accountpicker=1` gives any scenario the accounts the build's brief names. The sidebar footer's line and the
+   chip both name the weekly window. */
 const ACCOUNT_PICKER = new URLSearchParams(location.search).has("accountpicker");
-const pickerReading = (weeklyUsed: number | null, sessionUsed: number) => ({
+const pickerReading = (weeklyUsed: number | null, sessionUsed: number | null) => ({
   state: "fresh", checkedAt: iso(5 * MIN),
-  session: { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
+  session: sessionUsed === null ? null : { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
   weekly: weeklyUsed === null ? null : { usedPercent: weeklyUsed, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 },
 });
 const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<typeof pickerReading> | null, signedOut = false) => ({
@@ -3076,7 +3131,19 @@ const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<t
 /* `&pickeractive=team` makes the long-labelled account the Claude active one, and `&pickerdelay=<ms>` holds the
    accounts reply back, so the readings land after the chooser is open. */
 const PICKER_PARAMS = new URLSearchParams(location.search);
-const pickerAccounts = {
+/* `&sidebarweekly=1` (the "sidebar names each account's weekly limit" block): Claude «Main» with 77 % of its week
+   and 36 % of its 5-hour window left, «Work» with a week only, «Night» with a 5-hour window only; Codex weekly
+   only, as its plans report. */
+const SIDEBAR_WEEKLY = PICKER_PARAMS.has("sidebarweekly");
+const pickerAccounts = SIDEBAR_WEEKLY ? {
+  claude: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Main", "Max", pickerReading(23, 64)), pickerRow("work", "Work", "Max", pickerReading(59, null)),
+    pickerRow("night", "Night", "Pro", pickerReading(null, 30)),
+  ] },
+  codex: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Personal", "Pro", pickerReading(22, null)), pickerRow("review", "Review", "Plus", pickerReading(77, null)),
+  ] },
+} : {
   claude: { active: PICKER_PARAMS.get("pickeractive") ?? "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
     pickerRow("default", "Main", "Max", pickerReading(8, 5)), pickerRow("work", "Work", "Max", pickerReading(59, 44)),
     pickerRow("backup", "Backup", "Pro", pickerReading(93, 70)), pickerRow("old", "Old login", "Pro", null, true),
@@ -3149,16 +3216,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
+      /* A held save has not been written yet: the decision is recorded only once it is released. */
+      await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
       const held = rounds.find((entry) => entry.id === body.reviewId);
       if (!held) return json({ error: "prototype review not found" }, 404);
+      const phase = (window as unknown as { protoSavePhase?: PrototypeDeliveryPhase }).protoSavePhase;
       if (body.retry && held.decision) {
         /* A driver may queue what the next retries answer; with nothing queued a retry lands. */
         const state = (window as unknown as { protoRetryAnswers?: PrototypeDeliveryState[] }).protoRetryAnswers?.shift() ?? "sent";
-        held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent" } };
+        held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent", ...(phase ? { phase: state === "sent" ? "delivered" as const : "delivering" as const } : {}) } };
       }
       else if (!held.decision) {
-        const state = protoSaveState[taskId] ?? "sent";
-        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };
+        const state = phase === "saved" || phase === "delivering" ? "pending" : protoSaveState[taskId] ?? "sent";
+        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
       }
       protoPublish();
     }
@@ -3713,6 +3783,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
   }
+  if (VOICE && url.pathname === "/api/voice-companion/session" && method === "POST" && voiceSettings.backend === "codex") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (body.action !== "start") return json({ ok: true });
+    voice.sessionStarts.push({ project: body.project, locale: body.locale, offer: typeof body.sdp === "string" && body.sdp.startsWith("v=0") });
+    return json({ code: "CODEX_LIMIT_REACHED", resetsAt: VOICE_LOADED + 7_200 }, 409);
+  }
   if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
     if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
     const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
@@ -3948,7 +4024,8 @@ function voiceCompanionScene() {
       const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
       record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
         data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });
-      return { ...record, usage: { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
+      return { ...record, usage: VOICE_CODEX ? { backend: "codex" as const, callSeconds: 252, callFinal: true, plan: voicePlan(), planStartPercent: 21 }
+        : { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
     } } : {}),
   };
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through

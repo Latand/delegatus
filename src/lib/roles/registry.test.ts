@@ -38,7 +38,7 @@ test("maintainer preserves review and release ownership and treats retired seats
   expect(resolved.value.prompt).toContain("Hide only a confirmed retired orchestrator seat card");
 });
 
-test("role registry exposes the twelve role ids and campaign-ready orchestrator config", () => {
+test("role registry exposes the thirteen role ids and campaign-ready orchestrator config", () => {
   const roles = listRoles();
 
   expect(roles.map((role) => role.id)).toEqual([
@@ -52,6 +52,7 @@ test("role registry exposes the twelve role ids and campaign-ready orchestrator 
     "deployer",
     "merger",
     "maintainer",
+    "curator",
     "issue-reporter",
     "visual-critic",
   ]);
@@ -64,6 +65,7 @@ test("role registry exposes the twelve role ids and campaign-ready orchestrator 
     cleaner: { engine: "codex", model: "gpt-6-luna", effort: "medium" },
     "prod-auditor": { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" },
     maintainer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
+    curator: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     merger: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     deployer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
     "issue-reporter": { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
@@ -136,7 +138,7 @@ test("role registry rejects unknown and missing required parameters with bounded
   });
   expect(resolveRole("no-such-role", {})).toEqual({
     ok: false,
-    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer, issue-reporter, visual-critic)",
+    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer, curator, issue-reporter, visual-critic)",
   });
 });
 
@@ -172,7 +174,7 @@ test("builder, reviewer and architect scaffolds send the seat to search prior co
    only if every registry role renders it, so assert the whole registry. */
 test("every registry role scaffold carries the process-cleanup rule", () => {
   const roles = listRoles();
-  expect(roles.length).toBe(12);
+  expect(roles.length).toBe(13);
   for (const definition of roles) {
     /* The renderer both the spawn path and the pipeline stage lookup call, so
        a role whose required params are unset (a stage resolves them to registry
@@ -243,7 +245,7 @@ test("spawn role resolution enumerates the selected engine catalog for an invali
     model: "mythos-1",
   })).toEqual({
     ok: false,
-    error: "invalid claude model id \"mythos-1\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku",
+    error: "invalid claude model id \"mythos-1\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5",
   });
 });
 

@@ -2,7 +2,7 @@ import { claudeTierDisplayName } from "@/lib/agent/models";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { effectiveRemaining, gatingWindows } from "@/lib/accounts/migration/quotaPolicy";
 import type { Flow, FlowBlock } from "@/lib/flows/types";
-import { SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from "@/lib/limitWindows";
+import { SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES, windowKeyForMinutes } from "@/lib/limitWindows";
 import { hostProviderRetryAt, type ProviderThrottleState } from "@/lib/limitsThrottle";
 import { modelTierWindows, tierWindowKey, type Engine, type EngineLimits, type FileEntry, type LimitsProvenance, type LimitWindow, type LimitWindowSource, type QuotaWindowKey, type RateLimitState, type TierLimitWindow } from "@/lib/types";
 
@@ -180,6 +180,16 @@ export function effectiveQuota(quota: ReconciledQuota): (ReconciledQuotaWindow &
     ...quota.tiers.map((tier) => headroom(tierWindowKey(tier.value.tier), tier)),
   ];
   return windows.sort((a, b) => a.percent - b.percent || a.window.localeCompare(b.window))[0] ?? null;
+}
+
+/** What is left of the account's general weekly window, the number the sidebar
+    footer and the account pickers name. A window filed under `session` that
+    declares a weekly horizon is that weekly window (#606). Null without a
+    weekly reading: a 5-hour or tier window never stands in for it. */
+export function weeklyQuota(quota: ReconciledQuota): (ReconciledQuotaWindow & { percent: number }) | null {
+  const weekly = quota.weekly ?? (quota.session && windowKeyForMinutes(quota.session.value.windowMinutes) === "weekly" ? quota.session : null);
+  if (!weekly) return null;
+  return { ...weekly, percent: Math.max(0, Math.min(100, 100 - weekly.value.usedPercent)) };
 }
 
 export function quotaAsEngineLimits(quota: ReconciledQuota): EngineLimits | null {

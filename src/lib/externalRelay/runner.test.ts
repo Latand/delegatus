@@ -7,6 +7,7 @@ import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, ty
 import { ownerRequest, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
 import { relayClaimCapabilities } from "./poller";
 import { setRelaySwitch } from "./switches";
+import { assertOwnerCaptureResponse } from "./ownerCapture.fixture";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -23,6 +24,10 @@ import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
 import { startTestRelay } from "./testRelay";
+import { saveTasks, loadTasks } from "@/lib/tasks/store";
+import { telegramRound, telegramTask } from "@/lib/prototypeReview/telegram.fixture";
+import { prototypeCopyLine } from "@/lib/prototypeReview/telegramAnswer";
+import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -93,6 +98,97 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
+test.each([true, false])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (owner tier %s)", async ownerTier => {
+  const round = telegramRound(); saveTasks([telegramTask([round])]);
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = ownerTier;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let selections = 0, launches = 0;
+  const previous = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
+  const text = `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
+  const request = { ...contextRequest, request_id: "prototype-owner", answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
+    ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+    conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
+  try {
+    const ports = { command: "/missing-prototype-cli", ownerPorts: { launch: async () => { launches++; throw new Error("must not spawn"); },
+      observe: async () => ({ state: "failed" as const }), stop: async () => {} } };
+    const [result, duplicate] = await Promise.all([runClaimedRequest(paired, request, undefined, ports), runClaimedRequest(paired, request, undefined, ports)]);
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "m1" } });
+    if (result?.outcome === "answered") expect(result.answer.text).toContain("✅ Записав рішення");
+    expect(duplicate).toBeNull(); expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
+    const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
+    expect(decision).toMatchObject({ chosen: [2], comment: "Keep these controls.", answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
+    expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
+    expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
+    expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.profile).toMatchObject({ owner: true, prototype: round.id });
+    expect(readRunLedger().runs).toEqual([]);
+    const persisted = JSON.stringify(loadTasks());
+    const replay = await runClaimedRequest(paired, { ...request, lease_id: "repeat-".repeat(4) }, undefined, ports);
+    expect(replay).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "m1" } });
+    expect(JSON.stringify(loadTasks())).toBe(persisted);
+    expect(selections).toBe(0); expect(launches).toBe(0);
+  } finally { accountManager.resolveHeadlessSpawn = previous; await server.close(); }
+});
+
+for (const scenario of ["invalid", "lease-lost", "revoked", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
+  const round = telegramRound(); saveTasks([telegramTask([round])]);
+  const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = scenario !== "disabled";
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      if (scenario === "lease-lost") return { status: 409, body: { error: { code: "lease_lost", message: "gone" } } };
+      if (scenario === "revoked") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
+      if (scenario === "disabled") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, enabled: false }] }] }));
+    }
+    return { body: { status: "ok" } };
+  });
+  paired.api_base = `${server.origin}/v1`; paired.origin = server.origin;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const text = prototypeCopyLine(round, 2).replace("1a 2a 3a", scenario === "invalid" ? "1f 2a 3a" : "1a 2a 3a");
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: `prototype-${scenario}`, answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true }, conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } },
+      undefined, { command: "/missing-prototype-cli" });
+    if (scenario === "invalid") {
+      expect(result).toMatchObject({ outcome: "answered" });
+      if (result?.outcome === "answered") expect(result.answer.text).toContain("Не записав:");
+    } else if (scenario === "lease-lost") expect(result).toBeNull();
+    else expect(result).toMatchObject({ outcome: "failed" });
+    expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toBeUndefined();
+  } finally { await server.close(); }
+});
+
+for (const scenario of ["member", "owner-off-unknown", "unknown", "decided", "superseded"] as const) test(`prototype ${scenario} text follows the ordinary relay path`, async () => {
+  const round = telegramRound();
+  const held = telegramTask([round]);
+  if (scenario === "decided") round.decision = { chosen: [1], comment: "Earlier", at: round.createdAt,
+    delivery: { state: "no-orchestrator", conversationId: null, clientMessageId: "decision", text: "decision" } };
+  if (scenario === "superseded") held.prototypeReviews!.push(telegramRound("next"));
+  saveTasks(scenario === "unknown" || scenario === "owner-off-unknown" ? [] : [held]);
+  const before = JSON.stringify(loadTasks());
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = scenario !== "owner-off-unknown";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let launches = 0;
+  const text = prototypeCopyLine(round, 2);
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: `ordinary-${scenario}`, answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: scenario !== "member" },
+        tools: [], conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } }, undefined, {
+      command: stub("const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Normal',reply_to:'m1'}));"),
+      ownerPorts: { launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_ordinary" } }; },
+        observe: async () => ({ state: "ended", finalText: "Normal" }), stop: async () => {}, pollMs: 5 },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Normal" } });
+    expect(launches).toBe(scenario === "member" || scenario === "owner-off-unknown" ? 0 : 1);
+    expect(JSON.stringify(loadTasks())).toBe(before);
+  } finally { await server.close(); }
+});
+
 test("an unsafe provider home declines as a profile error before launch", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
@@ -1612,10 +1708,10 @@ for (const status of ["ok", "error"] as const) test(`E3 owner admitted ${status}
 test("X4 six owner runs extend the existing X2 capture format", async () => {
   const capture: { name: string; x1: unknown; calls: unknown[]; completion: unknown }[] = [];
   const grid = "00000000-0000-0000-0000-000000000000";
-  const page = "p".repeat(43);
+  const page = "public-next-page";
   const plans: Record<string, string> = {
     reads: `if(round===1||round===3)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{grid_id:'${grid}',cursor:'public-query-cursor',limit:2})]};
-      if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{},'${page}')]};return reply;`,
+      if(round===2){const page=JSON.parse(results.at(-1).output);return {action:'call',text:'',reply_to:null,calls:[call('owner_list_grid_chats',{grid_id:'${grid}',cursor:page.next_cursor,limit:2})]};}return reply;`,
     writes: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid A'}}),call('owner_list_grids',{})]};
       if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('owner_create_grid',{body:{name:'Grid B'}})]};
       if(round===3)return {action:'call',text:'',reply_to:null,calls:[call('owner_attach_grid_chats',{grid_id:'${grid}',body:{owned:[101]}})]};
@@ -1650,12 +1746,14 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
           let result: Partial<ToolCallResult> = { tool, calls_remaining: 16 - admitted.size, replayed };
           let sample = "owner_ok";
           if (name === "reads") {
-            result = { ...result, effect: "read", output: "[101,102]" };
-            if ("tool" in body && attempt === 1) { sample = "owner_pending"; result = { ...result, status: "pending", output: "", retry_after_s: 1 }; }
-            else if ("tool" in body) { sample = "owner_cursor_replayed"; result = { ...result, truncated: true, cursor: page }; }
-            else sample = "owner_last_page";
+            const last = "arguments" in body && body.arguments?.cursor === page;
+            const item = { chat_id: last ? 102 : 101, name: last ? "Chat B" : "Chat A", username: null,
+              avatar_url: null, total_participants: 2, synced_section_count: 0 };
+            result = { ...result, effect: "read", output: JSON.stringify({ items: [item], next_cursor: last ? null : page }) };
+            if (!last && attempt === 1) { sample = "owner_pending"; result = { ...result, status: "pending", output: "", retry_after_s: 1 }; }
+            else sample = last ? "owner_last_page" : "owner_first_page";
           } else if (name === "inner_404") {
-            result = { ...result, effect: "read", ...(tool === "owner_get_grid" ? { status: "error", output: '{"http_status":404,"message":"Grid not found"}' } : {}) };
+            result = { ...result, effect: "read", ...(tool === "owner_get_grid" ? { status: "error", output: '{"http_status":404,"message":"Grid not found"}' } : { output: '{"items":[]}' }) };
             sample = tool === "owner_get_grid" ? "owner_inner_404" : "owner_ok";
           } else if (name === "confirmation") {
             sample = "owner_confirmation_pending";
@@ -1666,6 +1764,8 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
             const name = (body.arguments!.body as { name: string }).name;
             result.output = JSON.stringify({ grid_id: name === "Grid A" ? grid : "00000000-0000-0000-0000-000000000001", kind: "settings", name });
           }
+          else if (tool === "owner_list_grids") result.output = '{"items":[]}';
+          else if (tool === "owner_activate_clone") result.output = JSON.stringify({ bot_id: 42, status: "active", webhook_url: "https://hooks.example/clone" });
           const response = ownerResponse(body, result);
           entry.attempts.push({ request: body, x1_sample: sample, response: response.body });
           return response;
@@ -1675,8 +1775,12 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
       } else expect(run.completion?.outcome).toBe(name === "retry_ceiling" ? "declined" : "answered");
       if (name === "reads") {
         expect(run.calls).toHaveLength(3); expect(run.calls[1]).toEqual(run.calls[0]);
-        expect(run.calls[2]).toEqual(callBody(run.request, { cursor: page }));
+        expect(run.calls[2]).toEqual(callBody(run.request, { tool: "owner_list_grid_chats", arguments: { grid_id: grid, cursor: page, limit: 2 } }));
         expect(projectionsOf(run, 3)).toHaveLength(2); // cached repetition grows no prompt
+        const outputs = calls.map((call) => (call.attempts.at(-1)!.response as ToolCallResult).output);
+        expect(projectionsOf(run, 3).map((result: { output: string }) => result.output)).toEqual(outputs);
+        expect(outputs.map((output) => JSON.parse(output).next_cursor)).toEqual([page, null]);
+        expect(projectionsOf(run, 3).every((result: { truncated: boolean; next_cursor?: string }) => !result.truncated && result.next_cursor === undefined)).toBe(true);
       }
       if (name === "writes") {
         expect(run.calls.map((call) => "tool" in call && call.tool)).toEqual([
@@ -1685,6 +1789,7 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(run.rounds[1].prompt).toContain("further distinct owner writes requested");
         expect(projectionsOf(run, 3).at(-1).output).toBe("");
         expect(run.rounds[4].prompt).toContain("11 calls are left.");
+        expect(projectionsOf(run, 4).at(-1).output).toBe((calls.at(-1)!.attempts.at(-1)!.response as ToolCallResult).output);
       }
       if (name === "retry_ceiling") {
         expect(run.calls).toHaveLength(4); expect(new Set(run.calls.map((call) => JSON.stringify(call))).size).toBe(1);
@@ -1703,6 +1808,11 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(run.rounds[1].prompt).not.toContain("2026-10-10T00:10:00Z");
         expect(run.rounds[1].prompt).toContain("nothing you can call confirms it");
         expect(run.rounds[1].schema).toEqual(answerSchema);
+      }
+      // The regeneration command selects this test alone. Refuse malformed
+      // R8 bodies here as well as in the committed-capture regression.
+      for (const call of calls) for (const attempt of call.attempts) {
+        if (attempt.response) assertOwnerCaptureResponse(attempt.response);
       }
       capture.push({ name, x1: { amendment_revision: "03de6455", amendment_sha256: "0a0e746a0868d7e5c81be9bdd12219205506f4cee082bb0126e2e82c89af050e",
         claim: "claimed_tools_owner_tools.json", claim_source: "local I10 owner index over unchanged X1 2b claim", index: "owner-tools-index.json" }, calls,
@@ -2162,6 +2272,61 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
 }, 30000);
 
 
+test("unresolved short owner approval asks one question without account selection or work", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const select = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => { throw new Error("a clarification needs no agent account"); });
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner-clarification", answer: { max_chars: 1000, progress: "none" },
+      input: { ...contextRequest.input, request_text: "го", requester: { ...contextRequest.input.requester, is_owner: true },
+        conversation: contextRequest.input.conversation.map(message => ({ ...message, text: "/ai го" })) } });
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining("Що саме підтверджуєте?") } });
+    expect(select).not.toHaveBeenCalled();
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { select.mockRestore(); await server.close(); }
+});
+
+test("runner freezes the stored report context into owner custody and the launched prompt", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { appendBridgeReports, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
+  const { recordPublishedRelayReference } = await import("./publishedReferences");
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const directory = path.join(process.env.LLV_STATE_DIR!, "telegram");
+  fs.mkdirSync(directory, { recursive: true });
+  const filename = path.join(directory, "bot.sqlite");
+  const db = new Database(filename);
+  db.exec("CREATE TABLE chats (chat_id TEXT PRIMARY KEY, alias TEXT)");
+  const chatId = String(2 ** 6), messageId = 2 ** 5;
+  db.query("INSERT INTO chats VALUES (?, ?)").run(chatId, "report-room");
+  db.close();
+  const body = "Create a clone with one button? Confirm the start.";
+  const report = appendBridgeReports([{ key: "owner-report", project: "project-b", targetSeatConversationId: "seat-b",
+    origin: { kind: "manager", conversationId: "seat-b", role: "orchestrator" }, class: "question", at: new Date().toISOString(), body,
+    telegram: { chat: "report-room", html: body } }]).appended[0];
+  recordBridgeReportTelegram(report.id, { state: "sent", messageIds: [messageId], at: new Date().toISOString() });
+  recordPublishedRelayReference(paired.api_base, "/targets/target_1/messages", "POST", { chat_id: Number(chatId), message_id: messageId }, 200, { message_key: "posted-report", replayed: false });
+  let launches = 0;
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner-report-reply", answer: { max_chars: 1000, progress: "none" },
+      input: { ...contextRequest.input, request_text: "го", requester: { ...contextRequest.input.requester, is_owner: true },
+        conversation: contextRequest.input.conversation.map(message => ({ ...message, text: "/ai го", reply_to: "posted-report" })) } }, undefined,
+      { ownerPorts: { launch: async input => { launches++; expect(input.prompt).toContain(body); return { status: 202, body: { conversationId: "conversation_report_reply" } }; },
+        observe: async () => {
+          expect(readRunLedger().runs.find(run => run.requestId === "owner-report-reply")?.ownerTurn).toMatchObject({
+            request: { text: "/ai го", requestText: "го" }, bridgeReport: { project: "project-b", sourceSeat: "seat-b", reportText: body },
+          });
+          return { state: "ended", finalText: "Передано до місця проєкту." };
+        }, stop: async () => {}, pollMs: 1 } });
+    expect(result).toMatchObject({ outcome: "answered" });
+    expect(launches).toBe(1);
+  } finally { await server.close(); fs.rmSync(filename, { force: true }); }
+});
+
 for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "invalid_request"] as const)
   test(`owner tier runner: ${scenario}`, async () => {
     const { contextRequest } = await import("./request.fixture");
@@ -2192,7 +2357,8 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
         ownerPorts: {
           launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_owner_runner" } }; },
           observe: async () => {
-            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null });
+            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null,
+              ownerTurn: { request: { text: contextRequest.input.conversation[0]!.text, requestText: null } } });
             if (!beats.length || scenario === "lease_lost" || scenario === "hard_cap") return { state: "running" };
             return { state: "ended", finalText: "Owner reply" };
           },

@@ -7,6 +7,17 @@ import path from "node:path";
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
 
+// Fixture executors clear inherited Git configuration too; keep the caller's
+// count consistent with the configuration available to their child processes.
+const inheritedGitConfig: Record<string, string> = {};
+for (const key of Object.keys(process.env)) {
+  if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/.test(key)) {
+    inheritedGitConfig[key] = process.env[key]!;
+    delete process.env[key];
+  }
+}
+afterAll(() => Object.assign(process.env, inheritedGitConfig));
+
 /* Isolated state only: this suite drives the production pipeline controller
    over a store of its own and must never read or write the operator's. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-commit-repair-"));
@@ -93,7 +104,7 @@ function hookedRepo() {
     stages: [], runs: [], cursor: null, state: "running", pausedState: null, stateDetail: null,
     srcPath: null, srcConversationId: null, createdAt: "now", closedAt: null,
   } as unknown as Pipeline;
-  return { root, repo, exec, run, calls, subject, hookMode: (mode: HookMode) => fs.writeFileSync(path.join(repo, ".git", `hook-${mode}`), "") };
+  return { root, repo, env, exec, run, calls, subject, hookMode: (mode: HookMode) => fs.writeFileSync(path.join(repo, ".git", `hook-${mode}`), "") };
 }
 
 function writeOutput(repo: string, relative: string, content: string) {
@@ -181,6 +192,41 @@ test.each(["local", "unrelated", "dangling", "dangling-parent", "unignored"] as 
     else if (mode === "dangling") expect(fs.readlinkSync(local)).toBe("missing-install");
     else if (mode === "dangling-parent") expect(fs.readlinkSync(local)).toBe(path.resolve(box.repo, "node_modules"));
     else expect(fs.existsSync(local)).toBe(false);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("a passed output commits through a hook that waits longer than the old sixty-second budget", async () => {
+  const box = hookedRepo();
+  try {
+    const hook = path.join(box.repo, ".git", "hooks", "pre-commit");
+    fs.writeFileSync(hook, "#!/bin/sh\necho 'pre-commit: waiting for admission' >&2\nsleep 61\ngit diff --cached --check\n", { mode: 0o755 });
+    writeOutput(box.repo, OUTPUT, "passed output\n");
+    const started = Date.now();
+    const exec: ExecPort = (command, args, cwd, env, options) => realExec(command, args, cwd, { ...box.env, ...env }, options);
+    const committed = await commitPipelineStage(box.subject, "study", false, exec, ["evidence/draft"], box.subject.lastPassedCommit);
+    expect(committed.ok).toBeTrue();
+    expect(Date.now() - started).toBeGreaterThan(60_000);
+    expect(box.run("show", "--format=", "--name-only", "HEAD")).toBe(OUTPUT);
+    expect(box.run("rev-parse", "HEAD")).not.toBe(box.subject.lastPassedCommit!);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 90_000);
+
+test("an expired real commit keeps its staged output and retries through the same hook", async () => {
+  const box = hookedRepo();
+  try {
+    const hook = path.join(box.repo, ".git", "hooks", "pre-commit");
+    fs.writeFileSync(hook, "#!/bin/sh\nsleep 5\ngit diff --cached --check\n", { mode: 0o755 });
+    writeOutput(box.repo, OUTPUT, "passed output\n");
+    const exec: ExecPort = (command, args, cwd, env, options) => realExec(command, args, cwd, { ...box.env, ...env },
+      args[0] === "commit" ? { ...options, timeoutMs: 100 } : options);
+    const timedOut = await commitPipelineStage(box.subject, "study", false, exec, ["evidence/draft"], box.subject.lastPassedCommit);
+    expect(timedOut).toMatchObject({ ok: false, deferred: true, commitTimeout: true });
+    expect(timedOut.commitRefusal).toBeUndefined();
+    expect(box.run("rev-parse", "HEAD")).toBe(box.subject.lastPassedCommit!);
+    expect(box.run("diff", "--cached", "--name-only")).toBe(OUTPUT);
+    fs.writeFileSync(hook, "#!/bin/sh\ngit diff --cached --check\n", { mode: 0o755 });
+    const retried = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
+    expect(retried.ok).toBeTrue();
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
@@ -285,6 +331,7 @@ test("a real lint refusal of another file whose name ends like the staged one is
 
 function harness(options: { access?: "read-only" | "read-write" } = {}) {
   const access = options.access ?? "read-write";
+  const index = path.join(fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "index-fixture-")), "index");
   const requests: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string; cohortAt?: string }> = [];
   let wall = Date.parse("2026-10-07T09:00:00.000Z");
   let turn: StageTurnEvidence = { turn: "busy", message: null, lastRecordAt: wall };
@@ -302,13 +349,19 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
   let committedBody = "";
   let ancestry: ExecResult = { code: 0, stdout: "", stderr: "" };
   let branchRef: ExecResult | null = null;
+  let reconciliationStarted = false;
   const calls: string[] = [];
   const ports: PipelinePorts = {
     exec: (rawCommand, rawArgs) => {
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
-      if (args[0] === "merge-base" && args[1] === "--is-ancestor") return ancestry;
-      if (args[0] === "symbolic-ref" && branchRef) return branchRef;
+      if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+        if (ancestry.code === 1) reconciliationStarted = true;
+        return ancestry;
+      }
+      if (args[0] === "symbolic-ref") return reconciliationStarted && branchRef
+        ? branchRef : { code: 0, stdout: `refs/heads/${loadPipelines()[0]?.branch ?? "main"}\n`, stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--git-path") && args.at(-1) === "index") return { code: 0, stdout: `${index}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--verify") return { code: 0, stdout: `${BASE_SHA}\n`, stderr: "" };
@@ -528,6 +581,121 @@ test("a commit retry holds uncertain repair delivery until a later terminal turn
   await tickPipelines([], h.ports);
   expect(study().state).toBe("passed");
   expect(h.spawnCount()).toBe(1);
+});
+
+test.each(["read-only", "read-write"] as const)("a %s commit deadline retries across ticks without a repair or a park", async (access) => {
+  const h = harness({ access });
+  const scheduled: number[] = [];
+  const budgets: Array<number | undefined> = [];
+  h.ports.scheduleTick = delay => { scheduled.push(delay ?? 0); };
+  const original = h.ports.exec;
+  h.ports.exec = (command, args, cwd, env, options) => {
+    if (args[0] === "commit") budgets.push(options?.timeoutMs);
+    return original(command, args, cwd, env, options);
+  };
+  await runningStage(h, access);
+  h.hookAnswers({ code: null, stdout: "", stderr: "command timed out after 900000ms: pre-commit: eslint", signal: "SIGKILL" });
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  for (let failure = 1; failure <= 4; failure++) {
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("running");
+    expect(current.cursor?.state).toBe("committing");
+    expect(study().verdict?.status).toBe("pass");
+    expect(study().commitRepair).toBeUndefined();
+    expect(study().stageCommitWait?.failures).toBe(failure);
+    expect(current.stateDetail).toContain("controller will retry");
+    const delay = Date.parse(study().stageCommitWait!.retryAt) - Date.parse(h.ports.now());
+    expect(scheduled).toContain(delay);
+    // A fresh read/tick retains the durable backoff and makes no early commit.
+    h.advance(delay - 1);
+    await tickPipelines([], h.ports);
+    expect(budgets).toHaveLength(failure);
+    h.advance(1);
+    if (failure === 4) h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+    await tickPipelines([], h.ports);
+  }
+  expect(budgets.every(budget => budget === 15 * 60_000)).toBeTrue();
+  expect(h.requests).toHaveLength(0);
+  expect(study().state).toBe("passed");
+  expect(study().stageCommitWait).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("verify");
+  expect(loadPipelines()[0]!.stateDetail).toBeNull();
+});
+
+test("a hook refusal after a controller timeout still requests file repair", async () => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.hookAnswers({ code: null, stdout: "", stderr: "command timed out after 900000ms: waiting" });
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  expect(h.requests).toHaveLength(0);
+  h.advance(TICK_MS);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  await tickPipelines([], h.ports);
+  expect(h.requests).toHaveLength(1);
+  expect(study().commitRepair?.detail).toContain(WHITESPACE_REFUSAL);
+  expect(study().verdict?.status).toBe("pass");
+  h.advance(TICK_MS); h.endTurn("Removed trailing whitespace.");
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  await tickPipelines([], h.ports);
+  expect(study().state).toBe("passed");
+  expect(study().stageCommitWait).toBeUndefined();
+  expect(h.requests).toHaveLength(1);
+});
+
+test("a controller deadline after file repair does not spend the repaired commit", async () => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(TICK_MS); h.endTurn("Removed trailing whitespace.");
+  h.hookAnswers({ code: null, stdout: "", stderr: "command timed out after 900000ms: waiting" });
+  await tickPipelines([], h.ports);
+  expect(study().commitRepair?.recommit).toBeUndefined();
+  expect(study().stageCommitWait?.failures).toBe(1);
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  await tickPipelines([], h.ports);
+  expect(h.requests).toHaveLength(1);
+  expect(study().state).toBe("passed");
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("verify");
+});
+
+test("a crash after checkpointing a commit deadline preserves its automatic retry", async () => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.hookAnswers({ code: null, stdout: "", stderr: "command timed out after 900000ms: waiting" });
+  h.advance(1_000); h.endTurn(PASS);
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const prototype = SqliteStateCollection.prototype as InstanceType<typeof SqliteStateCollection<Pipeline>>;
+  const original = prototype.mutate;
+  let crashed = false;
+  prototype.mutate = function<R>(
+    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => void) => Promise<R> | R,
+    ...args: [Parameters<typeof original>[1]?, boolean?, number?, ((heldMs: number) => void)?]
+  ): Promise<R> {
+    return original.call(this, (records, persist) => operation(records, changed => {
+      persist(changed);
+      if (!crashed && loadPipelines()[0]?.runs[0]?.attempts[0]?.stageCommitWait) {
+        crashed = true;
+        throw new Error("crash after commit deadline checkpoint");
+      }
+    }), ...args) as Promise<R>;
+  };
+  try {
+    await expect(tickPipelines([], h.ports)).rejects.toThrow("crash after commit deadline checkpoint");
+  } finally { prototype.mutate = original; }
+  expect(study().stageCommitWait?.failures).toBe(1);
+  expect(study().state).toBe("committing");
+  h.advance(TICK_MS);
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  await tickPipelines([], h.ports);
+  expect(study().state).toBe("passed");
+  expect(h.requests).toHaveLength(0);
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("verify");
 });
 
 test.each(["blocked", "deadline"] as const)("a rejected %s repair replays as parked after a crash at its settled checkpoint", async (kind) => {

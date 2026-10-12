@@ -938,6 +938,7 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(deniedSettingsIndex).toBeGreaterThanOrEqual(0);
     expect(deniedCapture.args).toContain("Task,Agent,Workflow,TeamCreate,TeamDelete,SendMessage");
     expect(deniedSettings.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
+    expect(deniedSettings.hooks.PreToolUse.some((group) => group.matcher === "Bash")).toBe(true);
     expect((await denied.health()).activeFlags).toContain(NATIVE_MULTI_AGENT_DENY_FLAG);
     await denied.release();
 
@@ -961,6 +962,7 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(allowedSettingsIndex).toBeGreaterThanOrEqual(0);
     expect(allowedCapture.args).not.toContain("--disallowedTools");
     expect(allowedSettings.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(false);
+    expect(allowedSettings.hooks.PreToolUse.some((group) => group.matcher === "Bash")).toBe(true);
     expect((await allowed.health()).activeFlags).not.toContain(NATIVE_MULTI_AGENT_DENY_FLAG);
     await allowed.release();
   });
@@ -1021,7 +1023,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedMcp = JSON.parse(fs.readFileSync(adoptedMcpPath, "utf8"));
     expect(freshSettings.theme).toBe("shared-dark");
     expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...agentPublicationIdentityEnv({}) });
-    expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
+    expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Bash", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
     // Each hosted generation has its own FIFO hook receipt queue. Native
     // settings and policy remain identical across fresh/adopted launches.
     const omitMemoryHook = (settings: typeof adoptedSettings) => ({ ...settings,
@@ -1061,6 +1063,7 @@ describe("ClaudeStreamBrokerHost", () => {
       hooks: { PreToolUse: Array<{ matcher: string }> };
     };
     expect(legacyProfile.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
+    expect(legacyProfile.hooks.PreToolUse.some((group) => group.matcher === "Bash")).toBe(true);
     expect(fs.readFileSync(legacySettingsPath, "utf8")).toBe(legacySettings);
     await legacy.release();
   });
@@ -1068,10 +1071,11 @@ describe("ClaudeStreamBrokerHost", () => {
   test("confirms delivery from an exact direct user echo without a replay marker", async () => {
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);
+    const eventStore = new MemoryEventStore();
     const host = await ClaudeStreamBrokerHost.start({
       cwd: "/repo",
       deliveryLedger: ledger,
-      eventStore: new MemoryEventStore(),
+      eventStore,
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
       spawnProcess: fakeSpawn(child, {}),
     });
@@ -1081,8 +1085,14 @@ describe("ClaudeStreamBrokerHost", () => {
     child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "wrong-role", message: { role: "tool", content: [{ type: "text", text: "match me" }] } });
     await Bun.sleep(0);
     expect(settled).toBeFalse();
+    const beforeEcho = Date.now();
     child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "ordinary", message: { role: "user", content: [{ type: "text", text: "match me" }] } });
     expect(await sent).toEqual({ outcome: "turn-started", turnId: "replay-only" });
+    const echo = eventStore.load(host.identity.sessionId).findLast(event => event.kind === "item") as { deliveryEcho?: { operationId: string; at: string } };
+    expect(echo.deliveryEcho?.operationId).toBe("replay-only");
+    expect(echo.deliveryEcho?.at).toBeString();
+    expect(Date.parse(echo.deliveryEcho!.at)).toBeGreaterThanOrEqual(beforeEcho);
+    expect(Date.parse(echo.deliveryEcho!.at)).toBeLessThanOrEqual(Date.now());
     await host.release();
   });
 
@@ -1951,11 +1961,13 @@ describe("ClaudeStreamBrokerHost", () => {
       subtype: "can_use_tool", tool_name: "Bash", input: { command: "rm -rf $R/*.json" },
       decision_reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json", decision_reason_type: "safetyCheck",
     } });
-    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [] } } });
+    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [] }, tool_use_id: "toolu_question" } });
     await Bun.sleep(0);
     const pending = await host.health();
     expect(pending.providerRetry).toBeNull();
     expect(pending.pendingAttention).toEqual(["permission-safety", "question"]);
+    /* The question is bound to the transcript tool use it answers; a permission is not. */
+    expect(pending.pendingToolUses).toEqual([{ id: "question", toolUseId: "toolu_question" }]);
     /* The question is the transcript's to surface; only the permission is listed. */
     expect(pending.pendingPermissions).toEqual([{
       id: "permission-safety",
@@ -1969,6 +1981,9 @@ describe("ClaudeStreamBrokerHost", () => {
     child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId, result: "done" });
     await Bun.sleep(0);
     expect((await host.health()).pendingPermissions).toEqual([]);
+    child.emitJson({ type: "control_cancel_request", request_id: "question" });
+    await Bun.sleep(0);
+    expect((await host.health()).pendingToolUses).toBeUndefined();
     await host.release();
   });
 

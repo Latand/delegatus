@@ -2,7 +2,7 @@
 
 import type { AccountLimits } from "@/hooks/useEngineAccounts";
 import type { TFunction } from "@/lib/i18n";
-import { quotaReadingFromAccountLimits, reconcileQuotaReadings } from "@/lib/rateLimit";
+import { quotaReadingFromAccountLimits, reconcileQuotaReadings, weeklyQuota } from "@/lib/rateLimit";
 
 import { barColor } from "./LimitRow";
 import { ReserveBar } from "./railFooterDensity";
@@ -26,9 +26,9 @@ export interface WeeklyLeft {
 
 /** Null without a weekly reading: no bar and no percent, never a made-up 0 % or 100 %. */
 export function accountWeeklyLeft(limits: AccountLimits | null | undefined, now: number, engineColor: string): WeeklyLeft | null {
-  const weekly = reconcileQuotaReadings(null, quotaReadingFromAccountLimits(limits), now).weekly;
+  const weekly = weeklyQuota(reconcileQuotaReadings(null, quotaReadingFromAccountLimits(limits), now));
   if (!weekly) return null;
-  const left = Math.max(0, Math.min(100, 100 - weekly.value.usedPercent));
+  const left = weekly.percent;
   return { left, color: barColor(left, engineColor), resetsAt: weekly.value.resetsAt, windowMinutes: weekly.value.windowMinutes ?? null };
 }
 

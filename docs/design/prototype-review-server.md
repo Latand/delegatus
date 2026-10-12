@@ -98,22 +98,50 @@ replica sets `historyTruncated`; complete history remains on its owner. A linked
 read shows `unavailable: "another-installation"` and cannot
 save a decision or dispatch its message.
 
-Only the operator can decide. A decision is immutable, persisted before sending,
-and retains its recipient and deterministic message key. The existing composer
-send path admits it with operator origin and the exact comment inside the
-message. Receipt and admission-ledger recovery handle reloads, lost acknowledgements
-and compacted keys. A failed operation retries through the existing retry route;
-unknown delivery waits for evidence. With no designated seat the decision stays
-saved as `no-orchestrator`; an explicit retry can resolve a subsequently seated
-orchestrator. No automatic resend occurs on a read.
+Only the operator can decide. The decision answers as soon as it is recorded:
+the route validates it, writes it with its recipient and deterministic message
+key, and returns. The review collapses into the saved decision as soon as that
+answer comes back, and shows how its message goes in one quiet line: saved, on
+its way, delivered. Nothing the operator does waits on the seat. Until the
+record is written the review claims nothing and keeps the choice and the words:
+a close pressed meanwhile waits for the answer and closes once the decision is
+written, or leaves the review open with the reason when the save is refused. A
+review closed by a second press or replaced by another task's review while its
+save is in flight keeps a refused save's choice, words and reason for that
+task's next opening.
 
-A Viewer stopped between the saved decision and the message's admission leaves
-a decision whose message was never sent. Reads take the decision's lock, so no
-send is in flight when one looks: a message the send path has no record of is
-then recorded as `failed`, which is what offers the retry. The retry checks
-admission and receipt again before it sends, so repeating it, or reloading,
-never sends twice, and a message that is in flight stays `pending` with no
-retry.
+The message goes from the background delivery (`deliveryWorker.ts`). The route
+starts an attempt at once; the release that owns traffic sweeps every owed
+decision when it starts and then runs a one-second clock with a full rescan a
+minute. A decision recorded while the Viewer restarted or a deploy ran is
+therefore attempted by the next boot. Attempts for one round are serialized by
+the round's decision lock and are idempotent by the message key. A message
+never handed to the send path goes at once, to whoever holds the project's
+seat at that moment, so a seat rotated during a deploy receives it; the mark
+`dispatchedAt` is written before the hand-over. A message that was handed over
+is recovered from its receipt, the admission ledger and the journal first: a
+failure the journal proves never ran goes again through the existing retry
+route under the same key, unknown delivery waits for evidence, and a message
+the seat holds behind its running turn is asked about every few seconds and
+never sent twice. Failed or unconfirmed attempts back off from 2 seconds to 5
+minutes. An earlier attempt the journal shows failed counts as a failure even
+when the runtime admits its retry, so the count and the time the failures began
+end only when the message lands or the operator sends it again. With no designated seat the decision stays saved as `no-orchestrator`
+and goes once a seat exists.
+
+A message that keeps failing for five minutes asks for the operator's
+attention: the review's line turns into a warning with «Send again», the card's
+button is marked undelivered, and the needs-you list carries the decision as a
+`prototype` entry with `undelivered`, which has no «Dismiss» and clears once
+the message lands. «Send again» starts the backoff and the five minutes over and
+attempts at once. The phase is derived on each local read and never crosses to
+another installation; the linked wire keeps its state-only shape.
+
+The same decision again changes nothing. A changed decision replaces the
+earlier one while that one was never handed to the send path, and otherwise
+goes as an amendment under a key of its own, its message saying which decision
+it replaces. A record written before the hand-over mark existed counts as
+handed over unless it never had a seat.
 
 The decision's lock is one per round, and taking it leaves a queue directory
 beside the store's copies. The next publication removes the queue and any lock
@@ -135,10 +163,13 @@ The interface imports client-safe contracts from
   round; nothing is removed, and such a round can still be decided by hand.
 - `usePrototypeReview(taskId, enabled)` returns `data`, `loading`, `error`,
   `saving`, `refresh`, `save({reviewId, chosen, comment})` and `retry(reviewId)`.
+  A save or a retry shows its outcome before the server answers and puts back
+  what was there if the server refuses it.
   It polls while open, cancels reads on close and discards stale task responses.
   Each media entry includes `available` and `url`; an original stays beside its
   changed frame. Pair and viewer labels combine the variant's number, name and
-  the frame's caption. `decision.delivery` exposes state and retry availability.
+  the frame's caption. `decision.delivery` exposes state and retry availability,
+  and on the installation that delivers it the `phase` the review shows.
 - `usePrototypeReviewNotices(tasks, project)` returns one notice per waiting
   task and `needsYouCount`. `/api/files` also exposes `prototypeReviewNotices`.
   A waiting review is an entry of the one needs-you queue

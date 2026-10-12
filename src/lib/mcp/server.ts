@@ -63,6 +63,7 @@ export const MCP_TOOL_NAMES = [
   "pipeline_action",
   "stage_report",
   "leave_lesson",
+  "curate_rules",
   "link_task_to_pipeline",
   "list_conversations",
   "search_transcripts",
@@ -132,6 +133,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      clientRequestId must answer with the rules the first call left rather than
      leave them a second time. */
   "leave_lesson",
+  "curate_rules",
   "link_task_to_pipeline",
   "deploy_exact_sha",
   "flow_action",
@@ -3325,6 +3327,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
     "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
   ].join(" "),
+  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes; scope reads page its active rules, versions, budget archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. Writes stay in local memory. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
     "Answer the lesson request after stage_report exactly once with none (the default), rewrite {id, rule, why}, or lesson {scope, role?, rule, why}.",
     "A new lesson must change what this role does on a different task and use the narrowest true level: own-role work here; every role in this project; or every role in every project on this machine. The curator alone widens role rules across projects.",
@@ -3346,7 +3349,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_flow: "Read one implement-review flow by durable id.",
   flow_action: "Apply a supported action to an implement-review flow. agent-decision durably submits an owner decision for one exact revision, HEAD, round, turn and optional pipeline stage attempt. Use submit-review, continue-fixing, stop or completed with a reason. Accepted decisions await authoritative completion of that same turn. Replay the original clientRequestId to recover its receipt. completed records a comment outcome and never grants review approval.",
   list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
-  conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
+  conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
   list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
@@ -3374,6 +3377,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
     "With target, clear one conversation reason, parked lane, report question or waiting prototype round; task targets include the waiting round. Only the operator's root/gateway session and this project's designated seat may clear. Its maintainer may read and cannot clear; workers and unidentified callers are refused. Update decisions stay answer-only.",
     'Targets: {kind:"conversation",conversationId|path,reasonId}, {kind:"pipeline",pipelineId,laneMovedAt}, {kind:"report",seq}, {kind:"prototype",taskId,reviewId}, {kind:"task",taskId}. Optional reason is one line up to 200 characters, retained beside server attribution in the read\'s cleared list. undo:true restores the mark. New reasons and rounds ask again. Dismissal resolves a report question in its log and leaves prototype choices open. pipeline_action dismiss/undismiss is the same lane write.',
+    "A worker's ask, question, plan, memory kill or permission request and a parked lane in a project with a seat wait on that seat first and are off the operator's list; your wakes name them. Answer each where it asked (send_message to the conversation, conversation_action answer or permission, pipeline_action resolve-decision or accept-head). Only when the operator alone can decide, ask them in a decision form (publish_prototype_review with questions, in their language), then pass escalate {reviewId} with a conversation target and its reasonId, or a pipeline target: the form's row stands for the wait until they answer, and their answer comes to you to carry back. undo:true withdraws it.",
   ].join(" "),
   bridge_report: [
     "Append one report to the durable bridge log: the report log beside the orchestrator chat, the voice relay, and, for the designated orchestrator of a project that set one, the project's Telegram chat, posted by Delegatus from the same report. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
@@ -3385,7 +3389,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_orchestrator: "Read a project's designated orchestrator: designation, health and activity, model and prompt version, transcript size, message/tool/compaction counts, context usage against its model's configured window (clearly labelled when estimated), predecessor lineage, and a bounded rotation recommendation — STRONGLY_RECOMMEND_ROTATION once usage reaches the configured threshold. Compact by default: the seat record without its mandate and role table, and counts for intentHistory and lineage; full:true returns them whole. Words only: it never rotates, creates, or interrupts anything itself.",
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
   send_message_to_orchestrator: [
-    "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. Workers, pipeline stages, deputies and unidentified callers are refused. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
+    "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. A live owner-tier relay verified by the paired service may also hand the owner's request to a designated seat with operator authority; the server quotes the original owner request and retains agent authorship. A resolved Telegram report reply includes the stored report and is bound to its project and source seat; forward the approval verbatim. Ask one short question for an unresolved ambiguous approval before creating work. Other workers, non-owner relays, pipeline stages, deputies and unidentified callers are refused. If a handoff fails, carry on with your available tools or explain the failure and the owner's concrete next action. Owner relay board tasks default to assigned so the seat tick can wake on unstarted-task; report the task and project, checking that a seat and its tick are enabled. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
     "For a shared project, pass machine as the linked machine label, install id or prefix; get_orchestrator names linkedSeats. Both machines must support seat messages. Unshared, revoked, unreachable and older peers are refused with project_not_linked, link_revoked, peer_unreachable or peer_cannot_relay. Only the shared project's seat sends remotely. Replies use the same tool back to the sending machine. A remote operationId has prefix seatmsg_; message_receipt reports queued, accepted or refused.",
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -3881,6 +3885,18 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     stageId: z.string().min(1).optional()
       .describe("Only when this conversation holds more than one live stage; the refusal lists them."),
   }).passthrough(),
+  curate_rules: z.object({
+    clientRequestId: clientRequestIdSchema,
+    action: z.enum(["read", "apply"]),
+    scope: z.string().min(1).max(512).optional(), cursor: z.string().max(2048).optional(),
+    scopes: z.array(z.object({ scope: z.string().min(1).max(512), revision: z.number().int().nonnegative(), order: z.array(z.string().min(1).max(128)).max(512) }).strict()).min(1).max(64).optional(),
+    rewrite: z.array(z.object({ id: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    merge: z.array(z.object({ into: z.string(), from: z.array(z.string()).min(1).max(512), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    move: z.array(z.object({ id: z.string(), to: z.string(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    split: z.array(z.object({ id: z.string(), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional() }).strict()).min(2).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    restore: z.array(z.string()).max(512).optional(),
+  }).strict().refine(args => args.action === "read" ? ![args.scopes, args.rewrite, args.merge, args.move, args.split, args.archive, args.restore].some(value => value !== undefined) : !!args.scopes && args.scope === undefined && args.cursor === undefined, "read takes scope/cursor; apply takes scopes and editorial operations"),
   leave_lesson: z.object({
     clientRequestId: clientRequestIdSchema,
     lesson: z.object({
@@ -4054,12 +4070,20 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     selectedContext: selectedContextSchema,
     targets: z.array(conversationArchiveTargetSchema).min(1).max(100).optional()
       .describe("Archive/unarchive list form. Cannot be combined with the single-target fields."),
-    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "archive", "unarchive"]),
+    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "archive", "unarchive"]),
     key: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "Tab", "Enter", "Escape"]).optional(),
     decision: z.enum(["allow", "deny"]).optional()
       .describe("permission only: allow once or deny the structured host's pending tool permission request."),
     requestId: z.string().optional()
-      .describe("permission only: the request to answer, when the conversation holds more than one; defaults to the oldest."),
+      .describe("permission: the request to answer, when the conversation holds more than one; defaults to the oldest. answer: the pending question or plan's reason id, required."),
+    answers: z.array(z.union([z.number().int(), z.array(z.number().int())])).optional()
+      .describe("answer only, for a question: one entry per question, the chosen option number counted from 1, or a list of them where the question takes several."),
+    text: z.string().optional()
+      .describe("answer only: a free answer to a single question instead of its options."),
+    approve: z.boolean().optional()
+      .describe("answer only, for a plan: approve it, or reject it."),
+    message: z.string().optional()
+      .describe("answer only, for a rejected plan: what the agent is told."),
     label: z.string().optional(),
     question: z.string().optional(),
   }).passthrough(),
@@ -4205,6 +4229,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     cursor: z.string().optional(),
     reason: z.string().max(200).optional().describe("One line retained beside who cleared the row."),
     undo: z.boolean().optional().describe("true brings back what an earlier dismissal cleared."),
+    escalate: z.object({
+      reviewId: z.string().min(1).max(200).optional().describe("The decision round publish_prototype_review answered; required unless undo."),
+    }).optional().describe("Hand a wait routed to you to the operator through a decision form instead of clearing it."),
   }).passthrough(),
   bridge_report: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -4222,6 +4249,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     coversOwed: z.boolean().optional().describe("true settles every outcome the seat tick owed whose wake reached you before this report."),
     body: z.string().optional().describe("Older free-text form, filed as one in-progress item per line. Prefer summary and sections."),
     correlatesDirective: z.string().optional().describe("clientRequestId of the directive this answers."),
+    answersDirective: z.boolean().optional().describe("With correlatesDirective: true when this report answers that request in full, false for progress, a partial answer or a question back."),
   }).passthrough(),
   bridge_directive: z.object({
     clientRequestId: clientRequestIdSchema,

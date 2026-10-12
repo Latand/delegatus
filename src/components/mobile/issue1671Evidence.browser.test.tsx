@@ -27,6 +27,7 @@ import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { runtimeScope } from "@/lib/runtime/contracts";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { destinationRelay, destinationTarget } from "@/lib/externalRelay/ownerDestination.fixture";
 
 /*
  * The phone's browser evidence driver: the real Viewer at phone width, in
@@ -1365,6 +1366,62 @@ async function admittedAgentEvidence(): Promise<{ feed: string; provenance: unkn
   }
 }
 
+/** Messages that reached the seat while its Claude turn ran. Claude journals
+ * each as a `queued_command` attachment between two tool results; the real
+ * ledger projection joins its `source_uuid` to the origin admitted with it. */
+const MID_TURN_DELIVERIES = [
+  { id: "mid-turn-voice", text: "Also check why my voice messages never show in the conversation.", origin: { kind: "operator", channel: "voice-delegatus" } },
+  { id: "mid-turn-builder", text: "Builder: the parser lane is green and its pull request is open.", origin: { kind: "agent", role: "builder" } },
+  { id: "mid-turn-operator", text: "Keep the fixture small; one transcript is enough.", origin: { kind: "operator" } },
+  { id: "mid-turn-tick", text: "Seat tick: two lanes are waiting on review.", origin: { kind: "agent", role: "seat-tick" } },
+] as const;
+
+function midTurnDeliveryEvidence(): { feed: string; provenance: unknown } {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mid-turn-evidence-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = sandbox;
+  setAgentRegistryForTests(new AgentRegistry(path.join(sandbox, "registry.json")));
+  try {
+    const session = path.basename(RUNNING_PATH, ".jsonl");
+    const ledger = new FileClaudeDeliveryLedger();
+    const start = Date.now() - 600_000;
+    const at = (seconds: number) => new Date(start + seconds * 1_000).toISOString();
+    const call = (index: number, seconds: number, text: string) => ({ type: "assistant", uuid: `mid-turn-call-${index}`, timestamp: at(seconds), sessionId: session,
+      message: { role: "assistant", content: [{ type: "text", text }, { type: "tool_use", id: `toolu_mid_turn_${index}`, name: "Bash", input: { command: `bun test src/components/feed --step ${index}` } }] } });
+    const result = (index: number, seconds: number) => ({ type: "user", uuid: `mid-turn-result-${index}`, timestamp: at(seconds), sessionId: session,
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_mid_turn_${index}`, content: "ok" }] } });
+    const rows: unknown[] = [
+      { type: "user", uuid: "mid-turn-opening", timestamp: at(0), sessionId: session, message: { role: "user", content: "Fix the flaky board test, then report." } },
+      call(0, 5, "Running the board suite first."),
+    ];
+    MID_TURN_DELIVERIES.forEach((delivery, index) => {
+      const seconds = 30 + index * 40;
+      const source = `${delivery.id}-engine`;
+      ledger.recordQueued(session, { id: delivery.id, text: delivery.text, origin: delivery.origin }, "queued-next-turn");
+      rows.push(result(index, seconds));
+      rows.push({ type: "attachment", uuid: `mid-turn-attachment-${index}`, timestamp: at(seconds + 1), entrypoint: "sdk-cli", userType: "external", isSidechain: false, sessionId: session,
+        attachment: { type: "queued_command", commandMode: "prompt", source_uuid: source, timestamp: at(seconds + 1), prompt: [{ type: "text", text: delivery.text }] },
+        rendered: [{ content: [{ type: "text", text: `<system-reminder>\nThe user sent a new message while you were working:\n${delivery.text}\n</system-reminder>` }] }] });
+      rows.push({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", timestamp: at(seconds + 1), sessionId: session });
+      rows.push(call(index + 1, seconds + 5, `Noted; continuing with step ${index + 2}.`));
+      ledger.confirmDelivered(session, delivery.id, source, "inferred");
+    });
+    rows.push(result(MID_TURN_DELIVERIES.length, 220));
+    rows.push({ type: "assistant", uuid: "mid-turn-answer", timestamp: at(225), sessionId: session,
+      message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The board test is fixed and every message above is handled." }] } });
+    const provenance = { messages: claudeMessageProvenance(RUNNING_PATH), occurrences: [], submissions: {}, senders: {} };
+    for (const delivery of MID_TURN_DELIVERIES) {
+      if (!provenance.messages[`${delivery.id}-engine`]) throw new Error(`mid-turn evidence lost the ledger join of ${delivery.id}`);
+    }
+    return { feed: rows.map((row) => JSON.stringify(row)).join("\n") + "\n", provenance };
+  } finally {
+    setAgentRegistryForTests(null);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}
+
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 
 describe("close-card receipt Reopen", () => {
@@ -1480,6 +1537,96 @@ browserTest("agent-delivered seat message keeps its author at desktop and phone 
     }
   } finally { await browser.close(); stop(); }
 }, 120_000);
+
+/* The same seat conversation, with the messages that reached it while its turn
+   ran. Served on the agent-label route, the fixture's seat with a delivered
+   transcript and its provenance answer. */
+browserTest("messages delivered mid-turn show once, in place, with their senders at 1440, 1000 and 390 px, light and dark, in both languages", async () => {
+  const evidence = midTurnDeliveryEvidence();
+  const { base, stop } = await serveFixture({ "/evidence/agent-message-label": evidence });
+  const out = path.join(os.homedir(), "Pictures/delegatus-review/mid-turn-delivery");
+  fs.mkdirSync(out, { recursive: true });
+  /* Own the browser server and keep its PID, so cleanup stops only this case's browser. */
+  const browserServer = await chromium.launchServer({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
+  const browserPid = browserServer.process().pid;
+  fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
+  const browser = await chromium.connect(browserServer.wsEndpoint());
+  const readings = [];
+  try {
+    for (const scheme of ["dark", "light"] as const) for (const locale of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme,
+        ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
+      try {
+        await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${base}/?agent-label=1#c=conversation_running`);
+        await page.getByText(MID_TURN_DELIVERIES.at(-1)!.text, { exact: true }).first().waitFor({ timeout: 15_000 });
+        /* Desktop shows the seat in its dock and again in the reader window:
+           each feed pane must hold every message exactly once. */
+        const panes = await page.evaluate((texts) => Array.from(document.querySelectorAll("[data-log-feed-scroller]")).flatMap((scroller) => {
+          const found = texts.map((text) => Array.from(scroller.querySelectorAll("*")).filter((element) => element.textContent?.trim() === text
+            && !Array.from(element.children).some((child) => child.textContent?.trim() === text)));
+          if (found.every((hits) => hits.length === 0)) return [];
+          return [found.map((hits) => {
+            const element = hits[0];
+            if (!element) return { count: 0 };
+            const row = element.closest("[data-feed-kind]") ?? element.parentElement!;
+            const author = row.querySelector("[data-agent-author]");
+            const box = row.getBoundingClientRect();
+            return {
+              count: hits.length, top: Math.round(box.top + scroller.scrollTop), left: Math.round(box.left), right: Math.round(box.right),
+              bubble: Boolean(element.closest("[data-user-bubble]")),
+              voice: row.querySelector("[data-voice-relay-author]")?.textContent?.trim() ?? null,
+              agentRole: author?.getAttribute("data-agent-role") ?? null,
+              agentLabel: author?.textContent?.trim() ?? null,
+            };
+          })];
+        }), MID_TURN_DELIVERIES.map((delivery) => delivery.text));
+        expect(panes.length).toBeGreaterThan(0);
+        for (const rows of panes) {
+          for (const row of rows) expect(row.count).toBe(1);
+          const [voice, builder, operator, tick] = rows as Array<Exclude<(typeof rows)[number], { count: 0 }>>;
+          expect(voice!.voice).toBe(translate(locale, "render.voiceDelegatusLabel"));
+          expect(builder!.agentRole).toBe("builder");
+          expect(builder!.agentLabel).toBe(`${translate(locale, "render.agentLabel")} · ${translate(locale, "render.senderRoleBuilder")}`);
+          expect(operator!.bubble).toBe(true);
+          expect(tick!.agentRole).toBe("seat-tick");
+          expect(tick!.agentLabel).toBe(`${translate(locale, "render.agentLabel")} · Delegatus`);
+          /* Transcript order, every row inside the viewport's width. */
+          for (let index = 1; index < rows.length; index += 1) expect(rows[index]!.top!).toBeGreaterThan(rows[index - 1]!.top!);
+          for (const row of rows) { expect(row.left!).toBeGreaterThanOrEqual(0); expect(row.right!).toBeLessThanOrEqual(width); }
+        }
+        const body = await page.locator("body").innerText();
+        expect(body).not.toContain("sent a new message while you were working");
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        expect(pageErrors).toEqual([]);
+        await page.screenshot({ path: path.join(out, `${width}-${scheme}-${locale}-end.png`) });
+        /* Scroll the visible pane up the way the operator would, so the live
+           tail lets go and the first message is in frame. */
+        const first = page.getByText(MID_TURN_DELIVERIES[0].text, { exact: true }).last();
+        const scroller = first.locator("xpath=ancestor::*[@data-log-feed-scroller][1]");
+        for (let step = 0; step < 20; step += 1) {
+          const box = await first.boundingBox();
+          if (box && box.y > 120 && box.y + box.height < 600) break;
+          const area = (await scroller.boundingBox())!;
+          await page.mouse.move(area.x + area.width / 2, area.y + area.height / 2);
+          await page.mouse.wheel(0, -250);
+          await page.waitForTimeout(120);
+        }
+        await page.screenshot({ path: path.join(out, `${width}-${scheme}-${locale}-start.png`) });
+        readings.push({ scheme, locale, width, panes: panes.map((rows) => MID_TURN_DELIVERIES.map((delivery, index) => ({ id: delivery.id, ...rows[index] }))), pageErrors });
+      } finally { await context.close(); }
+    }
+    expect(readings).toHaveLength(12);
+    fs.mkdirSync("evidence/mid-turn-delivery", { recursive: true });
+    fs.writeFileSync("evidence/mid-turn-delivery/rows.json", JSON.stringify(readings, null, 2) + "\n");
+  } finally {
+    await browser.close(); await browserServer.close(); stop();
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
+  }
+}, 300_000);
 
 browserTest("composer queue: a lost seat read drains once on the phone and survives reload", async () => {
   const { base, stop } = await serveFixture();
@@ -8781,6 +8928,103 @@ describe("account-switch message receipts", () => {
    routes. Over the built frames the operator asked for three separate kinds of
    rule a new agent gets together, small rows a tap removes with an undo, and
    no switch; this block drives each. */
+describe("role memory curation: reversible window", () => {
+  browserTest("candidates, versions, archive reasons and pass undo at desktop and 390 px in both languages", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-curation-browser-"));
+    const previous = process.env.LLV_STATE_DIR;
+    const store = await import("@/lib/memory/roleStore");
+    const curation = await import("@/lib/memory/curation/store");
+    const { applyCuration } = await import("@/lib/memory/curation/apply");
+    const route = await import("@/app/api/role-memory/route");
+    const { NextRequest } = await import("next/server");
+    const out = path.resolve(".artifacts/role-memory-curation"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(root, "bundle"), undefined, {
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+      "/api/asks-you/key": { present: true, source: "file" },
+      "/api/role-memory": (request: Request) => request.method === "POST" ? route.POST(new NextRequest(request)) : route.GET(new NextRequest(request)),
+      "/api/role-memory/lessons": { lessons: [] },
+    });
+    let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+    const cases: unknown[] = [];
+    try {
+      browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        process.env.LLV_STATE_DIR = path.join(root, `${lang}-${width}`);
+        const role = store.roleScope("atlas", "builder"), every = "role:*:builder", project = store.projectScope("atlas");
+        const stamp = new Date().toISOString();
+        const source = { project: "atlas", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: ["conversation", "fixture"].join("_") };
+        const texts = ["Inspect stored scope guidance before changing its readers.", "The earlier lane repaired orchard labels and captured its result.", "Validate the record before changing stored guidance."];
+        const ids = store.roleMemoryCollection(true)!.boundedPatch(24, tx => texts.map(rule => {
+          const id = store.newRuleId(tx); const held = tx.get(`s:${role}`);
+          tx.put({ kind: "rule", id, scope: role, rule, why: "An earlier write placed guidance with the wrong readers.", state: "active", hints: [], source, createdAt: stamp, changedAt: stamp });
+          tx.put({ kind: "scope", scope: role, revision: (held?.kind === "scope" ? held.revision : 0) + 1, active: [...(held?.kind === "scope" ? held.active : []), id], history: [] }); return id;
+        }));
+        const pass = curation.claimPass({ project: "atlas", repoDir: root, now: Date.now() })!;
+        const current = store.roleMemoryCollection()!.get(`s:${role}`);
+        applyCuration(pass, { scopes: [{ scope: role, revision: current!.kind === "scope" ? current!.revision : 0, order: [ids[2]] }, { scope: every, revision: 0, order: [ids[0]] }, { scope: project, revision: 0, order: [] }],
+          rewrite: [{ id: ids[0], rule: "Inspect stored guidance and its readers before changing the scope.", note: "This class is useful to builders in every repository." }], move: [{ id: ids[0], to: every, note: "This class guides builders in every repository." }], archive: [{ id: ids[1], reason: "task-specific", note: "This records one completed task." }] });
+        curation.patchPass(pass.id, { state: "succeeded", endedAt: new Date().toISOString() });
+        store.recordLessonRequest({ ...source, attempt: 2, at: new Date().toISOString() });
+        const candidate = store.leaveLessons({ request: { ...source, attempt: 2 }, source: { ...source, attempt: 2 }, lessons: [{ scope: "role", rule: "Read the current scope revision before proposing a stored rewrite.", why: "A stale write had changed the record underneath the reader." }], none: null }).left[0].id;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=pipeline-block&header=1&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, "light", lang, "reduce", width === 390);
+        try {
+          await page.evaluate(() => globalThis.dispatchEvent(new CustomEvent("delegatus:open-learned-rules", { detail: { project: "atlas" } })));
+          const window = page.locator("[data-rules-window]"); await window.waitFor();
+          await page.locator(`[data-learned-rule="${candidate}"]`).waitFor();
+          await page.locator(`[data-learned-rule="${candidate}"] button`).first().click();
+          await page.getByText(translate(lang, "roleMemory.unreviewed"), { exact: false }).waitFor();
+          await page.locator(`[data-learned-rule="${ids[0]}"] button`).first().click();
+          await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
+          const version = page.locator("[data-rule-revert]").first(); await version.waitFor();
+          await page.locator('[data-rules-history="role"]').click();
+          await page.getByText(translate(lang, "roleMemory.left.task-specific"), { exact: true }).waitFor();
+          await page.locator("[data-curation-history] summary").click();
+          await page.locator(`[data-curation-undo="${pass.id}"]`).waitFor();
+          const geometry = await window.evaluate(node => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth - node.clientWidth, sections: [...node.querySelectorAll('[data-rules-section]')].map(section => ({ kind: section.getAttribute('data-rules-section'), overflow: section.scrollWidth - section.clientWidth })) }));
+          expect(geometry.overflow).toBeLessThanOrEqual(1); for (const section of geometry.sections) expect(section.overflow).toBeLessThanOrEqual(1);
+          const frame = `variant-1-${width}-${lang}-history.png`; await page.screenshot({ path: path.join(out, frame) });
+          await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
+          await page.locator(`[data-left-rule-restore="${ids[1]}"]`).scrollIntoViewIfNeeded();
+          const archiveFrame = `variant-1-${width}-${lang}-archive.png`; await page.screenshot({ path: path.join(out, archiveFrame) });
+          await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
+          await version.click(); await page.waitForFunction(({ id, text }) => document.querySelector(`[data-learned-rule="${id}"]`)?.textContent?.includes(text), { id: ids[0], text: texts[0] });
+          await page.locator(`[data-left-rule-restore="${ids[1]}"]`).click(); await page.locator(`[data-learned-rule="${ids[1]}"]`).waitFor();
+          await page.locator(`[data-curation-undo="${pass.id}"]`).click();
+          await page.locator("[data-curation-skipped]").waitFor();
+          expect(await page.locator(`[data-learned-rule="${candidate}"]`).count()).toBe(1);
+          expect(await page.locator(`[data-curation-undo="${pass.id}"]`).isDisabled()).toBe(true);
+          /* The skipped note counts what it left and names no rule id; the rule just returned offers no Return for the text already in force. */
+          const skipped = await page.locator("[data-curation-skipped]").first().innerText();
+          expect(skipped).toBe(translate(lang, "roleMemory.pass.skipped", { count: 2 }));
+          expect(await page.locator("[data-curation-pass]").first().innerText()).not.toMatch(/\br_[0-9a-f]{8,}/);
+          const returned = page.locator(`[data-learned-rule="${ids[0]}"]`);
+          if (!await returned.locator(`[data-rule-versions="${ids[0]}"]`).count()) await returned.locator("button").first().click();
+          const earlier = returned.locator(`[data-rule-versions="${ids[0]}"] li`);
+          expect(await earlier.count()).toBe(1);
+          expect(await earlier.first().innerText()).not.toContain(texts[0]);
+          /* Every card shows all of its content: on the phone the window scrolls as one and no card scrolls inside itself. */
+          const cards = await window.evaluate(node => [...node.querySelectorAll<HTMLElement>("[data-rules-section]")].map(section => {
+            const body = section.lastElementChild as HTMLElement;
+            return { kind: section.getAttribute("data-rules-section"), cardScrolls: section.scrollHeight - section.clientHeight, bodyScrolls: body.scrollHeight - body.clientHeight };
+          }));
+          if (width === 390) for (const card of cards) { expect(card.cardScrolls).toBeLessThanOrEqual(1); expect(card.bodyScrolls).toBeLessThanOrEqual(1); }
+          const undoneFrame = `variant-1-${width}-${lang}-undone.png`; await page.screenshot({ path: path.join(out, undoneFrame) });
+          expect(pageErrors).toEqual([]);
+          cases.push({ lang, width, frame, archiveFrame, undoneFrame, geometry, cards, revertedVersion: true, returnedRule: true, undoSkippedLaterWrites: true });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/role-memory-curation", { recursive: true });
+      fs.writeFileSync("evidence/role-memory-curation/geometry.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally {
+      await browser?.close(); server.stop();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 240_000);
+});
+
 describe("role memory: rules window and the rule line", () => {
   browserTest("the card's rule line, the ⋯ row, and the rules window's three kinds with remove and undo, desktop and 390 px, en and uk", async () => {
     const { NextRequest } = await import("next/server");
@@ -9414,6 +9658,52 @@ describe("prototype review on the phone", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
+
+browserTest("external relay: owner review destination and off reasons at phone and desktop widths", async () => {
+  const { base, stop } = await serveFixture(); const browser = await launchChromium();
+  const out = path.resolve(".artifacts/external-relay"); fs.mkdirSync(out, { recursive: true });
+  const readings: Record<string, unknown>[] = [];
+  const cases = [
+    { name: "one", relays: [destinationRelay()], reason: "ready" },
+    { name: "several", relays: [destinationRelay([destinationTarget("ordinary"), destinationTarget("owner-first", true), destinationTarget("owner-second", true)])], reason: "ready" },
+    { name: "unpaired", relays: [], reason: "no_relay" },
+    { name: "no-target", relays: [destinationRelay([])], reason: "no_target" },
+    { name: "not-configured", relays: [destinationRelay([{ ...destinationTarget("first"), engine: null }, destinationTarget("second")])], reason: "not_configured" },
+    { name: "paused", relays: [{ ...destinationRelay(), paused: true }], reason: "paused" },
+  ];
+  try {
+    for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) for (const entry of cases) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
+      await context.addInitScript(lang => localStorage.setItem("llv_lang", lang), locale);
+      const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+      try {
+        await page.goto(`${base}/?relay=paired`);
+        await page.evaluate(relays => {
+          const previous = window.fetch;
+          window.fetch = ((input, init) => new URL(String(input), location.origin).pathname === "/api/external-relay"
+            ? Promise.resolve(Response.json({ relays, pending: [], status: relays.map(relay => ({ id: relay.id,
+              state: { state: relay.paused ? "paused" : "polling", lastOutcome: null, lastOutcomeAt: null, lastProgress: null }, running: {} })) }))
+            : previous(input, init)) as typeof window.fetch;
+        }, entry.relays.map(({ credential: _credential, ...relay }) => relay));
+        await page.locator(width === 390 ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").click();
+        await page.locator(width === 390 ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+        await page.locator(width === 390 ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]").click();
+        const line = page.locator("[data-external-relay-review-destination]"); await line.waitFor();
+        expect(await line.getAttribute("data-external-relay-review-destination")).toBe(entry.reason);
+        const reading = await line.evaluate(element => ({ text: element.textContent, overflow: element.scrollWidth > element.clientWidth,
+          lineWidth: element.getBoundingClientRect().width, lineHeight: element.getBoundingClientRect().height }));
+        expect(reading.overflow).toBe(false);
+        if (entry.name === "several") expect(reading.text).toContain("owner-first");
+        const frame = `owner-review-${entry.name}-${width}-${locale}.png`;
+        await page.screenshot({ path: path.join(out, frame) });
+        readings.push({ locale, width, state: entry.name, reason: entry.reason, ...reading, frame });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    fs.mkdirSync("evidence/external-relay", { recursive: true });
+    fs.writeFileSync("evidence/external-relay/owner-review-publishing.json", JSON.stringify({ readings }, null, 2) + "\n");
+  } finally { await browser.close(); stop(); }
+}, 180000);
 
 browserTest("external relay: paired card uses existing pairing at phone and desktop widths", async () => {
   const { base, stop } = await serveFixture(); const browser = await launchChromium();

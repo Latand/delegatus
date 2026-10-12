@@ -46,11 +46,13 @@ import { runtimeReceiptForSend } from "@/lib/runtime/sendSettlement";
 import { materializeStructuredTerminal } from "@/lib/runtime/structuredTerminal";
 import { attachmentsAreOrphaned, structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileAdmissionResult } from "@/lib/inboxFiles";
+import type { NativeAnswerInput } from "@/lib/conversation/nativeAnswer";
 import type { ApiError, FileEntry } from "@/lib/types";
 import {
   conversationHostDependencies,
   type ConversationHostDependencies,
 } from "./dependencies";
+import { recordDeliveryIngress } from "@/lib/runtime/deliveryProgress";
 
 interface TargetResponse {
   target: string | null;
@@ -221,6 +223,7 @@ export function conversationHostPOST(req: NextRequest, options?: { actor: TeamAc
 // never an actor option. The explicit overload is for trusted in-process sends.
 export function conversationHostPOST(req: NextRequest): Promise<NextResponse<SendResponse | ApiError>>;
 export async function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<SendResponse | ApiError>> {
+  const ingressAt = new Date().toISOString();
   const dependencies = conversationHostDependencies();
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
@@ -238,7 +241,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   const deniedActor = actorRejection();
   if (deniedActor) return deniedActor;
 
-  let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
+  let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; answer?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
   try {
     body = (await req.json()) as {
       pid?: unknown;
@@ -255,6 +258,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       question?: unknown;
       decision?: unknown;
       requestId?: unknown;
+      answer?: unknown;
       target?: unknown;
       model?: unknown;
       effort?: unknown;
@@ -358,7 +362,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   if (dependencies.conversationActions.includes(explicitAction)) {
     /* Answering an agent's question is a person acting: in team mode it
        needs a member, and the audit names them (sign-in-and-team §7.1). */
-    const answering = explicitAction === "dialog-key" || explicitAction === "permission";
+    const answering = explicitAction === "dialog-key" || explicitAction === "permission" || explicitAction === "answer";
     const person = answering ? teamActor(req) : null;
     if (person) {
       const anonymous = refuseAnonymous(person);
@@ -402,6 +406,8 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       question: body.question,
       ...(typeof body.decision === "string" ? { decision: body.decision } : {}),
       ...(typeof body.requestId === "string" && body.requestId.trim() ? { requestId: body.requestId.trim() } : {}),
+      ...(explicitAction === "answer" && body.answer && typeof body.answer === "object" && !Array.isArray(body.answer)
+        ? { answer: body.answer as NativeAnswerInput } : {}),
     });
     if (person && result.status < 400) recordConversationEvent({ actor: person, action: "question.answered", conversationId, path: filePath });
     return NextResponse.json(result.body, { status: result.status });
@@ -595,6 +601,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       ...(origin ? { origin } : {}),
     });
     if (structured) {
+      recordDeliveryIngress(structured.operationId, ingressAt);
       await releaseAttachments(structuredAttachmentOutcome(structured));
       if (structured.ok) settleMessageAuthor(authorClaim);
       const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
@@ -618,6 +625,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     ...(typeof body.effort === "string" ? { resumeEffort: body.effort } : {}),
     ...(typeof body.fast === "boolean" ? { resumeFast: body.fast } : {}),
   });
+  recordDeliveryIngress(outcome.operationId, ingressAt);
   /* `started` actuation is the uncertain case the image path also keeps: the
      agent may already hold the message, so its attachments stay readable. */
   await releaseAttachments(outcome.ok

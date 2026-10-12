@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, MessageCircleQuestionMark, GalleryHorizontalEnd, PanelRight, PictureInPicture2, Undo2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageCircleQuestionMark, GalleryHorizontalEnd, PanelRight, PictureInPicture2, TriangleAlert, Undo2, X } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 
 import { projectTitle } from "@/lib/displayNames";
@@ -21,6 +21,7 @@ import {
   needsYouRowText,
   needsYouSections,
 } from "./needsYouPanel";
+import { NeedsYouAskText } from "./NeedsYouAskText";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -264,10 +265,11 @@ export function AttentionPanel({
 
 /**
  * One row: the agent's role and how long it has waited on the first line,
- * with «Dismiss»; the title on the second; the wait on the third, two lines
- * at most, since a list that stays open has room for an ask's whole sentence.
- * An orchestrator's question is its own title, the question itself, and the
- * line under it says it is a question. A permission prompt answers under it.
+ * with «Dismiss»; the title on the second; then what it asks, whole: the
+ * question in its author's words, its choices, and the sentence saying what to
+ * choose and what happens next (docs/design/attention-auto-resolve.md). A list
+ * that stays open has room for all of it. An orchestrator's question is its
+ * own title. A permission prompt answers under it.
  */
 function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   entry: MobileAttentionEntry;
@@ -281,7 +283,8 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   if (entry.kind === "prototype") return <PrototypeRow entry={entry} onOpen={onOpen} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
-  const { title, line } = needsYouRowText(t, entry);
+  const { title, line, question, options, recommended } = needsYouRowText(t, entry);
+  const asksInTitle = entry.kind === "conversation" && Boolean(entry.item.reason.report?.body);
   const permission = entry.kind === "conversation" && entry.item.reason.kind === "permission" && entry.item.file.pendingPermission ? entry.item.file : null;
   return (
     <div
@@ -303,8 +306,15 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
             <RoleTag role={role} />
             {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">· {fmtAge(since)}</span> : null}
           </span>
-          <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{title}</span>
-          <span data-attention-decision className={entry.kind === "conversation" && entry.item.reason.kind === "memory" ? "w-full text-[11px] text-muted [overflow-wrap:anywhere]" : "line-clamp-2 w-full text-[11px] text-muted [overflow-wrap:anywhere]"}>{line}</span>
+          {/* An orchestrator's question is its own title, so it is shown whole. */}
+          <span
+            className={`${asksInTitle ? "" : "line-clamp-2 "}w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]`}
+            data-needs-you-title-line=""
+            data-needs-you-question-title={asksInTitle ? "" : undefined}
+          >
+            {title}
+          </span>
+          <NeedsYouAskText ask={{ question, options, recommended, sentence: line }} />
         </button>
         <button
           type="button"
@@ -323,27 +333,30 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
 }
 
 /** A prototype review that waits: the row opens the task's review, and the
-    choice saved there is what takes it off the list, so it has no «Dismiss». */
+    choice saved there is what takes it off the list, so it has no «Dismiss».
+    A decision whose message keeps failing waits the same way until it lands. */
 function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, { kind: "prototype" }>; onOpen: () => void }) {
   const { t } = useLocale();
-  const Mark = entry.notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
+  const undelivered = entry.notice.undelivered === true;
+  const Mark = undelivered ? TriangleAlert : entry.notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
   const since = needsYouEntrySince(entry);
+  const { question, options, recommended, line } = needsYouRowText(t, entry);
   return (
     <div className="rounded-[8px]" data-needs-you-row={entry.id} data-needs-you-kind={entry.kind} data-needs-you-since={since ?? undefined}>
       <button
         type="button"
         className="flex w-full min-w-0 flex-col gap-1 rounded-[8px] px-2.5 py-2 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         data-attention-prototype={entry.notice.taskId}
-        aria-label={t(entry.notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: entry.notice.title })}
+        aria-label={t(undelivered ? "proto.notice.undeliveredAria" : entry.notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: entry.notice.title })}
         onClick={onOpen}
       >
-        <span className="flex w-full min-w-0 items-center gap-1.5 text-[10.5px] font-semibold text-accent">
+        <span className={`flex w-full min-w-0 items-center gap-1.5 text-[10.5px] font-semibold ${undelivered ? "text-warning" : "text-accent"}`}>
           <Mark className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate">{t(entry.notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
+          <span className="min-w-0 truncate">{t(undelivered ? "proto.notice.undelivered" : entry.notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
           {since !== null ? <span data-attention-age className="shrink-0 font-normal text-muted">· {fmtAge(since)}</span> : null}
         </span>
         <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{entry.notice.title}</span>
-        <span data-attention-decision className="w-full text-[11px] text-muted">{t(entry.notice.asks === "questions" ? "proto.notice.answer" : "proto.notice.open")}</span>
+        <NeedsYouAskText ask={{ question, options, recommended, sentence: undelivered ? t("proto.notice.open") : line }} />
       </button>
     </div>
   );

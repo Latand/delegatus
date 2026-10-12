@@ -49,8 +49,9 @@ test("autosend admission commits its initial card event with the durable deliver
 test("a repeated Live delegation reuses its durable outcome and delivery key across call IDs and restart", async () => {
   fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
   const keys: string[] = [];
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
   const paths = { recipient: () => ({ project: "retry", conversationId: "conversation_retry", seatEpoch: 1, engine: "codex" as const }),
-    send: async ({ delivery }: { delivery: { clientMessageId: string } }) => { keys.push(delivery.clientMessageId); return { status: "delivered" as const, operationId: "retry-operation" }; }, reports: () => [] };
+    send: async ({ delivery }: { delivery: { clientMessageId: string } }) => { keys.push(delivery.clientMessageId); return { status: "delivered" as const, operationId: "retry-operation" }; }, reports: () => reports };
   const storage = new CompanionStorage();
   const admission = new CompanionAdmission(storage, paths);
   const session = admission.create({ project: "retry", locale: "en", authority: "live-model" });
@@ -58,7 +59,14 @@ test("a repeated Live delegation reuses its durable outcome and delivery key acr
   const key = storage.read().sessions[session.id]!.proposals[Object.keys(storage.read().sessions[session.id]!.proposals)[0]!]!.delivery!.clientMessageId;
   const restarted = new CompanionAdmission(new CompanionStorage(), paths);
   expect(await restarted.delegate(session.id, "call-retry", "delegation-same", "Review the plan")).toEqual({ state: "sent", status: "delivered" });
-  expect(await restarted.delegate(session.id, "call-distinct", "delegation-other", "Review the plan")).toEqual({ state: "sent", status: "delivered" });
+  // Another delegation with the same words waits for the first report instead of sending again.
+  expect(await restarted.delegate(session.id, "call-distinct", "delegation-other", "Review the plan")).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
+  expect(keys).toEqual([key]);
+  // Once that report has answered it, the same words get its answer; asked once more, they are a new send.
+  reports.push(reportFixture("retry", 1, { class: "completed", correlatesDirective: key }));
+  restarted.pollReports(session.id);
+  expect(await restarted.delegate(session.id, "call-later", "delegation-later", "Review the plan")).toMatchObject({ state: "answered", report: { status: "result" } });
+  expect(await restarted.delegate(session.id, "call-again", "delegation-again", "Review the plan", { renewed: true })).toEqual({ state: "sent", status: "delivered" });
   expect(keys).toEqual([key, expect.any(String)]);
   expect(keys[1]).not.toBe(key);
 });
@@ -469,7 +477,8 @@ test("all fresh manager reports are ordered and committed once with advancing pr
   expect(polls[0][2]).toMatchObject({ type: "orchestrator.report", project: "reports", at: Date.parse("2026-10-10T07:00:00Z") });
   expect(JSON.stringify(storage.read().sessions[session.id])).not.toContain("synthetic-secret-value");
   expect(JSON.stringify(polls)).not.toContain("/private/file.txt");
-  expect(polls[0][2].type === "orchestrator.report" && polls[0][2].text.length).toBe(1200);
+  // The whole report reaches the voice: nothing is cut for length.
+  expect(polls[0][2].type === "orchestrator.report" && polls[0][2].text.endsWith("я".repeat(1400))).toBe(true);
   reports = Array.from({ length: 270 }, (_, index) => reportFixture("reports", index + 17));
   expect(admission.pollReports(session.id)).toHaveLength(270);
   const persisted = storage.read().sessions[session.id];
@@ -607,4 +616,302 @@ test("a restart during the one seat retry recovers its persisted new key and can
   expect(await original).toEqual({ state: "sent", status: "delivered" });
   expect(attempts).toEqual([attempts[0], held.delivery!.clientMessageId, held.delivery!.clientMessageId]);
   expect(admission.events(session.id, 0).filter(event => event.type === "delegation.retargeted")).toHaveLength(1);
+});
+
+/* Recorded pattern of one call (evidence by line number and event kind only): a
+   question sent, then four rephrasings while its report was pending, a turn
+   that repeats it and asks something new, a new question, progress, the
+   answer, a restart and a project switch. The words below are written for
+   this test. */
+const SEQUENCES = {
+  uk: { first: "Що зараз з ревʼю голосового каналу?", again: ["Ну то що там з ревʼю?", "Перевір, будь ласка, ревʼю голосового каналу", "Ревʼю голосу вже готове?", "А ревʼю голосу як?"],
+    mixed: { repeat: "Що там з ревʼю голосу", added: "Як там деплой?" }, fresh: "Яку модель обрати для голосу?", answer: "Ревʼю пройшло обидва раунди." },
+  en: { first: "What is the state of the voice review?", again: ["So what about that review?", "Check the voice review, please", "Is the voice review done yet?", "And the voice review?"],
+    mixed: { repeat: "What about the voice review", added: "How is the deploy going?" }, fresh: "Which model should the voice use?", answer: "The review passed both rounds." },
+};
+for (const [locale, words] of Object.entries(SEQUENCES) as Array<["uk" | "en", typeof SEQUENCES.uk]>) test(`${locale}: a question pending its report is sent once whatever its rewording, the new part of a mixed turn goes through once, and the answer settles it across restart and project switch`, async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const sent: Array<{ project: string; text: string; key: string }> = [];
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  let seat = 1;
+  const paths = { recipient: (project: string) => ({ project, conversationId: `conversation_${project}_${seat}`, seatEpoch: seat, engine: "claude" as const }), reports: () => reports,
+    send: async ({ delivery, text }: { delivery: { clientMessageId: string; recipient: { project: string } }; text: string }) => {
+      sent.push({ project: delivery.recipient.project, text: text.split("\n")[0]!, key: delivery.clientMessageId }); return { status: "queued" as const, operationId: `operation-${sent.length}` }; } };
+  const admission = new CompanionAdmission(new CompanionStorage(), paths);
+  const session = admission.create({ project: "voice", locale, authority: "live-model" });
+  let turn = 0;
+  const say = (text: string) => { turn += 1; admission.input(session.id, { itemId: `said-${turn}`, text, final: true, turn }); };
+  const send = (instruction: string, options: { pendingRequest?: string; renewed?: boolean; project?: string } = {}) =>
+    admission.delegate(session.id, `call-${turn}-${instruction.length}`, `delegation-${turn}`, instruction, { sourceTurn: turn, ...options });
+  const ask = (instruction: string, options: { pendingRequest?: string; renewed?: boolean; project?: string } = {}) => { say(instruction); return send(instruction, options); };
+  expect(await ask(words.first)).toEqual({ state: "sent", status: "queued" });
+  expect(admission.awaitingReports(session.id)).toMatchObject([{ handle: "r1", instruction: words.first, project: "voice", progressReports: 0, askedBack: false }]);
+  // Four rewordings, the backend naming the waiting request each time: nothing more is sent.
+  for (const again of words.again) expect(await ask(again, { pendingRequest: "r1" })).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
+  // The same words again, unmarked, still wait.
+  expect(await ask(words.first)).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
+  // One turn repeats it and asks something new: the repeat waits, the new part is sent once.
+  say(`${words.mixed.repeat}, ${words.mixed.added}`);
+  expect(await send(words.mixed.repeat, { pendingRequest: "r1" })).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
+  expect(await send(words.mixed.added)).toEqual({ state: "sent", status: "queued" });
+  expect(await send(words.mixed.added)).toEqual({ state: "sent", status: "queued" });
+  // A bundle of earlier questions is not one short ask.
+  expect(await ask([words.first, ...words.again, words.fresh, words.first].join(" ").repeat(2))).toEqual({ state: "refused", code: "invalid_instruction" });
+  expect(sent.map(row => row.text)).toEqual([words.first, words.mixed.added]);
+  // Progress keeps it waiting; the seat rotating keeps it waiting too.
+  reports.push(reportFixture("voice", 1, { class: "status", correlatesDirective: sent[0]!.key, body: "Working on it." }));
+  admission.pollReports(session.id);
+  seat = 2;
+  expect(await ask(words.again[0]!, { pendingRequest: "r1" })).toMatchObject({ state: "awaiting_report", request: { handle: "r1", progressReports: 1 }, report: { status: "progress", text: "Working on it." } });
+  // A new question goes through.
+  expect(await ask(words.fresh)).toEqual({ state: "sent", status: "queued" });
+  expect(sent.map(row => row.text)).toEqual([words.first, words.mixed.added, words.fresh]);
+  // The answer arrives whole; asked again, the backend gets it and nothing is sent.
+  const whole = `${words.answer}\n${"- ".concat("x".repeat(1_500))}`;
+  reports.push(reportFixture("voice", 2, { class: "completed", correlatesDirective: sent[0]!.key, body: whole }));
+  admission.pollReports(session.id);
+  expect(await ask(words.again[3]!, { pendingRequest: "r1" })).toEqual({ state: "answered", request: expect.objectContaining({ handle: "r1" }), report: { status: "result", text: whole } });
+  expect(admission.callReports(session.id).requests).toMatchObject([
+    { request: "r1", state: "answered", ask: words.first, answer: { status: "result", text: whole } },
+    { request: "r2", state: "waiting_for_report", ask: words.mixed.added },
+    { request: "r3", state: "waiting_for_report", ask: words.fresh }]);
+  // A restart keeps what waits; a project switch sends the same words to the other project as its own request.
+  const restarted = new CompanionAdmission(new CompanionStorage(), paths);
+  expect(await restarted.delegate(session.id, "call-restart", "delegation-restart", words.fresh)).toMatchObject({ state: "awaiting_report", request: { handle: "r3" } });
+  restarted.setProject(session.id, "other");
+  expect(await restarted.delegate(session.id, "call-other", "delegation-other", words.fresh)).toEqual({ state: "sent", status: "queued" });
+  expect(sent.map(row => row.project)).toEqual(["voice", "voice", "voice", "other"]);
+  expect(restarted.awaitingReports(session.id).map(request => [request.handle, request.project])).toEqual([["r2", "voice"], ["r3", "voice"], ["r4", "other"]]);
+});
+
+/* The operator explicitly asks to send a waiting request once more. The words are written for this test. */
+const RESEND = {
+  en: { first: "Review the plan", again: "Send the plan review to the orchestrator again", reworded: "Did the plan review get going?" },
+  uk: { first: "Переглянь план", again: "Надішли оркестратору ще раз прохання переглянути план", reworded: "Перегляд плану вже почався?" },
+};
+for (const [locale, words] of Object.entries(RESEND) as Array<["uk" | "en", typeof RESEND.en]>) test(`${locale}: an explicit ask to send again goes out once more under its own key; a retried call, an unmarked repeat and a model rewording do not`, async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const keys: string[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => ({ project, conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" }), reports: () => [],
+    send: async ({ delivery }) => { keys.push(delivery.clientMessageId); return { status: "queued", operationId: `operation-${keys.length}` }; } });
+  const session = admission.create({ project: "voice", locale, authority: "live-model" });
+  const said = (text: string, turn: number) => admission.input(session.id, { itemId: `said-${turn}`, text, final: true, turn });
+  said(words.first, 1);
+  expect(await admission.delegate(session.id, "call-1", "turn-1", words.first, { sourceTurn: 1 })).toEqual({ state: "sent", status: "queued" });
+  said(words.first, 2);
+  expect(await admission.delegate(session.id, "call-2", "turn-2", words.first, { sourceTurn: 2 })).toMatchObject({ state: "awaiting_report" });
+  expect(await admission.delegate(session.id, "call-3", "turn-2", words.reworded, { sourceTurn: 2, pendingRequest: "r1" })).toMatchObject({ state: "awaiting_report" });
+  expect(keys).toHaveLength(1);
+  said(words.again, 3);
+  expect(await admission.delegate(session.id, "call-4", "turn-3", words.first, { sourceTurn: 3, renewed: true })).toEqual({ state: "sent", status: "queued" });
+  // The same call retried, and the model asking again in other words within that turn, add nothing.
+  expect(await admission.delegate(session.id, "call-4", "turn-3", words.first, { sourceTurn: 3, renewed: true })).toEqual({ state: "sent", status: "queued" });
+  expect(await admission.delegate(session.id, "call-5", "turn-3", words.again, { sourceTurn: 3, renewed: true, pendingRequest: "r1" })).toEqual({ state: "sent", status: "queued" });
+  expect(keys).toHaveLength(2);
+  expect(new Set(keys).size).toBe(2);
+  // Afterwards an unmarked repeat waits for the newest send.
+  said(words.reworded, 4);
+  expect(await admission.delegate(session.id, "call-6", "turn-4", words.first, { sourceTurn: 4 })).toMatchObject({ state: "awaiting_report" });
+  expect(keys).toHaveLength(2);
+});
+
+test("a waiting request's handle never absorbs an ask to another project: it is refused for recomposition and the new ask then goes to that project once", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const sent: Array<{ project: string; text: string }> = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "codex" }), reports: () => [],
+    send: async ({ delivery, text }) => { sent.push({ project: delivery.recipient.project, text: text.split("\n")[0]! }); return { status: "queued", operationId: `operation-${sent.length}` }; } });
+  const session = admission.create({ project: "alpha", locale: "en", authority: "live-model" });
+  expect(await admission.delegate(session.id, "call-1", "turn-1", "Review the Alpha release", { sourceTurn: 1 })).toEqual({ state: "sent", status: "queued" });
+  expect(await admission.delegate(session.id, "call-2", "turn-2", "Review the Beta release", { sourceTurn: 2, project: "beta", pendingRequest: "r1" }))
+    .toEqual({ state: "refused", code: "request_other_project" });
+  expect(sent).toHaveLength(1);
+  expect(await admission.delegate(session.id, "call-3", "turn-2", "Review the Beta release", { sourceTurn: 2, project: "beta" })).toEqual({ state: "sent", status: "queued" });
+  expect(sent).toEqual([{ project: "alpha", text: "Review the Alpha release" }, { project: "beta", text: "Review the Beta release" }]);
+  expect(admission.awaitingReports(session.id).map(request => [request.handle, request.project])).toEqual([["r1", "alpha"], ["r2", "beta"]]);
+});
+
+/* Reports correlated to one request: what closes it is an answer, whatever its class. */
+const COVERAGE = {
+  en: { ask: "Review the plan", second: "Check the release notes", question: "Which environment should I review?", partial: "The first half of the plan is reviewed.", answer: "The plan is reviewed: two notes, both fixed." },
+  uk: { ask: "Переглянь план", second: "Перевір нотатки до релізу", question: "Яке середовище переглянути?", partial: "Першу половину плану переглянуто.", answer: "План переглянуто: дві примітки, обидві виправлені." },
+};
+for (const [locale, words] of Object.entries(COVERAGE) as Array<["uk" | "en", typeof COVERAGE.en]>) test(`${locale}: a question back or a partial report leaves the request waiting; an answer closes it whatever its class`, async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const keys: string[] = [];
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => ({ project, conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" }), reports: () => reports,
+    send: async ({ delivery }) => { keys.push(delivery.clientMessageId); return { status: "queued", operationId: `operation-${keys.length}` }; } });
+  const session = admission.create({ project: "voice", locale, authority: "live-model" });
+  await admission.delegate(session.id, "call-1", "turn-1", words.ask, { sourceTurn: 1 });
+  await admission.delegate(session.id, "call-2", "turn-1", words.second, { sourceTurn: 1 });
+  reports.push(reportFixture("voice", 1, { class: "question", correlatesDirective: keys[0], body: words.question }));
+  admission.pollReports(session.id);
+  expect(admission.awaitingReports(session.id).map(request => [request.handle, request.askedBack])).toEqual([["r1", true], ["r2", false]]);
+  expect(admission.callReports(session.id).requests[0]).toMatchObject({ request: "r1", state: "orchestrator_asked_back", askedBack: { status: "question", text: words.question } });
+  expect(await admission.delegate(session.id, "call-3", "turn-2", words.ask, { sourceTurn: 2, pendingRequest: "r1" }))
+    .toMatchObject({ state: "awaiting_report", request: { handle: "r1", askedBack: true }, report: { status: "question", text: words.question } });
+  // A completed report the seat marks as partial does not close it either.
+  reports.push(reportFixture("voice", 2, { class: "completed", answersDirective: false, correlatesDirective: keys[0], body: words.partial }));
+  admission.pollReports(session.id);
+  expect(admission.awaitingReports(session.id).map(request => request.handle)).toEqual(["r1", "r2"]);
+  // A status report the seat marks as the answer closes it.
+  reports.push(reportFixture("voice", 3, { class: "status", answersDirective: true, correlatesDirective: keys[0], body: words.answer }));
+  admission.pollReports(session.id);
+  expect(admission.awaitingReports(session.id).map(request => request.handle)).toEqual(["r2"]);
+  expect(admission.callReports(session.id).requests[0]).toMatchObject({ request: "r1", state: "answered", answer: { status: "progress", text: words.answer } });
+  // Without the seat's word, a result answers and a blocker does not.
+  reports.push(reportFixture("voice", 4, { class: "blocked", correlatesDirective: keys[1], body: words.question }));
+  admission.pollReports(session.id);
+  expect(admission.awaitingReports(session.id).map(request => [request.handle, request.askedBack])).toEqual([["r2", true]]);
+  reports.push(reportFixture("voice", 5, { class: "completed", correlatesDirective: keys[1], body: words.answer }));
+  admission.pollReports(session.id);
+  expect(admission.awaitingReports(session.id)).toEqual([]);
+  expect(keys).toHaveLength(2);
+});
+
+test("a request whose delivery is uncertain still waits and is never sent twice; one whose delivery failed waits for nothing and may be sent again", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let mode: "throw" | "failed" | "queued" = "throw";
+  const keys: string[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => ({ project: "voice", conversationId: "conversation_voice", seatEpoch: 1, engine: "codex" }), reports: () => [],
+    send: async ({ delivery }) => { keys.push(delivery.clientMessageId);
+      if (mode === "throw") throw new Error("transport lost");
+      return mode === "failed" ? { status: "failed", operationId: null, code: "conversation_closed" } : { status: "queued", operationId: `operation-${keys.length}` }; } });
+  const session = admission.create({ project: "voice", locale: "en", authority: "live-model" });
+  expect(await admission.delegate(session.id, "call-a", "delegation-a", "Check the review")).toEqual({ state: "sent", status: "unknown" });
+  expect(await admission.delegate(session.id, "call-b", "delegation-b", "How is the review?", { pendingRequest: "r1" })).toMatchObject({ state: "awaiting_report" });
+  expect(await admission.delegate(session.id, "call-c", "delegation-c", "Check the review")).toMatchObject({ state: "awaiting_report" });
+  expect(new Set(keys).size).toBe(1);
+  mode = "failed";
+  expect(await admission.delegate(session.id, "call-d", "delegation-d", "Run the checks")).toMatchObject({ state: "sent", status: "failed" });
+  expect(await admission.delegate(session.id, "call-e", "delegation-e", "Did the checks run?", { pendingRequest: "r2" })).toEqual({ state: "refused", code: "request_not_waiting" });
+  mode = "queued";
+  expect(await admission.delegate(session.id, "call-f", "delegation-f", "Run the checks")).toEqual({ state: "sent", status: "queued" });
+  expect(admission.awaitingReports(session.id).map(request => request.handle)).toEqual(["r1", "r3"]);
+});
+
+/* Case-sensitive targets, explicit asks again without a transcript, and handles switched within one turn. The words are written for this test. */
+const TARGETS = {
+  en: { upper: "What changed on branch Release?", lower: "What changed on branch release?", reworded: "So what about branch Release?", ask: "Review the plan", again: "Send the plan review once more",
+    opening: "Release: what changed?", openingLower: "release: what changed?", openingReworded: "And release, what changed there?" },
+  uk: { upper: "Що змінилося у гілці Release?", lower: "Що змінилося у гілці release?", reworded: "То що там з гілкою Release?", ask: "Переглянь план", again: "Надішли перегляд плану ще раз",
+    opening: "Release: що змінилося?", openingLower: "release: що змінилося?", openingReworded: "А release, що там змінилося?" },
+};
+const resendFixture = () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const sent: Array<{ key: string; text: string }> = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => ({ project, conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" }), reports: () => [],
+    send: async ({ delivery, text }) => { sent.push({ key: delivery.clientMessageId, text: text.split("\n")[0]! }); return { status: "queued", operationId: `operation-${sent.length}` }; } });
+  return { admission, sent };
+};
+for (const [locale, words] of Object.entries(TARGETS) as Array<["en" | "uk", typeof TARGETS.en]>) {
+  test(`${locale}: questions about two targets that differ only in case each send once; a rephrasing named by its handle sends nothing`, async () => {
+    for (const transcribed of [true, false]) {
+      const { admission, sent } = resendFixture();
+      const session = admission.create({ project: "voice", locale, authority: "live-model" });
+      const turn = (n: number, text: string) => { if (transcribed) admission.input(session.id, { itemId: `said-${n}`, text, final: true, turn: n }); return transcribed ? { sourceTurn: n } : {}; };
+      expect(await admission.delegate(session.id, "call-1", "turn-1", words.upper, turn(1, words.upper))).toEqual({ state: "sent", status: "queued" });
+      expect(await admission.delegate(session.id, "call-2", "turn-2", words.lower, turn(2, words.lower))).toEqual({ state: "sent", status: "queued" });
+      // The same words with only their spacing or closing stop changed are a repeat.
+      const repeat = `  ${words.upper.slice(0, -1).replace(" ", "  ")} `;
+      expect(await admission.delegate(session.id, "call-3", "turn-3", repeat, turn(3, repeat))).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
+      expect(await admission.delegate(session.id, "call-4", "turn-4", words.reworded, { ...turn(4, words.reworded), pendingRequest: "r1" })).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
+      // A target at the start of the ask keeps its case too: each sends once, before either report.
+      expect(await admission.delegate(session.id, "call-5", "turn-5", words.opening, turn(5, words.opening))).toEqual({ state: "sent", status: "queued" });
+      expect(await admission.delegate(session.id, "call-6", "turn-6", words.openingLower, turn(6, words.openingLower))).toEqual({ state: "sent", status: "queued" });
+      expect(admission.awaitingReports(session.id).map(request => request.handle)).toEqual(["r1", "r2", "r3", "r4"]);
+      // A rephrasing of the lowercase one, named by its handle, sends nothing.
+      expect(await admission.delegate(session.id, "call-7", "turn-7", words.openingReworded, { ...turn(7, words.openingReworded), pendingRequest: "r4" })).toMatchObject({ state: "awaiting_report", request: { handle: "r4" } });
+      expect([transcribed, sent.map(row => row.text)]).toEqual([transcribed, [words.upper, words.lower, words.opening, words.openingLower]]);
+    }
+  });
+
+  test(`${locale}: with no transcript, each later explicit ask to send again sends once; a replayed call or a rewording within that delegation adds none`, async () => {
+    const { admission, sent } = resendFixture();
+    const session = admission.create({ project: "voice", locale, authority: "live-model" });
+    expect(await admission.delegate(session.id, "call-1", "d1", words.ask)).toEqual({ state: "sent", status: "queued" });
+    for (const attempt of ["d2", "d3"]) {
+      expect(await admission.delegate(session.id, `call-${attempt}`, attempt, words.ask, { renewed: true, pendingRequest: "r1" })).toEqual({ state: "sent", status: "queued" });
+      expect(await admission.delegate(session.id, `call-${attempt}`, attempt, words.ask, { renewed: true, pendingRequest: "r1" })).toEqual({ state: "sent", status: "queued" });
+      expect(await admission.delegate(session.id, `call-${attempt}-reworded`, attempt, words.again, { renewed: true, pendingRequest: "r1" })).toEqual({ state: "sent", status: "queued" });
+    }
+    expect(sent.map(row => row.text)).toEqual([words.ask, words.ask, words.ask]);
+    expect(new Set(sent.map(row => row.key)).size).toBe(3);
+  });
+
+  test(`${locale}: switching between the original and a renewed handle within one turn never sends again; a later explicit ask sends once`, async () => {
+    for (const transcribed of [true, false]) {
+      const { admission, sent } = resendFixture();
+      const session = admission.create({ project: "voice", locale, authority: "live-model" });
+      const turn = (n: number, text: string) => { if (transcribed) admission.input(session.id, { itemId: `said-${n}`, text, final: true, turn: n }); return transcribed ? { sourceTurn: n } : {}; };
+      expect(await admission.delegate(session.id, "call-1", "turn-1", words.ask, turn(1, words.ask))).toEqual({ state: "sent", status: "queued" });
+      // In the first turn itself, an ask again under the original's handle is that same attempt.
+      expect(await admission.delegate(session.id, "call-1b", "turn-1", words.again, { ...turn(1, words.ask), renewed: true, pendingRequest: "r1" })).toEqual({ state: "sent", status: "queued" });
+      expect(sent).toHaveLength(1);
+      const two = turn(2, words.again);
+      expect(await admission.delegate(session.id, "call-2", "turn-2", words.ask, { ...two, renewed: true, pendingRequest: "r1" })).toEqual({ state: "sent", status: "queued" });
+      for (const [call, handle] of [["call-2b", "r2"], ["call-2c", "r1"], ["call-2d", "r2"]] as const)
+        expect(await admission.delegate(session.id, call, "turn-2", `${words.again} (${call})`, { ...two, renewed: true, pendingRequest: handle })).toEqual({ state: "sent", status: "queued" });
+      expect([transcribed, sent.length]).toEqual([transcribed, 2]);
+      const three = turn(3, words.again);
+      expect(await admission.delegate(session.id, "call-3", "turn-3", words.ask, { ...three, renewed: true, pendingRequest: "r2" })).toEqual({ state: "sent", status: "queued" });
+      expect(await admission.delegate(session.id, "call-3b", "turn-3", words.again, { ...three, renewed: true, pendingRequest: "r1" })).toEqual({ state: "sent", status: "queued" });
+      expect([transcribed, sent.length, new Set(sent.map(row => row.key)).size]).toEqual([transcribed, 3, 3]);
+    }
+  });
+}
+
+test("more reports than the speech queue holds arrive while the hand-off is blocked: none is dropped, and every one reaches the voice once and in order, across a restart", () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const reports = Array.from({ length: 130 }, (_, index) => reportFixture("voice", index + 1, { class: "completed", body: `REPORT_${index + 1}` }));
+  const paths = { recipient: (project: string) => ({ project, conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" as const }), reports: () => reports,
+    send: async () => ({ status: "queued" as const, operationId: "operation" }) };
+  let admission = new CompanionAdmission(new CompanionStorage(), { ...paths, reports: () => [] });
+  const session = admission.create({ project: "voice", locale: "en", authority: "live-model" });
+  admission = new CompanionAdmission(new CompanionStorage(), paths);
+  admission.pollReports(session.id);
+  // The first report is part-way handed and its hand-off stalls; polls go on.
+  admission.speechHanded(session.id, "report-voice-1", ["part one", "part two"], 1);
+  for (let poll = 0; poll < 3; poll += 1) admission.pollReports(session.id);
+  expect(admission.reportSpeech(session.id).map(row => row.reportId)).toEqual(reports.slice(0, 64).map(row => row.id));
+  expect(admission.reportSpeech(session.id)[0]).toMatchObject({ handed: 1, parts: ["part one", "part two"] });
+  const voiced: string[] = [];
+  for (let round = 0; round < 10 && voiced.length < reports.length; round += 1) {
+    // A restart between polls keeps what is owed and where the scan stands.
+    admission = new CompanionAdmission(new CompanionStorage(), paths);
+    admission.pollReports(session.id);
+    for (const entry of admission.reportSpeech(session.id)) {
+      const parts = entry.parts ?? [entry.text];
+      voiced.push(...parts.slice(entry.handed).map(part => `${entry.reportId}:${part}`));
+      admission.speechHanded(session.id, entry.reportId, parts, parts.length);
+    }
+  }
+  expect(voiced).toEqual(["report-voice-1:part two", ...reports.slice(1).map(row => `${row.id}:${row.body}`)]);
+  expect(admission.reportSpeech(session.id)).toEqual([]);
+});
+
+test("a report asked for again is owed once more from its own text, by report or request handle, once per delegation", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const keys: string[] = [];
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => ({ project, conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" }), reports: () => reports,
+    send: async ({ delivery }) => { keys.push(delivery.clientMessageId); return { status: "queued", operationId: `operation-${keys.length}` }; } });
+  const session = admission.create({ project: "voice", locale: "uk", authority: "live-model" });
+  expect(admission.rereadReport(session.id, null)).toEqual({ status: "not_found" });
+  await admission.delegate(session.id, "call-1", "turn-1", "Переглянь план", { sourceTurn: 1 });
+  const whole = Array.from({ length: 15 }, (_, index) => index === 14 ? "- TAIL_FACT" : `- факт ${index + 1}: перевірку пройдено`).join("\n");
+  reports.push(reportFixture("voice", 1, { class: "completed", correlatesDirective: keys[0], body: whole }), reportFixture("voice", 2, { class: "status", body: "Інший звіт." }));
+  admission.pollReports(session.id);
+  for (const entry of admission.reportSpeech(session.id)) admission.speechHanded(session.id, entry.reportId, [entry.text], 1);
+  expect(admission.callReports(session.id)).toMatchObject({ requests: [{ request: "r1", answer: { report: "k1", text: whole } }], reports: [{ report: "k2" }] });
+  expect(admission.rereadReport(session.id, "r1", "delegation-a")).toEqual({ status: "reading", report: "k1" });
+  expect(admission.rereadReport(session.id, "k1", "delegation-a")).toEqual({ status: "already_owed", report: "k1" });
+  expect(admission.reportSpeech(session.id)).toMatchObject([{ reportId: "report-voice-1", text: whole, handed: 0, reread: true }]);
+  admission.speechHanded(session.id, "report-voice-1", [whole], 1);
+  // Handed already, the same delegation asking twice hears it once; another delegation asks anew.
+  expect(admission.rereadReport(session.id, "k1", "delegation-a")).toEqual({ status: "already_owed", report: "k1" });
+  expect(admission.reportSpeech(session.id)).toEqual([]);
+  expect(admission.rereadReport(session.id, null, "delegation-b")).toEqual({ status: "reading", report: "k2" });
+  expect(admission.rereadReport(session.id, "k9", "delegation-b")).toEqual({ status: "not_found" });
+  expect(keys).toHaveLength(1);
 });

@@ -553,6 +553,8 @@ export type PipelineStageAttempt = {
       still held harness-tracked background work, named in `tasks`. Cleared
       once the work has reported. */
   backgroundWait?: BackgroundWait;
+  /** A controller commit deadline keeps the passed attempt retrying itself. */
+  stageCommitWait?: { retryAt: string; detail: string; failures: number };
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn
@@ -594,6 +596,24 @@ export type PipelineStageAttempt = {
     /** Consumes the one recommit before Git runs. Recovery must advance from
         this head; a refused recommit checkpoints a rejected outcome. */
     recommit?: { at: string; head: string };
+  };
+  /** One post-accept publication repair, delivered to the recorded producer. The
+      refused SHA remains accepted until committedSha is adopted. baseSha
+      fences history repair to the unpublished suffix. A changed reviewed
+      tree returns to its gate with the original budget activation. */
+  publicationRepair?: NonNullable<PipelineStageAttempt["commitRepair"]> & {
+    sha: string;
+    baseSha: string;
+    operationId: string;
+    stageId: string;
+    attempt: number;
+    commitStartedHead?: string;
+    committedSha?: string;
+    republishQueued?: true;
+    reviewRequired?: boolean;
+    /** The park the refusal would have caused (its cause and action on the
+        first line). Every park after the repair starts with that line. */
+    parkDetail?: string;
   };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
@@ -1040,6 +1060,10 @@ export type Pipeline = {
       before attribution existed. */
   dismissedNote?: string;
   dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
+  /** Projection only, never stored: who answers what the lane waits on when
+      it is not the operator (docs/design/attention-auto-resolve.md), stamped
+      by `/api/files` for the movement it names. */
+  attentionRoute?: import("@/lib/attention/routeTypes").AttentionRouteMark;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */

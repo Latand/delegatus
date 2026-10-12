@@ -104,7 +104,11 @@ interface CurrentReleaseControllerLoaders {
   loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
   /** Optional for the same reason. */
   loadAsksClassifier?: () => Promise<{ startAsksClassifier: () => void }>;
+  /** Optional for the same reason. */
+  loadAttentionReconcile?: () => Promise<{ startAttentionReconcile: () => void }>;
   loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
+  /** Optional for the same reason. */
+  loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
 }
 
@@ -377,7 +381,9 @@ export async function startCurrentReleaseControllers(
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
     loadAsksClassifier: () => import("@/lib/asks/controller"),
+    loadAttentionReconcile: () => import("@/lib/attention/reconcileController"),
     loadLinkedBoardSync: () => import("@/lib/links/schedule"),
+    loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
   },
 ): Promise<void> {
@@ -503,6 +509,14 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[asks you] start failed", error instanceof Error ? error.name : "unknown");
   }
+  /* Waits that no longer ask anyone leave «Waiting for you» on their own
+     (docs/design/attention-auto-resolve.md), on the same clock. */
+  try {
+    const reconcile = await loaders.loadAttentionReconcile?.();
+    reconcile?.startAttentionReconcile();
+  } catch (error) {
+    console.error("[attention reconcile] start failed", error instanceof Error ? error.name : "unknown");
+  }
   /* A seat's deputy that was running when the Viewer stopped still has to end
      and tell its seat (docs/design/ghost-seat.md §5). The sweep stops itself
      when nothing is live, so this is one small read on an install that never
@@ -521,6 +535,16 @@ export async function startCurrentReleaseControllers(
     linkedBoards?.startLinkedBoardSync();
   } catch (error) {
     console.error("[linked boards] sync start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* The operator's prototype decisions answer as soon as they are saved, and
+     their messages go to the seat from here (docs/design/prototype-review-server.md).
+     The first sweep attempts every decision still owed, so a decision saved
+     while the Viewer restarted or a deploy ran goes out now. */
+  try {
+    const prototypeDelivery = await loaders.loadPrototypeDelivery?.();
+    prototypeDelivery?.startPrototypeDeliveryWorker();
+  } catch (error) {
+    console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

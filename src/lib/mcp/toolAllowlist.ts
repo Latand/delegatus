@@ -73,7 +73,7 @@ export type McpCallerIdentity =
 
 export type McpToolVerdict =
   | { allowed: true }
-  | { allowed: false; code: "tool_not_permitted" | "maintainer_tool_refused" | "issue_reporter_write_refused"; error: string };
+  | { allowed: false; code: "tool_not_permitted" | "maintainer_tool_refused" | "issue_reporter_write_refused" | "curator_write_refused"; error: string };
 
 const ALLOWED: McpToolVerdict = { allowed: true };
 
@@ -352,4 +352,14 @@ export function permitNeedsYouRead(
   if (authority.kind !== "unidentified" && maintainer?.conversationId === authority.conversationId && !maintainer.endedScheduledRun && maintainer.project && (project === null || maintainer.project === project)) return { allowed: true };
   if (authority.kind !== "unidentified" && seats.some(s => s.conversationId === authority.conversationId && s.project && (project === null || s.project === project))) return { allowed: true };
   return { allowed: false, error: "Needs-you reads require the operator, this project's designated seat or its maintenance run" };
+}
+
+/** The curator's only domain write is its checked pass; poll receipts are reads. */
+export function permitCuratorTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (tool === "curate_rules" || tool === "agent_activity" || tool === "lifecycle_events") return ALLOWED;
+  if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;
+  if (tool === "backfill_worktree_projects" && args.dryRun !== false) return ALLOWED;
+  const fields = MUTATING_TOOL_READ_FIELDS[tool];
+  if (fields && !fields.some(field => args[field] !== undefined)) return ALLOWED;
+  return { allowed: false, code: "curator_write_refused", error: `A curator changes memory only through curate_rules; ${tool} would change something else.` };
 }

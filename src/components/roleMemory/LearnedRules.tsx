@@ -77,7 +77,7 @@ export function StageLessonLine({ pipeline, entry }: { pipeline: Pipeline; entry
   const targets = [...new Set(lesson.rules.map((rule) => targetName(t, rule)))].join(", ");
   return (
     <button type="button" className="stage-lesson" data-stage-lesson={lesson.rules.length} onClick={(event) => { event.stopPropagation(); openRulesWindow(pipeline.project, lesson.rules[0]!.id); }}>
-      <span className="head"><SparkGlyph />{t("roleMemory.line.left", { count: lesson.rules.length, targets })}</span>
+      <span className="head"><SparkGlyph />{t(lesson.rewrote ? "roleMemory.line.rewrote" : "roleMemory.line.left", { count: lesson.rules.length, targets })}</span>
       <span className="rule">“{lesson.rules[0]!.rule}”</span>
     </button>
   );
@@ -126,22 +126,23 @@ function useProjectRules(project: string | null) {
   const revision = useRef(0);
   useEffect(() => {
     if (!project) return;
+    const sequence = revision;
     const abort = new AbortController();
     const read = async () => {
-      const current = ++revision.current;
+      const current = ++sequence.current;
       try {
         const response = await fetch(`/api/role-memory?project=${encodeURIComponent(project)}`, { signal: abort.signal, cache: "no-store" });
         if (!response.ok) throw Error();
         const value = projectRulesOf(await response.json());
-        if (current === revision.current && !abort.signal.aborted) { setView(value); setFailed(null); }
-      } catch { if (current === revision.current && !abort.signal.aborted) setFailed("read"); }
+        if (current === sequence.current && !abort.signal.aborted) { setView(value); setFailed(null); }
+      } catch { if (current === sequence.current && !abort.signal.aborted) setFailed("read"); }
     };
     void read();
     const timer = setInterval(() => void read(), 15_000);
-    return () => { revision.current++; abort.abort(); clearInterval(timer); };
+    return () => { sequence.current++; abort.abort(); clearInterval(timer); };
   }, [project]);
   /** Removes a rule from the injected list or puts one back; the answer is the project's new reading. */
-  const act = useCallback(async (action: "delete" | "restore", ruleId: string) => {
+  const act = useCallback(async (action: "delete" | "restore" | "revert" | "revert-pass", ruleId: string) => {
     if (!project) return false;
     const current = ++revision.current;
     try {
@@ -164,17 +165,23 @@ const KIND_TONE: Record<ScopeKind, { bar: string; dot: string; soft: string; tex
   machine: { bar: "border-t-warning", dot: "bg-warning", soft: "bg-warning-soft", text: "text-warning" },
 };
 
-function RuleRow({ rule, kind, focused, scopeRole, onDelete }: { rule: RuleView; kind: ScopeKind; focused: boolean; scopeRole: string | null; onDelete: (rule: RuleView) => void }) {
+function RuleRow({ rule, kind, focused, scopeRole, onDelete, onRevert }: { rule: RuleView; kind: ScopeKind; focused: boolean; scopeRole: string | null; onDelete: (rule: RuleView) => void; onRevert?: (id: string) => void }) {
   const { t } = useLocale();
-  const [open, setOpen] = useState(focused);
+  const [expansion, setExpansion] = useState({ focused, open: focused });
+  const open = expansion.focused === focused ? expansion.open : focused || expansion.open;
+  const row = useRef<HTMLLIElement>(null);
+  useEffect(() => { if (focused) row.current?.scrollIntoView({ block: "nearest" }); }, [focused]);
   /* Who left it is news only where it differs from the scope's own role. */
   const author = rule.roleId && rule.roleId !== scopeRole ? roleNameById(t, rule.roleId) : null;
-  const meta = [author, rule.fixRound ? t("roleMemory.fixRound") : null].filter(Boolean).join(" · ");
+  const revision = rule.revisedBy;
+  const awaitingCurator = rule.awaitingCuration ?? (!rule.curatedAt || revision?.by === "agent" && revision.at > rule.curatedAt);
+  const meta = [rule.keptByOperatorAt ? t("roleMemory.kept") : awaitingCurator ? t("roleMemory.unreviewed") : null, revision ? t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") }) : author, (revision?.fixRound ?? rule.fixRound) ? t("roleMemory.fixRound") : null, rule.mergedFrom?.length ? t("roleMemory.mergedFrom", { count: rule.mergedFrom.length }) : null].filter(Boolean).join(" · ");
   return (
-    <li data-learned-rule={rule.id} data-focused={focused ? "" : undefined} data-open={open ? "" : undefined}
+    <li ref={row} data-learned-rule={rule.id} data-focused={focused ? "" : undefined} data-open={open ? "" : undefined}
       className={`group flex items-start gap-2 rounded-[8px] px-2 py-1.5 ${focused ? KIND_TONE[kind].soft : "hover:bg-sunken"}`}>
       <span aria-hidden className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${KIND_TONE[kind].dot}`} />
-      <button type="button" aria-expanded={open} onClick={() => setOpen((was) => !was)} title={open ? undefined : `${t("roleMemory.why")} ${rule.why}`}
+      <div className="min-w-0 flex-1">
+      <button type="button" aria-expanded={open} onClick={() => setExpansion({ focused, open: !open })} title={rule.note ?? (open ? undefined : `${t("roleMemory.why")} ${rule.why}`)}
         className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         <span className={`block text-[12.5px] leading-[17px] text-primary ${open ? "" : "line-clamp-2"}`}>{rule.rule}</span>
         {open ? (
@@ -189,20 +196,37 @@ function RuleRow({ rule, kind, focused, scopeRole, onDelete }: { rule: RuleView;
           </span>
         ) : null}
       </button>
+      {open ? <EarlierTexts rule={rule} onRevert={onRevert} /> : null}
+      </div>
       <button type="button" data-learned-rule-delete={rule.id} aria-label={t("roleMemory.delete")} title={t("roleMemory.delete")} onClick={() => onDelete(rule)}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] text-[15px] leading-none text-muted hover:bg-well hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-9">×</button>
     </li>
   );
 }
 
-function LeftRow({ rule, onRestore }: { rule: RuleView; onRestore: (rule: RuleView) => void }) {
+function EarlierTexts({ rule, onRevert }: { rule: RuleView; onRevert?: (id: string) => void }) {
+  const { t, locale } = useLocale();
+  if (!rule.versions?.length) return null;
+  return <details data-rule-versions={rule.id} className="text-[11.5px] leading-4 text-secondary">
+    <summary className="cursor-pointer py-1">{t("roleMemory.versions", { count: rule.versions.length })}</summary>
+    <ul className="m-0 list-none p-0">{rule.versions.slice().reverse().map(version => <li key={version.id} className="border-t border-border py-1">
+      <p className="m-0">{version.rule}</p><p className="m-0 text-muted">{version.why}</p>
+      <p className="m-0 text-[10.5px] text-muted">{new Date(version.revisedBy?.at ?? version.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")}{version.revisedBy ? ` · ${t(`roleMemory.revised.${version.revisedBy.by}`, { role: roleNameById(t, version.revisedBy.roleId ?? "") })}` : ""}</p>
+      <button type="button" data-rule-revert={version.id} className="min-h-9 px-1 text-accent" onClick={() => onRevert?.(version.id)}>{t("roleMemory.restore")}</button>
+    </li>)}</ul>
+  </details>;
+}
+
+function LeftRow({ rule, onRestore, counterpart, onFocus, onRevert }: { rule: RuleView; onRestore: (rule: RuleView) => void; counterpart?: RuleView; onFocus?: (id: string) => void; onRevert?: (id: string) => void }) {
   const { t } = useLocale();
-  const reason = rule.reason === "duplicate" ? "roleMemory.left.duplicate" : rule.reason === "deleted" ? "roleMemory.left.deleted" : "roleMemory.left.budget";
+  const reason: `roleMemory.left.${NonNullable<RuleView["reason"]> | "merged"}` = rule.state === "merged" ? "roleMemory.left.merged" : `roleMemory.left.${rule.reason ?? "budget"}`;
   return (
-    <li data-left-rule={rule.id} className="flex items-start gap-2 px-2 py-1">
+    <li title={rule.note} data-left-rule={rule.id} className="flex items-start gap-2 px-2 py-1">
       <span className="min-w-0 flex-1">
         <span className="block text-[11.5px] leading-4 text-muted line-through line-clamp-2">{rule.rule}</span>
-        <span className="block text-[10.5px] leading-4 text-muted">{t(reason)}</span>
+        <span className="block text-[10.5px] leading-4 text-muted">{t(reason)}{rule.where ? ` · ${rule.where}` : ""}</span>
+        {counterpart ? <button type="button" data-rule-counterpart={counterpart.id} onClick={() => onFocus?.(counterpart.id)} className="text-left text-[11px] leading-4 text-accent">{counterpart.rule.slice(0, 70)}…</button> : null}
+        <EarlierTexts rule={rule} onRevert={onRevert} />
       </span>
       <button type="button" data-left-rule-restore={rule.id} onClick={() => onRestore(rule)}
         className="h-6 shrink-0 rounded-[6px] px-1.5 text-[11px] font-semibold text-accent hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t("roleMemory.restore")}</button>
@@ -228,38 +252,48 @@ function UndoRow({ onUndo }: { onUndo: () => void }) {
 const NEAR_BOUND = 0.8;
 
 /** One kind of rule: its heading in its colour with its count when it has rules, its rows, what left it behind one toggle, and its size once it nears 10 000. A picker carries the counts itself; an empty kind says so once, in its body. */
-export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, removed, onDelete, onRestore }: {
-  kind: ScopeKind; title: string; subtitle: string; scope: ScopeView | null; picker?: ReactNode; focusRule?: string; removed?: Removed | null;
-  onDelete: (rule: RuleView) => void; onRestore: (rule: RuleView) => void;
+export function RuleSection({ kind, title, subtitle, scope, additionalScope, picker, focusRule, removed, onDelete, onRestore, onRevert, allRules, onFocus }: {
+  allRules?: RuleView[]; onFocus?: (id: string) => void;
+  kind: ScopeKind; title: string; subtitle: string; scope: ScopeView | null; additionalScope?: ScopeView | null; picker?: ReactNode; focusRule?: string; removed?: Removed | null;
+  onDelete: (rule: RuleView) => void; onRestore: (rule: RuleView) => void; onRevert?: (id: string) => void;
 }) {
   const { t, locale } = useLocale();
   const [history, setHistory] = useState(false);
   const chars = scope?.chars ?? 0;
   const bound = scope?.bound ?? 10_000;
   const shown = scope?.active.slice().reverse() ?? [];
+  const count = (scope?.active.length ?? 0) + (additionalScope?.active.length ?? 0);
   const undo = removed && scope && removed.scope === scope.scope ? removed : null;
-  const rows: ReactNode[] = shown.map((rule) => <RuleRow key={rule.id} rule={rule} kind={kind} focused={rule.id === focusRule} scopeRole={scope!.roleId} onDelete={onDelete} />);
+  const rows: ReactNode[] = shown.map((rule) => <RuleRow key={rule.id} rule={rule} kind={kind} focused={rule.id === focusRule} scopeRole={scope!.roleId} onDelete={onDelete} onRevert={onRevert} />);
   if (undo) rows.splice(Math.min(undo.at, rows.length), 0, <UndoRow key="undo" onUndo={() => onRestore(undo.rule)} />);
+  const additionalRows: ReactNode[] = additionalScope?.active.slice().reverse().map(rule => <RuleRow key={rule.id} rule={rule} kind={kind} focused={rule.id === focusRule} scopeRole={additionalScope.roleId} onDelete={onDelete} onRevert={onRevert} />) ?? [];
+  if (removed && additionalScope?.scope === removed.scope) additionalRows.splice(Math.min(removed.at, additionalRows.length), 0, <UndoRow key="additional-undo" onUndo={() => onRestore(removed.rule)} />);
   return (
-    <section data-rules-section={kind} data-rules-scope-page={scope?.scope ?? ""} className={`flex min-h-0 min-w-0 flex-col rounded-[10px] border border-border border-t-[3px] bg-card ${KIND_TONE[kind].bar}`}>
+    <section data-rules-section={kind} data-rules-scope-page={scope?.scope ?? ""} className={`flex min-w-0 flex-col rounded-[10px] border border-border border-t-[3px] bg-card md:min-h-0 ${KIND_TONE[kind].bar}`}>
       <header className="flex flex-col gap-1 px-3 pb-1.5 pt-2">
         <div className="flex items-baseline gap-2">
           <h3 className={`m-0 text-[13px] font-semibold ${KIND_TONE[kind].text}`}>{title}</h3>
-          {picker || !scope?.active.length ? null : <span data-rules-count="" className="text-[11.5px] tabular-nums text-muted">{scope.active.length}</span>}
+          {picker || !count ? null : <span data-rules-count="" className="text-[11.5px] tabular-nums text-muted">{count}</span>}
           {chars >= bound * NEAR_BOUND ? <span className="ml-auto text-[10.5px] tabular-nums text-warning" data-rules-size="">{t("roleMemory.size", { chars: number(chars, locale), bound: number(bound, locale) })}</span> : null}
         </div>
         <span className="text-[11px] leading-4 text-muted">{subtitle}</span>
         {picker}
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
+      <div className="px-1 pb-1 md:min-h-0 md:flex-1 md:overflow-y-auto">
+        {kind === "role" ? <p className="m-0 px-2 py-1 text-[11px] font-semibold text-muted">{t("roleMemory.thisProject")}</p> : null}
         {rows.length ? <ol className="m-0 flex list-none flex-col p-0">{rows}</ol> : <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p>}
-        {scope?.left.length ? (
+        {kind === "role" ? <div data-rules-every-project="" className="border-t border-border">
+          <p className="m-0 px-2 py-1 text-[11px] font-semibold text-muted">{t("roleMemory.everyProject")}</p>
+          {additionalRows.length ? <ol className="m-0 list-none p-0">{additionalRows}</ol> : <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p>}
+          {additionalScope && additionalScope.chars >= additionalScope.bound * NEAR_BOUND ? <p data-rules-size="" className="m-0 px-2 text-[10.5px] text-warning">{t("roleMemory.size", { chars: number(additionalScope.chars, locale), bound: number(additionalScope.bound, locale) })}</p> : null}
+        </div> : null}
+        {(scope?.left.length ?? 0) + (additionalScope?.left.length ?? 0) > 0 ? (
           <div className="border-t border-border pt-0.5">
             <button type="button" data-rules-history={kind} aria-expanded={history} onClick={() => setHistory((was) => !was)}
               className="flex h-7 w-full items-center gap-1 rounded-[6px] px-2 text-left text-[11px] font-semibold text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-              <span className="flex-1">{t("roleMemory.history")} · {scope.left.length}</span><span aria-hidden>{history ? "▴" : "▾"}</span>
+              <span className="flex-1">{t("roleMemory.history")} · {(scope?.left.length ?? 0) + (additionalScope?.left.length ?? 0)}</span><span aria-hidden>{history ? "▴" : "▾"}</span>
             </button>
-            {history ? <ul className="m-0 list-none p-0">{scope.left.map((rule) => <LeftRow key={rule.id} rule={rule} onRestore={onRestore} />)}</ul> : null}
+            {history ? <ul className="m-0 list-none p-0">{[...(scope?.left ?? []), ...(additionalScope?.left ?? [])].map((rule) => <LeftRow key={rule.id} rule={rule} onRestore={onRestore} counterpart={allRules?.find(r => r.id === (rule.against ?? rule.mergedInto))} onFocus={onFocus} onRevert={onRevert} />)}</ul> : null}
           </div>
         ) : null}
       </div>
@@ -269,8 +303,16 @@ export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, r
 
 /** The rules window: the role, project and machine rules a new agent of the chosen role starts with, side by side on the desktop and stacked on the phone. */
 export function RulesWindow({ project, focusRule, onClose }: { project: string; focusRule?: string; onClose: () => void }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const failures: Record<string, string> = {
+    "no-account": t("roleMemory.failure.noAccount"), "no-repository": t("roleMemory.failure.noRepository"),
+    "launch-refused": t("roleMemory.failure.launchRefused"), "launch-failed": t("roleMemory.failure.launchFailed"),
+    "turn-error": t("roleMemory.failure.turnError"), "timed-out": t("roleMemory.failure.timedOut"),
+  };
   const { view, failed, act } = useProjectRules(project);
+  const [focus, setFocus] = useState({ prop: focusRule, rule: focusRule });
+  const localFocus = focus.prop === focusRule ? focus.rule : focusRule;
+  const setLocalFocus = (id: string) => setFocus({ prop: focusRule, rule: id });
   const [chosenRole, setChosenRole] = useState<string | null>(null);
   const [undo, setUndo] = useState<Removed | null>(null);
   useEffect(() => {
@@ -285,10 +327,11 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
   }, [undo]);
   const scopes = view?.scopes ?? [];
   const roleScopes = scopes.filter((scope) => scope.kind === "role");
-  const focusRole = focusRule ? scopes.find((scope) => scope.active.some((rule) => rule.id === focusRule))?.roleId : null;
+  const focusRole = localFocus ? scopes.find((scope) => scope.active.some((rule) => rule.id === localFocus))?.roleId : null;
   const roles = [...new Set([...roleScopes.map((scope) => scope.roleId!), ...(roleScopes.length ? [] : ["builder"])])];
   const role = chosenRole ?? (focusRole && scopes.some((scope) => scope.roleId === focusRole) ? focusRole : roles.includes("builder") ? "builder" : roles[0]!);
-  const roleScope = roleScopes.find((scope) => scope.roleId === role) ?? null;
+  const roleScope = roleScopes.find((scope) => scope.roleId === role && !scope.scope.startsWith("role:*:")) ?? null;
+  const everyRoleScope = roleScopes.find(scope => scope.roleId === role && scope.scope.startsWith("role:*:")) ?? null;
   const projectScope = scopes.find((scope) => scope.kind === "project") ?? null;
   const machineScope = scopes.find((scope) => scope.kind === "machine") ?? null;
   const roleName = roleNameById(t, role);
@@ -302,7 +345,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
   const picker = roles.length > 1 ? (
     <div role="tablist" aria-label={t("roleMemory.roleSection")} className="flex gap-1 overflow-x-auto pt-0.5">
       {roles.map((id) => {
-        const count = roleScopes.find((scope) => scope.roleId === id)?.active.length ?? 0;
+        const count = roleScopes.filter(scope => scope.roleId === id).reduce((sum, scope) => sum + scope.active.length, 0);
         const selected = id === role;
         return (
           <button key={id} type="button" role="tab" aria-selected={selected} data-rules-role={id} onClick={() => setChosenRole(id)}
@@ -331,11 +374,21 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         {failed === "read" && !view ? <p role="alert" className="m-4 text-[13px] text-danger">{t("roleMemory.loadFailed")}</p> : null}
         {failed === "save" ? <p role="alert" className="m-0 border-b border-border px-4 py-1.5 text-[12px] text-danger">{t("roleMemory.saveFailed")}</p> : null}
         {view && !view.enabled ? <p data-rules-window-off="" className="m-0 border-b border-border bg-warning-soft px-4 py-1.5 text-[12px] text-primary">{t("roleMemory.off")}</p> : null}
+        {view?.curation ? <details data-curation-history="" className="shrink-0 border-b border-border px-4 py-1.5 text-[11.5px] leading-4 text-secondary">
+          <summary className="cursor-pointer">{t("roleMemory.curator")} · {t("roleMemory.lastRun", { at: view.curation.lastAt ? new Date(view.curation.lastAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US") : t("roleMemory.never") })} · {view.enabled ? t("roleMemory.nextRun", { at: view.curation.nextAt ? new Date(view.curation.nextAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US") : t("roleMemory.noActive") }) : t("roleMemory.off")}</summary>
+          <ol className="m-0 max-h-32 list-none overflow-y-auto p-0">{view.curation.passes.map(pass => <li key={pass.id} data-curation-pass={pass.id} className="border-t border-border py-1">
+            <div className="flex flex-wrap items-center gap-x-2">
+              <span className="min-w-0">{t("roleMemory.curator")} · {new Date(pass.claimedAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")} · {t(`roleMemory.pass.${pass.state}`)}{pass.failure ? ` · ${failures[pass.failure] ?? pass.failure}` : ""} · {t("roleMemory.pass.counts", pass.counts)}</span>
+              {pass.state === "succeeded" || pass.state === "failed" ? <button type="button" disabled={!!pass.revertedAt} data-curation-undo={pass.id} onClick={() => void act("revert-pass", pass.id)} className="min-h-9 pr-2 font-semibold text-accent disabled:text-muted">{t(pass.revertedAt ? "roleMemory.pass.undone" : "roleMemory.pass.undo")}</button> : null}
+            </div>
+            {pass.skipped?.length ? <p data-curation-skipped="" className="m-0 text-muted">{t("roleMemory.pass.skipped", { count: pass.skipped.length })}</p> : null}
+          </li>)}</ol>
+        </details> : null}
         {view ? (
-          <div className="grid min-h-0 flex-1 grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
-            <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : t("roleMemory.roleSubtitle", { role: roleName })} scope={roleScope} picker={picker} focusRule={focusRule} removed={undo} onDelete={remove} onRestore={restore} />
-            <RuleSection kind="project" title={t("roleMemory.projectSection")} subtitle={t("roleMemory.projectSubtitle")} scope={projectScope} focusRule={focusRule} removed={undo} onDelete={remove} onRestore={restore} />
-            <RuleSection kind="machine" title={t("roleMemory.machineSection")} subtitle={t("roleMemory.machineSubtitle")} scope={machineScope} focusRule={focusRule} removed={undo} onDelete={remove} onRestore={restore} />
+          <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:auto-rows-auto md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
+            <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : t("roleMemory.roleSubtitle", { role: roleName })} scope={roleScope} additionalScope={everyRoleScope} picker={picker} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />
+            <RuleSection kind="project" title={t("roleMemory.projectSection")} subtitle={t("roleMemory.projectSubtitle")} scope={projectScope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />
+            <RuleSection kind="machine" title={t("roleMemory.machineSection")} subtitle={t("roleMemory.machineSubtitle")} scope={machineScope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />
           </div>
         ) : null}
       </section>
