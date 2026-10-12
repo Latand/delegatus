@@ -30,6 +30,8 @@ export function cardStatusText(t: TFunction, status: CardStatus): { word: string
   if (status.kind === "needs-you") return { word: t("cardStatus.needsYou"), detail: null };
   if (status.kind === "held") return { word: t("cardStatus.held"), detail: `×${status.count}` };
   if (status.kind === "running") {
+    if (status.activity?.state === "checking") return { word: t("cardStatus.checking"), detail: status.activity.check };
+    if (status.activity?.state === "idle") return { word: t("cardStatus.idle"), detail: t("cardStatus.idleMinutes", { n: Math.floor((status.activity.idleForMs ?? 0) / 60_000) }) };
     return {
       word: t("cardStatus.running"),
       detail: status.elapsedSeconds === null ? null : humanizeDuration(status.elapsedSeconds),
@@ -48,14 +50,16 @@ export function CardStatusBadge({ file, fontClassName = "text-caption" }: {
   if (!status) return null;
   const { word, detail } = cardStatusText(t, status);
   const label = detail ? `${word} ${detail}` : word;
+  const tone = status.kind === "running" && status.activity?.state === "checking" ? TONE.held
+    : status.kind === "running" && status.activity?.state === "idle" ? "border-danger/45 bg-danger-soft text-danger" : TONE[status.kind];
   return (
     <span
       data-card-status={status.kind}
       title={label}
-      className={`inline-flex min-w-0 shrink-0 items-center gap-[0.35em] rounded-full border px-[0.6em] py-[0.15em] font-bold ${fontClassName} ${TONE[status.kind]}`}
+      className={`inline-flex min-w-0 max-w-full overflow-hidden items-center gap-[0.35em] rounded-full border px-[0.6em] py-[0.15em] font-bold ${fontClassName} ${tone}`}
     >
-      <span className="truncate uppercase tracking-wide">{word}</span>
-      {detail ? <span className="shrink-0 tabular-nums opacity-90">{detail}</span> : null}
+      <span className="shrink-0 uppercase tracking-wide">{word}</span>
+      {detail ? <span className="min-w-0 truncate tabular-nums opacity-90">{detail}</span> : null}
     </span>
   );
 }

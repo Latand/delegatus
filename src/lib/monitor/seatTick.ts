@@ -139,7 +139,7 @@ export const SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS = 15 * MINUTE_MS;
 
 export const DEFAULT_SEAT_TICK_POLICY: SeatTickPolicy = {
   checkIntervalMs: 5 * MINUTE_MS,
-  stallAfterMs: 40 * MINUTE_MS,
+  stallAfterMs: 10 * MINUTE_MS,
   proposalIntervalMs: 24 * 60 * MINUTE_MS,
   itemsPerWake: 5,
   retryGuard: 2,
@@ -240,10 +240,13 @@ function childStallId(child: SeatTickChildInput): string {
 /** A reported stall's memory: the stall and the record it was stalled at, so
     a lane or child that moved and stalled again is a stall nobody reported. */
 function laneStallToken(pipeline: SeatTickPipelineInput): string {
+  const activity = pipeline.stageActivity;
+  if (verifiedIdle(activity)) return `${activity!.conversationId ?? pipeline.id}@${activity!.lastRecordAt ?? ""}`;
   return `${pipeline.id}@${pipeline.updatedAt ?? ""}`;
 }
 
 function childStallToken(child: SeatTickChildInput): string {
+  if (verifiedIdle(child.activity)) return `${child.conversationId}@${child.activity!.lastRecordAt ?? child.lastRecordAt ?? ""}`;
   return `${childStallId(child)}@${child.lastRecordAt ?? ""}`;
 }
 
@@ -401,6 +404,18 @@ export function seatTurnProgressing(seat: SeatTickSeatInput): boolean {
  * newest attempt instant from the clock would instead call a long-running stage
  * stalled while its host was writing to the transcript.
  */
+function verifiedIdle(activity: SeatTickActivity | null | undefined): boolean {
+  return activity?.verified === true && activity.activity?.state === "idle";
+}
+function idleReason(activity: SeatTickActivity): string {
+  const minutes = Math.floor((activity.activity?.idleForMs ?? 0) / MINUTE_MS);
+  const at = activity.lastRecordAt ? new Intl.DateTimeFormat("uk", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" }).format(new Date(activity.lastRecordAt)) : "?";
+  return `стоїть ${minutes} хв: no transcript record since ${at} UTC and no running process`;
+}
+function suppressStall(activity: SeatTickActivity): boolean {
+  return activity.verified === false || activity.activity?.state === "checking";
+}
+
 function stalledLanes(input: SeatTickCheckInput): { pipeline: SeatTickPipelineInput; reason: string }[] {
   const options = { now: new Date(input.now), stallAfterMs: null };
   const found: { pipeline: SeatTickPipelineInput; reason: string }[] = [];
@@ -412,11 +427,11 @@ function stalledLanes(input: SeatTickCheckInput): { pipeline: SeatTickPipelineIn
       continue;
     }
     const activity = pipeline.stageActivity;
-    if (activity && (activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
+    if (activity && !suppressStall(activity) && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
       const stage = pipeline.stageId ? ` stage ${pipeline.stageId}` : "";
       found.push({
         pipeline,
-        reason: `pipeline ${pipeline.id}${stage} runs a turn the registry reports ${activity.lifecycle} (${activity.reason})`,
+        reason: verifiedIdle(activity) ? idleReason(activity) : `pipeline ${pipeline.id}${stage} runs a turn the registry reports ${activity.lifecycle} (${activity.reason})`,
       });
     }
   }
@@ -440,8 +455,8 @@ function stalledChildren(input: SeatTickCheckInput): { child: SeatTickChildInput
   for (const child of input.children) {
     if (!isRunningChild(child)) continue;
     const activity = child.activity;
-    if (activity && isStalledActivity(activity)) {
-      found.push({ child, reason: `child ${child.conversationId} runs a turn the registry reports ${activity.lifecycle} (${activity.reason})` });
+    if (activity && !suppressStall(activity) && (verifiedIdle(activity) || isStalledActivity(activity))) {
+      found.push({ child, reason: verifiedIdle(activity) ? idleReason(activity) : `child ${child.conversationId} runs a turn the registry reports ${activity.lifecycle} (${activity.reason})` });
     }
   }
   return found;
@@ -1213,10 +1228,10 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     unreadable: countSkipped(skipped, "unreadable") - unreadable.named.length - unreadable.unchanged,
     unchanged: countSkipped(skipped, "unchanged") + unreadable.unchanged,
   };
-  /* A stall is only reported once it survived a second check, so a lane between
-     two attempts is never called stuck. */
-  const persistedStalls = stalled.filter((entry) => input.state.stalledSeen.includes(entry.pipeline.id));
-  const persistedChildStalls = offeredChildStalls.filter((entry) => input.state.stalledSeen.includes(childStallId(entry.child)));
+  /* A measured ten-minute idle stretch is due immediately. Other stall
+     sources retain their second sighting through attempt transitions. */
+  const persistedStalls = stalled.filter((entry) => verifiedIdle(entry.pipeline.stageActivity) || input.state.stalledSeen.includes(entry.pipeline.id));
+  const persistedChildStalls = offeredChildStalls.filter((entry) => verifiedIdle(entry.child.activity) || input.state.stalledSeen.includes(childStallId(entry.child)));
   const unknownChildren = input.children.filter((child) => child.status === "unknown").length;
   const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs));
   const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.length;
@@ -1270,6 +1285,9 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const laneEvents = input.events.filter(event => isOwedEvent(event, input));
   const intervalAgenda = input.pipelines.some(isOpenLane) || runningChildren.length > 0 || input.signals.length > 0;
   const candidates: SeatTickWakeReason[] = [];
+  const reportedIdle = new Set(input.state.reportedStalls ?? []);
+  const verifiedIdleDue = persistedStalls.some(entry => verifiedIdle(entry.pipeline.stageActivity) && !reportedIdle.has(laneStallToken(entry.pipeline)))
+    || persistedChildStalls.some(entry => verifiedIdle(entry.child.activity) && !reportedIdle.has(childStallToken(entry.child)));
   if (wakeDue) {
     /* A verdict the seat cannot decide without leads the wake — and waits for
        the wake like everything else. Routine progress never wakes on its own,
@@ -1365,6 +1383,9 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     if (openWork && intervalAgenda && candidates.length === 0) {
       candidates.push({ kind: "interval", detail: "the wake interval elapsed while work is open" });
     }
+  }
+  if (!wakeDue && verifiedIdleDue) {
+    candidates.push({ kind: "stalled", detail: (persistedStalls[0] ?? persistedChildStalls[0])!.reason });
   }
   /* Low disk leads and does not wait for the interval: a volume that fills
      kills every agent writing to it. The episode is shown once. */
@@ -2209,7 +2230,7 @@ function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | 
   const signal = kind === "signal" ? input.signals.find(row => row.id === item.id) : undefined;
   const source = signal?.episode ?? (kind === "task" ? input.tasks.find(row => row.id === item.id)
     : kind === "pull-request" ? input.pullRequests.find(row => `#${row.number}` === item.id)
-    : pipeline ? { title: pipeline.title, state: pipeline.state, stageId: pipeline.stageId, updatedAt: pipeline.updatedAt, pausedBy: pipeline.pausedBy, stall: pipeline.pausedBy !== "seat" && input.state.stalledSeen.includes(pipeline.id) && stalledLanes(input).some(entry => entry.pipeline.id === pipeline.id) ? laneStallToken(pipeline) : null, activity: pipeline.stageActivity?.lifecycle, reason: pipeline.stageActivity?.reason }
+    : pipeline ? { title: pipeline.title, state: pipeline.state, stageId: pipeline.stageId, updatedAt: pipeline.updatedAt, pausedBy: pipeline.pausedBy, stall: pipeline.pausedBy !== "seat" && (verifiedIdle(pipeline.stageActivity) || input.state.stalledSeen.includes(pipeline.id)) && stalledLanes(input).some(entry => entry.pipeline.id === pipeline.id) ? laneStallToken(pipeline) : null, activity: pipeline.stageActivity?.lifecycle, reason: pipeline.stageActivity?.reason }
     : ownLane ?? item.label);
   // A settlement's resume instruction can outlive the deploy's own showing.
   // Keep its identity in each paused lane's version after the source drops it.

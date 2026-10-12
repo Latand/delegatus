@@ -431,6 +431,10 @@ export interface SeatTickSourceGap {
  * "progressing" either.
  */
 export interface SeatTickActivity {
+  verified?: boolean;
+  conversationId?: string | null;
+  lastRecordAt?: string | null;
+  activity?: import("@/lib/lifecycle/agentActivity").AgentActivity;
   lifecycle: LifecycleState;
   reason: string;
   /**

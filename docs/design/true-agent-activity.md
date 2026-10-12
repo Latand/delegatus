@@ -390,3 +390,18 @@ that the badge's check name truncates inside the card with no overlap.
 - **A fourth display state for `unverified` on the board.** The Viewer reads
   every tail it shows, so the board never sees one; it exists only in
   `agent_activity` answers.
+
+
+## Implementation verification notes
+
+The Claude background ledger is the existing incremental reader, capped at
+1 MiB per activity observation. Each observation advances its complete-line
+cursor; an incomplete prefix cannot prove that background work ended. A quiet
+live turn with that evidence unresolved remains unverified and carries no
+silence number. A positive wait or live check still establishes `checking`.
+This keeps large and sparse transcripts within the bounded-read contract.
+
+The current kanban renders conversation state in its member tile, so the
+shared badge replaces that tile's state word. The phone uses its existing
+conversation status slot. The existing browser drivers record the three
+states in both languages at 1440, 1000 and 390 px.

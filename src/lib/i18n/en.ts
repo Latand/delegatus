@@ -480,6 +480,9 @@ export const en = {
   // attention/receipt/turn surfaces, one word per card.
   "cardStatus.needsYou": "needs you",
   "cardStatus.held": "held",
+  "cardStatus.checking": "waiting on a check",
+  "cardStatus.idleMinutes": "{n}m",
+  "cardStatus.idle": "idle",
   "cardStatus.running": "working",
   "cardStatus.queued": "queued",
 

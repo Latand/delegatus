@@ -1,5 +1,7 @@
 "use client";
 
+import { CardStatusBadge } from "@/components/CardStatusBadge";
+
 import { ArrowDown, ArrowUp, Bot, Flag } from "lucide-react";
 import { memo, useState } from "react";
 
@@ -164,7 +166,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
         <EngineMark engine={member.file.engine} size={12} className="engine" label={member.file.engine} />
         <span className="role" title={hint}>{parts ? parts.name : role}</span>
         {parts && parts.attempt !== null ? <span className="attempt"> · {parts.attempt}</span> : null}
-        <span className={`state ${stateClass}`}>{state}</span>
+        {member.file.agentActivity && member.file.proc === "running" ? <CardStatusBadge file={member.file} /> : <span className={`state ${stateClass}`}>{state}</span>}
       </span>
       {member.latest ? <span className="latest">{member.latest}</span> : null}
       <span className="age">{fmtAge(member.file.mtime)}</span>

@@ -1,3 +1,4 @@
+import { fileAgentActivity, type AgentActivity } from "@/lib/lifecycle/agentActivity";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
 import type { FileEntry } from "@/lib/types";
@@ -33,7 +34,7 @@ import { workingSince } from "./workingSince";
 export type CardStatus =
   | { kind: "needs-you" }
   | { kind: "held"; count: number }
-  | { kind: "running"; elapsedSeconds: number | null }
+  | { kind: "running"; elapsedSeconds: number | null; activity?: AgentActivity }
   | { kind: "queued" };
 
 export function cardStatus(file: FileEntry, nowMs: number = Date.now()): CardStatus | null {
@@ -45,6 +46,7 @@ export function cardStatus(file: FileEntry, nowMs: number = Date.now()): CardSta
     const startedAt = workingSince(file);
     return {
       kind: "running",
+      ...(file.agentActivity ? { activity: fileAgentActivity(file, nowMs) } : {}),
       elapsedSeconds: startedAt === null ? null : Math.max(0, (nowMs - startedAt) / 1000),
     };
   }

@@ -1,3 +1,5 @@
+import { fileAgentActivity } from "@/lib/lifecycle/agentActivity";
+import { getLocale, translate, type Locale } from "@/lib/i18n";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
@@ -153,7 +155,7 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
   if (reason && !reason.dismissal) {
     return bits({ key: "waiting", dot: "warning", edge: "warning", badge: waitingBadge(reason), seconds: Math.max(0, now - reason.since) });
   }
-  if (stalledAttention(file, now)) return bits({ key: "stalled", dot: "danger", seconds: Math.max(0, now - file.mtime) });
+  if (stalledAttention(file, now)) return bits({ key: "stalled", dot: "danger", seconds: (fileAgentActivity(file, now * 1000).idleForMs ?? 0) / 1000 });
   if (file.rateLimit) {
     return bits({
       key: "limit",
@@ -180,7 +182,9 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
  * the work in flight; neither is invented here, and a conversation that
  * published neither gets no fragment rather than a guess.
  */
-export function nowFragment(file: FileEntry): string | null {
+export function nowFragment(file: FileEntry, nowMs = Date.now(), locale: Locale = getLocale()): string | null {
+  const activity = fileAgentActivity(file, nowMs);
+  if (activity.state === "checking") return `${translate(locale, "cardStatus.checking")}${activity.check ? ` · ${activity.check}` : ""}`;
   const current = file.plan?.current?.trim();
   if (current) return current;
   const objective = file.goal?.status === "active" ? file.goal.objective?.trim() : null;
@@ -392,7 +396,7 @@ function boardConversation(file: FileEntry, now: number, crowned: ReadonlySet<st
     path: file.path,
     title: cleanTitle(file.title, 90),
     state,
-    now: state.key === "working" ? nowFragment(file) : null,
+    now: state.key === "working" ? nowFragment(file, now * 1000) : null,
     launchedAt: launchedAt(file),
     crowned: crowned.has(file.path),
   };

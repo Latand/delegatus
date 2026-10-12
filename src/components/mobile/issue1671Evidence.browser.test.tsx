@@ -9778,3 +9778,36 @@ describe("short questionnaire rendered evidence", () => {
     } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
   }, 900_000);
 });
+
+
+describe("true agent activity", () => {
+  browserTest("true activity phone rows name checks and idle minutes without overflow", async () => {
+    const out = path.resolve(".artifacts/true-activity/phone"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
+    const readings = [];
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?true-activity=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
+        const workingTab = page.locator('[data-phone-kanban-tab="assigned"]'); if (await workingTab.isVisible()) await workingTab.click();
+        for (const state of ["working", "checking", "idle"]) {
+          const row = page.locator(`[data-phone-card-agent="/repo/activity-${state}.jsonl"]`);
+          await row.waitFor(); await row.scrollIntoViewIfNeeded();
+          const badge = row.locator("[data-card-status]"); await badge.waitFor();
+          expect(await badge.textContent()).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
+          const geometry = await badge.evaluate(element => {
+            const box = element.getBoundingClientRect(); const row = element.closest("[data-phone-card-agent]")!.getBoundingClientRect(); const detail = element.lastElementChild as HTMLElement;
+            return { left: box.left, right: box.right, rowLeft: row.left, rowRight: row.right, clipped: detail.scrollWidth > detail.clientWidth };
+          });
+          expect(geometry.right).toBeLessThanOrEqual(geometry.rowRight);
+          expect(geometry.left).toBeGreaterThanOrEqual(geometry.rowLeft);
+          if (state === "checking") expect(geometry.clipped).toBe(true);
+          readings.push({ lang, state, ...geometry });
+        }
+        expect(pageErrors).toEqual([]);
+        await page.screenshot({ path: path.join(out, `variant-1-390-${lang}.png`), fullPage: true }); await context.close();
+      }
+      fs.writeFileSync(path.resolve("evidence/true-agent-activity-phone.json"), JSON.stringify(readings, null, 2)+"\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});

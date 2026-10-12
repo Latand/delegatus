@@ -41,8 +41,8 @@ export function clockDuration(seconds: number): string {
     condition the pinned working spinner paints from. Anything that states
     something about that turn (the strip's interrupt note) reads it from here, so
     the two can never end up asserting opposite things about the same turn. */
-export function turnIsRunning(file: Pick<FileEntry, "lastTurn" | "activity">): boolean {
-  return file.activity === "live" && (!file.lastTurn || file.lastTurn.endedAt === null);
+export function turnIsRunning(file: Pick<FileEntry, "lastTurn" | "activity"> & Partial<Pick<FileEntry, "proc" | "authoritativeTurn" | "activityReason">>): boolean {
+  return file.proc === "running" ? turnLeftOpen(file) : file.proc === "killed" ? false : file.activity === "live" && (!file.lastTurn || file.lastTurn.endedAt === null);
 }
 
 /** Whether the transcript's last turn never closed. This is the line the

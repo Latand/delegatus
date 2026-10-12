@@ -271,8 +271,9 @@ function compactLivenessRow(row: AgentLivenessRecord) {
           permission: { tool: row.permission.tool, command: row.permission.command, reason: row.permission.reason, since: row.permission.since },
         }
       : {}),
-    silentForMs: row.silentForMs,
-    stalledForMs: row.stalledForMs,
+    verified: row.verified ?? row.evidenceSource === "transcript",
+    ...(row.activity ? { activity: row.activity } : {}),
+    ...(row.verified === false || row.evidenceSource !== "transcript" ? {} : { silentForMs: row.silentForMs, stalledForMs: row.stalledForMs }),
     pipeline: row.pipeline
       ? { pipelineId: row.pipeline.pipelineId, stageId: row.pipeline.stageId, attempt: row.pipeline.attempt }
       : null,

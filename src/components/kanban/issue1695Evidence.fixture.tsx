@@ -450,6 +450,15 @@ function pipeline(id: string, task: string, taskId: string, state: string, stage
 
 const files: FileEntry[] = [];
 const add = (file: FileEntry) => { files.push(file); return file; };
+if (SCENARIO === "true-activity") {
+  for (const [state, age] of [["working", 20], ["checking", 300], ["idle", 840]] as const) {
+    add(conversation(`activity-${state}`, `Activity ${state}`, working({
+      mtime: now - age, activity: age > 180 ? "stalled" : "live",
+      agentActivity: { lastRecordAt: (now - age) * 1000, checking: state === "checking", check: state === "checking" ? "privacy-publication-gate-with-an-extremely-long-check-name".repeat(3) : null },
+    })));
+  }
+}
+
 
 /* t-search: implement → review (review loop) → verify → merge, with verify's fail edge back to implement. */
 const searchImpl1 = add(conversation("search-impl-1", "Keep the old index serving until the new one answers", { mtime: now - 180 * MIN }));

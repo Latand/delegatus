@@ -28837,3 +28837,48 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
     }
   }, 300_000);
 });
+
+
+describe("true agent activity", () => {
+  browserTest("true activity badges fit working, checking and idle conversation tiles", async () => {
+    const out = path.resolve(".artifacts/true-activity/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings = [];
+    try {
+      for (const width of [1440, 1000]) for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=true-activity`, { width, height: 900 }, "dark", lang, "reduce");
+        await page.locator('[data-member="/repo/activity-working.jsonl"]').waitFor({ state: "attached" });
+        const inboxTab = page.locator('[data-tab="inbox"], [data-phone-kanban-tab="inbox"]');
+        if (await inboxTab.isVisible()) await inboxTab.click();
+        for (const state of ["working", "checking", "idle"]) {
+          const tile = page.locator(`[data-member="/repo/activity-${state}.jsonl"]`);
+          // Existing cards may fold their conversation list; open the list.
+          if (!await tile.isVisible()) {
+            const card = page.locator(`.card`).filter({ hasText: `Activity ${state}` }).first();
+            const expand = card.locator("button.fold");
+            if (await expand.count()) await expand.click();
+          }
+          const badge = tile.locator("[data-card-status]");
+          await badge.waitFor(); await badge.scrollIntoViewIfNeeded();
+          const geometry = await badge.evaluate(element => {
+            const box = element.getBoundingClientRect(); const parent = element.closest(".tile")!.getBoundingClientRect();
+            const detail = element.lastElementChild as HTMLElement;
+            const prior = element.previousElementSibling?.getBoundingClientRect();
+            return { left: box.left, right: box.right, parentLeft: parent.left, parentRight: parent.right, clipped: detail.scrollWidth > detail.clientWidth, priorRight: prior?.right ?? 0, text: element.textContent, title: element.getAttribute("title") };
+          });
+          expect(geometry.left).toBeGreaterThanOrEqual(geometry.parentLeft);
+          expect(geometry.right).toBeLessThanOrEqual(geometry.parentRight);
+          expect(geometry.priorRight).toBeLessThanOrEqual(geometry.left + 1);
+          if (state === "checking") { expect(geometry.clipped).toBe(true); expect(geometry.title).toContain("privacy-publication-gate"); }
+          expect(geometry.text).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
+          readings.push({ width, lang, state, ...geometry });
+        }
+        expect(pageErrors).toEqual([]);
+        await page.screenshot({ path: path.join(out, `variant-1-${width}-${lang}.png`), fullPage: true });
+        await context.close();
+      }
+      fs.writeFileSync(path.resolve("evidence/true-agent-activity-desktop.json"), JSON.stringify(readings, null, 2)+"\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});

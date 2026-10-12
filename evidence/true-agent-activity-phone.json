@@ -1,0 +1,56 @@
+[
+  {
+    "lang": "uk",
+    "state": "working",
+    "left": 24,
+    "right": 366,
+    "rowLeft": 12,
+    "rowRight": 378,
+    "clipped": false
+  },
+  {
+    "lang": "uk",
+    "state": "checking",
+    "left": 24,
+    "right": 366,
+    "rowLeft": 12,
+    "rowRight": 378,
+    "clipped": true
+  },
+  {
+    "lang": "uk",
+    "state": "idle",
+    "left": 24,
+    "right": 366,
+    "rowLeft": 12,
+    "rowRight": 378,
+    "clipped": false
+  },
+  {
+    "lang": "en",
+    "state": "working",
+    "left": 24,
+    "right": 366,
+    "rowLeft": 12,
+    "rowRight": 378,
+    "clipped": false
+  },
+  {
+    "lang": "en",
+    "state": "checking",
+    "left": 24,
+    "right": 366,
+    "rowLeft": 12,
+    "rowRight": 378,
+    "clipped": true
+  },
+  {
+    "lang": "en",
+    "state": "idle",
+    "left": 24,
+    "right": 366,
+    "rowLeft": 12,
+    "rowRight": 378,
+    "clipped": false
+  }
+]
