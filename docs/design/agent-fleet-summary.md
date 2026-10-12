@@ -154,7 +154,7 @@ Field rules:
   `permission_request`.
 - When lane 23790aa4 (#2783) is on main, rows carry `activity.state`
   (`working`, `checking`, `idle`) for open turns, and the summary adds
-  `"running": {"working": n, "checking": n, "idle": n}` under `agents`. Its
+  `"activity": {"working": n, "checking": n, "idle": n}` under `agents`. Its
   words are reused as they are; `idle` there means an open turn silent for
   ten minutes, which this answer keeps apart from `waiting`.
 - `where.pipeline` counts rows with a pipeline reference; `seat` counts
@@ -165,7 +165,8 @@ Field rules:
   record at all reads `unknown`.
 - `accounts` lists every account with at least one agent in scope, plus each
   engine's active account (`"active": true`) even with none, sorted by
-  running then live. `session` is `[usedPercent, resetsAt]` from the same
+  active, limit wait, running, then live. `session` is `[usedPercent, resetsAt]`
+  from the same
   durable observations `account_limits` reads, or `null` when the engine
   reports no session window; `weekly` is its used percent. An account whose
   observation is older than the automatic switch accepts adds
@@ -182,14 +183,17 @@ Field rules:
 this shape: 1,004 bytes for 22 agents and 1,042 bytes for 58 agents; the
 receipt envelope (`ok`, `toolName`, `clientRequestId`, `replayed`) adds about
 90. The bulk is account rows, so the cap is kept by folding: past 8 entries
-`byModel` folds the smallest into `"other"`, and past 8 accounts the ones
-with no running agent fold into `"moreAccounts": n`. A unit test pins the cap
+`byModel` folds the smallest into `"other"`, and past 8 accounts the
+lowest-priority rows fold into `"moreAccounts": n`
+with their total pairs in `moreAccountAgents` and wait count in `moreAccountLimitWait`.
+Active accounts and accounts waiting for a reset are retained first; busy
+accounts can also fold when necessary to enforce the cap. A unit test pins the cap
 at 20 and at 200 agents.
 
 ## 5. Detailed answer (on demand)
 
-`detail: true` returns the summary of the filtered set plus `agents`, one row
-per agent. `conversationId` or `pipelineId` imply `detail: true`, since a
+`detail: true` returns `{summary, agents, nextCursor}`: the summary of the
+filtered set plus `agents`, one row per agent. `conversationId` or `pipelineId` imply `detail: true`, since a
 summary of one agent or one lane says nothing the rows do not.
 
 Filters, all optional and combinable: `conversationId`, `pipelineId`,
@@ -248,7 +252,7 @@ Row shape (placeholders for ids and account names):
 | seat | designated seats from `authorizedManagerSeats` | `bindings.ts:841` |
 | limitWait | latest attempt of each open pipeline run whose `providerWait` has no `actionAt`, matched by `attempt.conversationId` | `src/lib/pipelines/types.ts:423` |
 | account windows, active, fresh | `accountLimitRows`, the projection behind `account_limits` | `src/lib/mcp/compactAnswers.ts:319`, `bindings.ts:4883` |
-| rssMB, procs | Viewer resource cache, `readResourcesWithDiagnostic(false, { waitMs: 0 })`, rows keyed by `conversationId` | `bindings.ts:5810`, `src/lib/types.ts:818` |
+| rssMB, procs | Viewer resource cache, `readCachedResourceSessions()`, rows keyed by `conversationId` | `bindings.ts:5810`, `src/lib/types.ts:818` |
 | memLimitMB, memKills | `entry.structuredHost.memory` | `src/lib/runtime/agentMemoryState.ts:3` |
 
 ## 7. Access fence
@@ -306,8 +310,10 @@ report. Nothing new is needed there; one test pins it.
 | File | Change |
 |---|---|
 | `src/lib/mcp/agentFleet.ts` (new) | Pure projection: `fleetAgents(rows, runtimeFor, seats, limitWaits, sessions)`, `fleetSummary(agents, accountRows, scope)` with the 2,048-byte folding, `fleetDetailRows(agents, filters)`. No I/O. |
-| `src/lib/mcp/bindings.ts` | `agentFleet` binding: resolve the scope from the caller, run `agentLivenessSnapshot` with `liveOnly` and the project, build `runtimeFor` with keyed registry reads for only the selected paths and ids, collect open `providerWait`s from `getPipelines()`, read `accountLimitRows` inputs and the cached sessions, call the module, apply `projectReadText` and `redactPayload`. Register it in `viewerReadTools` with `budgeted("agent_fleet", args, 24_000, …)`. |
+| `src/lib/mcp/bindings.ts` | `agentFleet` binding: resolve the scope from the caller, scope receipt replay by the current caller and project before reading a receipt, run `agentLivenessSnapshot` with `liveOnly` and the project, build `runtimeFor` with keyed registry reads for only the selected paths and ids, collect open `providerWait`s from `getPipelines()`, read `accountLimitRows` inputs and the cached sessions, call the module, apply `projectReadText` and `redactPayload`. Register it in `viewerReadTools` with `budgeted("agent_fleet", args, 24_000, …)`. |
 | `src/lib/mcp/server.ts` | `agent_fleet` in `MCP_TOOL_NAMES` and `OPTIONAL_READ_KEY_TOOLS`; its description; its input schema (`detail`, the filters, `limit` via `boundedNumericInput`, `cursor`); one sentence in `agent_activity`'s description; in `VIEWER_MCP_BASE_INSTRUCTIONS` the board-reading sentence names `agent_fleet` first for counts by engine, model, effort and account. |
+| `src/lib/resources.ts` | Expose the existing durable resource session table without starting or persisting a collection. `readResourcesWithDiagnostic(false, {waitMs: 0})` can start a background collection, so it cannot serve this read. |
+| `src/lib/voiceCompanion/readPaths.ts` | Keep voice detail pages within 3,200 bytes before the speech projection. |
 | `src/lib/mcp/largeReads.ts` | Add `agent_fleet` to `VIEWER_LARGE_READS`. |
 | `src/lib/voiceCompanion/boardReads.ts`, `readSchemas.ts`, `tools.ts` | Add `agent_fleet` to `READ_TOOL_NAMES` with a schema (`detail`, `engine`, `model`, `account`, `state`), a capability line, and a speech projection of the summary (it already fits the 4,000-byte page). |
 
@@ -331,7 +337,7 @@ isolated `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR`, and
   entry, generation and receipt all lack it, and the fallback order when only
   the generation or only the receipt has it; model and effort `default` for
   a launch that pinned none; the active account listed with zero agents;
-  `fresh: false` passes through; the `running` breakdown present with
+  `fresh: false` passes through; the `activity` breakdown present with
   `activity` and absent without; the compact payload stays under 2,048 bytes
   for 20 and for 200 agents with 12 accounts and 10 models (folding
   applied); detail filters by pipeline, conversation, engine, model, effort,
