@@ -1,6 +1,7 @@
 # Voice Delegatus on the phone: the floating head
 
-Status: prototype, three numbered variants, waiting for the visual critic and then the operator's pick.
+Status: prototype, three numbered variants. The visual critic's first round is answered below; the frames wait for the
+critic's next look and then the operator's pick.
 Nothing in `src/` is changed by this folder.
 
 ## Originating requirement
@@ -66,7 +67,8 @@ remounts, and a change of project is passed to the running session (`VoiceCompan
 - **The head.** A 52 px round tile with the product's own character (`CompanionCharacter`), its ring in the state's colour
   as on the desktop tile. It is one object: there is no open and collapsed pair on the phone.
 - **State: a dot and a short popover.** A 13 px dot on the head's rim carries the state: accent while listening, the text
-  colour while speaking, grey while thinking, a dashed ring with no call, red while the microphone is muted. A tap on the head
+  colour while speaking, grey while thinking, a hollow solid grey ring with no call, red while the microphone is muted. With no call the head keeps
+  its full colour and a solid grey outline: nothing is dashed or dimmed, so nothing reads as work in progress. A tap on the head
   opens its popover: one line with the dot, the state's word and the call's clock, then the rows. No label stands under the
   head.
 - **The head's menu.** In a call: «Вимкнути мікрофон», «Завершити розмову», «Сховати». With no call: «Говорити» as the one
@@ -81,29 +83,35 @@ remounts, and a change of project is passed to the running session (`VoiceCompan
   dimmed strip above the sheet's top edge, above the sheet's layer, and its words stand beside it there. It lies on 0 px² of
   the sheet in every frame.
 - **Composer, keyboard, safe areas.** The head stands between the screen's fixed chrome: under the bar (on a board, under the
-  seat card and the column tabs too) and above the composer or the dock, 8 px from each and from the side edge. It reads those
+  seat card and the column tabs too) and above the composer or the dock, 8 px from each and from the side edge. Below, the 8 px are counted from the line the
+  eye reads as the chrome's top: the dock's own border, and the border of the footer the composer's field sits in, which
+  is 7 px above the field. So the gap is the same 8 px on a conversation and on a board. It reads those
   boxes while they move, so when the keyboard raises the composer the head rises with it. The composer and the dock already
   pad the bottom safe area, and the bar the top one, so the head inherits both; the side insets are added to its 8 px in
   landscape.
 - **Words.** Each variant uses the product's bubble. On the phone it is opaque: the desktop's glass let the rows under it
   read through (first render of variant 2), and the operator's rule is no liquid glass.
+- **No row is covered in part.** Where words lie over the conversation (variants 2 and 3) they stand on one opaque plate
+  whose edges are moved to the nearest gap between two rows. A line of text or an icon is covered whole or not at all, and
+  nothing shows between two bubbles. The plate takes the touch, so no control under it is pressed unseen. The prototype finds
+  the gaps from the rendered lines; the build would take them from the feed's own rows.
 
 ## The variants
 
 | | 1 · Над полем вводу | 2 · Вільна голова, хмаринки | 3 · Під шапкою |
 | --- | --- | --- | --- |
 | Where it floats | Bottom right, 8 px above the composer (above the dock on a board). | The same place by default; any height on either side edge once moved. | Top right, 8 px under the bar (under the seat card and the tabs on a board). |
-| Words | One bubble of two lines beside the head, in a 76 px band the feed is inset by. At the feed's end the last row stands above the band. | The desktop's lane: the newest bubble and the one before it, over the page above the head. | One bubble of two lines beside the head, over the oldest rows on screen. |
-| Text under the words, speaking | **0 px²** in 8 of 8 frames | **8 082 to 12 533 px²** | **1 130 to 1 336 px²** |
+| Words | One bubble of two lines beside the head, as tall as the head, in a 76 px band the feed is inset by. At the feed's end the last row stands above the band. | The desktop's lane: the newest bubble and the one before it, on one plate as wide as the page, above the head (under it when the head is in the upper half). | One bubble of two lines beside the head, in a strip under the bar that ends between two rows. |
+| Rows under the words, speaking | **None** in 8 of 8 frames | Whole rows only, 0 cut: a plate 128 to 134 px high, about five lines of the newest reply | Whole rows only, 0 cut: a strip 71 px high, the first two rows under the bar |
 | Text under the head | 0 px² in every frame | 0 px² in these frames; with no inset, a row that reaches the right edge passes under it | 0 px² in these frames; the same holds |
-| Cost | The last 76 px of the feed's end are kept for the head while it is shown. The feed's box is unchanged (668 px of 844, 491 px of 667). | Covers what the operator reads for as long as it speaks. | Far from the thumb; words stand over rows, though the oldest ones. |
+| Cost | The last 76 px of the feed's end are kept for the head while it is shown. The feed's box is unchanged (668 px of 844, 491 px of 667). | Hides about five lines of what the operator reads for as long as it speaks; a line of the same paragraph can stay in view under the plate. | Far from the thumb; the first two rows under the bar are hidden while it speaks. |
 | Dragging | Left or right corner of the same row; it snaps to the nearer. Measured rest: x = 8, same y. | Either edge at any height between the bar and the composer; it keeps the height. Measured rest: x = 8, 30 % of the height up. | Left or right corner under the bar. Measured rest: x = 8, same y. |
 | «Сховати» | The row of the head's menu: two taps. | The same row, and one gesture: drag the head into the round place that appears over the composer while it is held. | The row of the head's menu: two taps. |
-| Sheet open | Rides above the sheet's top edge, 0 px² on the sheet. | The same; its words stand beside it, as in 1. | The same. |
+| Sheet open | Rides above the sheet's top edge, 0 px² on the sheet. | The same; its words stand beside it, as in 1. | Stays under the bar with its strip, above the dimming, and moves 0 px. It rides the sheet's edge only for a sheet tall enough to cover it. |
 | Keyboard | Rises with the composer. | Rises when the composer reaches it. | Does not move. |
 
 Measured in all 24 runs (3 variants, 390×844 and 375×667, uk and en, light and dark): the head, its words and its menu stay
-inside the viewport; 0 px of sideways scroll; 0 px² of the head or its words on any control; no bubble's text is cut; the
+inside the viewport; 0 px of sideways scroll; 0 px² of the head or a bare bubble on any control (variant 2's plate hides the copy button of the reply it covers, whole, in some frames); no bubble's text is cut; the
 head is 52 × 52 px and every menu row 44 px; the same mounted head and the same call clock after a real navigation from the
 conversation to the board; «Показати голос» is a 44 px row on the first screen of the menu at both sizes, and a tap on it
 closes the sheet with the head back in place.
@@ -126,11 +134,14 @@ closed by the case and its process id is recorded; no process of the run was lef
   (`Input.dispatchTouchEvent`), and «Сховати» and «Показати голос» are tapped.
 - The conversation is the fixture's seat conversation filled past the screen (`?mvf-long`), so what is covered is measured
   over real rows.
-- 352 frames, 176 pairs: `variant-N-<scene>-<size>-<lang>-<theme>-changed.png` beside `…-original.png`, the same screen as
-  the product draws it today. Scenes: `talk`, `offline`, `menu`, `drag`, `drag-hide` (variant 2), `sheet`, `board`, `hidden`.
+- 400 frames, 200 pairs: `variant-N-<scene>-<size>-<lang>-<theme>-changed.png` beside `…-original.png`, the same screen as
+  the product draws it today. Scenes: `talk`, `offline`, `menu-idle` (a tap on the idle head), `menu` (in a call), `drag`,
+  `drag-hide` (variant 2), `sheet`, `board`, `hidden`.
   Every frame carries its printed band: the variant's number and name, then the scene, size, language and theme.
-- The frames are under `/var/tmp/delegatus-mobile-voice-floating/`, outside the repository; `FRAMES.md` lists every path.
-  The readings are `geometry.json` here. The last run: 1 pass, 0 failures, 352 frames.
+- The frames are under `/var/tmp/mvf-fix-8a952634/frames/`, outside the repository; `FRAMES.md` lists every path. The
+  readings are `geometry.json` here. The full run drew 400 frames and failed on one check, in variant 1 at 390×844 (see
+  the critic's round below); after that fix all of variant 1 was drawn again into the same directory: 128 frames, 0 failures.
+  The frames of variants 2 and 3 are those of the full run, which the fix does not touch.
 - `PhoneVoiceHead.tsx` and the patched files type-check (`tsc` on them through a small tsconfig in the export, exit 0).
 
 The first render found three defects, fixed before these frames: the head's menu opened above the screen; the desktop's glass
@@ -145,7 +156,7 @@ which read variant 2 as covering nothing.
 | Clutter | One object on screen: the head. Its words show only while it speaks; its menu only on a tap. |
 | An obvious primary action | With no call the menu has one filled button, «Говорити». In a call the menu has three plain rows, the hang-up in the danger colour. |
 | Rows of identical cards or buttons | None. The menu has at most three rows, each with its own icon. |
-| Overlap and truncation | Measured, see above: 0 px² on controls and on sheets in every frame, no cut text. Variants 2 and 3 cover text by the figures given; that is their trade-off and it is stated. |
+| Overlap and truncation | Measured, see above: 0 px² of the head on controls and on sheets in every frame, no cut text. Variants 2 and 3 hide whole rows while they speak and cut none; that is their trade-off and it is stated. |
 | Affordances | The head is the one thing that takes a tap and a drag. While it is dragged, where it may land is drawn: the two places (1, 3), the two edges and the place to hide (2). |
 | Hierarchy | The head is 52 px beside 44 px controls; its dot is 13 px; the words use the product's 14 px bubble. |
 | Consistency | The character, the ring colours, the bubble and the menu's words are the desktop companion's. The menu row is the phone menu's own row. |
@@ -153,8 +164,31 @@ which read variant 2 as covering nothing.
 | No liquid glass | The phone bubble is opaque with no blur. |
 | No new chrome | The restore lives in the existing ⋯ menu as one row, present only while hidden. The round place to hide in variant 2 exists only during a drag. |
 
-Open to the critic: with no call the head is dimmed and its dot is a dashed ring, which at 13 px may read as a spinner; and
-in variant 2 the older bubble is drawn in the secondary colour, which is quiet on the dark theme.
+## The critic's first round
+
+The visual critic judged all three variants (352 frames, both sizes, both languages, both themes) and returned six findings.
+Each is fixed in every variant it names and held by a check in the driver case, so a state the fix missed fails the run.
+
+| Finding | What changed | The check |
+| --- | --- | --- |
+| P1, variant 2, speaking: the bubbles cut lines of the newest reply, and a line showed between them | The two bubbles stand on one opaque plate as wide as the page; its edges move to the gap between two rows. | `rowsCutByWords` and `marksCutByWords` are 0 in 8 of 8 `talk` frames; a `talk` frame of variant 2 or 3 with no plate fails. The reading knows the plate's rounded corners. |
+| P2, variant 3, speaking: the bubble sliced the author line under the bar | The words stand in a strip from the bar down to the first gap between rows under the head. | The same two readings, 0 in 8 of 8. |
+| P2, variants 1 and 2: the head and the bubble rested on the composer's line | The 8 px are counted from the footer's border, 7 px above the composer's field. The two-line bubble is 52 px, the head's height, with the small shadow. | `chromeLine` less the head's bottom is 8 px in `talk`, `offline`, `menu-idle`, `menu` and `board`; the bubble's bottom in variant 1 too. |
+| P2, all variants, no call: the dot and the head read as a spinner | A hollow solid ring, a solid grey outline, the character at full colour and still. | In `offline` the head's and the dot's border style is `solid`, the character's opacity 1 and its filter `none`. |
+| P2, all variants: no frame of the menu with no call | A new scene, `menu-idle`: a tap on the idle head. 24 frames, each with its pair. | The popover holds two rows, the filled «Говорити» then the plain «Сховати», each 44 px and uncut. |
+| P3, variant 3, sheet: the head dropped to the middle of the screen | The head keeps its place under the bar unless the sheet's top edge reaches it. | In `sheet` the head's y equals its y in `talk`, and no row is cut. |
+
+One more defect came out of the gap's fix and is fixed too: raised by 7 px, variant 1's bubble touched 15 px² of the touch
+area of the last reply's copy button at 390×844, because the feed pins its tail by its own measure and stopped short of the
+inset. The prototype now carries that pin on to the true end (`feedAtEnd` is true in all 8 `talk` frames of variant 1).
+
+Still open after this round, none of it in the findings:
+
+- With a sheet open, the bubble of variants 1 and 2 stands beside the head over dimmed rows and covers 1 to 3 of their
+  lines in part (`rowsCutByWords` in `sheet`). The operator reads the sheet then, and the critic passed these frames.
+- The rule that variant 3 rides a sheet tall enough to reach it is written and not rendered: the driver's sheets end
+  below the head.
+- Variant 3's strip on a board is not rendered: the board scene has no speech.
 
 ## Questions for the operator
 

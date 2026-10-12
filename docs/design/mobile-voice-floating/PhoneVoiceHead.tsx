@@ -16,8 +16,8 @@ import { translate, useLocale } from "@/lib/i18n";
  * the Viewer in an export of the repository; the product never imports this file.
  *
  *   1  the head above the composer, its words in a band the feed is inset by
- *   2  the head free on either side edge, its words as bubbles over the page, hidden by one drag
- *   3  the head under the top bar, its words in a strip under the bar
+ *   2  the head free on either side edge, its words as bubbles on one plate that covers whole rows, hidden by one drag
+ *   3  the head under the top bar, its words in a strip under the bar that ends between two rows
  */
 
 export type PhoneVoiceVariant = 1 | 2 | 3;
@@ -31,6 +31,9 @@ const CHARACTER = 36;
 const EDGE = 8;
 /* The band the first variant keeps for the head and its words at the feed's end: two lines of a bubble. */
 const BAND = 60;
+/* Between the second variant's head and the plate its words stand on. */
+const PLATE_GAP = 10;
+const PLATE_PAD = 8;
 const DRAG_THRESHOLD = 6;
 /* Where the second variant's head is dropped to hide it. */
 const DROP = 64;
@@ -62,7 +65,12 @@ const CSS = `
 .mvf .mvf-head { inset: auto; left: 0; top: 0; width: ${HEAD}px; height: ${HEAD}px; border-radius: 50%; transition: transform 260ms var(--vc-ease), box-shadow 200ms ease-out; animation: none; }
 .mvf[data-dragging] .mvf-head { transition: none; box-shadow: 0 12px 26px rgb(20 20 30 / 0.28); cursor: grabbing; }
 .mvf-dot { position: absolute; right: -1px; bottom: -1px; width: 13px; height: 13px; border-radius: 50%; background: var(--vc-ring); border: 2px solid var(--color-raised); }
-.mvf[data-phase="offline"] .mvf-dot { background: var(--color-raised); border: 2px dashed var(--color-muted); }
+/* No call: a hollow solid ring and a solid outline in the border's colour. Nothing dashed and nothing dimmed, so nothing reads as work in progress. */
+.mvf[data-phase="offline"] .mvf-dot { background: var(--color-raised); border: 2px solid var(--color-muted); box-shadow: 0 0 0 1px var(--color-raised); }
+.mvf[data-phase="offline"] .mvf-head { border-style: solid; border-color: color-mix(in srgb, var(--color-muted) 60%, var(--color-border)); }
+.mvf[data-phase="offline"] .vc-char { filter: none; opacity: 1; }
+.mvf[data-phase="offline"] .vc-char-body, .mvf[data-phase="offline"] .vc-char-eyes { animation: none; }
+.mvf[data-phase="offline"] .mvf-status .vc-dot { border: 1.5px solid var(--color-muted); }
 .mvf[data-muted] .mvf-dot { background: var(--color-danger); }
 .mvf .mvf-lane { clip-path: none; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
 .mvf .mvf-lane[data-side="left"] { align-items: flex-end; }
@@ -74,12 +82,25 @@ const CSS = `
 .mvf .mvf-lane[data-fit="two"] { justify-content: flex-end; }
 .mvf .mvf-lane[data-fit="two"][data-direction="down"] { justify-content: flex-end; }
 .mvf .mvf-lane[data-fit="two"] .vc-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-.mvf .mvf-lane[data-fit="two"] .vc-bubble { padding: 7px 12px; }
+/* Two lines stand exactly as tall as the head, and the shadow stays inside the 8 px kept above the composer's line. */
+.mvf .mvf-lane[data-fit="two"] .vc-bubble { padding: 5px 12px; box-shadow: var(--shadow-1); }
 /* Over a phone's page a bubble is opaque: the rows under glass read through it. */
 .mvf .vc-bubble[data-speaker="companion"], .mvf .vc-bubble[data-speaker="companion"][data-newest]::after { background: var(--color-raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .mvf .vc-bubble[data-older] { color: var(--color-secondary); font-size: 13px; line-height: 18px; font-weight: 400; box-shadow: var(--shadow-1); }
-.mvf .vc-lane[data-side="above"][data-align="end"] .vc-bubble[data-newest]::after { right: 21px; }
-.mvf .vc-lane[data-side="above"][data-align="start"] .vc-bubble[data-newest]::after { left: 21px; }
+.mvf .vc-lane[data-side="above"][data-align="end"] .vc-bubble[data-newest]::after { right: 13px; }
+.mvf .vc-lane[data-side="above"][data-align="start"] .vc-bubble[data-newest]::after { left: 13px; }
+/* What the words stand on where they lie over the page: one opaque surface whose edges fall between two rows, so a row is
+   covered whole or not at all, and nothing reads through between two bubbles. It takes the touch, so no row under it is
+   pressed unseen. */
+.mvf-plate { position: absolute; display: flex; flex-direction: column; pointer-events: auto; background: var(--color-canvas); }
+/* The corners are tight: a wide one would let the first letters of the row at the plate's edge out past its arc. */
+.mvf-plate[data-kind="card"] { border: 1px solid var(--color-border); border-radius: 8px; box-shadow: var(--shadow-2); }
+.mvf-plate[data-kind="strip"] { border-bottom: 1px solid var(--color-border); }
+.mvf-plate[data-grow="up"] { justify-content: flex-end; }
+.mvf-plate > .mvf-plate-in { flex: none; padding: ${PLATE_PAD}px; }
+.mvf .mvf-plate .mvf-lane { position: relative; width: 100%; }
+.mvf .mvf-plate .mvf-lane > * { max-width: 100%; }
+.mvf .mvf-plate .vc-bubble { box-shadow: none; }
 .mvf .vc-lane[data-side="above"][data-direction="down"] .vc-bubble[data-newest]::after { bottom: auto; top: -6px; transform: rotate(-135deg); }
 .mvf .vc-lane[data-side="left"] .vc-bubble[data-newest]::after, .mvf .vc-lane[data-side="right"] .vc-bubble[data-newest]::after { bottom: calc(50% - 5px); }
 .mvf-pop {
@@ -121,25 +142,107 @@ const box = (element: Element | null): Box | null => {
   return rect.width < 1 || rect.height < 1 ? null : { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 };
 
+/**
+ * The line the eye reads as the top of the bottom chrome. The dock draws it on its own box; the composer's field sits
+ * a few pixels inside the pane's footer, and the divider is the footer's. The head keeps its 8 px from that line.
+ */
+function lineAbove(node: Element): number {
+  const own = node.getBoundingClientRect().top;
+  let line = own;
+  for (let parent = node.parentElement, depth = 0; parent && depth < 6; parent = parent.parentElement, depth += 1) {
+    const top = parent.getBoundingClientRect().top;
+    if (top < own - 24) break;
+    if (top < line && parseFloat(getComputedStyle(parent).borderTopWidth) > 0) line = top;
+  }
+  return line;
+}
+
+interface Row { top: number; bottom: number }
+/** Every line of text, icon and control the conversation shows, as the spans of height a plate's edge must not cross. */
+function pageRows(): Row[] {
+  const rows: Row[] = [];
+  const range = document.createRange();
+  for (const feed of document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")) {
+    const frame = box(feed);
+    if (!frame) continue;
+    const add = (rect: DOMRect) => {
+      const top = Math.max(rect.top, frame.y), bottom = Math.min(rect.bottom, frame.y + frame.height);
+      if (rect.width >= 1 && bottom - top >= 1) rows.push({ top, bottom });
+    };
+    const walker = document.createTreeWalker(feed, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      range.selectNodeContents(node);
+      for (const line of range.getClientRects()) add(line);
+    }
+    for (const mark of feed.querySelectorAll("svg, img, button")) add(mark.getBoundingClientRect());
+  }
+  return rows;
+}
+/** Moves an edge the given way until it stands between two rows. */
+function between(rows: Row[], y: number, way: 1 | -1): number {
+  let edge = y;
+  for (let pass = 0; pass < 40; pass += 1) {
+    const crossed = rows.find((row) => row.top - 1.5 < edge && edge < row.bottom + 1.5);
+    if (!crossed) break;
+    edge = way > 0 ? crossed.bottom + 2 : crossed.top - 2;
+  }
+  return edge;
+}
+
+/**
+ * The surface the words stand on over the page. It starts at \`from\` and grows the given way by its content (a card) or
+ * by \`extent\` (a strip); the far edge, and a card's near one, are moved to stand between two rows of the conversation.
+ */
+function WordsPlate({ kind, left, width, from, grow, extent, children }: { kind: "card" | "strip"; left: number; width: number; from: number; grow: "up" | "down"; extent?: number; children?: React.ReactNode }) {
+  const inner = useRef<HTMLDivElement>(null);
+  const [span, setSpan] = useState<{ top: number; height: number } | null>(null);
+  const [, setScrolled] = useState(0);
+  useEffect(() => {
+    let frame = 0;
+    const onScroll = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(() => setScrolled((value) => value + 1)); };
+    document.addEventListener("scroll", onScroll, true);
+    return () => { document.removeEventListener("scroll", onScroll, true); cancelAnimationFrame(frame); };
+  }, []);
+  /* Read after every render: the rows move with the feed's scroll, its tail and its own layout, and the guarded set stops the chain. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const natural = extent ?? inner.current?.offsetHeight ?? 0;
+    const rows = pageRows();
+    const near = kind === "strip" ? from : between(rows, from, grow === "up" ? -1 : 1);
+    const far = grow === "up" ? between(rows, near - natural, -1) : between(rows, near + natural, 1);
+    const next = { top: Math.min(near, far), height: Math.abs(far - near) };
+    setSpan((value) => value && Math.abs(value.top - next.top) < 0.25 && Math.abs(value.height - next.height) < 0.25 ? value : next);
+  });
+  return (
+    <div className="mvf-plate" data-mvf-plate={kind} data-kind={kind} data-grow={grow} style={{ left, width, top: span?.top ?? from, height: span?.height, visibility: span ? undefined : "hidden" }}>
+      {children ? <div ref={inner} className="mvf-plate-in">{children}</div> : null}
+    </div>
+  );
+}
+
 /** What the phone shell gives the head to stand between: the fixed chrome above, the composer or dock below, an open sheet. */
 function readShell() {
   const width = innerWidth;
   const height = visualViewport?.height ?? innerHeight;
   /* The fixed chrome over a screen: its bar and, on a board, the seat card and the column tabs under it. */
   const tops = [...document.querySelectorAll("[data-mobile2-bar], [data-mobile2-seat-card], [data-mobile2-seat-invitation], [data-phone-kanban-tabs]")].flatMap((node) => box(node) ?? []);
-  const bottoms = [...document.querySelectorAll("[data-mobile2-composer], [data-mobile2-dock], [data-mobile2-receipt]")].flatMap((node) => box(node) ?? []);
+  const bottoms = [...document.querySelectorAll("[data-mobile2-composer], [data-mobile2-dock], [data-mobile2-receipt]")].flatMap((node) => box(node) ? lineAbove(node) : []);
   const sheet = box(document.querySelector("[data-mobile2-sheet]"));
-  return { width, height, top: tops.length ? Math.max(...tops.map((rect) => rect.y + rect.height)) : 0, bottom: bottoms.length ? Math.min(...bottoms.map((rect) => rect.y)) : height, sheet };
+  return { width, height, top: tops.length ? Math.max(...tops.map((rect) => rect.y + rect.height)) : 0, bottom: bottoms.length ? Math.min(...bottoms) : height, sheet };
 }
 type Shell = ReturnType<typeof readShell>;
 
+const ridesSheet = (variant: PhoneVoiceVariant, shell: Shell) => shell.sheet !== null && (variant !== 3 || shell.sheet.y < shell.top + EDGE + HEAD + EDGE);
+
 function restingPlace(variant: PhoneVoiceVariant, shell: Shell, side: Side, free: number | null): { x: number; y: number } {
   const x = side === "right" ? shell.width - EDGE - HEAD : EDGE;
-  /* Over an open sheet every variant rides the dimmed strip above it, so it lies on nothing the sheet shows. */
-  if (shell.sheet) return { x, y: Math.max(4, shell.sheet.y - EDGE - HEAD) };
   const low = shell.bottom - EDGE - HEAD;
   const high = shell.top + EDGE;
-  if (variant === 3) return { x, y: high };
+  /* Under the bar the head keeps its place while a sheet opens below it, and moves only for a sheet tall enough to cover it. */
+  if (variant === 3 && !ridesSheet(variant, shell)) return { x, y: high };
+  /* Over an open sheet the head rides the dimmed strip above it, so it lies on nothing the sheet shows. */
+  if (shell.sheet) return { x, y: Math.max(4, shell.sheet.y - EDGE - HEAD) };
   if (variant === 2 && free !== null) return { x, y: Math.min(low, Math.max(high, free)) };
   return { x, y: low };
 }
@@ -194,20 +297,31 @@ export function PhoneVoiceHead({ variant }: { variant: PhoneVoiceVariant }) {
     };
   }, []);
 
-  /* Variant 1 insets the conversation's feed by the band, so at the feed's end the head and its words lie on no row. */
+  /* Variant 1 insets the conversation's feed by the band, so at the feed's end the head and its words lie on no row:
+     the last row and the touch area of its copy button end above them, wherever the feed's own box ends. */
   const inset = variant === 1 && !hidden && !shell?.sheet;
   useLayoutEffect(() => {
-    if (!inset) return;
+    if (!inset || !shell) return;
+    const bandTop = restingPlace(variant, shell, side, free).y;
     const feeds = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")];
     const kept = feeds.map((feed) => {
-      const atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 4;
       const before = feed.style.paddingBottom;
-      feed.style.paddingBottom = `${BAND + EDGE * 2}px`;
+      const pad = Math.max(BAND, Math.ceil(feed.getBoundingClientRect().bottom - bandTop)) + EDGE * 2;
+      const short = () => feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+      const atEnd = short() < 4;
+      feed.style.paddingBottom = `${pad}px`;
       if (atEnd) feed.scrollTop = feed.scrollHeight;
-      return { feed, before };
+      /* The feed pins its tail by its own measure, which stops short of the inset. A move down that ends inside the inset
+         is that pin, and goes on to the true end; a move up is the reader's and is left alone. */
+      let last = feed.scrollTop;
+      const follow = () => { if (feed.scrollTop >= last && short() > 0.5 && short() <= pad + 4) feed.scrollTop = feed.scrollHeight; last = feed.scrollTop; };
+      feed.addEventListener("scroll", follow, { passive: true });
+      let tries = 0;
+      let frame = requestAnimationFrame(function settle() { follow(); tries += 1; if (tries < 40) frame = requestAnimationFrame(settle); });
+      return { feed, before, follow, stop: () => cancelAnimationFrame(frame) };
     });
-    return () => { for (const { feed, before } of kept) feed.style.paddingBottom = before; };
-  }, [inset, shell]);
+    return () => { for (const { feed, before, follow, stop } of kept) { stop(); feed.removeEventListener("scroll", follow); feed.style.paddingBottom = before; } };
+  }, [inset, shell, variant, side, free]);
 
   const hide = useCallback(() => {
     try { localStorage.setItem(HIDDEN_KEY, "1"); } catch { /* private mode */ }
@@ -255,11 +369,14 @@ export function PhoneVoiceHead({ variant }: { variant: PhoneVoiceVariant }) {
   const lowHalf = rest.y + HEAD / 2 > shell.height / 2;
   const showWords = scene.words && scene.phase === "speaking" && !drag && !menu;
   /* Beside the head (1, 3) there is one bubble of two lines; over the page (2) the newest and the one before it. */
-  const beside = variant !== 2 || shell.sheet !== null;
-  const laneWidth = beside ? shell.width - HEAD - EDGE * 3 : Math.min(280, shell.width - EDGE * 2);
+  const riding = ridesSheet(variant, shell);
+  const beside = variant !== 2 || riding;
+  /* Under the bar the words' strip runs from the bar to the first gap between rows under the head. */
+  const strip = variant === 3 && !riding;
+  const laneWidth = shell.width - HEAD - EDGE * 3;
   const lane = beside
     ? { left: side === "right" ? EDGE : rest.x + HEAD + EDGE, top: rest.y + HEAD / 2 - BAND / 2, width: laneWidth, height: BAND, side: side === "right" ? "left" : "right", align: undefined, direction: "up" }
-    : { left: side === "right" ? rest.x + HEAD - laneWidth : rest.x, top: lowHalf ? rest.y - 10 - 200 : rest.y + HEAD + 10, width: laneWidth, height: 200, side: "above", align: side === "right" ? "end" : "start", direction: lowHalf ? "up" : "down" };
+    : { left: EDGE, top: 0, width: shell.width - EDGE * 2, height: 0, side: "above", align: side === "right" ? "end" : "start", direction: lowHalf ? "up" : "down" };
   const pop = { left: side === "right" ? rest.x + HEAD - 236 : rest.x, top: lowHalf ? rest.y - 8 : rest.y + HEAD + 8, transform: lowHalf ? "translateY(-100%)" : undefined };
   const slots: Side[] = ["left", "right"];
   const slotPlace = (slot: Side) => restingPlace(variant, shell, slot, null);
@@ -288,12 +405,20 @@ export function PhoneVoiceHead({ variant }: { variant: PhoneVoiceVariant }) {
           <span className="mvf-drop-word" data-mvf-drop-word style={{ left: shell.width / 2, top: dropTarget.y - 34 }}>{copy.dropToHide}</span>
         </>
       ) : null}
-      {showWords ? (
-        <div className="vc-lane mvf-lane" data-mvf-words data-fit={beside ? "two" : undefined} data-side={lane.side} data-align={lane.align} data-direction={lane.direction}
-          style={{ left: lane.left, top: lane.top, width: lane.width, height: lane.height, justifyContent: beside ? "center" : "flex-end" }}>
-          {beside ? null : <p className="vc-bubble" data-speaker="companion" data-older data-mvf-bubble><span className="vc-text">{copy.older}</span></p>}
-          <p className="vc-bubble" data-speaker="companion" data-newest data-mvf-bubble><span className="vc-text">{beside ? copy.short : copy.long}</span></p>
+      {showWords && strip ? <WordsPlate kind="strip" left={0} width={shell.width} from={shell.top} grow="down" extent={rest.y + HEAD + EDGE - shell.top} /> : null}
+      {showWords && beside ? (
+        <div className="vc-lane mvf-lane" data-mvf-words data-fit="two" data-side={lane.side} data-direction={lane.direction}
+          style={{ left: lane.left, top: lane.top, width: lane.width, height: lane.height, justifyContent: "center" }}>
+          <p className="vc-bubble" data-speaker="companion" data-newest data-mvf-bubble><span className="vc-text">{copy.short}</span></p>
         </div>
+      ) : null}
+      {showWords && !beside ? (
+        <WordsPlate kind="card" left={lane.left} width={lane.width} from={lowHalf ? rest.y - PLATE_GAP : rest.y + HEAD + PLATE_GAP} grow={lowHalf ? "up" : "down"}>
+          <div className="vc-lane mvf-lane" data-mvf-words data-side={lane.side} data-align={lane.align} data-direction={lane.direction}>
+            <p className="vc-bubble" data-speaker="companion" data-older data-mvf-bubble><span className="vc-text">{copy.older}</span></p>
+            <p className="vc-bubble" data-speaker="companion" data-newest data-mvf-bubble><span className="vc-text">{copy.long}</span></p>
+          </div>
+        </WordsPlate>
       ) : null}
       <button
         type="button"

@@ -20,7 +20,8 @@ describe("phone voice head prototype", () => {
   const SCENES = {
     talk: { uk: "говорить", en: "speaking" },
     offline: { uk: "без розмови", en: "no call" },
-    menu: { uk: "меню голови", en: "the head's menu" },
+    "menu-idle": { uk: "меню голови без розмови", en: "the head's menu, no call" },
+    menu: { uk: "меню голови під час розмови", en: "the head's menu, in a call" },
     drag: { uk: "перетягування", en: "dragging" },
     "drag-hide": { uk: "перетягнути на «Сховати»", en: "drag onto «Hide»" },
     sheet: { uk: "над шторкою", en: "over a sheet" },
@@ -31,7 +32,7 @@ describe("phone voice head prototype", () => {
   type Variant = keyof typeof NAMES;
   /* What each changed frame is paired with: the same screen today. */
   const ORIGINAL_OF: Record<SceneName, "conversation" | "sheet" | "board" | "menu"> = {
-    talk: "conversation", offline: "conversation", menu: "conversation", drag: "conversation", "drag-hide": "conversation", sheet: "sheet", board: "board", hidden: "menu",
+    talk: "conversation", offline: "conversation", "menu-idle": "conversation", menu: "conversation", drag: "conversation", "drag-hide": "conversation", sheet: "sheet", board: "board", hidden: "menu",
   };
 
   browserTest("three variants at 390x844 and 375x667, en and uk, light and dark", async () => {
@@ -117,17 +118,19 @@ describe("phone voice head prototype", () => {
         return right - left < 1 || bottom - top < 1 ? null : { x: left, y: top, width: right - left, height: bottom - top };
       };
       const texts: R[] = [];
+      /* The same lines whatever is open: what a surface over the dimmed page cuts is read from these. */
+      const pageTexts: R[] = [];
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       const range = document.createRange();
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
         const parent = node.parentElement;
-        if (!parent || !node.textContent?.trim() || !scope(parent) || parent.closest("style, script, [hidden], .sr-only, .vc-sr")) continue;
+        if (!parent || !node.textContent?.trim() || root?.contains(parent) || parent.closest("style, script, [hidden], .sr-only, .vc-sr")) continue;
         /* A conversation's messages sit in `display: contents` wrappers, which have no box and which `checkVisibility` calls hidden: the nearest ancestor with a box answers for them. */
         let boxed: Element = parent;
         while (boxed.parentElement && getComputedStyle(boxed).display === "contents") boxed = boxed.parentElement;
         if (!boxed.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
         range.selectNodeContents(node);
-        for (const line of range.getClientRects()) { const shown = reach(parent, line); if (shown) texts.push(shown); }
+        for (const line of range.getClientRects()) { const shown = reach(parent, line); if (!shown) continue; if (!sheetNode?.contains(parent)) pageTexts.push(shown); if (scope(parent)) texts.push(shown); }
       }
       const controls = [...document.querySelectorAll("button, a[href], input, textarea, select, [role=button], [role=menuitem]")].filter(scope).flatMap((node) => {
         if ((node as HTMLElement).checkVisibility?.({ checkVisibilityCSS: true }) === false) return [];
@@ -137,13 +140,62 @@ describe("phone voice head prototype", () => {
       const bubbleNodes = [...document.querySelectorAll<HTMLElement>("[data-mvf-bubble]")];
       const bubbles = bubbleNodes.flatMap((node) => rect(node) ?? []);
       const pop = rect(document.querySelector("[data-mvf-pop]"));
+      const plateNode = document.querySelector<HTMLElement>("[data-mvf-plate]");
+      const plate = rect(plateNode);
+      /* What the words stand on over the page: the plate where there is one, else each bubble. A row is cut when a surface covers part of it. */
+      const surfaces = plate ? [plate] : bubbles;
+      const round = plateNode ? parseFloat(getComputedStyle(plateNode).borderTopLeftRadius) || 0 : 0;
+      const cutBy = (list: R[]) => list.filter((item) => surfaces.some((surface) => {
+        const wide = Math.min(surface.x + surface.width, item.x + item.width) - Math.max(surface.x, item.x);
+        const high = Math.min(surface.y + surface.height, item.y + item.height) - Math.max(surface.y, item.y);
+        if (wide < 0.75 || high < 0.75) return false;
+        if (wide < item.width - 0.75 || high < item.height - 0.75) return true;
+        /* Inside the surface's box, yet out through one of its rounded corners. */
+        if (surface !== plate || round <= 0) return false;
+        return [[item.x, item.y], [item.x + item.width, item.y], [item.x, item.y + item.height], [item.x + item.width, item.y + item.height]].some(([x, y]) => {
+          const dx = Math.max(surface.x + round - x!, x! - (surface.x + surface.width - round), 0), dy = Math.max(surface.y + round - y!, y! - (surface.y + surface.height - round), 0);
+          return dx > 0 && dy > 0 && Math.hypot(dx, dy) > round + 0.5;
+        });
+      }));
+      const cuts = (list: R[]) => cutBy(list).length;
+      const pageControls = [...document.querySelectorAll("button, a[href], input, textarea, select, [role=button], [role=menuitem]")].filter((node) => !root?.contains(node) && !sheetNode?.contains(node)).flatMap((node) => {
+        if ((node as HTMLElement).checkVisibility?.({ checkVisibilityCSS: true }) === false) return [];
+        return reach(node.parentElement, node.getBoundingClientRect()) ?? [];
+      });
+      /* What a control or a row draws besides text: its icons and pictures. A control's box is its touch area, wider than what is seen of it. */
+      const pageMarks = [...document.querySelectorAll("svg, img")].filter((node) => !root?.contains(node) && !sheetNode?.contains(node)).flatMap((node) => {
+        if ((node as HTMLElement).checkVisibility?.({ checkVisibilityCSS: true }) === false) return [];
+        return reach(node.parentElement, node.getBoundingClientRect()) ?? [];
+      });
+      /* The line read as the top of the bottom chrome: the dock's own border, or the border of the footer the composer's field sits in. */
+      const lineAbove = (node: Element) => {
+        const own = node.getBoundingClientRect().top;
+        let line = own;
+        for (let parent = node.parentElement, depth = 0; parent && depth < 6; parent = parent.parentElement, depth += 1) {
+          const top = parent.getBoundingClientRect().top;
+          if (top < own - 24) break;
+          if (top < line && parseFloat(getComputedStyle(parent).borderTopWidth) > 0) line = top;
+        }
+        return line;
+      };
+      const headNode = document.querySelector<HTMLElement>("[data-mvf-head]");
+      const dotNode = document.querySelector<HTMLElement>("[data-mvf-dot]");
+      const charNode = headNode?.querySelector<SVGElement>(".vc-char") ?? null;
       const under = (shape: R | null, list: R[]) => Math.round(list.reduce((sum, item) => sum + area(shape, item), 0));
       const inside = (shape: R | null) => !shape || (shape.x >= 0 && shape.y >= 0 && shape.x + shape.width <= innerWidth + 0.5 && shape.y + shape.height <= innerHeight + 0.5);
       const feed = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")].find((node) => rect(node));
       const bottoms = [...document.querySelectorAll("[data-mobile2-composer], [data-mobile2-dock]")].flatMap((node) => rect(node) ?? []);
       const dot = rect(document.querySelector("[data-mvf-dot]"));
       return {
-        head, bubbles, pop, sheet: rect(sheetNode), bar: rect(document.querySelector("[data-mobile2-bar]")), feed: feed ? rect(feed) : null,
+        head, bubbles, pop, plate, sheet: rect(sheetNode),
+        chromeLine: bottoms.length ? Math.min(...[...document.querySelectorAll("[data-mobile2-composer], [data-mobile2-dock]")].filter((node) => rect(node)).map(lineAbove)) : null,
+        rowsCutByWords: cuts(pageTexts), marksCutByWords: cuts(pageMarks),
+        controlsHiddenByWords: plate ? pageControls.filter((item) => area(plate, item) > 1).length : 0,
+        marks: headNode && dotNode ? {
+          headBorder: getComputedStyle(headNode).borderTopStyle, dotBorder: getComputedStyle(dotNode).borderTopStyle,
+          character: charNode ? { opacity: getComputedStyle(charNode).opacity, filter: getComputedStyle(charNode).filter } : null,
+        } : null,
+        popPrimary: [...document.querySelectorAll<HTMLElement>("[data-mvf-pop] .mvf-row")].map((row) => row.getAttribute("data-tone") ?? "plain"), bar: rect(document.querySelector("[data-mobile2-bar]")), feed: feed ? rect(feed) : null,
         bottomChromeTop: bottoms.length ? Math.min(...bottoms.map((item) => item.y)) : null,
         textUnderHeadPx2: under(head, texts), textUnderWordsPx2: Math.round(bubbles.reduce((sum, bubble) => sum + texts.reduce((inner, item) => inner + area(bubble, item), 0), 0)),
         controlsUnderHeadPx2: under(head, controls), controlsUnderWordsPx2: Math.round(bubbles.reduce((sum, bubble) => sum + controls.reduce((inner, item) => inner + area(bubble, item), 0), 0)),
@@ -214,7 +266,16 @@ describe("phone voice head prototype", () => {
             if (!reading.inViewport) fail(scene, "the head, its words or its menu leave the viewport");
             if (reading.sideways > 0) fail(scene, `the page scrolls sideways by ${reading.sideways}px`);
             if (reading.controlsUnderHeadPx2 > 0 && scene !== "drag" && scene !== "drag-hide") fail(scene, `the head lies on ${reading.controlsUnderHeadPx2}px² of controls`);
-            if (reading.controlsUnderWordsPx2 > 0) fail(scene, `the words lie on ${reading.controlsUnderWordsPx2}px² of controls`);
+            /* Bubbles alone lie on no control. A plate covers whole rows, their controls with them, and takes the touch itself: no icon may show in part. */
+            if (!reading.plate && reading.controlsUnderWordsPx2 > 0) fail(scene, `the words lie on ${reading.controlsUnderWordsPx2}px² of controls`);
+            if (reading.plate && reading.marksCutByWords > 0) fail(scene, `the words' plate covers part of ${reading.marksCutByWords} icons`);
+            /* On a screen with no sheet the head and its words keep 8 px above the line of the composer or the dock. */
+            if (!reading.sheet && reading.chromeLine !== null && reading.head && variant !== 3 && scene !== "drag" && scene !== "drag-hide") {
+              const gap = reading.chromeLine - (reading.head.y + reading.head.height);
+              if (Math.abs(gap - 8) > 0.6) fail(scene, `the head stands ${gap}px above the bottom chrome's line, not 8`);
+              const lowest = Math.max(0, ...reading.bubbles.map((bubble) => bubble.y + bubble.height));
+              if (variant === 1 && reading.bubbles.length && reading.chromeLine - lowest < 7.4) fail(scene, `the words stand ${reading.chromeLine - lowest}px above the bottom chrome's line`);
+            }
             if (reading.wordsCut) fail(scene, "a bubble's text is cut");
             if (reading.head && (reading.head.width < 44 || reading.head.height < 44)) fail(scene, `the head is ${reading.head.width}x${reading.head.height}`);
             return reading;
@@ -237,12 +298,25 @@ describe("phone voice head prototype", () => {
             await pause(page, 400);
             const talk = await shot("talk");
             if (!talk.bubbles.length) fail("talk", "no words are shown");
+            if (talk.rowsCutByWords > 0) fail("talk", `the words cover part of ${talk.rowsCutByWords} lines of the conversation`);
+            if (variant !== 1 && !talk.plate) fail("talk", "the words over the page stand on no plate");
             if (variant === 1 && (talk.textUnderHeadPx2 > 0 || talk.textUnderWordsPx2 > 0)) fail("talk", `the band lies on ${talk.textUnderHeadPx2 + talk.textUnderWordsPx2}px² of text at the feed's end`);
             if (talk.bottomChromeTop !== null && talk.head && talk.head.y + talk.head.height > talk.bottomChromeTop) fail("talk", "the head lies on the composer");
 
             await voice(page, { phase: "offline", words: false });
             await pause(page, 300);
-            await shot("offline");
+            const idle = await shot("offline");
+            if (idle.marks?.headBorder !== "solid" || idle.marks.dotBorder !== "solid" || idle.marks.character?.opacity !== "1" || idle.marks.character.filter !== "none") fail("offline", `the idle head is dashed or dimmed: ${JSON.stringify(idle.marks)}`);
+
+            /* A tap on the idle head: the one filled button starts a conversation, «Сховати» is the plain row under it. */
+            await page.tap("[data-mvf-head]");
+            await page.waitForSelector("[data-mvf-pop] [data-mvf-talk]", { timeout: 5_000 });
+            await pause(page, 250);
+            const idleMenu = await shot("menu-idle");
+            if (idleMenu.popRows.length !== 2 || idleMenu.popPrimary.join() !== "primary,plain") fail("menu-idle", `the idle menu is not Talk then Hide: ${JSON.stringify(idleMenu.popPrimary)}`);
+            if (idleMenu.popRows.some((row) => row.height < 44 || row.cut)) fail("menu-idle", `a menu row is under 44 px or cut: ${JSON.stringify(idleMenu.popRows)}`);
+            await page.tap("[data-mvf-head]");
+            await page.waitForSelector("[data-mvf-pop]", { state: "detached", timeout: 5_000 });
 
             await voice(page, { phase: "listening" });
             await page.tap("[data-mvf-head]");
@@ -266,7 +340,7 @@ describe("phone voice head prototype", () => {
             await page.evaluate(() => (window as unknown as { mvfVoice: { reset(): void } }).mvfVoice.reset());
             await pause(page, 400);
             if (variant === 2) {
-              const target: Point = [size.width / 2, (talk.bottomChromeTop ?? size.height) - 40];
+              const target: Point = [size.width / 2, (talk.chromeLine ?? size.height) - 40];
               await dragHead(target, target, "drag-hide");
               if (!await page.locator("[data-mvf-hidden]").count()) fail("drag-hide", "the drop on «Hide» left the head on screen");
               await page.evaluate(() => { localStorage.removeItem("mvf:voice-hidden"); window.dispatchEvent(new Event("mvf:voice-show")); });
@@ -278,6 +352,10 @@ describe("phone voice head prototype", () => {
             await openSheet(page);
             const sheet = await shot("sheet");
             if (sheet.headOverSheetPx2 > 0 || sheet.wordsOverSheetPx2 > 0) fail("sheet", `the head or its words lie on ${sheet.headOverSheetPx2 + sheet.wordsOverSheetPx2}px² of the sheet`);
+            if (variant === 3) {
+              if (!talk.head || !sheet.head || Math.abs(sheet.head.y - talk.head.y) > 0.5) fail("sheet", `the head left its place under the bar for a sheet that does not reach it (${talk.head?.y} to ${sheet.head?.y})`);
+              if (sheet.rowsCutByWords > 0) fail("sheet", `the words cover part of ${sheet.rowsCutByWords} lines of the page`);
+            }
             await closeSheet(page);
 
             /* Navigation: the same mounted head and the same running call on the next screen. */
