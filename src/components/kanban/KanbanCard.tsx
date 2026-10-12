@@ -395,6 +395,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const linkIndex = useWorkLinks();
   const onWorkLinks = props.onWorkLinks;
   const workspace = status === "assigned";
+  const footWorked = card.lastAgentWorkAtMs > 0;
+  const footAge = ageLabel(t, footWorked ? card.lastAgentWorkAtMs : card.updatedAtMs, nowMs);
   const title = card.titlePending ? t("kanban.untitled") : card.title;
   /* A placeholder's text is no title to guess an icon from: it gets the quiet default. */
   const iconTitle = card.titlePending ? "" : card.title;
@@ -858,7 +860,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               {card.priority === "high" ? <ArrowUp aria-hidden /> : <ArrowDown aria-hidden />}
             </span>
           ) : null}
-          <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
+          {/* The age the column sorts by: the last agent work, else the edit. */}
+          <span className="age num" title={t(footWorked ? "kanban.worked" : "kanban.updated", { age: footAge })}>{footAge}</span>
           {footMeta}
           <span className="spacer" />
           {/* The task's prototype review: highlighted while a round waits. */}
@@ -889,7 +892,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : (
         <div className="foot">
           <span className="origin-chip">{t(`kanban.origin.${card.origin}`)}</span>
-          <span className="age num">{ageLabel(t, card.updatedAtMs, nowMs)}</span>
+          <span className="age num">{footAge}</span>
           {footMeta}
         </div>
       )}

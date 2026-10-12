@@ -17,7 +17,8 @@ import type { TaskBand } from "@/components/scheme/taskBands";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 import { workingSince } from "@/components/workingSince";
 import { isWorkingAgent, workingAgentCount } from "@/components/workingAgents";
-import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
+import { DONE_TASK_BOARD_RETENTION_MS, taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import { bandHoldsMembers } from "@/components/scheme/taskBands";
 
 import { pastAttempts, type PastAttempt, type WorkingConversations } from "./pipelineGraph";
@@ -129,8 +130,9 @@ export interface KanbanCard {
   idle: boolean;
   updatedAtMs: number;
   /** Newest agent work of anything the card holds, epoch ms: its conversations
-      and mirrors, every attempt of its pipelines, its review decks; 0 when
-      none is known. */
+      and mirrors, every attempt of its pipelines, its review decks, and when
+      each of its lanes last moved (`laneMovedAt`, known even when no
+      transcript of the lane is loaded); 0 when none is known. */
   lastAgentWorkAtMs: number;
   /** Null unless work is in flight on the card right now: a member
       conversation working, or a stage of a pipeline that is not paused
@@ -359,15 +361,6 @@ function referenceIdentity(reference: { conversationId: string | null; path: str
   return reference.conversationId ?? reference.path;
 }
 
-/**
- * The order of a column, the Not-on-a-task list and the phone's columns alike.
- *
- * Needs-you cards come first, then working, waiting and stopped cards.
- * Within a motion, the one whose work started last comes first. A start moves only when a turn or a stage attempt starts or ends, so
- * the working cards keep their places while their agents stream. Then the
- * newest agent work, then the newest edit of the task, then the id.
- */
-const MOTION_ORDER: Record<TaskMotion["key"], number> = { "needs-you": 0, working: 1, waiting: 2, stopped: 3, "not-started": 4, done: 5 };
 /** A card no task owns that holds nothing but agent drafts. Its launch becomes
     a task in Assigned, so the board draws it there from the first keystroke. */
 export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "members" | "mirrors">): boolean {
@@ -382,8 +375,8 @@ export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "memb
  * out of the window. When the launched agent's turn ends its card sorts below
  * the working ones, and it keeps the same place under the card being read
  * instead. With no other card read, the launched card stands first:
- * the motion order would put it under a needs-you card, below the window's
- * edge, where the draft it replaced stood in view. Closing either reader lets
+ * the work order would put it under cards whose work started later, below
+ * the window's edge, where the draft it replaced stood in view. Closing either reader lets
  * the launched card sort as any other. Reorders `cards` in place.
  */
 export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<string> | undefined, launched: ((file: FileEntry) => boolean) | undefined): void {
@@ -397,9 +390,18 @@ export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<strin
   cards.splice(0, cards.length, ...rest.slice(0, anchor + 1), ...moved, ...rest.slice(anchor + 1));
 }
 
+/**
+ * The order of a column, the Not-on-a-task list and the phone's columns alike.
+ *
+ * Cards with work in flight come first, the one whose work started last on
+ * top. A start moves only when a turn or a stage attempt starts or ends, so
+ * the working cards keep their places while their agents stream. Then the
+ * newest agent work, lane movement included, then the newest edit of the task,
+ * then the id. Motion (needs-you, waiting, stopped) does not order a column:
+ * the card keeps its motion line wherever it sorts, and the header's
+ * needs-you filter gathers those cards.
+ */
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
-  const motionOrder = MOTION_ORDER[a.motion.key] - MOTION_ORDER[b.motion.key];
-  if (motionOrder) return motionOrder;
   if ((a.workingSinceMs === null) !== (b.workingSinceMs === null)) return a.workingSinceMs === null ? 1 : -1;
   if (a.workingSinceMs !== null && b.workingSinceMs !== null) return b.workingSinceMs - a.workingSinceMs || a.id.localeCompare(b.id);
   return b.lastAgentWorkAtMs - a.lastAgentWorkAtMs
@@ -408,11 +410,25 @@ export function compareCards(a: KanbanCard, b: KanbanCard): number {
 }
 
 /**
- * The Inbox's order: high, normal, low, and {@link compareCards} inside each
- * level. Every other column keeps {@link compareCards} alone, where the
- * newest agent work already says what is being taken.
+ * Whether work happened on the card recently enough to stand above the
+ * untouched queue: something in flight, or agent work within the span the board
+ * already treats as recent for «Done».
  */
-export function compareInboxCards(a: KanbanCard, b: KanbanCard): number {
+function workedRecently(card: KanbanCard, nowMs: number): boolean {
+  return card.workingSinceMs !== null || card.lastAgentWorkAtMs >= nowMs - DONE_TASK_BOARD_RETENTION_MS;
+}
+
+/**
+ * The Inbox's order: cards worked recently first, in {@link compareCards}
+ * order; then the rest, high, normal, low, with {@link compareCards} inside
+ * each level. Untouched work keeps the priority queue, and only work of the
+ * last three days rises above it. Every other column keeps
+ * {@link compareCards} alone.
+ */
+export function compareInboxCards(a: KanbanCard, b: KanbanCard, nowMs: number): number {
+  const recentA = workedRecently(a, nowMs);
+  if (recentA !== workedRecently(b, nowMs)) return recentA ? -1 : 1;
+  if (recentA) return compareCards(a, b);
   return priorityRank(a.priority) - priorityRank(b.priority) || compareCards(a, b);
 }
 
@@ -685,7 +701,13 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };
     const holdsSeat = Boolean(task && input.seat && seatAssignment(task.assignments, input.seat));
-    if (task && !taskShowsOnBoard({ ...task, status, ...(status === "done" && task.status !== "done" ? { doneAt: new Date(now * 1000).toISOString() } : {}) }, bandHoldsMembers(band), {
+    /* The board flag governs an EMPTY band. Lane work that is live or moved
+       within the retention span counts as the band holding something, as a
+       resolved conversation does. An explicit choice still hides it, and a
+       group hide keeps the card in the hidden groups, never in a column. */
+    const laneMovedMs = Math.max(0, ...summaries.map((summary) => laneMovedAt(summary.pipeline)).filter(Number.isFinite));
+    const laneWorkedRecently = activePipeline || laneMovedMs >= now * 1000 - DONE_TASK_BOARD_RETENTION_MS;
+    if (task && !taskShowsOnBoard({ ...task, status, ...(status === "done" && task.status !== "done" ? { doneAt: new Date(now * 1000).toISOString() } : {}) }, bandHoldsMembers(band) || (laneWorkedRecently && !task.boardChoice), {
       now: now * 1000, holdsSeat, seat: input.seat,
       members: members.map((member) => member.file), pipelines,
     })) return [];
@@ -760,7 +782,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         ...band.members.filter(member => member.kind === "deck").map(member => reviewerWorkAt(flowsByDeck.get(member.key))),
         ...[...members, ...mirrors].map(member => member.file.lastAgentWorkAt ?? 0).filter(Number.isFinite),
         ...[...identities].map(id => workByIdentity.get(id) ?? 0),
-        ...summaries.map(summary => pipelineWorkAt(summary.pipeline))),
+        ...summaries.map(summary => pipelineWorkAt(summary.pipeline)),
+        laneMovedMs),
       workingSinceMs,
       searchText: [title, description, task?.hold?.note ?? "", task?.hold?.ref ?? "", ...(task?.steps ?? []).flatMap(step => [step.text, step.hold?.note ?? "", step.ref ?? ""]), ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
         .join("\n")
@@ -791,7 +814,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const recorded = cards.filter((card) => card.task && !card.hide.hidden);
   const unlinked = cards.filter((card) => !card.task).sort(compareCards);
   const columns = Object.fromEntries(KANBAN_STATUSES.map((status) => {
-    const inColumn = recorded.filter((card) => card.status === status).sort(status === "inbox" ? compareInboxCards : compareCards);
+    const inColumn = recorded.filter((card) => card.status === status).sort(status === "inbox" ? (a, b) => compareInboxCards(a, b, now * 1000) : compareCards);
     if (status === "assigned") landUnderReading(inColumn, input.openReaders, input.launched);
     return [status, {
       status,

@@ -1,0 +1,117 @@
+{
+  "readings": {
+    "desktop-1440-en": {
+      "assigned": [
+        "t-rf-running",
+        "t-rf-finished",
+        "t-rf-decision",
+        "t-rf-paused",
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "inbox": [
+        "t-rf-inbox-working",
+        "t-rf-yesterday",
+        "t-rf-hidden-recent",
+        "t-rf-high",
+        "t-rf-normal",
+        "t-rf-low"
+      ],
+      "done": [
+        "t-rf-done-fresh",
+        "t-rf-done-blocked"
+      ],
+      "hiddenCount": 3,
+      "foot": {
+        "finished": {
+          "text": "5m ago",
+          "title": "Last worked 5m ago",
+          "inside": true,
+          "overlaps": false
+        },
+        "notes": {
+          "text": "just now",
+          "title": "Updated just now",
+          "inside": true,
+          "overlaps": false
+        }
+      }
+    },
+    "phone-390-en": {
+      "assigned": [
+        "t-rf-decision",
+        "t-rf-running",
+        "t-rf-finished",
+        "t-rf-paused",
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "inbox": [
+        "t-rf-inbox-working",
+        "t-rf-yesterday",
+        "t-rf-hidden-recent",
+        "t-rf-high",
+        "t-rf-normal",
+        "t-rf-low"
+      ],
+      "overflowX": 0
+    },
+    "desktop-1440-uk": {
+      "assigned": [
+        "t-rf-running",
+        "t-rf-finished",
+        "t-rf-decision",
+        "t-rf-paused",
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "inbox": [
+        "t-rf-inbox-working",
+        "t-rf-yesterday",
+        "t-rf-hidden-recent",
+        "t-rf-high",
+        "t-rf-normal",
+        "t-rf-low"
+      ],
+      "done": [
+        "t-rf-done-fresh",
+        "t-rf-done-blocked"
+      ],
+      "hiddenCount": 3,
+      "foot": {
+        "finished": {
+          "text": "5 хв тому",
+          "title": "Остання робота 5 хв тому",
+          "inside": true,
+          "overlaps": false
+        },
+        "notes": {
+          "text": "щойно",
+          "title": "Оновлено щойно",
+          "inside": true,
+          "overlaps": false
+        }
+      }
+    },
+    "phone-390-uk": {
+      "assigned": [
+        "t-rf-decision",
+        "t-rf-running",
+        "t-rf-finished",
+        "t-rf-paused",
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "inbox": [
+        "t-rf-inbox-working",
+        "t-rf-yesterday",
+        "t-rf-hidden-recent",
+        "t-rf-high",
+        "t-rf-normal",
+        "t-rf-low"
+      ],
+      "overflowX": 0
+    }
+  },
+  "failures": []
+}

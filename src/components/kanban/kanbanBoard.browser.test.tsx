@@ -9349,11 +9349,138 @@ describe("board order: working cards first, then recently worked, then idle", ()
   }, 600_000);
 });
 
+describe("recent first: columns order by the newest work, and a recently worked hidden task is drawn", () => {
+  /* The `recent-first` scenario (docs/design/kanban-recent-first.md). Assigned:
+     a stage running now, a lane finished five minutes ago whose transcript is
+     not loaded, a lane parked on the operator for two days, a lane paused for
+     three, a transcript from six days ago, and a task nobody worked on that
+     was edited a minute ago. Inbox: a low-priority task with an agent working,
+     a normal one whose lane moved yesterday, the hidden-flag task whose lane
+     moved two days ago, then high, normal and low untouched ones. Done: one
+     finished ten minutes ago above one whose merge blocked yesterday. The
+     hidden tray holds the three tasks the board keeps off: never worked, an
+     explicit choice, a hidden group. On the desktop at 1440×900 and the phone
+     at 390×844, en and uk. Frames go to RECENT_FIRST_PNG_DIR, or
+     `.artifacts/recent-first/`, never committed; the readings go to
+     `evidence/kanban-recent-first/readings.json`, each frame taken before any
+     gate is read, so the same case renders the "before" frames on a tree
+     without the change.
+
+       CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+         bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "recent first" */
+  const ASSIGNED = ["t-rf-running", "t-rf-finished", "t-rf-decision", "t-rf-paused", "t-rf-old", "t-rf-notes"];
+  const INBOX = ["t-rf-inbox-working", "t-rf-yesterday", "t-rf-hidden-recent", "t-rf-high", "t-rf-normal", "t-rf-low"];
+  const DONE = ["t-rf-done-fresh", "t-rf-done-blocked"];
+  /* The phone leads each tab with what asks the operator, as its own contract says. */
+  const PHONE_ASSIGNED = ["t-rf-decision", "t-rf-running", "t-rf-finished", "t-rf-paused", "t-rf-old", "t-rf-notes"];
+
+  browserTest("every column reads newest work first, the recent hidden task is a card, and the foot age is the work's", async () => {
+    const pngDir = path.resolve(process.env.RECENT_FIRST_PNG_DIR ?? ".artifacts/recent-first");
+    const out = path.resolve(".artifacts/recent-first-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=recent-first`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, "light", lang);
+          try {
+            await page.waitForSelector(card("t-rf-running"), { timeout: 30_000 });
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.waitForTimeout(800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
+            const read = await page.evaluate(() => {
+              const order = (status: string) => [...document.querySelectorAll(`[data-kanban-board] .column[data-status="${status}"] .card`)]
+                .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, ""));
+              const foot = (id: string) => {
+                const age = document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"] .foot .age`) as HTMLElement | null;
+                if (!age) return null;
+                const box = age.getBoundingClientRect();
+                const parent = age.parentElement!.getBoundingClientRect();
+                const overlaps = [...age.parentElement!.children].filter((other) => other !== age).some((other) => {
+                  const o = other.getBoundingClientRect();
+                  return o.width > 0 && o.height > 0 && o.left < box.right - 0.5 && o.right > box.left + 0.5 && o.top < box.bottom - 0.5 && o.bottom > box.top + 0.5;
+                });
+                return { text: age.textContent ?? "", title: age.getAttribute("title") ?? "", inside: box.left >= parent.left - 0.5 && box.right <= parent.right + 0.5, overlaps };
+              };
+              const bar = document.querySelector('[data-bar="project"]');
+              return {
+                assigned: order("assigned"), inbox: order("inbox"), done: order("done"),
+                hiddenCount: Number(bar?.getAttribute("data-hidden-count") ?? "-1"),
+                foot: { finished: foot("t-rf-finished"), notes: foot("t-rf-notes") },
+              };
+            });
+            readings[label] = read;
+            if (JSON.stringify(read.assigned) !== JSON.stringify(ASSIGNED)) failures.push(`${label}: Assigned reads ${JSON.stringify(read.assigned)}`);
+            if (JSON.stringify(read.inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(read.inbox)}`);
+            if (JSON.stringify(read.done) !== JSON.stringify(DONE)) failures.push(`${label}: Done reads ${JSON.stringify(read.done)}`);
+            if (read.hiddenCount !== 3) failures.push(`${label}: the hidden tray counts ${read.hiddenCount}, not 3`);
+            const finished = read.foot.finished;
+            const worked = lang === "en" ? /^Last worked/ : /^Остання робота/;
+            const edited = lang === "en" ? /^Updated/ : /^Оновлено/;
+            const minutes = lang === "en" ? /^5\s?m/ : /^5\s?хв/;
+            if (!finished || !worked.test(finished.title) || !minutes.test(finished.text)) failures.push(`${label}: finished card foot ${JSON.stringify(finished)}`);
+            if (!read.foot.notes || !edited.test(read.foot.notes.title)) failures.push(`${label}: untouched card foot ${JSON.stringify(read.foot.notes)}`);
+            for (const [name, foot] of Object.entries(read.foot)) {
+              if (foot && (!foot.inside || foot.overlaps)) failures.push(`${label}: ${name} foot age ${JSON.stringify(foot)}`);
+            }
+            for (const status of ["assigned", "inbox", "done"] as const) {
+              await page.locator(`[data-kanban-board] .column[data-status="${status}"]`).screenshot({ path: path.join(pngDir, `${label}-${status}.png`) });
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const readTab = async (tab: string) => {
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).first().click();
+              await page.waitForSelector(`[data-phone-kanban-column="${tab}"] [data-phone-card^="task:"]`, { timeout: 30_000 });
+              await page.waitForTimeout(600);
+              await page.screenshot({ path: path.join(pngDir, `${label}-${tab}.png`) });
+              return page.evaluate((column) => [...document.querySelectorAll(`[data-phone-kanban-column="${column}"] [data-phone-card^="task:"]`)]
+                .map((element) => (element.getAttribute("data-phone-card") ?? "").replace(/^task:/, "")), tab);
+            };
+            const assigned = await readTab("assigned");
+            const inbox = await readTab("inbox");
+            const overflowX = await page.evaluate(() => (document.scrollingElement ? document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth : 0));
+            readings[label] = { assigned, inbox, overflowX };
+            if (JSON.stringify(assigned) !== JSON.stringify(PHONE_ASSIGNED)) failures.push(`${label}: Assigned reads ${JSON.stringify(assigned)}`);
+            if (JSON.stringify(inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(inbox)}`);
+            /* Measured against the 390 px viewport passed in: the layout viewport widens to fit overflow. */
+            if (overflowX > 0.5) failures.push(`${label}: overflows sideways by ${overflowX}px`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/kanban-recent-first", { recursive: true });
+    fs.writeFileSync("evidence/kanban-recent-first/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
 describe("task priority: the Inbox takes high first and low last, the other columns keep their order", () => {
   /* The `task-priority` scenario: an Inbox of two high, two normal and two
-     low tasks (one low task with a working agent, which still sits under
-     every normal one), and an Assigned column whose high and low tasks keep
-     the most recent agent work on top. On the desktop at 1440×900 the board,
+     low tasks (one low task with a working agent, which leads: work in flight
+     stands above the priority queue), and an Assigned column whose high and
+     low tasks keep the most recent agent work on top. On the desktop at 1440×900 the board,
      the Inbox and the card's ⋯ with its Priority group; on the phone at
      390×844 the Inbox tab and the task sheet's Priority face; en and uk.
      Frames go to PRIORITY_PNG_DIR, or `.artifacts/task-priority/`, never
@@ -9361,7 +9488,7 @@ describe("task priority: the Inbox takes high first and low last, the other colu
 
        CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 PRIORITY_PNG_DIR=… \
          bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "task priority" */
-  const INBOX = ["t-prio-deploy", "t-prio-limits", "t-prio-notes", "t-prio-export", "t-prio-cleanup", "t-prio-idea"];
+  const INBOX = ["t-prio-cleanup", "t-prio-deploy", "t-prio-limits", "t-prio-notes", "t-prio-export", "t-prio-idea"];
   const ASSIGNED = ["t-prio-banner", "t-prio-search", "t-prio-docs"];
   const MARKS: Record<string, string> = { "t-prio-deploy": "high", "t-prio-limits": "high", "t-prio-cleanup": "low", "t-prio-idea": "low", "t-prio-banner": "low", "t-prio-search": "high" };
 
@@ -9437,8 +9564,8 @@ describe("task priority: the Inbox takes high first and low last, the other colu
             const raised = await page.evaluate(() => [...document.querySelectorAll('[data-kanban-board] .column[data-status="inbox"] .card')]
               .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, "")));
             readings[`${label}-raised`] = raised;
-            /* The newest edit leads its level, as it did among the normal ones. */
-            const RAISED = ["t-prio-notes", "t-prio-deploy", "t-prio-limits", "t-prio-export", "t-prio-cleanup", "t-prio-idea"];
+            /* The working task still leads; the newest edit leads the high level, as it did among the normal ones. */
+            const RAISED = ["t-prio-cleanup", "t-prio-notes", "t-prio-deploy", "t-prio-limits", "t-prio-export", "t-prio-idea"];
             if (JSON.stringify(raised) !== JSON.stringify(RAISED)) failures.push(`${label}: after High the Inbox reads ${JSON.stringify(raised)}`);
             await page.mouse.move(0, 0);
             await page.locator('[data-kanban-board] .column[data-status="inbox"]').screenshot({ path: path.join(pngDir, `${label}-inbox-raised.png`) });

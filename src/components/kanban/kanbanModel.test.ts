@@ -259,11 +259,12 @@ test("a card whose stage agent is working comes first even while its row carries
   const cards = model(tasks, [building, maintaining, reviewed], { pipelines: [lane] }).columns.assigned.cards;
   expect(cards.map((card) => card.task!.id)).toEqual(["icons", "maintenance", "viewer"]);
 
-  /* The card knows its agent is working and has no agent work on record: the
-     start of the running attempt is what places it among the working cards. */
+  /* The card knows its agent is working and has no transcript stamp: the
+     start of the running attempt is what places it among the working cards,
+     and the lane's own movement is its last work. */
   const icons = cards[0]!;
   expect(icons.working).toBe(1);
-  expect(icons.lastAgentWorkAtMs).toBe(0);
+  expect(icons.lastAgentWorkAtMs).toBe((NOW - 1800) * 1000);
   expect(icons.workingSinceMs).toBe((NOW - 1800) * 1000);
 });
 
@@ -313,11 +314,103 @@ test("a stage in flight puts its card among the working ones, and a paused lane'
   const order = (pipelines: Pipeline[]) => model(tasks, [quiet], { pipelines }).columns.assigned.cards.map((card) => card.task!.id);
   expect(order([lane])).toEqual(["staged", "quiet"]);
   const paused = { ...lane, state: "paused", pausedState: "running" } as Pipeline;
-  // Declared waiting comes before work stopped without a reason.
-  expect(order([paused])).toEqual(["staged", "quiet"]);
-  const held = model(tasks, [quiet], { pipelines: [paused] }).columns.assigned.cards[0]!;
+  // A paused lane is not in flight: the card worked 30 s ago stands above it.
+  expect(order([paused])).toEqual(["quiet", "staged"]);
+  const held = model(tasks, [quiet], { pipelines: [paused] }).columns.assigned.cards.find((card) => card.task!.id === "staged")!;
   expect(held.motion.key).toBe("waiting");
   expect(cardHasLiveWork(held)).toBe(false);
+});
+
+/* Recent first (docs/design/kanban-recent-first.md): a column sorts by work in
+   flight, then by the newest agent work, lane movement included. */
+function parkedLane(id: string, taskId: string, attempt: Record<string, unknown>, extra: Partial<Pipeline> = {}): Pipeline {
+  return linkedPipeline(id, [{ state: "passed", ...attempt }], { taskIds: [taskId], state: "paused", pausedState: "running", ...extra } as Partial<Pipeline>);
+}
+
+function decisionLane(id: string, taskId: string, secondsAgo: number): Pipeline {
+  return linkedPipeline(id, [{ state: "failed", startedAt: iso(NOW - secondsAgo - 600), completedAt: iso(NOW - secondsAgo) }], {
+    taskIds: [taskId],
+    state: "needs_decision",
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+  } as unknown as Partial<Pipeline>);
+}
+
+const DAY = 24 * 60 * 60;
+
+test("a recently worked waiting card sorts above a stale one in the same column, with no transcript loaded for it", () => {
+  const stale = file(501, { lastAgentWorkAt: (NOW - 3 * DAY) * 1000, mtime: NOW - 3 * DAY });
+  const tasks = [task("stale", "assigned", [], { updatedAt: iso(NOW - 10) }), task("fresh", "assigned", [], { updatedAt: iso(NOW - 4 * DAY) })];
+  const pipelines = [
+    parkedLane("lane-stale", "stale", { conversationId: stale.conversationId, agentPath: stale.path, startedAt: iso(NOW - 3 * DAY - 600), completedAt: iso(NOW - 3 * DAY) }),
+    /* Its transcript is outside the board's file window: only the lane's own stamps date it. */
+    parkedLane("lane-fresh", "fresh", { conversationId: "conversation_not_loaded", startedAt: iso(NOW - 900), completedAt: iso(NOW - 300) }),
+  ];
+  const cards = model(tasks, [stale], { pipelines }).columns.assigned.cards;
+  expect(cards.map((card) => card.task!.id)).toEqual(["fresh", "stale"]);
+  expect(cards[0]!.motion.key).toBe(cards[1]!.motion.key);
+  expect(cards[0]!.lastAgentWorkAtMs).toBe((NOW - 300) * 1000);
+});
+
+test("a card worked two minutes ago stands above a needs-you card parked two days ago, in Assigned and in Done", () => {
+  const worked = file(511, { lastAgentWorkAt: (NOW - 120) * 1000, mtime: NOW - 120 });
+  for (const status of ["assigned", "done"] as const) {
+    const tasks = [task("parked", status, [], { updatedAt: iso(NOW - 10) }), task("worked", status, [worked.path], { updatedAt: iso(NOW - 5 * DAY) })];
+    const board = model(tasks, [worked], { pipelines: [decisionLane("lane-parked", "parked", 2 * DAY)] });
+    const cards = board.columns[status].cards;
+    expect(cards.map((card) => card.task!.id)).toEqual(["worked", "parked"]);
+    expect(cards[1]!.motion.key).toBe("needs-you");
+  }
+});
+
+test("the Inbox lifts a card whose lane moved yesterday above a high-priority untouched one, and not one that moved four days ago", () => {
+  const tasks = [
+    task("high-untouched", "inbox", [], { priority: "high", updatedAt: iso(NOW - 10) }),
+    task("normal-untouched", "inbox", [], { updatedAt: iso(NOW - 20) }),
+    task("low-untouched", "inbox", [], { priority: "low", updatedAt: iso(NOW - 30) }),
+    task("moved-yesterday", "inbox", [], { updatedAt: iso(NOW - 9 * DAY) }),
+    task("moved-long-ago", "inbox", [], { priority: "low", updatedAt: iso(NOW - 9 * DAY) }),
+  ];
+  const pipelines = [
+    parkedLane("lane-yesterday", "moved-yesterday", { startedAt: iso(NOW - DAY - 600), completedAt: iso(NOW - DAY) }),
+    parkedLane("lane-long-ago", "moved-long-ago", { startedAt: iso(NOW - 4 * DAY - 600), completedAt: iso(NOW - 4 * DAY) }),
+  ];
+  const order = model(tasks, [], { pipelines }).columns.inbox.cards.map((card) => card.task!.id);
+  /* The four-day lane lifts nothing; it only dates its card inside its own level. */
+  expect(order).toEqual(["moved-yesterday", "high-untouched", "normal-untouched", "moved-long-ago", "low-untouched"]);
+});
+
+test("a hidden-flag task whose lane moved within three days is a card; an explicit choice, an old lane or a hidden group keep it hidden", () => {
+  const recent = { startedAt: iso(NOW - 2 * DAY - 600), completedAt: iso(NOW - 2 * DAY) };
+  const old = { startedAt: iso(NOW - 4 * DAY - 600), completedAt: iso(NOW - 4 * DAY) };
+  const hidden = (id: string, extra: Partial<BoardTask> = {}) => task(id, "inbox", [], { board: "hidden", ...extra });
+  const tasks = [
+    hidden("recent"),
+    hidden("chosen", { boardChoice: true }),
+    hidden("old"),
+    hidden("grouped", { groupHidden: { at: iso(NOW - 10), by: "operator", admitted: [] } }),
+    hidden("never-worked"),
+    hidden("active-and-old"),
+  ];
+  const pipelines = [
+    parkedLane("lane-recent", "recent", recent),
+    parkedLane("lane-chosen", "chosen", recent),
+    parkedLane("lane-old", "old", old, { state: "completed", pausedState: undefined } as Partial<Pipeline>),
+    parkedLane("lane-grouped", "grouped", recent),
+    parkedLane("lane-active", "active-and-old", old, { state: "running", pausedState: undefined } as Partial<Pipeline>),
+  ];
+  const board = model(tasks, [], { pipelines });
+  expect(board.columns.inbox.cards.map((card) => card.task!.id).sort()).toEqual(["active-and-old", "recent"]);
+  expect(board.offBoard.map((entry) => entry.id).sort()).toEqual(["chosen", "never-worked", "old"]);
+  expect(board.hiddenGroups.map((card) => card.task!.id)).toEqual(["grouped"]);
+});
+
+test("a card's foot age follows what orders the column: the lane's last move, else the edit", () => {
+  const tasks = [task("laned", "assigned", [], { updatedAt: iso(NOW - 5 * DAY) }), task("edited", "assigned", [], { updatedAt: iso(NOW - 60) })];
+  const board = model(tasks, [], { pipelines: [parkedLane("lane-laned", "laned", { startedAt: iso(NOW - 900), completedAt: iso(NOW - 300) })] });
+  const byId = new Map(board.columns.assigned.cards.map((card) => [card.task!.id, card] as const));
+  expect(byId.get("laned")!.lastAgentWorkAtMs).toBe((NOW - 300) * 1000);
+  expect(byId.get("edited")!.lastAgentWorkAtMs).toBe(0);
+  expect(board.columns.assigned.cards.map((card) => card.task!.id)).toEqual(["laned", "edited"]);
 });
 
 test("a card's agent work counts every attempt of its lanes, including a stage conversation the board draws nowhere", () => {
@@ -758,8 +851,8 @@ test("a launched card whose turn ended keeps its place under the agent being rea
 });
 
 
-test("a launched card with its reader open stands first when no other card is read, above a needs-you card", () => {
-  const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000 });
+test("a launched card with its reader open stands first when no other card is read, above a card worked more recently", () => {
+  const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000, lastAgentWorkAt: (NOW - 100) * 1000 });
   const launchedFile = file(2, { mtime: NOW - 1 });
   const tasks = [task("asking", "assigned", [asking.path]), task("launched", "assigned", [launchedFile.path])];
   const files = [asking, launchedFile];
@@ -771,7 +864,7 @@ test("a launched card with its reader open stands first when no other card is re
     buildKanbanModel({ bands, tasks, pipelines: [], projection, files, openReaders, launched, now: NOW })
       .columns.assigned.cards.map((card) => card.task!.id);
   const reading = new Set([conversationIdentity(launchedFile)]);
-  /* The motion order puts the needs-you card first; the launched card being read takes the window's top. */
+  /* The newer work puts the asking card first; the launched card being read takes the window's top. */
   expect(order(new Set())).toEqual(["asking", "launched"]);
   expect(order(reading)).toEqual(["asking", "launched"]);
   expect(order(reading, isLaunched)).toEqual(["launched", "asking"]);
@@ -1122,8 +1215,9 @@ test("a lane cleared on the phone no longer marks the desktop card, and comes ba
   expect(moved.cleared).toEqual([]);
 });
 
-/* Task priority: the Inbox takes high first and low last, keeping its own
-   order inside each level; every other column ignores priority. */
+/* Task priority: the Inbox takes work of the last three days first, then high
+   first and low last, keeping its own order inside each level; every other
+   column ignores priority. */
 function prioritized(status: TaskStatus) {
   const working = file(401, { activity: "live", lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 240) * 1000, mtime: NOW - 240 });
   const recent = file(402, { activity: "recent", lastAgentWorkAt: (NOW - 60) * 1000, mtime: NOW - 60 });
@@ -1141,15 +1235,14 @@ function prioritized(status: TaskStatus) {
   return { tasks, files: [working, recent, older] };
 }
 
-test("the Inbox sorts high, normal, low, and keeps its working-then-recent-work order inside each level", () => {
+test("the Inbox lifts work of the last three days, then sorts high, normal, low", () => {
   const { tasks, files } = prioritized("inbox");
   const cards = model(tasks, files).columns.inbox.cards;
   expect(cards.map((card) => card.task!.id)).toEqual([
-    "high-older", "high-idle-old",
-    "normal-recent", "normal-idle", "normal-odd",
-    "low-working", "low-idle",
+    "low-working", "normal-recent", "high-older",
+    "high-idle-old", "normal-idle", "normal-odd", "low-idle",
   ]);
-  expect(cards.map((card) => card.priority)).toEqual(["high", "high", "normal", "normal", "normal", "low", "low"]);
+  expect(cards.map((card) => card.priority)).toEqual(["low", "normal", "high", "high", "normal", "normal", "low"]);
   /* Read order does not matter. */
   expect(model([...tasks].reverse(), [...files].reverse()).columns.inbox.cards.map((card) => card.task!.id)).toEqual(cards.map((card) => card.task!.id));
 });
@@ -1282,10 +1375,12 @@ test("zero-member in-flight and step work move as working and agree in header, c
   }
 });
 
-test("a step operator hold keeps its note, age, needs-you total and first position", () => {
+test("a step operator hold keeps its note, age and needs-you total, and sorts with its column by work", () => {
   const hold = { kind: "operator" as const, note: "Choose release A or B", since: iso(NOW - 1200), by: "agent" as const };
-  const board = model([task("t906", "blocked"), task("t907", "blocked", [], { steps: [{ id: "ask", text: "Choose release", state: "open", hold }] })], []);
-  const card = board.columns.blocked.cards[0]!;
+  const board = model([task("t906", "blocked", [], { updatedAt: iso(NOW - 10) }), task("t907", "blocked", [], { updatedAt: iso(NOW - 20), steps: [{ id: "ask", text: "Choose release", state: "open", hold }] })], []);
+  /* Needs-you does not pin a card: the untouched task edited last stands first. */
+  expect(board.columns.blocked.cards.map((entry) => entry.task!.id)).toEqual(["t906", "t907"]);
+  const card = board.columns.blocked.cards[1]!;
   expect(card.task?.id).toBe("t907");
   expect(card.motion).toMatchObject({ key: "needs-you", reason: hold, since: hold.since });
   expect(card.stepSummary?.needsYou).toBe(1);
