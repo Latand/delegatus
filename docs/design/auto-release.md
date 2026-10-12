@@ -330,6 +330,7 @@ blocker makes the controller wait and say why; it never closes anything.
 | 8 | No verified cut | no deployment qualifies under §3.2 (production changed within the soak, or the project has no ledger) | the cut exists |
 | 9 | A deployment is running, or an automatic update drains | a non-terminal latest deployment; `activeDrain()`; both as board maintenance (`run.ts:221`, `run.ts:224`) | clear |
 | 10 | The screenshot capture cannot run on this machine | the lookups the capture driver and the publication gate make themselves: `tesseract` and `pdftocairo` on the Viewer's PATH, and a Chrome (`CHROME_BIN`, the system Chrome, or the Playwright browser the repository's drivers use) | **blocked**: `tesseract` is not on PATH; `pdftocairo` and a Playwright Chrome are present |
+| 11 | The publisher at the release cut cannot satisfy the macOS workflow's receipt contract | inspect the publisher workflow from the immutable release ref and the current default-branch macOS consumer; require the publisher to upload the `release-receipt` artifact with the exact tag and commit revision the consumer reads | **blocked for the recorded cut in §3.2**: its `publish.yml` has no receipt producer, while the current `macos-newcomer.yml` requires that artifact |
 
 Why these signals:
 
@@ -355,6 +356,19 @@ Why these signals:
   (`tool_unavailable`, `scripts/privacy-publication-gate.ts:1732`), so a missing
   OCR tool can never be skipped. The 1.11.0 capture ran with a private copy of
   `tesseract` outside PATH.
+- **The workflow receipt (11)** is checked before the operator is asked to
+  approve a tag. A tag push runs the `publish.yml` carried by that tag; the
+  `workflow_run` macOS consumer comes from the default branch and downloads
+  the publisher run's `release-receipt` artifact. Checking only the current
+  default branch misses an older release cut. The recorded cut proves the
+  failure case: its `.github/workflows/publish.yml` has no
+  receipt producer, and the current `.github/workflows/macos-newcomer.yml`
+  downloads `release-receipt` and reads its `tag` and `revision` files. The
+  controller checks this before creating the lane and repeats the check in
+  preflight immediately before approval. It holds such a cut before any tag or
+  publish action. It waits for a production-soaked cut whose publisher
+  satisfies the consumer contract; it never bypasses the six-hour soak or
+  dispatches a recovery workflow to compensate for an incompatible cut.
 
 A blocker that keeps a due release waiting for 24 hours wakes the seat once per
 blocker episode (§6.3), so a forgotten hold or a red main does not stall
@@ -532,6 +546,21 @@ with `needs_decision` until a quoted operator go names them. Its brief:
   `package.json`, `bun.lock`, `patches/**`, `README.md`, `docs/media/readme/**`
   and `scripts/**`. Those are what the last three release PRs changed, less the
   product file of 1.11.0. A file outside them ends the stage with `fail`.
+- The same read-only preflight inspects `.github/workflows/publish.yml` at the
+  immutable release ref and `.github/workflows/macos-newcomer.yml` on the
+  current default branch. It must prove that the tag's publisher uploads the
+  `release-receipt` artifact containing the exact tag and checked-out commit,
+  and that the macOS workflow triggered by that publisher run downloads and
+  validates those fields before installing the exact npm version. A missing,
+  malformed or mismatched producer/consumer contract blocks the release
+  before the go prompt and before any mutating step. Run this check when
+  deciding whether to create the release lane, then repeat it immediately
+  before asking for the go so a changed default-branch consumer cannot race
+  the approval. The recorded cut in §3.2 must fail preflight because its
+  publisher cannot create the artifact required by the current macOS
+  consumer. Do not copy the default-branch workflow into a frozen cut or rely
+  on a manual dispatch: GitHub runs a pushed-tag workflow from the pushed ref,
+  while `workflow_run` uses the default-branch workflow definition.
 - **The go.** The setting asks before publishing by default, every time. The
   stage stops with `needs_decision` and the version, the PR and the step list.
   The seat wakes on the decision as for any lane, asks the operator in chat with
@@ -735,8 +764,14 @@ its monitor note.
 
 - `scripts/release-verify.ts`, read-only, in two modes: `--preflight` (tag,
   version, npm, provenance of the frames, release paths) and the wait for the
-  three workflows; a test over recorded `gh`, npm and registry answers, and a
-  preflight case that a product file in the diff turns red.
+  three workflows; tests over recorded `gh`, npm and registry answers. A
+  workflow-compatibility regression reads the actual publisher at the
+  historical cut in §3.2 and the current default-branch macOS consumer, proves
+  that the producer is missing the required receipt, and asserts preflight
+  refuses before a tag or publish action. A matching producer/consumer pair
+  must pass this compatibility check. Keep this regression read-only: it never
+  creates or pushes tags, dispatches workflows, or publishes packages. Retain
+  the preflight case that a product file in the diff turns red.
 - `macos-newcomer.yml` runs for a release after `publish.yml` succeeds
   (`workflow_run` on «Publish to npm», `completed`, success only) and keeps its
   PR and dispatch triggers; `scripts/publish-workflow.test.ts` follows.
