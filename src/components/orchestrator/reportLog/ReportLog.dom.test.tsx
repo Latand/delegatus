@@ -38,6 +38,7 @@ const { appendBridgeReports } = await import("@/lib/bridge/store");
 const { setBridgeReports } = await import("@/lib/projects/settings");
 const { resetDismissalOverlayForTests, useDismissalOverlay } = await import("@/components/attention/dismissalOverlay");
 const { buildNeedsYouQueue } = await import("@/components/attention/attentionQueue");
+const { resetDoneItemsForTests } = await import("@/components/attention/doneItems");
 
 const PROJECT = "repo-widgets";
 const realFetch = globalThis.fetch;
@@ -47,6 +48,9 @@ let pages: ReportLogPage[] = [];
 let requests: string[] = [];
 let settingWrites: unknown[] = [];
 let dismissals: Array<{ target: unknown; undo: boolean; surface: string }> = [];
+type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
+let doneServer: DoneItemV1[] = [];
+let doneWrites: Array<{ keys: string[]; undo: boolean; surface: string }> = [];
 
 function entry(seq: number, overrides: Partial<ReportLogEntry> = {}): ReportLogEntry {
   return { seq, at: new Date(Date.UTC(2026, 8, 24, 9, seq)).toISOString(), class: "completed", body: `report ${seq}`, cards: [], ...overrides };
@@ -57,6 +61,9 @@ function page(entries: ReportLogEntry[], overrides: Partial<ReportLogPage> = {})
 }
 
 beforeEach(() => {
+  doneServer = [];
+  doneWrites = [];
+  resetDoneItemsForTests();
   requests = [];
   settingWrites = [];
   dismissals = [];
@@ -86,6 +93,14 @@ beforeEach(() => {
       const body = JSON.parse(String(init!.body)) as { target: { subjects: Array<{ kind: "report"; seq: number }> }; undo: boolean; surface: string };
       dismissals.push(body);
       return new Response(JSON.stringify({ ok: true, dismissed: body.target.subjects, alreadyClear: [], changed: [], at: "2026-09-24T12:00:00.000Z", by: { kind: "operator", surface: body.surface }, undo: body.undo }));
+    }
+    if (url.startsWith("/api/attention/done")) {
+      if ((init?.method ?? "GET") === "GET") return new Response(JSON.stringify({ ok: true, items: doneServer.filter((item) => !item.acknowledgedAt), revision: 1 }));
+      const body = JSON.parse(String(init!.body)) as { keys: string[]; undo: boolean; surface: string };
+      doneWrites.push(body);
+      const changed = doneServer.filter((item) => body.keys.includes(item.key));
+      for (const item of changed) item.acknowledgedAt = body.undo ? null : "2026-09-24T12:00:00.000Z";
+      return new Response(JSON.stringify({ ok: true, changed }));
     }
     if (url.startsWith("/api/projects/settings")) {
       if (init?.method === "PUT") {
@@ -490,4 +505,50 @@ test("«Clear resolved» takes resolved questions out of the view on this device
   expect(dom.localStorage.getItem(`llvReportLogHideResolved:${PROJECT}`)).toBe("1");
   flushSync(() => host.querySelector<HTMLButtonElement>('[data-report-hide-resolved="hidden"]')!.click());
   expect(host.querySelector('[data-report-entry="1"]')).not.toBeNull();
+});
+
+/* «Готово» (docs/design/done-section.md) is pinned at the top of the log: the
+   same list «Чекають на вас» opens with, cut to this project and to what
+   belongs to no board, newest first, folding to its head with the count. */
+function doneItem(key: string, over: Partial<DoneItemV1> = {}): DoneItemV1 {
+  const at = new Date(Date.UTC(2026, 8, 24, 11)).toISOString();
+  return { key, kind: "task", look: "closed", project: PROJECT, at, createdAt: at, title: `Closed ${key}`, icon: null, refs: {}, frame: null, frameCheckedAt: at, acknowledgedAt: null, acknowledgedBy: null, ...over };
+}
+
+test("«Готово» is pinned above the log for this project, newest first, and «Seen all» accepts what it shows", async () => {
+  doneServer = [
+    doneItem("report:r-incident", { kind: "report", look: "incident", at: new Date(Date.UTC(2026, 8, 24, 11, 50)).toISOString(), title: "A lane stalled and was restarted" }),
+    doneItem("deploy:d1", { kind: "deploy", look: "deploy", project: null, at: new Date(Date.UTC(2026, 8, 24, 11, 55)).toISOString(), refs: { phase: "succeeded" } }),
+    doneItem("task:t-other", { project: "repo-other", title: "Another board's work" }),
+    doneItem("task:t-mine", { title: "This board's work" }),
+  ];
+  pages = [page([entry(3), entry(2)])];
+  const host = mount();
+  await settle();
+  const log = host.querySelector("[data-report-log]")!;
+  const section = log.querySelector<HTMLElement>('[data-done-section="desktop"]')!;
+  expect(section.getAttribute("data-done-place")).toBe("reports");
+  /* Under the log's heading, before the entries, outside their scroller. */
+  const scroller = log.querySelector("[data-report-log-entries]")!.parentElement!;
+  expect(scroller.contains(section)).toBe(false);
+  expect(section.compareDocumentPosition(scroller as unknown as Node) & 4).toBe(4);
+  expect(section.querySelector("[data-done-count]")!.textContent).toBe("3");
+  expect([...section.querySelectorAll("[data-done-row], [data-done-group]")].map((row) => row.getAttribute("data-done-row") ?? row.getAttribute("data-done-group")))
+    .toEqual(["deploy:d1", "report:r-incident", "closed"]);
+  expect(section.textContent).not.toContain("Another board's work");
+
+  /* Folded to its head, the count stays. */
+  (section.querySelector("[data-done-fold]") as HTMLElement).click();
+  await settle();
+  expect(section.querySelector("[data-done-list]")).toBeNull();
+  expect(section.querySelector("[data-done-count]")!.textContent).toBe("3");
+  expect(localStorage.getItem("llvDoneFolded:reports:desktop")).toBe("1");
+  (section.querySelector("[data-done-fold]") as HTMLElement).click();
+  await settle();
+
+  (section.querySelector("[data-done-accept-all]") as HTMLElement).click();
+  await settle();
+  expect(doneWrites).toEqual([{ keys: ["deploy:d1", "report:r-incident", "task:t-mine"], undo: false, surface: "desktop" }]);
+  expect(section.querySelector("[data-done-all-accepted]")).not.toBeNull();
+  expect(section.querySelector("[data-done-count]")!.textContent).toBe("0");
 });

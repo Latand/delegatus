@@ -484,7 +484,7 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    pointer and the merged role rows, the directive measures 14 807, and with
    the applyNow pointer on the override-stage line 14 823, inside a 14 900
    byte share that still leaves more than two history budgets. */
-// Operator decision forms measure 15 280 bytes; 16 700 still hold two history budgets.
+// Operator decision forms measure 15 276 bytes; 16 700 still hold two history budgets.
 const DELIVERED_DIRECTIVE_BUDGET_BYTES = 15_300;
 
 test("what delivery appends stays inside its share of the envelope", () => {

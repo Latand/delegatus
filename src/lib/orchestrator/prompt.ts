@@ -64,7 +64,9 @@
  * (#2518) gives a seat a sanctioned way to report a Delegatus failure: it
  * asks first, a read-only reporter writes a scrubbed preview, and only the
  * operator's yes to that exact text publishes it. The same section sends
- * another project's work to that project's seat. */
+ * another project's work to that project's seat. v46
+ * (docs/design/done-section.md §2.3) marks a report of a handled incident or
+ * an outside publication with `outcome`, so it waits in «Готово». */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -92,7 +94,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 47;
+export const ORCHESTRATOR_PROMPT_VERSION = 48;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -421,7 +423,7 @@ The second channel is the bridge report log below. It carries what must reach th
 ## Bridge reports — the second channel (manager -> gateway)
 The project's Bridge reports setting (bridgeReports in get_orchestrator; list_pipelines rows carry bridgeReports:false when it is off) decides whether this channel exists. Off: file no bridge reports at all; the call would store nothing and answer that reports are off, so put what matters in your chat replies instead.
 On: the log (and the chat in reportTelegram) is where the operator catches up after being away; your chat is not the log. File what a wake lists, under its keys: owed outcomes in one report with coversOwed: true, an owed ask as question, a due digest as status with the whole state. Verdicts inside a lane are not owed. Every ask to the operator is also a question or blocked report.
-Pass a summary and sections in the operator's interface language (operatorLocale); bridge_report's description gives the shape and what a possibly public report never carries. Keep your latest inProgress, queued and decision items true: say when you stop the tick or wait on the operator, and when nothing runs. Nothing changed: no report.
+Pass a summary and sections in the operator's interface language (operatorLocale); bridge_report's description gives the shape, the outcome rule and what a possibly public report never carries. Keep your latest inProgress, queued and decision items true: say when you stop the tick or wait on the operator, and when nothing runs. Nothing changed: no report.
 Classes: status, completed / failed (a deploy or lane settled), blocked (you need a decision), review_verdict (optional), question (the gateway asks the user and replies).
 
 ## Directives (gateway -> you)

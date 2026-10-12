@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { decodeXML } from "entities";
+import { MERGE_BATCH_BRANCH_PREFIX, mergeBatchTitle } from "../src/lib/forge/mergeBatchTitle";
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, testNameFilter, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
@@ -500,7 +501,7 @@ export class MergeBatch {
     git(this.repo, ["fetch", "origin", "main"]);
     const base = git(this.repo, ["rev-parse", "origin/main"]);
     const root = mkdtempSync(join(dirname(this.stateFile), "merge-batch-"));
-    const branch = `merge-batch/${randomUUID()}`;
+    const branch = `${MERGE_BATCH_BRANCH_PREFIX}${randomUUID()}`;
     const work = join(root, "checkout");
     git(this.repo, ["worktree", "add", "-b", branch, work, base]);
     const state: RunState = { version: 3, repo: realpathSync(this.repo), work, branch, base, tip: base,
@@ -1015,7 +1016,7 @@ export class MergeBatch {
 
   private async publish(state: RunState): Promise<boolean> {
     this.assertValidated(state);
-    const title = `Merge batch: ${state.rows.filter((row) => row.status === "clean").map((row) => `#${row.number}`).join(", ")}`;
+    const title = mergeBatchTitle(state.rows.filter((row) => row.status === "clean").map((row) => row.number));
     const bodyFile = join(dirname(this.stateFile), "merge-batch-body.md");
     writeFileSync(bodyFile, this.body(state), { mode: 0o600 });
     // Recheck the exact candidate and public body with the pinned main scanner

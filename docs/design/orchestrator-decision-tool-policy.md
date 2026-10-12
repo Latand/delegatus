@@ -9,8 +9,8 @@ bridge reports are enabled. The form holds the decision.
 PR #2758 supplies the project's «Рішення» column and seat rounds through this
 same tool. This change adds no form store, delivery route or rendered surface.
 It upgrades shipped mandate text and appends the rule to bespoke mandates.
-Version 47 leaves version 46 to that PR and marks existing default seats stale
-until rotation or upgrade.
+Version 48 preserves main's outcome-report rule and marks existing default
+seats stale until rotation or upgrade.
 
 Native questions are denied on fresh launches, boot re-hosts and terminal
 resume commands. Claude receives `AskUserQuestion` and

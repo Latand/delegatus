@@ -5,6 +5,7 @@ import type { AnySchemaObject } from "ajv";
 import pin from "./fixtures/relay_v1/owner-tools-response-schemas.json";
 import { ownerRateLimitSchema, toolCallResultSchema } from "./protocol";
 import { assertOwnerCaptureResponse, ownerCaptureOperations as operations } from "./ownerCapture.fixture";
+import { x1Results } from "./toolLoop.fixture";
 
 const captureFile = path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop_owner.json");
 
@@ -12,6 +13,24 @@ type CaptureCall = { body: { call_id: string; tool?: string; arguments?: Record<
   attempts: { response?: unknown; status?: number; body?: unknown }[] };
 type Capture = { calls: CaptureCall[]; actions: { name: string; calls: CaptureCall[] }[] };
 const capture = (): Capture => JSON.parse(fs.readFileSync(captureFile, "utf8"));
+
+test("X1, X2 and X4 pending responses use the builder's five-second retry delay", () => {
+  const x2 = JSON.parse(fs.readFileSync(path.join(path.dirname(captureFile), "install_tool_loop.json"), "utf8"));
+  for (const [name, fixture] of Object.entries({ X1: x1Results, X2: x2, X4: capture() })) {
+    let checked = 0;
+    const visit = (value: unknown) => {
+      if (!value || typeof value !== "object") return;
+      const record = value as Record<string, unknown>;
+      if (record.status === "pending") {
+        expect(record.retry_after_s, name).toBe(5);
+        checked++;
+      }
+      for (const child of Object.values(record)) visit(child);
+    };
+    visit(fixture);
+    expect(checked, name).toBeGreaterThan(0);
+  }
+});
 
 test("X4 committed owner responses validate against R8 public OpenAPI schemas", () => {
   const wire = capture();

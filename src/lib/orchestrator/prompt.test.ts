@@ -80,8 +80,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 47, and a v46 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(47);
+test("the default mandate is at version 48, and a v47 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(48);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -113,7 +113,8 @@ test("the default mandate is at version 47, and a v46 seat reads as stale", () =
      project's work. v41 points the operator to a task's prototype review
      instead of describing variants in prose. v42 clears waiting rows that ask
      nothing. v43 adds the questionnaire before ambiguous work. v44 combines
-     both with linked-seat coordination. */
+     both with linked-seat coordination. v46 marks a report of a handled
+     incident or an outside publication with `outcome`. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -131,7 +132,9 @@ test("the default mandate is at version 47, and a v46 seat reads as stale", () =
   expect(orchestratorMandateStale(44)).toBe(true);
   expect(orchestratorMandateStale(45)).toBe(true);
   expect(orchestratorMandateStale(46)).toBe(true);
-  expect(orchestratorMandateStale(47)).toBe(false);
+  expect(orchestratorMandateStale(47)).toBe(true);
+  expect(orchestratorMandateStale(48)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -183,7 +186,9 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
   44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
   45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
+  46: "2f8d1ef97f331cb982a32746575816ea2d1fe5a4869c17a6329f05033b3f15f1",
   47: "0a204f45fe2e477c20d14888313530363eece18a53e608f8a8f427fb5ef3241c",
+  48: "b5ac29298046ae89343fee1ea5d7149bd9b26d2bc8b4270300e5ca7892dd2ce2",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -791,7 +796,8 @@ test("the role table keeps the delivered default inside the structured envelope"
      the issue-reporter row. The visual-critic row and the UI-lane step that
      ends on it take 150 more. The prototype-review pointer adds 47 bytes;
      the delivered default includes the questionnaire, board cleanup and
-     linked-seat coordination alongside the applyNow pointer: 29 367 bytes.
+     linked-seat coordination alongside the applyNow pointer: 29 367 bytes,
+     and the pointer to the rule for a report's `outcome` 18 more.
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
   expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
