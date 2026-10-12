@@ -63,6 +63,7 @@ export interface WorkflowPorts {
   /** A held setup or stage-agent start waits for CPU pressure to fall; null admits. */
   cpuPressureHold?(key: string): CpuPressureHold | null;
   cpuAdmissionReconcile?(): void;
+  cpuAdmissionSuspend?(key: string): void;
   setupStatus(wf: Workflow): SetupStatus;
   spawnAgent(role: RoleConfig, cwd: string, prompt: string, accountId: string | null | undefined, title: string): Promise<StageSpawn>;
   /** The pane still hosts a non-shell foreground process. */
@@ -87,6 +88,7 @@ export function defaultPorts(): WorkflowPorts {
     startSetup,
     cpuPressureHold: (key) => machineCpuPressureGate()?.check(key) ?? null,
     cpuAdmissionReconcile: reconcileCpuAdmission,
+    cpuAdmissionSuspend: (key) => machineCpuAdmissionQueue().suspend(key),
     setupStatus,
     spawnAgent: async (role, cwd, prompt, accountId, title) => {
       const account = accountManager.resolveSpawn(role.engine, accountId);
@@ -288,7 +290,10 @@ async function ensureStageAgent(
   persistCheckpoint: () => void,
 ): Promise<"spawning" | "waiting" | "ready"> {
   if (!run.startedAt) {
-    if (wf.mode === "auto" && activeDrain()) return "waiting";
+    if (wf.mode === "auto" && activeDrain()) {
+      ports.cpuAdmissionSuspend?.(cpuWorkflowKey(wf, "stage"));
+      return "waiting";
+    }
     // Only a fresh start asks; a stage whose start is stamped is observed and
     // recovered below whatever the pressure reads.
     const pressure = ports.cpuPressureHold?.(cpuWorkflowKey(wf, "stage"));
@@ -391,7 +396,10 @@ async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheck
     if (wf.setupPid == null && ports.setupStatus(wf).status !== "done") {
       // Only the first launch asks; a setup that already started is observed
       // below whatever the pressure reads.
-      if (wf.mode === "auto" && activeDrain()) return;
+      if (wf.mode === "auto" && activeDrain()) {
+        ports.cpuAdmissionSuspend?.(cpuWorkflowKey(wf, "setup"));
+        return;
+      }
       const pressure = ports.cpuPressureHold?.(cpuWorkflowKey(wf, "setup"));
       if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, SETUP_HOLD_SUBJECT); return; }
       const started = ports.startSetup(wf);

@@ -192,3 +192,25 @@ test.each(["setup", "stage"] as const)("an update suspends automatic %s while ma
   expect(rows[0]?.stageRuns[0]?.startedAt).toBeNull();
   expect(phase === "setup" ? rows[1]?.setupPid : rows[1]?.stageRuns[0]?.startedAt).not.toBeNull();
 });
+
+test.each(["setup", "stage"] as const)("a mid-tick update suspends %s before later work asks for admission", async phase => {
+  const h = harness();
+  saveWorkflows([workflow("one", phase)]);
+  await tickWorkflows([], h.ports);
+  const rows = loadWorkflows();
+  rows.push(workflow("two", "stage", "manual"));
+  saveWorkflows(rows);
+  const reconcile = h.ports.cpuAdmissionReconcile!;
+  h.ports.cpuAdmissionReconcile = () => {
+    reconcile();
+    writeDrain(drainFile(), { id: "update", target: "candidate", since: new Date(now).toISOString(), until: 0, persistent: true });
+  };
+  const check = h.ports.cpuPressureHold!;
+  h.ports.cpuPressureHold = key => {
+    // The manual workflow asks before tickWorkflows' final reconciliation.
+    expect(machineCpuAdmissionQueue().check("command:mid-tick", true)).toBeNull();
+    return check(key);
+  };
+  await tickWorkflows([], h.ports);
+  expect(h.starts).toEqual([]);
+});
