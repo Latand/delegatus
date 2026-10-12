@@ -304,6 +304,10 @@ and the operator read the same words.
 
 ## 4. The seat-tick wake rule
 
+A newly verified idle episode passes the busy-seat guard, so the seat receives
+its first alert while working too. Once that episode is reported, routine
+checks retain the normal busy-seat gate.
+
 The tick runs in the Viewer process (`seatTickSources.ts:690-699`), with a
 fresh catalog and no answer budget, so its rows are verified except a tail that
 cannot be read.

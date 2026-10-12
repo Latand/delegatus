@@ -47,3 +47,23 @@ test("a verified idle child wakes immediately and its unchanged record is shown 
   const next = seatTickDecision({ ...check, now: now + 300_000, state });
   expect((next.verdict.kind === "wake" ? next.verdict.items : []).filter(item => item.stallToken)).toHaveLength(0);
 });
+
+
+for (const child of [false, true]) {
+  test(`verified idle ${child ? "child" : "stage"} notifies a busy seat once`, () => {
+    const check = input();
+    check.seat!.turn = "busy";
+    check.seat!.activity = { lifecycle: "running", reason: "host_alive_transcript_active", turnState: "busy", hostState: "alive", silentForMs: 1_000, stalledForMs: null };
+    if (child) {
+      const activity = check.pipelines[0].stageActivity!;
+      check.pipelines = [];
+      check.children = [{ conversationId: "conversation_child", title: "child check", status: "running", outcome: null, terminalAt: null, lastRecordAt: activity.lastRecordAt!, activity: { ...activity, conversationId: "conversation_child" } }];
+    }
+    const first = seatTickDecision(check);
+    expect(first.verdict.kind).toBe("wake");
+    if (first.verdict.kind !== "wake") throw new Error("verified idle must notify the busy seat");
+    expect(first.verdict.items.some(item => item.stallToken)).toBe(true);
+    const state = seatTickWakeCommit(first.state, seatTickWakeCommitPlan(first.verdict, { fingerprint: "one", eventsThrough: 0 })!, now);
+    expect(seatTickDecision({ ...check, now: now + 300_000, state }).verdict).toMatchObject({ kind: "skipped", reason: "seat-busy" });
+  });
+}

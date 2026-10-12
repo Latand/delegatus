@@ -14,10 +14,10 @@
       "colour": "rgb(79, 195, 111)"
     },
     "popup": {
-      "left": 376.46875,
-      "right": 429.34375,
-      "top": 527.40625,
-      "bottom": 551.15625,
+      "left": 376.53125,
+      "right": 429.40625,
+      "top": 527.65625,
+      "bottom": 551.40625,
       "portalled": true,
       "lines": 1,
       "text": "працює",
@@ -40,10 +40,10 @@
       "colour": "rgb(224, 174, 69)"
     },
     "popup": {
-      "left": 348.984375,
-      "right": 468.015625,
-      "top": 326.09375,
-      "bottom": 349.84375,
+      "left": 348.96875,
+      "right": 468,
+      "top": 326.34375,
+      "bottom": 350.09375,
       "portalled": true,
       "lines": 1,
       "text": "чекає перевірку · 5 хв",
@@ -66,13 +66,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 330.25,
-      "right": 429.359375,
-      "top": 655.84375,
-      "bottom": 693.34375,
+      "left": 330.5625,
+      "right": 428.9375,
+      "top": 656.34375,
+      "bottom": 693.84375,
       "portalled": true,
       "lines": 2,
-      "text": "стоїть 14 хвостання дія 10:52",
+      "text": "стоїть 14 хвостання дія 11:43",
       "scrollWidth": 1440,
       "scrollHeight": 900
     }
@@ -92,10 +92,10 @@
       "colour": "rgb(79, 195, 111)"
     },
     "popup": {
-      "left": 376.96875,
-      "right": 429.4375,
-      "top": 498.40625,
-      "bottom": 522.15625,
+      "left": 376.734375,
+      "right": 429.203125,
+      "top": 498.65625,
+      "bottom": 522.40625,
       "portalled": true,
       "lines": 1,
       "text": "working",
@@ -118,10 +118,10 @@
       "colour": "rgb(224, 174, 69)"
     },
     "popup": {
-      "left": 346.984375,
-      "right": 470.046875,
-      "top": 297.09375,
-      "bottom": 320.84375,
+      "left": 346.953125,
+      "right": 470.015625,
+      "top": 297.34375,
+      "bottom": 321.09375,
       "portalled": true,
       "lines": 1,
       "text": "waiting on a check · 5m",
@@ -144,13 +144,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 334.25,
-      "right": 425.078125,
-      "top": 655.78125,
-      "bottom": 693.28125,
+      "left": 334.703125,
+      "right": 424.796875,
+      "top": 656.28125,
+      "bottom": 693.78125,
       "portalled": true,
       "lines": 2,
-      "text": "idle 14mlast action 10:52",
+      "text": "idle 14mlast action 11:43",
       "scrollWidth": 1440,
       "scrollHeight": 900
     }
@@ -170,10 +170,10 @@
       "colour": "rgb(79, 195, 111)"
     },
     "popup": {
-      "left": 372.46875,
-      "right": 425.34375,
-      "top": 559.65625,
-      "bottom": 583.40625,
+      "left": 372.53125,
+      "right": 425.40625,
+      "top": 559.90625,
+      "bottom": 583.65625,
       "portalled": true,
       "lines": 1,
       "text": "працює",
@@ -196,10 +196,10 @@
       "colour": "rgb(224, 174, 69)"
     },
     "popup": {
-      "left": 344.984375,
-      "right": 464.015625,
-      "top": 387.28125,
-      "bottom": 411.03125,
+      "left": 344.96875,
+      "right": 464,
+      "top": 387.53125,
+      "bottom": 411.28125,
       "portalled": true,
       "lines": 1,
       "text": "чекає перевірку · 5 хв",
@@ -222,13 +222,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 326.25,
-      "right": 425.359375,
-      "top": 688.09375,
-      "bottom": 725.59375,
+      "left": 326.5625,
+      "right": 424.9375,
+      "top": 688.59375,
+      "bottom": 726.09375,
       "portalled": true,
       "lines": 2,
-      "text": "стоїть 14 хвостання дія 10:52",
+      "text": "стоїть 14 хвостання дія 11:43",
       "scrollWidth": 1000,
       "scrollHeight": 900
     }
@@ -248,10 +248,10 @@
       "colour": "rgb(79, 195, 111)"
     },
     "popup": {
-      "left": 372.96875,
-      "right": 425.4375,
-      "top": 861.65625,
-      "bottom": 885.40625,
+      "left": 372.734375,
+      "right": 425.203125,
+      "top": 861.90625,
+      "bottom": 885.65625,
       "portalled": true,
       "lines": 1,
       "text": "working",
@@ -274,10 +274,10 @@
       "colour": "rgb(224, 174, 69)"
     },
     "popup": {
-      "left": 342.984375,
-      "right": 466.046875,
-      "top": 689.28125,
-      "bottom": 713.03125,
+      "left": 342.953125,
+      "right": 466.015625,
+      "top": 689.53125,
+      "bottom": 713.28125,
       "portalled": true,
       "lines": 1,
       "text": "waiting on a check · 5m",
@@ -300,13 +300,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 330.25,
-      "right": 421.078125,
-      "top": 701.09375,
-      "bottom": 738.59375,
+      "left": 330.703125,
+      "right": 420.796875,
+      "top": 701.59375,
+      "bottom": 739.09375,
       "portalled": true,
       "lines": 2,
-      "text": "idle 14mlast action 10:52",
+      "text": "idle 14mlast action 11:43",
       "scrollWidth": 1000,
       "scrollHeight": 900
     }

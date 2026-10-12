@@ -462,6 +462,13 @@ function stalledChildren(input: SeatTickCheckInput): { child: SeatTickChildInput
   return found;
 }
 
+/** A measured idle episode is urgent even while the seat's turn progresses. */
+function verifiedIdleWakeDue(input: SeatTickCheckInput): boolean {
+  const reported = new Set(input.state.reportedStalls ?? []);
+  return stalledLanes(input).some(entry => verifiedIdle(entry.pipeline.stageActivity) && !reported.has(laneStallToken(entry.pipeline)))
+    || stalledChildren(input).some(entry => verifiedIdle(entry.child.activity) && !reported.has(childStallToken(entry.child)));
+}
+
 /**
  * The lanes and children whose turn waits on a tool permission request nobody
  * answered (#2215), each with the line that names it: the tool, what it would
@@ -1136,10 +1143,10 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     };
   }
 
-  /* A tick that landed after the current turn would be acting on evidence the
-     turn has already superseded. Drop it: no delivery, no cursor advance, no
-     stall memory, and the next check re-reads everything. */
-  if (seatTurnProgressing(input.seat)) {
+  /* Routine evidence can be superseded by the seat's progressing turn. A
+     newly verified idle agent still needs its first alert; after delivery its
+     token restores the normal busy-seat gate. */
+  if (seatTurnProgressing(input.seat) && !verifiedIdleWakeDue(input)) {
     return { verdict: { kind: "skipped", reason: "seat-busy" }, state: unchanged, cards: [] };
   }
 
@@ -1285,9 +1292,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const laneEvents = input.events.filter(event => isOwedEvent(event, input));
   const intervalAgenda = input.pipelines.some(isOpenLane) || runningChildren.length > 0 || input.signals.length > 0;
   const candidates: SeatTickWakeReason[] = [];
-  const reportedIdle = new Set(input.state.reportedStalls ?? []);
-  const verifiedIdleDue = persistedStalls.some(entry => verifiedIdle(entry.pipeline.stageActivity) && !reportedIdle.has(laneStallToken(entry.pipeline)))
-    || persistedChildStalls.some(entry => verifiedIdle(entry.child.activity) && !reportedIdle.has(childStallToken(entry.child)));
+  const verifiedIdleDue = verifiedIdleWakeDue(input);
   if (wakeDue) {
     /* A verdict the seat cannot decide without leads the wake — and waits for
        the wake like everything else. Routine progress never wakes on its own,
