@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Pause, Play, RotateCcw, Unplug } from "lucide-react";
-import { useCallback, useEffect, useState, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { effortTierLabel } from "@/components/builderCopy";
 import { EngineRadioGroup } from "@/components/draft/AgentLaunchControls";
@@ -19,6 +19,11 @@ import { KNOWN_RELAYS, verifyUrlAllowed, type KnownRelayInfo } from "@/lib/exter
 import { RELAY_MEMBER_ANSWERS_PER_HOUR } from "@/lib/externalRelay/profile";
 import { selectOwnerDestination } from "@/lib/externalRelay/ownerDestination";
 import { useLocale, type TFunction } from "@/lib/i18n";
+
+import { offersCloneCreate } from "@/lib/externalRelay/cloneNames";
+
+import { CloneCreateRow, CloneEmpty, CloneForm, ClonePendingRow, CloneStatus, useCloneCreate, useCloneSetup, type CloneCreatedView, type CloneRequestView } from "./CloneCreate";
+import { alertLine, call, Dot, FOCUS, HEAD, LINK, openBlankWindow, ownerLine, PRIMARY, QUIET, safeLink } from "./relayUi";
 
 /**
  * The external relay's operator surface (docs/design/relay.md §B.9): pair
@@ -57,6 +62,10 @@ export type RelayView = {
   pairedAt: string;
   paused: boolean;
   targets: Target[];
+  /** What the relay's descriptor offers; "clone_create" shows the «Створити клона» block. */
+  features?: string[];
+  cloneRequest?: CloneRequestView;
+  cloneCreated?: CloneCreatedView;
 };
 export type PendingView = {
   id: string;
@@ -95,6 +104,12 @@ const ERROR_KEYS: Record<string, Parameters<TFunction>[0]> = {
   rate_limited: "externalRelay.error.rateLimited",
   refused_here: "externalRelay.error.refusedHere",
   local_error: "externalRelay.error.local",
+  clone_daily_limit: "externalRelay.error.cloneDailyLimit",
+  clone_create_unsupported: "externalRelay.error.cloneUnsupported",
+  clone_setup_pending: "externalRelay.error.cloneSetupPending",
+  photo_unreadable: "externalRelay.error.photoUnreadable",
+  photo_too_large: "externalRelay.error.photoTooLarge",
+  avatars_unreadable: "externalRelay.error.avatarsUnreadable",
 };
 export function relayErrorText(t: TFunction, code: string): string {
   const key = ERROR_KEYS[code];
@@ -138,15 +153,6 @@ export function outcomeText(t: TFunction, outcome: string): string {
   return t(kind === "declined" ? "externalRelay.outcome.declined" : "externalRelay.outcome.failed", { reason: why });
 }
 
-/** A relay-provided link is followed only when it is an ordinary web address. */
-function safeLink(value: string | null): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
-  } catch { return null; }
-}
-
 /** Times and dates in the UI's language on the board's 24-hour clock, to the minute; a date names its year only outside this one. */
 const localeTag = (locale: string) => locale === "uk" ? "uk-UA" : "en-US";
 const clock = (value: string, locale: string) => new Date(value).toLocaleTimeString(localeTag(locale), { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -156,27 +162,10 @@ const stamp = (value: string, locale: string) => {
   return date.toLocaleString(localeTag(locale), { year, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 };
 
-const ownerLine = (owner: Owner) => owner.handle ? `${owner.display_name} (${owner.handle})` : owner.display_name;
 const modelLabel = (engine: RelayEngine | null, model: string | null) => engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
 
-/* The board's own recipes: the seat tick panel's link, quiet action and number
-   field, its uppercase section head, and the primary button. Every control is
-   44 px on the phone. */
-const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-const LINK = `inline-flex items-center gap-0.5 font-semibold text-accent underline-offset-2 hover:underline ${FOCUS}`;
-const QUIET = `inline-flex h-7 items-center gap-1.5 rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent disabled:opacity-50 max-sm:min-h-11 ${FOCUS}`;
 const NUMBER = `h-7 rounded-control border border-border bg-card px-2 text-ui text-primary tabular-nums disabled:opacity-50 max-sm:h-11 max-sm:text-body ${FOCUS}`;
-const HEAD = "text-label font-semibold uppercase tracking-wide text-muted";
-const PRIMARY = `inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-ui font-semibold text-on-brand shadow-1 hover:opacity-90 disabled:opacity-50 max-sm:h-11 ${FOCUS}`;
 const PHONE_SELECT = "max-sm:h-11 max-sm:text-body";
-
-async function call<T>(url: string, method: string, body?: object): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
-  try {
-    const response = await fetch(url, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
-    const result = response.status === 204 ? {} : await response.json();
-    return response.ok ? { ok: true, value: result as T } : { ok: false, error: typeof result?.error === "string" ? result.error : "unavailable" };
-  } catch { return { ok: false, error: "unavailable" }; }
-}
 
 /** The relay list, read on open and every few seconds while shown. */
 export function useExternalRelay(): { state: RelayState | null; error: string | null; refresh: () => Promise<void> } {
@@ -209,14 +198,6 @@ function useKnownRelays(): KnownRelayInfo[] {
   return known;
 }
 
-/** The status dot of the seat tick panel, with the danger tone a refused pairing needs. */
-function Dot({ tone, className = "" }: { tone: "ok" | "warn" | "danger" | "muted"; className?: string }) {
-  const fill = tone === "ok" ? "bg-success" : tone === "warn" ? "bg-warning" : tone === "danger" ? "bg-danger" : "bg-muted";
-  return <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${fill} ${className}`} />;
-}
-
-const alertLine = (text: string) => <p role="alert" className="rounded-control border border-danger/40 bg-danger/10 px-2 py-1.5 text-ui leading-4 text-danger">{text}</p>;
-
 /** The relay's mark: the service's icon, or the first letter of its name. */
 function RelayMark({ name, icon = null }: { name: string; icon?: string | null }) {
   return icon
@@ -233,22 +214,6 @@ function RelayName({ name, origin }: { name: string; origin: string }) {
       <span className="min-w-0 truncate text-caption text-muted">{origin.replace(/^https?:\/\//, "")}</span>
     </p>
   );
-}
-
-/**
- * Opens the service's page while the click that asked for it is still running,
- * which is the only moment a browser lets a window open unasked. The window
- * starts blank and loses its link back to this page; it is pointed at the
- * service's page once the pairing has one. Null when the browser refused.
- */
-function openPairingWindow(text: string): Window | null {
-  try {
-    const win = window.open("about:blank", "_blank");
-    if (!win) return null;
-    win.opener = null;
-    try { win.document.body.textContent = text; } catch { /* a blank tab is fine */ }
-    return win;
-  } catch { return null; }
 }
 
 /**
@@ -313,7 +278,7 @@ export function RelayPairing({ resume, disabled = false, known = [], connected =
   };
   const startKnown = (relay: KnownRelayInfo) => {
     if (busy || disabled) return;
-    void start(relay.origin, relay.id, openPairingWindow(t("externalRelay.pairing.opening", { name: relay.name })));
+    void start(relay.origin, relay.id, openBlankWindow(t("externalRelay.pairing.opening", { name: relay.name })));
   };
   const reset = () => { setPending(null); setStatus(null); setError(null); setOpened(false); };
   const cancel = async () => {
@@ -472,9 +437,11 @@ function SettingLine({ label, children }: { label: string; children: ReactNode }
  * pills, model and effort of the new-agent form, the concurrency, the member
  * limit with who it exempts, and what the target still needs.
  */
-function TargetRow({ relay, target, running, signedIn, actions, open, onOpen }: {
+function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fresh = false }: {
   relay: RelayView;
   target: Target;
+  /** A clone this page just created: its row is tinted and marked «Новий». */
+  fresh?: boolean;
   running: number;
   signedIn: Record<RelayEngine, boolean>;
   actions: Actions;
@@ -491,13 +458,16 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen }: 
   const here = target.answered_by === "install";
   const name = (key: Parameters<TFunction>[0]) => `${t(key)} · ${target.name}`;
   return (
-    <div data-external-relay-target={target.id} data-open={open ? "" : undefined} className={`flex min-w-0 flex-col border-t border-border first:border-t-0 ${open ? "pb-2.5" : ""}`}>
+    <div data-external-relay-target={target.id} data-open={open ? "" : undefined} data-fresh={fresh ? "" : undefined} className={`flex min-w-0 flex-col border-t border-border first:border-t-0 ${fresh ? "rounded-control bg-accent-soft/60" : ""} ${open ? "pb-2.5" : ""}`}>
       <div className="flex min-h-9 min-w-0 items-center gap-2 max-sm:min-h-11">
         <button type="button" aria-expanded={open} onClick={onOpen} data-external-relay-target-fold=""
           className={`flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-control px-1 text-left hover:bg-sunken max-sm:min-h-11 ${FOCUS}`}>
           {target.engine ? <EngineMark engine={target.engine} size={14} /> : <Dot tone="muted" className="mx-1" />}
           <span className="flex min-w-0 flex-1 flex-col">
-            <span className="line-clamp-2 break-words text-ui font-semibold leading-4 text-primary" title={target.name}>{target.name}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="line-clamp-2 min-w-0 break-words text-ui font-semibold leading-4 text-primary" title={target.name}>{target.name}</span>
+              {fresh ? <span data-external-relay-fresh="" className="shrink-0 rounded-full bg-brand px-1.5 text-[10.5px] font-semibold leading-4 text-on-brand">{t("externalRelay.clone.fresh")}</span> : null}
+            </span>
             <span data-external-relay-running={running} className={`flex min-w-0 items-center gap-1 text-caption ${noAccount ? "text-warning" : "text-muted"}`}>
               {noAccount ? <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden /> : null}
               {configured ? (
@@ -565,12 +535,29 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen }: 
 }
 
 /**
+ * Gives a new pairing's unset targets an engine with its default model and,
+ * when `here`, routes each to this install. A clone created from the card is
+ * set up by `useCloneSetup` instead, which retries what failed.
+ */
+async function adoptTargets(relayId: string, targets: Target[], engine: RelayEngine, here: boolean): Promise<void> {
+  const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}`;
+  for (const target of targets.filter((item) => item.engine === null)) {
+    const set = await call(base, "PATCH", { target: { id: target.id, engine, model: defaultModelFor(engine) } });
+    if (set.ok && here && target.answered_by !== "install")
+      await call(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
+  }
+}
+
+/**
  * One paired relay (relay.md §B.9): its mark, name, address and who it is
  * paired as, with pause or resume and disconnect behind its ⋯; the poller's
  * state as a status line with its dot; the last request and the last progress
  * as the sidebar's meter lines; then one folded row per target. What the
  * relay's chats said is never shown here: those conversations are listed with
  * the others (the sidebar's entry for the service) and open in the agent window.
+ * A relay whose descriptor lists `clone_create` adds «Створити клона» below the
+ * rows (CloneCreate.tsx); the clone it creates takes the signed-in engine
+ * (Claude first) and is answered here.
  */
 function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; status: StatusRow | null; signedIn: Record<RelayEngine, boolean>; onChanged: () => Promise<void> }) {
   const { t, locale } = useLocale();
@@ -578,6 +565,12 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
   const [error, setError] = useState<string | null>(null);
   const [warned, setWarned] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const cloneable = offersCloneCreate(relay);
+  const clone = useCloneCreate({ relayId: relay.id, stored: relay.cloneRequest ?? null, created: relay.cloneCreated ?? null, onChanged });
+  const freshId = clone.phase.kind === "created" ? clone.phase.targetId : null;
+  const fresh = freshId ? relay.targets.find((target) => target.id === freshId) ?? null : null;
+  const defaultEngine: RelayEngine | null = signedIn.claude ? "claude" : signedIn.codex ? "codex" : null;
+  const setup = useCloneSetup({ relayId: relay.id, phase: clone.phase, recorded: relay.cloneCreated?.request_id ?? null, target: fresh, engine: defaultEngine, onChanged });
   const act = async (url: string, method: string, body?: object) => {
     setBusy(true); setError(null);
     const result = await call<{ warned?: boolean }>(url, method, body);
@@ -592,6 +585,7 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
     patchTarget: (target, patch) => void act(base, "PATCH", { target: { id: target.id, ...patch } }),
     route: (target, answeredBy) => void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy }),
   };
+  const errorText = (code: string) => relayErrorText(t, code);
   const state = relay.paused ? "paused" : status?.state.state ?? "paused";
   const tone = state === "polling" ? "ok" : state === "credential_rejected" || state === "unsupported_version" ? "danger" : state === "unreachable" || state === "rate_limited" ? "warn" : "muted";
   const progress = status?.state.lastProgress ?? null;
@@ -627,15 +621,25 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
         <MeterLine label={t("externalRelay.lastOutcome")} value={<span data-external-relay-last-outcome="">{outcome}</span>} percent={null} color="" bar={false} />
         {progress ? <MeterLine label={t("externalRelay.lastProgress")} value={<span data-external-relay-last-progress="" title={progress.label}>{`${progressTarget} · ${clock(progress.at, locale)}`}</span>} percent={null} color="" bar={false} /> : null}
       </div>
-      {relay.targets.length ? (
+      {relay.targets.length || (cloneable && clone.phase.kind === "waiting") ? (
         <div className="flex min-w-0 flex-col">
-          <div className="flex items-baseline justify-end pb-0.5"><span className={HEAD}>{t("externalRelay.target.answeredHere")}</span></div>
+          {relay.targets.length ? <div className="flex items-baseline justify-end pb-0.5"><span className={HEAD}>{t("externalRelay.target.answeredHere")}</span></div> : null}
           {relay.targets.map((target) => (
             <TargetRow key={target.id} relay={relay} target={target} running={status?.running[target.id] ?? 0} signedIn={signedIn} actions={actions}
-              open={open === target.id} onOpen={() => setOpen((value) => value === target.id ? null : target.id)} />
+              open={open === target.id} onOpen={() => setOpen((value) => value === target.id ? null : target.id)} fresh={target.id === freshId} />
           ))}
+          {cloneable ? <ClonePendingRow clone={clone} /> : null}
+          {cloneable && relay.targets.length ? (
+            clone.phase.kind === "form" ? <CloneForm clone={clone} errorText={errorText} />
+              : clone.phase.kind === "idle" || (clone.phase.kind === "created" && setup.settled) ? <CloneCreateRow clone={clone} /> : null
+          ) : null}
         </div>
-      ) : <p className="text-caption text-muted">{t("externalRelay.noTargets")}</p>}
+      ) : null}
+      {relay.targets.length ? null
+        : !cloneable ? <p className="text-caption text-muted">{t("externalRelay.noTargets")}</p>
+          : clone.phase.kind === "form" ? <CloneForm clone={clone} errorText={errorText} bare />
+            : clone.phase.kind === "idle" ? <CloneEmpty relayName={relay.name} clone={clone} /> : null}
+      {cloneable ? <CloneStatus clone={clone} setup={setup} owner={relay.owner} here={fresh?.answered_by === "install" && fresh.engine !== null} name={fresh?.name ?? null} errorText={errorText} /> : null}
       {error ? alertLine(relayErrorText(t, error)) : null}
       {warned ? <p role="status" className="flex items-start gap-1.5 text-caption leading-4 text-warning"><AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />{t("externalRelay.removeWarning")}</p> : null}
     </div>
@@ -662,12 +666,7 @@ export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, 
   const paired = async (relay: RelayView) => {
     const builtIn = KNOWN_RELAYS.some((item) => item.origin === relay.origin);
     const engine = pairEngine ?? (builtIn ? (signedIn.claude ? "claude" : signedIn.codex ? "codex" : null) : null);
-    if (engine)
-      for (const target of relay.targets.filter((item) => item.engine === null)) {
-        const set = await call(`/api/external-relay/relays/${encodeURIComponent(relay.id)}`, "PATCH", { target: { id: target.id, engine, model: defaultModelFor(engine) } });
-        if (set.ok && builtIn && signedIn[engine] && target.answered_by !== "install")
-          await call(`/api/external-relay/relays/${encodeURIComponent(relay.id)}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
-      }
+    if (engine) await adoptTargets(relay.id, relay.targets, engine, builtIn && signedIn[engine]);
     await refresh();
     onPaired?.(relay);
   };

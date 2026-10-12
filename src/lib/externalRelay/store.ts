@@ -23,6 +23,30 @@ export type RelayTargetSettings = {
   /** Absent is off; only the operator can enable full owner agent runs. */
   ownerTier?: boolean;
 };
+/** The open «Створити клона» request (cloneCreate.ts), until it ends. */
+export type RelayCloneRequest = {
+  request_id: string;
+  create_url: string;
+  expires_at: string;
+  name: string;
+  username: string;
+  requestedAt: string;
+};
+/**
+ * A clone the relay reported created while its request was open here. It
+ * stays until the settings card has given the new target this install's
+ * engine and route and says so, so a page closed or reloaded while the
+ * relay answered still finishes the setup when it opens again.
+ */
+export type RelayCloneCreated = {
+  request_id: string;
+  target_id: string | null;
+  /** The target's name as Telegram confirmed it, else the requested one. */
+  name: string;
+  username: string;
+  photo_failed: boolean;
+  createdAt: string;
+};
 export type PairedRelay = {
   id: string;
   origin: string;
@@ -40,6 +64,8 @@ export type PairedRelay = {
     max_answer_chars: number;
   };
   targets: RelayTargetSettings[];
+  cloneRequest?: RelayCloneRequest;
+  cloneCreated?: RelayCloneCreated;
 };
 export type PendingRelay = {
   id: string;

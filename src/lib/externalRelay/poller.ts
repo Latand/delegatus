@@ -146,6 +146,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
    already on the wire is joined rather than repeated. */
 export const TARGETS_REFRESH_ON_READ_MS = 30_000;
 export const TARGETS_REFRESH_IN_LOOP_MS = 300_000;
+export const DESCRIPTOR_REFRESH_ON_READ_MS = 300_000;
 export type TargetRefreshOutcome =
   | "changed"
   | "unchanged"
@@ -174,9 +175,12 @@ export async function refreshTargetsForRead(waitMs = 2_000): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     Promise.all(
-      readRelayStore().relays.map((relay) =>
+      readRelayStore().relays.flatMap((relay) => [
         refreshRelayTargets(relay.id, TARGETS_REFRESH_ON_READ_MS),
-      ),
+        // A feature the service ships after pairing («clone_create») shows
+        // without a new pairing; a failed read here is not a request outcome.
+        refreshRelayDescriptorFeatures(relay.id, DESCRIPTOR_REFRESH_ON_READ_MS, { quiet: true }),
+      ]),
     ),
     new Promise((resolve) => {
       timer = setTimeout(resolve, waitMs);
@@ -254,9 +258,10 @@ export function relayClaimBody(relay: PairedRelay) {
     ...relayClaimCapabilities(readRelayStore().relays.find(item => item.id === relay.id)),
     slots: advertisedSlots(relay) };
 }
-/** Dark installs make no extra descriptor request. Enabled installs refresh before
- * their first claim, then with the existing five-minute target cadence. */
-export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0): Promise<TargetRefreshOutcome> {
+/** The claim loop of a dark install makes no extra descriptor request. Enabled
+ * installs refresh before their first claim, then with the existing five-minute
+ * target cadence; the settings page reads it at most every five minutes too. */
+export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0, options: { quiet?: boolean } = {}): Promise<TargetRefreshOutcome> {
   const prior = descriptorRefreshes.get(id);
   if (prior?.running) return prior.running;
   if (prior && Date.now() - prior.at < minIntervalMs) return Promise.resolve("skipped");
@@ -276,7 +281,7 @@ export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0): P
       }) }));
       return changed ? "changed" : "unchanged";
     } catch {
-      noteRelayOutcome(id, "descriptor:unreachable");
+      if (!options.quiet) noteRelayOutcome(id, "descriptor:unreachable");
       return "failed";
     }
   })().finally(() => { entry.running = null; });
