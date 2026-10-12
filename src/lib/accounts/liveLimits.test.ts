@@ -40,7 +40,7 @@ test("login-complete bypasses a cached pre-login failure and the next controller
   const fetch = spyOn(globalThis, "fetch").mockImplementation((async () => {
     reads += 1;
     return new Response(JSON.stringify({ five_hour: { utilization: 7 }, seven_day: { utilization: 31 } }));
-  }) as typeof globalThis.fetch);
+  }) as unknown as typeof globalThis.fetch);
   const status = spyOn(realClaudeLoginPorts, "status").mockResolvedValue({ loggedIn: true, method: null, email: null, plan: "max" });
   const probe: QuotaProbePort = {
     list: () => [account], active: () => account.id, credentialIdentity: () => "fixture-credential",
