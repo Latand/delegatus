@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { SEAT_DECISIONS_COLLECTION } from "@/lib/prototypeReview/seatRounds";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { pipelineRegistryHealth } from "@/lib/pipelines/store";
 import { bridgeReportLogSignature } from "@/lib/bridge/store";
@@ -256,6 +257,9 @@ function projectionBaseKey(
       /* An operator message to the seat answers its open questions, and the
          moment it was admitted lives in the reply-suggestion store. */
       hotStateSignature("reply_suggestions", "reply-suggestions.json"),
+      /* The orchestrators' own questions ride beside the tasks: a question
+         asked or answered moves no other store. */
+      `seat-decisions:${readStateCollectionRevision(statePath("state.sqlite"), SEAT_DECISIONS_COLLECTION) ?? "none"}`,
       /* A tick switched off hands its project's routed asks back to the operator. */
       hotStateSignature("seat_tick_settings", "seat-tick-settings.json"),
     ],

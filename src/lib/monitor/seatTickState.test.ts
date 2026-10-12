@@ -61,6 +61,13 @@ test("a row survives the write and reads back whole", () => {
   expect(readSeatTickState("other", file)).toMatchObject(emptySeatTickState());
 });
 
+test("persisted reported stalls keep every still-active conversation past the former 64-item cap", () => {
+  const file = path.join(SANDBOX, "active-stall-ledger.json");
+  const reportedStalls = Array.from({ length: 100 }, (_, index) => `conversation_${index}@2026-10-12T05:00:00.000Z`);
+  writeSeatTickState("viewer", { ...row, reportedStalls }, file);
+  expect(readSeatTickState("viewer", file).reportedStalls).toEqual(reportedStalls);
+});
+
 test("recovered authentication notice debt survives persistence and a new seat epoch", () => {
   const file = path.join(SANDBOX, "auth-notice-debt.json");
   const lastFailedTs = Date.parse("2026-10-08T00:05:00Z");

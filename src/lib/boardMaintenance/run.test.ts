@@ -231,7 +231,7 @@ test("superseding a failed run archives its linked worker and removes its hidden
   const oldTaskId = old.taskId!;
   const { patchMaintenanceRun } = await import("./store");
   const { boardFor } = await import("@/lib/board/store");
-  const { boardConversationKeys, taskHasBoardMembers, taskShowsOnBoard } = await import("@/lib/tasks/boardVisibility");
+  const { taskShowsOnBoard } = await import("@/lib/tasks/boardVisibility");
   const { saveTasks } = await import("@/lib/tasks/store");
   const transcriptPath = "/fixtures/worker.jsonl";
   const conversation = h.registry.ensureConversation("codex", transcriptPath, null);
@@ -239,13 +239,13 @@ test("superseding a failed run archives its linked worker and removes its hidden
   saveTasks(tasks().map(task => task.id === oldTaskId ? { ...task, assignments: [...task.assignments, { path: transcriptPath, conversationId: conversation.id, panePid: null, state: "delivered" as const, error: null, at: new Date(NOW).toISOString() }] } : task), statePath("tasks.json"));
   h.observe({ state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } }); await h.controller.reconcile(PROJECT);
   const cardBefore = tasks().find(t => t.id === oldTaskId)!;
-  expect(taskShowsOnBoard(cardBefore, taskHasBoardMembers(cardBefore, boardConversationKeys([{ path: transcriptPath, conversationId: conversation.id }])))).toBe(true);
+  expect(taskShowsOnBoard(cardBefore, true)).toBe(true);
   h.now(NOW + 3 * 3600000); await h.controller.launchIfDue(input()); const latest = h.run();
   h.observe({ state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } }); await h.controller.reconcile(PROJECT);
   expect(readMaintenanceRun(latest.runId)!.supersededTaskIds).toContain(oldTaskId);
   expect(boardFor(PROJECT).prefs.hidden).toContain(transcriptPath);
   const cardAfter = tasks().find(t => t.id === oldTaskId)!;
-  expect(taskShowsOnBoard(cardAfter, taskHasBoardMembers(cardAfter, boardConversationKeys([])))).toBe(false);
+  expect(taskShowsOnBoard(cardAfter, false)).toBe(false);
   expect(tasks().find(t => t.id === latest.taskId)).toMatchObject({ status: "blocked", board: "shown" });
 });
 

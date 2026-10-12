@@ -194,45 +194,28 @@
       "outside": [],
       "boxes": {
         "row#1": [
-          337,
-          457,
-          654,
-          34
+          1016,
+          385.3,
+          335,
+          44
         ],
         "row#2": [
-          337,
-          495,
-          654,
-          34
+          1016,
+          437.3,
+          335,
+          44
         ],
-        "more": [
-          337,
-          533,
-          128.5,
-          24
-        ],
-        "field": [
-          348,
-          572,
-          528,
-          26
+        "card": [
+          1016,
+          183,
+          335,
+          194.3
         ]
       },
-      "rows": [
-        {
-          "task": "t-search",
-          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        },
-        {
-          "task": "t-upload",
-          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        }
+      "listed": [
+        "r-upload",
+        "r-links-2",
+        "r-search"
       ]
     },
     "desktop-1440-en-light-jump": {
@@ -905,7 +888,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:53",
+      "time": "11 Oct, 20:02",
       "posts": [
         {
           "taskId": "t-search",
@@ -1460,7 +1443,7 @@
     },
     "desktop-1440-en-light-files-gone": {
       "retired": true,
-      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
+      "banner": "The pictures and videos of this round were retired on 9 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -1817,45 +1800,28 @@
       "outside": [],
       "boxes": {
         "row#1": [
-          337,
-          457,
-          654,
-          34
+          1016,
+          385.3,
+          335,
+          44
         ],
         "row#2": [
-          337,
-          495,
-          654,
-          34
+          1016,
+          437.3,
+          335,
+          44
         ],
-        "more": [
-          337,
-          533,
-          128.5,
-          24
-        ],
-        "field": [
-          348,
-          572,
-          528,
-          26
+        "card": [
+          1016,
+          183,
+          335,
+          194.3
         ]
       },
-      "rows": [
-        {
-          "task": "t-search",
-          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        },
-        {
-          "task": "t-upload",
-          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        }
+      "listed": [
+        "r-upload",
+        "r-links-2",
+        "r-search"
       ]
     },
     "desktop-1440-en-dark-jump": {
@@ -2528,7 +2494,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:54",
+      "time": "11 Oct, 20:02",
       "posts": [
         {
           "taskId": "t-search",
@@ -3083,7 +3049,7 @@
     },
     "desktop-1440-en-dark-files-gone": {
       "retired": true,
-      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
+      "banner": "The pictures and videos of this round were retired on 9 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -3440,45 +3406,28 @@
       "outside": [],
       "boxes": {
         "row#1": [
-          337,
-          457,
-          654,
-          34
+          1016,
+          385.3,
+          335,
+          44
         ],
         "row#2": [
-          337,
-          495,
-          654,
-          34
+          1016,
+          437.3,
+          335,
+          44
         ],
-        "more": [
-          337,
-          533,
-          100,
-          24
-        ],
-        "field": [
-          348,
-          572,
-          528,
-          26
+        "card": [
+          1016,
+          183,
+          335,
+          194.3
         ]
       },
-      "rows": [
-        {
-          "task": "t-search",
-          "text": "Прототип готовийRestore search results after the index rebuild · Макет результатів пошукуДо прототипу",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        },
-        {
-          "task": "t-upload",
-          "text": "Прототип готовийRedesign attachment upload for large files · Панель перебігу завантаженняДо прототипу",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        }
+      "listed": [
+        "r-upload",
+        "r-links-2",
+        "r-search"
       ]
     },
     "desktop-1440-uk-light-jump": {
@@ -4151,7 +4100,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:54",
+      "time": "11 жовт., 20:03",
       "posts": [
         {
           "taskId": "t-search",
@@ -4706,7 +4655,7 @@
     },
     "desktop-1440-uk-light-files-gone": {
       "retired": true,
-      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
+      "banner": "Зображення й відео цього раунду прибрано 9 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -5063,45 +5012,28 @@
       "outside": [],
       "boxes": {
         "row#1": [
-          337,
-          457,
-          654,
-          34
+          1016,
+          385.3,
+          335,
+          44
         ],
         "row#2": [
-          337,
-          495,
-          654,
-          34
+          1016,
+          437.3,
+          335,
+          44
         ],
-        "more": [
-          337,
-          533,
-          100,
-          24
-        ],
-        "field": [
-          348,
-          572,
-          528,
-          26
+        "card": [
+          1016,
+          183,
+          335,
+          194.3
         ]
       },
-      "rows": [
-        {
-          "task": "t-search",
-          "text": "Прототип готовийRestore search results after the index rebuild · Макет результатів пошукуДо прототипу",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        },
-        {
-          "task": "t-upload",
-          "text": "Прототип готовийRedesign attachment upload for large files · Панель перебігу завантаженняДо прототипу",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        }
+      "listed": [
+        "r-upload",
+        "r-links-2",
+        "r-search"
       ]
     },
     "desktop-1440-uk-dark-jump": {
@@ -5774,7 +5706,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:54",
+      "time": "11 жовт., 20:03",
       "posts": [
         {
           "taskId": "t-search",
@@ -6329,7 +6261,7 @@
     },
     "desktop-1440-uk-dark-files-gone": {
       "retired": true,
-      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
+      "banner": "Зображення й відео цього раунду прибрано 9 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -6700,18 +6632,24 @@
           18.8
         ],
         "parts#3": [
-          728.3,
+          692.3,
           101,
           133.9,
           28
         ],
         "parts#4": [
-          870.2,
+          834.2,
           101,
           28,
           28
         ],
         "parts#5": [
+          870.2,
+          101,
+          28,
+          28
+        ],
+        "parts#6": [
           906.2,
           101,
           80.8,
@@ -6725,48 +6663,33 @@
     "pane-1000-en-light-notice": {
       "missing": [],
       "overlaps": [],
-      "outside": [],
+      "outside": [
+        "row#2"
+      ],
       "boxes": {
         "row#1": [
           273,
-          394,
+          452.3,
           702,
-          34
+          44
         ],
         "row#2": [
           273,
-          432,
+          504.3,
           702,
-          34
+          44
         ],
-        "more": [
+        "card": [
           273,
-          470,
-          128.5,
-          24
-        ],
-        "field": [
-          284,
-          508,
-          576,
-          28
+          258,
+          702,
+          186.3
         ]
       },
-      "rows": [
-        {
-          "task": "t-search",
-          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        },
-        {
-          "task": "t-upload",
-          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        }
+      "listed": [
+        "r-upload",
+        "r-links-2",
+        "r-search"
       ]
     },
     "pane-1000-en-light-jump": {
@@ -7439,7 +7362,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:55",
+      "time": "11 Oct, 20:04",
       "posts": [
         {
           "taskId": "t-search",
@@ -7994,7 +7917,7 @@
     },
     "pane-1000-en-light-files-gone": {
       "retired": true,
-      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
+      "banner": "The pictures and videos of this round were retired on 9 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -8365,18 +8288,24 @@
           18.8
         ],
         "parts#3": [
-          728.3,
+          692.3,
           101,
           133.9,
           28
         ],
         "parts#4": [
-          870.2,
+          834.2,
           101,
           28,
           28
         ],
         "parts#5": [
+          870.2,
+          101,
+          28,
+          28
+        ],
+        "parts#6": [
           906.2,
           101,
           80.8,
@@ -8390,48 +8319,33 @@
     "pane-1000-en-dark-notice": {
       "missing": [],
       "overlaps": [],
-      "outside": [],
+      "outside": [
+        "row#2"
+      ],
       "boxes": {
         "row#1": [
           273,
-          394,
+          452.3,
           702,
-          34
+          44
         ],
         "row#2": [
           273,
-          432,
+          504.3,
           702,
-          34
+          44
         ],
-        "more": [
+        "card": [
           273,
-          470,
-          128.5,
-          24
-        ],
-        "field": [
-          284,
-          508,
-          576,
-          28
+          258,
+          702,
+          186.3
         ]
       },
-      "rows": [
-        {
-          "task": "t-search",
-          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        },
-        {
-          "task": "t-upload",
-          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        }
+      "listed": [
+        "r-upload",
+        "r-links-2",
+        "r-search"
       ]
     },
     "pane-1000-en-dark-jump": {
@@ -9104,7 +9018,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:55",
+      "time": "11 Oct, 20:04",
       "posts": [
         {
           "taskId": "t-search",
@@ -9659,7 +9573,7 @@
     },
     "pane-1000-en-dark-files-gone": {
       "retired": true,
-      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
+      "banner": "The pictures and videos of this round were retired on 9 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -10030,18 +9944,24 @@
           18.8
         ],
         "parts#3": [
-          687.1,
+          651.1,
           101,
           147.9,
           28
         ],
         "parts#4": [
-          843,
+          807,
           101,
           28,
           28
         ],
         "parts#5": [
+          843,
+          101,
+          28,
+          28
+        ],
+        "parts#6": [
           879,
           101,
           108,
@@ -10055,48 +9975,33 @@
     "pane-1000-uk-light-notice": {
       "missing": [],
       "overlaps": [],
-      "outside": [],
+      "outside": [
+        "row#2"
+      ],
       "boxes": {
         "row#1": [
           273,
-          394,
+          452.3,
           702,
-          34
+          44
         ],
         "row#2": [
           273,
-          432,
+          504.3,
           702,
-          34
+          44
         ],
-        "more": [
+        "card": [
           273,
-          470,
-          100,
-          24
-        ],
-        "field": [
-          284,
-          508,
-          576,
-          28
+          258,
+          702,
+          186.3
         ]
       },
-      "rows": [
-        {
-          "task": "t-search",
-          "text": "Прототип готовийRestore search results after the index rebuild · Макет результатів пошукуДо прототипу",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        },
-        {
-          "task": "t-upload",
-          "text": "Прототип готовийRedesign attachment upload for large files · Панель перебігу завантаженняДо прототипу",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        }
+      "listed": [
+        "r-upload",
+        "r-links-2",
+        "r-search"
       ]
     },
     "pane-1000-uk-light-jump": {
@@ -10769,7 +10674,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:56",
+      "time": "11 жовт., 20:04",
       "posts": [
         {
           "taskId": "t-search",
@@ -11324,7 +11229,7 @@
     },
     "pane-1000-uk-light-files-gone": {
       "retired": true,
-      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
+      "banner": "Зображення й відео цього раунду прибрано 9 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -11695,18 +11600,24 @@
           18.8
         ],
         "parts#3": [
-          687.1,
+          651.1,
           101,
           147.9,
           28
         ],
         "parts#4": [
-          843,
+          807,
           101,
           28,
           28
         ],
         "parts#5": [
+          843,
+          101,
+          28,
+          28
+        ],
+        "parts#6": [
           879,
           101,
           108,
@@ -11720,48 +11631,33 @@
     "pane-1000-uk-dark-notice": {
       "missing": [],
       "overlaps": [],
-      "outside": [],
+      "outside": [
+        "row#2"
+      ],
       "boxes": {
         "row#1": [
           273,
-          394,
+          452.3,
           702,
-          34
+          44
         ],
         "row#2": [
           273,
-          432,
+          504.3,
           702,
-          34
+          44
         ],
-        "more": [
+        "card": [
           273,
-          470,
-          100,
-          24
-        ],
-        "field": [
-          284,
-          508,
-          576,
-          28
+          258,
+          702,
+          186.3
         ]
       },
-      "rows": [
-        {
-          "task": "t-search",
-          "text": "Прототип готовийRestore search results after the index rebuild · Макет результатів пошукуДо прототипу",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        },
-        {
-          "task": "t-upload",
-          "text": "Прототип готовийRedesign attachment upload for large files · Панель перебігу завантаженняДо прототипу",
-          "actionInside": true,
-          "titleClear": true,
-          "height": 34
-        }
+      "listed": [
+        "r-upload",
+        "r-links-2",
+        "r-search"
       ]
     },
     "pane-1000-uk-dark-jump": {
@@ -12434,7 +12330,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:56",
+      "time": "11 жовт., 20:05",
       "posts": [
         {
           "taskId": "t-search",
@@ -12989,7 +12885,7 @@
     },
     "pane-1000-uk-dark-files-gone": {
       "retired": true,
-      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
+      "banner": "Зображення й відео цього раунду прибрано 9 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -13413,7 +13309,7 @@
         "chevron": 290
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791380383",
+        "row": "/repo/links-impl.jsonl:waiting:1791737311",
         "title": 16,
         "chevron": 290
       },
@@ -13999,7 +13895,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:56",
+      "time": "11 Oct, 20:05",
       "posts": [
         {
           "taskId": "t-search",
@@ -14514,7 +14410,7 @@
     },
     "phone-390-en-light-files-gone": {
       "retired": true,
-      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
+      "banner": "The pictures and videos of this round were retired on 9 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -14916,7 +14812,7 @@
         "chevron": 290
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791380407",
+        "row": "/repo/links-impl.jsonl:waiting:1791737335",
         "title": 16,
         "chevron": 290
       },
@@ -15502,7 +15398,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:57",
+      "time": "11 Oct, 20:06",
       "posts": [
         {
           "taskId": "t-search",
@@ -16017,7 +15913,7 @@
     },
     "phone-390-en-dark-files-gone": {
       "retired": true,
-      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
+      "banner": "The pictures and videos of this round were retired on 9 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -16203,7 +16099,7 @@
         },
         "reasons": [
           "запит дозволу",
-          "gpt-5.6·17 хв",
+          "gpt-5.6·16 хв",
           "Прототип"
         ],
         "overlaps": [],
@@ -16419,7 +16315,7 @@
         "chevron": 300
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791380430",
+        "row": "/repo/links-impl.jsonl:waiting:1791737358",
         "title": 16,
         "chevron": 300
       },
@@ -17005,7 +16901,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:57",
+      "time": "11 жовт., 20:06",
       "posts": [
         {
           "taskId": "t-search",
@@ -17520,7 +17416,7 @@
     },
     "phone-390-uk-light-files-gone": {
       "retired": true,
-      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
+      "banner": "Зображення й відео цього раунду прибрано 9 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -17922,7 +17818,7 @@
         "chevron": 300
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791380454",
+        "row": "/repo/links-impl.jsonl:waiting:1791737382",
         "title": 16,
         "chevron": 300
       },
@@ -18508,7 +18404,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:58",
+      "time": "11 жовт., 20:06",
       "posts": [
         {
           "taskId": "t-search",
@@ -19023,7 +18919,7 @@
     },
     "phone-390-uk-dark-files-gone": {
       "retired": true,
-      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
+      "banner": "Зображення й відео цього раунду прибрано 9 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },

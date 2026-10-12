@@ -17,7 +17,7 @@ export const prototypeQuestionsSchema = z.array(z.object({
   text: z.string().trim().min(1).max(300),
   options: z.array(z.object({ label: z.string().trim().min(1).max(120), recommended: z.boolean().optional() }).strict()).min(2).max(6),
   multiple: z.boolean().optional(), other: z.boolean().optional(),
-}).strict()).min(3).max(7).superRefine((questions, ctx) => {
+}).strict()).min(1).max(7).superRefine((questions, ctx) => {
   if (new Set(questions.map(q => q.id)).size !== questions.length) ctx.addIssue({ code: "custom", message: "question ids must be unique" });
   questions.forEach((q, i) => {
     if (q.options.filter(o => o.recommended).length !== 1) ctx.addIssue({ code: "custom", path: [i, "options"], message: `${q.id}: exactly one recommended option is required` });

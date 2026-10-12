@@ -121,9 +121,11 @@ export function cardState(card: CardInput, nowSeconds: number): CardState | null
       const lane = lanes.find((entry) => entry.pipeline.id === first.pipeline.id) ?? laneState(first.pipeline);
       return { owner: "you", subject: { kind: "lane", lane: { ...lane, owner: "you" } }, lanes, sinceMs: first.since * 1000 };
     }
-    if (formLane?.route?.form) {
+    /* The seat's own decision form carries no task: on a task card it opens as that card's. */
+    const formTaskId = formLane?.route?.form ? formLane.route.form.taskId ?? card.task?.id ?? null : null;
+    if (formLane?.route?.form && formTaskId) {
       const own = waitingRound && waitingRound.waitingReviewId === formLane.route.form.reviewId ? waitingRound.title : null;
-      return { owner: "you", subject: { kind: "form", ...formLane.route.form, title: own }, lanes, sinceMs: formLane.sinceMs };
+      return { owner: "you", subject: { kind: "form", taskId: formTaskId, reviewId: formLane.route.form.reviewId, title: own }, lanes, sinceMs: formLane.sinceMs };
     }
     if (waitingRound && card.task) {
       return { owner: "you", subject: { kind: "form", taskId: card.task.id, reviewId: waitingRound.waitingReviewId!, title: waitingRound.title }, lanes, sinceMs: parseMs(waitingRound.createdAt) };

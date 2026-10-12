@@ -1313,6 +1313,15 @@ function persistedObservation(): ResourceObservation<CollectedResources> | null 
   }
 }
 
+/** Fleet reads consume the collector's durable table without starting a collection,
+ * measuring the Viewer tree, or persisting another observation. */
+export function readCachedResourceSessions(): { sessions: ResourceSession[]; stale: boolean } {
+  const observation = persistedObservation();
+  return { sessions: observation?.value.payload.sessions ?? [],
+    stale: !observation || Date.now() - observation.completedAt >= CACHE_MS
+      || observation.value.payload.sessionsStale === true || observation.degradedReason !== undefined };
+}
+
 function persistObservation(observation: ResourceObservation<CollectedResources>): boolean {
   const filename = statePath(RESOURCE_OBSERVATION_FILE);
   let temporary: string | undefined;

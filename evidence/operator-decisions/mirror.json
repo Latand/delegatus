@@ -1,0 +1,966 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": {
+    "mirror-1440-uk-light-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 307,
+          "height": 74.25,
+          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити ««Готово»: місце і деплой»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 307,
+          "height": 74.25,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-uk-light-open": {
+      "scope": "[data-decision-column]",
+      "card": {
+        "x": 277,
+        "y": 270,
+        "w": 814,
+        "h": 293
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-1440-uk-light-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 307,
+          "height": 74.25,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-uk-light-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-uk-dark-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 307,
+          "height": 74.25,
+          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити ««Готово»: місце і деплой»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 307,
+          "height": 74.25,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-uk-dark-open": {
+      "scope": "[data-decision-column]",
+      "card": {
+        "x": 277,
+        "y": 270,
+        "w": 814,
+        "h": 293
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-1440-uk-dark-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 307,
+          "height": 74.25,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-uk-dark-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-en-light-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 307,
+          "height": 74.25,
+          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open ««Done»: placement and deploy»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 307,
+          "height": 74.25,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-en-light-open": {
+      "scope": "[data-decision-column]",
+      "card": {
+        "x": 277,
+        "y": 270,
+        "w": 814,
+        "h": 293
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-1440-en-light-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 307,
+          "height": 74.25,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-en-light-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-en-dark-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 307,
+          "height": 74.25,
+          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open ««Done»: placement and deploy»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 307,
+          "height": 74.25,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-en-dark-open": {
+      "scope": "[data-decision-column]",
+      "card": {
+        "x": 277,
+        "y": 270,
+        "w": 814,
+        "h": 293
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-1440-en-dark-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 307,
+          "height": 74.25,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1440-en-dark-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-uk-light-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 346,
+          "height": 74.25,
+          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити ««Готово»: місце і деплой»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 346,
+          "height": 74.25,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-uk-light-open": {
+      "scope": "[data-decision-column]",
+      "card": {
+        "x": 273,
+        "y": 310,
+        "w": 702,
+        "h": 293
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-1000-uk-light-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 346,
+          "height": 74.25,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-uk-light-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-uk-dark-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 346,
+          "height": 74.25,
+          "text": "Питання до вас · 4 хв тому «Готово»: місце і деплой Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити ««Готово»: місце і деплой»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 346,
+          "height": 74.25,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-uk-dark-open": {
+      "scope": "[data-decision-column]",
+      "card": {
+        "x": 273,
+        "y": 310,
+        "w": 702,
+        "h": 293
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-1000-uk-dark-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 346,
+          "height": 74.25,
+          "text": "Питання до вас · 2 хв тому Акаунт для нічних лейнів Codex Відповісти",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-uk-dark-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-en-light-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 346,
+          "height": 74.25,
+          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open ««Done»: placement and deploy»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 346,
+          "height": 74.25,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-en-light-open": {
+      "scope": "[data-decision-column]",
+      "card": {
+        "x": 273,
+        "y": 310,
+        "w": 702,
+        "h": 293
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-1000-en-light-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 346,
+          "height": 74.25,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-en-light-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-en-dark-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 346,
+          "height": 74.25,
+          "text": "Questions for you · 4m ago «Done»: placement and deploy Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open ««Done»: placement and deploy»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 346,
+          "height": 74.25,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-en-dark-open": {
+      "scope": "[data-decision-column]",
+      "card": {
+        "x": 273,
+        "y": 310,
+        "w": 702,
+        "h": 293
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-1000-en-dark-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 346,
+          "height": 74.25,
+          "text": "Questions for you · 2m ago Account for the night Codex lanes Answer",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-1000-en-dark-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-uk-light-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 333.89,
+          "height": 66.75,
+          "text": "ПИТАННЯ ДО ВАС «Готово»: місце і деплой 4 хв тому",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити ««Готово»: місце і деплой»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 333.89,
+          "height": 66.75,
+          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex 2 хв тому",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-uk-light-open": {
+      "scope": "[data-decision-sheet=\"atlas\"]",
+      "card": {
+        "x": 12,
+        "y": 303,
+        "w": 366,
+        "h": 463
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-390-uk-light-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 333.89,
+          "height": 66.75,
+          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex 2 хв тому",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-uk-light-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-uk-dark-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 333.89,
+          "height": 66.75,
+          "text": "ПИТАННЯ ДО ВАС «Готово»: місце і деплой 4 хв тому",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити ««Готово»: місце і деплой»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 333.89,
+          "height": 66.75,
+          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex 2 хв тому",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-uk-dark-open": {
+      "scope": "[data-decision-sheet=\"atlas\"]",
+      "card": {
+        "x": 12,
+        "y": 303,
+        "w": 366,
+        "h": 463
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-390-uk-dark-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 333.89,
+          "height": 66.75,
+          "text": "ПИТАННЯ ДО ВАС Акаунт для нічних лейнів Codex 2 хв тому",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-uk-dark-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-en-light-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 323.8,
+          "height": 66.75,
+          "text": "QUESTIONS FOR YOU «Done»: placement and deploy 4m ago",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open ««Done»: placement and deploy»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 323.8,
+          "height": 66.75,
+          "text": "QUESTIONS FOR YOU Account for the night Codex lanes 2m ago",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-en-light-open": {
+      "scope": "[data-decision-sheet=\"atlas\"]",
+      "card": {
+        "x": 12,
+        "y": 303,
+        "w": 366,
+        "h": 463
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-390-en-light-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 323.8,
+          "height": 66.75,
+          "text": "QUESTIONS FOR YOU Account for the night Codex lanes 2m ago",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-en-light-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-en-dark-rows": {
+      "count": 6,
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "width": 323.8,
+          "height": 66.75,
+          "text": "QUESTIONS FOR YOU «Done»: placement and deploy 4m ago",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open ««Done»: placement and deploy»"
+        },
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 323.8,
+          "height": 66.75,
+          "text": "QUESTIONS FOR YOU Account for the night Codex lanes 2m ago",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-en-dark-open": {
+      "scope": "[data-decision-sheet=\"atlas\"]",
+      "card": {
+        "x": 12,
+        "y": 303,
+        "w": 366,
+        "h": 463
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "mirror-390-en-dark-answered": {
+      "count": 5,
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "width": 323.8,
+          "height": 66.75,
+          "text": "QUESTIONS FOR YOU Account for the night Codex lanes 2m ago",
+          "overflow": false,
+          "titleCut": false,
+          "inside": true,
+          "label": "Open «Account for the night Codex lanes»"
+        }
+      ],
+      "prototypes": [
+        "t-search",
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    },
+    "mirror-390-en-dark-elsewhere": {
+      "count": 4,
+      "rows": [],
+      "prototypes": [
+        "t-search"
+      ],
+      "overlaps": [],
+      "horizontalOverflow": false
+    }
+  },
+  "failures": []
+}

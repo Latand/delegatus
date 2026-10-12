@@ -1,3 +1,7 @@
+import { readBackgroundTaskLedger, pendingBackgroundTasks } from "@/lib/pipelines/backgroundTasks";
+import { activityFactsFromRecords } from "@/lib/lifecycle/agentActivityEvidence";
+import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
+import { tailRecordsResult } from "./activity";
 import type { FileEntry } from "../types";
 import { resolveTarget } from "../tmux";
 import { ctxFor } from "./context";
@@ -91,6 +95,7 @@ async function runObservation(signal?: AbortSignal): Promise<FileEntry[]> {
     }
   }, signal);
   assignTranscriptPids(entries);
+  const activityProcesses = activityProcessReader();
   const durableTiers = durableServiceTierIndex();
   await each(entries, (entry) => {
     entry.effort = entryEffort(entry);
@@ -104,8 +109,25 @@ async function runObservation(signal?: AbortSignal): Promise<FileEntry[]> {
     if (probe.atComposer && entry.activity === "stalled") { entry.activity = Date.now() / 1000 - entry.mtime < 900 ? "recent" : "idle"; entry.activityReason = "pane_at_composer"; }
     entry.plan = planFor(entry); entry.goal = goalFor(entry); entry.ctx = ctxFor(entry);
     entry.lastTurn = lastTurnFor(entry);
+    if (entry.engine === "claude" || entry.engine === "codex") {
+      const tail = tailRecordsResult(entry.path, entry.size, entry.mtime * 1000);
+      if (tail.complete) {
+        const facts = activityFactsFromRecords(tail.records);
+        facts.turnBoundaryVerified = !tail.prefixTruncated || facts.turnBoundaryFound === true;
+        entry.agentActivity = facts;
+      } else entry.agentActivity = { lastRecordAt: null, turnBoundaryVerified: false };
+    }
     entry.lastAssistantMessageAt = lastAssistantMessageAtFor(entry);
     entry.lastAgentWorkAt = lastAgentWorkAtFor(entry);
+    if (entry.agentActivity && entry.proc === "running" && entry.pid !== null) {
+      entry.agentActivity.workProcesses = activityProcesses(entry.pid);
+      entry.agentActivity.turnStartedAt = entry.lastTurn?.endedAt === null ? entry.lastTurn.startedAt : entry.agentActivity.turnStartedAt;
+    }
+    if (entry.engine === "claude" && entry.agentActivity && entry.proc === "running") {
+      const ledger = await readBackgroundTaskLedger(entry.path);
+      entry.agentActivity.backgroundVerified = ledger !== null;
+      if (ledger) entry.agentActivity.background = pendingBackgroundTasks(ledger, Date.now()).filter(task => task.kind !== "wakeup").map(task => ({ id: task.id, description: entry.agentActivity?.background?.find(item => item.id === task.id)?.description ?? null }));
+    }
     entry.pendingWakeup = pendingWakeupFor(entry);
   }, signal);
   throwIfCancelled(signal);

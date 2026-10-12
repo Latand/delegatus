@@ -1,5 +1,8 @@
 "use client";
 
+import { CardStatusBadge } from "@/components/CardStatusBadge";
+import { rowStateWord } from "@/components/mobile/mobileBoardModel";
+
 import { Bot, Flag } from "lucide-react";
 import { memo, useState } from "react";
 
@@ -46,7 +49,7 @@ import { TaskChronology } from "./TaskChronology";
 import { hasTaskMeta, TaskMeta } from "./TaskMeta";
 import { taskChronology } from "./taskChronologyModel";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, KanbanUnstartedLaunch } from "./kanbanModel";
-import { PastAttempts, stageNames } from "./PipelineSection";
+import { cardWaitsForCpu, PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { StageDraftPanel } from "./StageDraft";
@@ -154,7 +157,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
   const parts = member.stage && place ? stageCardLabelParts(t, member.stage.stage, place) : null;
   const engine = member.file.engine === "claude" || member.file.engine === "codex" ? engineWord(member.file.engine) : null;
   const hint = member.stage && place ? stageLabelTitle(t, member.stage.stage, place, engine) : undefined;
-  const state = t(`kanban.memberState.${member.state}`);
+  const state = rowStateWord(t, member);
   const stateClass = member.needsYou ? "needs" : member.working ? "working" : member.state;
   return (
     <button
@@ -171,7 +174,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
         <EngineMark engine={member.file.engine} size={12} className="engine" label={member.file.engine} />
         <span className="role" title={hint}>{parts ? parts.name : role}</span>
         {parts && parts.attempt !== null ? <span className="attempt"> · {parts.attempt}</span> : null}
-        <span className={`state ${stateClass}`}>{state}</span>
+        {member.file.agentActivity && member.file.proc === "running" ? <CardStatusBadge file={member.file} /> : <span className={`state ${stateClass}`}>{state}</span>}
       </span>
       {member.latest ? <span className="latest">{member.latest}</span> : null}
       <span className="age">{fmtAge(member.file.mtime)}</span>
@@ -505,7 +508,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
     : null;
   const openHoldTask = card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined;
   const motionLine = (plain: boolean) => (
-    <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain={plain}
+    <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain={plain} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
       taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
       onOpenTask={openHoldTask}
       referenceUrl={motionReference}

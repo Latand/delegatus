@@ -2,7 +2,8 @@ import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatF
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickPolicy } from "@/lib/monitor/seatTick";
 import { effectiveSeatTickSettings, readSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import type { Pipeline } from "@/lib/pipelines/types";
-import { withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { seatDecisionNotices, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import { loadTasksForList } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -102,13 +103,14 @@ export function overlayAttentionRoutes(
   }
 }
 
-/** The decision rounds that wait on the operator, read from the task store
-    the board projects them from, with the same dismissals and supersession:
+/** The decision rounds that wait on the operator, read from the task and seat
+    stores the board projects them from, with the same dismissals and supersession:
     the set `/api/files` stamps with, for a reader that has no board at hand. */
 export function storedWaitingRoundIds(
   tasks: readonly BoardTask[] = loadTasksForList(), dismissals?: ReadonlyMap<string, AttentionDismissalV1>,
+  seatDecisions: readonly PrototypeReviewNotice[] = seatDecisionNotices(),
 ): Set<string> {
-  return waitingRoundIds(withPrototypeReviewSummaries(tasks, dismissals));
+  return waitingRoundIds(withPrototypeReviewSummaries(tasks, dismissals), seatDecisions);
 }
 
 /**

@@ -1,0 +1,6291 @@
+{
+  "commit": "0f9a382e0e10db0c880212f6968c2a18ac515e4f",
+  "frames": {
+    "2254-en-light": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 2006,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 1310.09375,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 1718.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 1766.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1814.09375,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1933.796875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 2025.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 2073.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "3 waiting",
+            "rect": {
+              "x": 2121.625,
+              "y": 7.5,
+              "w": 112.375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 waiting",
+            "title": "Who is waiting for you, by project"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          620,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 2121.625,
+            "y": 7.5,
+            "w": 112.375,
+            "h": 32
+          },
+          "text": "Needs you 3",
+          "last": true,
+          "fill": "color(srgb 0.926588 0.89302 0.823529)"
+        },
+        "toast": {
+          "x": 1956.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8Needs you3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "2254-en-light-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1686,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 1118.46875,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 1526.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 1574.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1622.46875,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1742.171875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1834,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1882,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          428.5,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 1636.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1934,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "2254-en-dark": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 2006,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 1310.09375,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 1718.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 1766.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1814.09375,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1933.796875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 2025.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 2073.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "3 waiting",
+            "rect": {
+              "x": 2121.625,
+              "y": 7.5,
+              "w": 112.375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 waiting",
+            "title": "Who is waiting for you, by project"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          620,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 2121.625,
+            "y": 7.5,
+            "w": 112.375,
+            "h": 32
+          },
+          "text": "Needs you 3",
+          "last": true,
+          "fill": "color(srgb 0.222902 0.198118 0.158588)"
+        },
+        "toast": {
+          "x": 1956.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8Needs you3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "2254-en-dark-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1686,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 1118.46875,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 1526.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 1574.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1622.46875,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1742.171875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1834,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1882,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          428.5,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 1636.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1934,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "2254-uk-light": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 2006,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 1293.734375,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 1701.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 1749.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 1797.734375,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1920.859375,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 2018.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 2066.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "3 чекають",
+            "rect": {
+              "x": 2114.03125,
+              "y": 7.5,
+              "w": 119.96875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 чекають",
+            "title": "Хто чекає на вас, за проєктами"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          604,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 2114.03125,
+            "y": 7.5,
+            "w": 119.96875,
+            "h": 32
+          },
+          "text": "Потрібні ви 3",
+          "last": true,
+          "fill": "color(srgb 0.926588 0.89302 0.823529)"
+        },
+        "toast": {
+          "x": 1956.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8Потрібні ви3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "2254-uk-light-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1686,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 1109.703125,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 1517.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 1565.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 1613.703125,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1736.828125,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1834,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1882,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          420,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 1636.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1934,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "2254-uk-dark": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 2006,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 1293.734375,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 1701.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 1749.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 1797.734375,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1920.859375,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 2018.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 2066.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "3 чекають",
+            "rect": {
+              "x": 2114.03125,
+              "y": 7.5,
+              "w": 119.96875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 чекають",
+            "title": "Хто чекає на вас, за проєктами"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          604,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 2114.03125,
+            "y": 7.5,
+            "w": 119.96875,
+            "h": 32
+          },
+          "text": "Потрібні ви 3",
+          "last": true,
+          "fill": "color(srgb 0.222902 0.198118 0.158588)"
+        },
+        "toast": {
+          "x": 1956.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8Потрібні ви3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "2254-uk-dark-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1686,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 1109.703125,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 1517.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 1565.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 1613.703125,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1736.828125,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1834,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1882,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          420,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 1636.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1934,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1960-en-light": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1712,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 1016.09375,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 1424.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 1472.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1520.09375,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1639.796875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1731.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1779.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "3 waiting",
+            "rect": {
+              "x": 1827.625,
+              "y": 7.5,
+              "w": 112.375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 waiting",
+            "title": "Who is waiting for you, by project"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          326,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 1827.625,
+            "y": 7.5,
+            "w": 112.375,
+            "h": 32
+          },
+          "text": "Needs you 3",
+          "last": true,
+          "fill": "color(srgb 0.926588 0.89302 0.823529)"
+        },
+        "toast": {
+          "x": 1662.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8Needs you3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1960-en-light-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1392,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 824.46875,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 1232.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 1280.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1328.46875,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1448.171875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1540,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1588,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          134.5,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 1342.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1640,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1960-en-dark": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1712,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 1016.09375,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 1424.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 1472.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1520.09375,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1639.796875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1731.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1779.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "3 waiting",
+            "rect": {
+              "x": 1827.625,
+              "y": 7.5,
+              "w": 112.375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 waiting",
+            "title": "Who is waiting for you, by project"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          326,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 1827.625,
+            "y": 7.5,
+            "w": 112.375,
+            "h": 32
+          },
+          "text": "Needs you 3",
+          "last": true,
+          "fill": "color(srgb 0.222902 0.198118 0.158588)"
+        },
+        "toast": {
+          "x": 1662.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8Needs you3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1960-en-dark-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1392,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 824.46875,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 1232.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 1280.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1328.46875,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1448.171875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1540,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1588,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          134.5,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 1342.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1640,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1960-uk-light": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1712,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 999.734375,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 1407.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 1455.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 1503.734375,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1626.859375,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1724.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1772.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "3 чекають",
+            "rect": {
+              "x": 1820.03125,
+              "y": 7.5,
+              "w": 119.96875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 чекають",
+            "title": "Хто чекає на вас, за проєктами"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          310,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 1820.03125,
+            "y": 7.5,
+            "w": 119.96875,
+            "h": 32
+          },
+          "text": "Потрібні ви 3",
+          "last": true,
+          "fill": "color(srgb 0.926588 0.89302 0.823529)"
+        },
+        "toast": {
+          "x": 1662.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8Потрібні ви3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1960-uk-light-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1392,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 815.703125,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 1223.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 1271.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 1319.703125,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1442.828125,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1540,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1588,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          126,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 1342.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1640,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1960-uk-dark": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1712,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 999.734375,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 1407.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 1455.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 1503.734375,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1626.859375,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1724.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1772.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "3 чекають",
+            "rect": {
+              "x": 1820.03125,
+              "y": 7.5,
+              "w": 119.96875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 чекають",
+            "title": "Хто чекає на вас, за проєктами"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          310,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 1820.03125,
+            "y": 7.5,
+            "w": 119.96875,
+            "h": 32
+          },
+          "text": "Потрібні ви 3",
+          "last": true,
+          "fill": "color(srgb 0.222902 0.198118 0.158588)"
+        },
+        "toast": {
+          "x": 1662.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8Потрібні ви3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1960-uk-dark-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1392,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 414.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 540.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 815.703125,
+              "y": 7.5,
+              "w": 408,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 1223.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 1271.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 1319.703125,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1442.828125,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1540,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1588,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 268,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 670.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          126,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 268,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 1342.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1640,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1440-en-light": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 410.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 536.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 717.890625,
+              "y": 7.5,
+              "w": 190.203125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 908.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 956.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1004.09375,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1123.796875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1215.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1263.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "3 waiting",
+            "rect": {
+              "x": 1311.625,
+              "y": 7.5,
+              "w": 112.375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 waiting",
+            "title": "Who is waiting for you, by project"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 264,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 666.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 264,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 1311.625,
+            "y": 7.5,
+            "w": 112.375,
+            "h": 32
+          },
+          "text": "Needs you 3",
+          "last": true,
+          "fill": "color(srgb 0.926588 0.89302 0.823529)"
+        },
+        "toast": {
+          "x": 1142.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8Needs you3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1440-en-light-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 872,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "accounts",
+        "controls": [
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 470.5,
+              "y": 7.5,
+              "w": 245.96875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 716.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 764.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 812.46875,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 932.171875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1024,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1072,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 264,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 418.8125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 264,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 822.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1120,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 0,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1440-en-dark": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Claude accounts — switch or add — Main",
+            "rect": {
+              "x": 410.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Claude accounts — switch or add — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Codex accounts — switch or add — Main",
+            "rect": {
+              "x": 536.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Codex accounts — switch or add — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 717.890625,
+              "y": 7.5,
+              "w": 190.203125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 908.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 956.09375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 1004.09375,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 1123.796875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1215.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1263.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "3 waiting",
+            "rect": {
+              "x": 1311.625,
+              "y": 7.5,
+              "w": 112.375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 waiting",
+            "title": "Who is waiting for you, by project"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 264,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 666.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 264,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 1311.625,
+            "y": 7.5,
+            "w": 112.375,
+            "h": 32
+          },
+          "text": "Needs you 3",
+          "last": true,
+          "fill": "color(srgb 0.222902 0.198118 0.158588)"
+        },
+        "toast": {
+          "x": 1142.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8Needs you3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1440-en-dark-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 872,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "accounts",
+        "controls": [
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 470.5,
+              "y": 7.5,
+              "w": 245.96875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 716.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 764.46875,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 812.46875,
+              "y": 7.5,
+              "w": 119.703125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 932.171875,
+              "y": 7.5,
+              "w": 91.828125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 1024,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 1072,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 264,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 418.8125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 264,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 822.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1120,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 0,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1440-uk-light": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 410.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 536.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 717.890625,
+              "y": 7.5,
+              "w": 173.84375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 891.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 939.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 987.734375,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1110.859375,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1208.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1256.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "3 чекають",
+            "rect": {
+              "x": 1304.03125,
+              "y": 7.5,
+              "w": 119.96875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 чекають",
+            "title": "Хто чекає на вас, за проєктами"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 264,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 666.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 264,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 1304.03125,
+            "y": 7.5,
+            "w": 119.96875,
+            "h": 32
+          },
+          "text": "Потрібні ви 3",
+          "last": true,
+          "fill": "color(srgb 0.926588 0.89302 0.823529)"
+        },
+        "toast": {
+          "x": 1142.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8Потрібні ви3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1440-uk-light-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 872,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "accounts",
+        "controls": [
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 470.5,
+              "y": 7.5,
+              "w": 237.203125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 707.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 755.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 803.703125,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 926.828125,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1024,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1072,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 264,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 418.8125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 264,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 822.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1120,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 0,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1440-uk-dark": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "",
+        "controls": [
+          {
+            "name": "Акаунти Claude — змінити або додати — Main",
+            "rect": {
+              "x": 410.8125,
+              "y": 7.5,
+              "w": 117.359375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Claude — змінити або додати — Main",
+            "title": "Claude · Main"
+          },
+          {
+            "name": "Акаунти Codex — змінити або додати — Main",
+            "rect": {
+              "x": 536.171875,
+              "y": 7.5,
+              "w": 114.03125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Акаунти Codex — змінити або додати — Main",
+            "title": "Codex · Main"
+          },
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 717.890625,
+              "y": 7.5,
+              "w": 173.84375,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 891.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 939.734375,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 987.734375,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 1110.859375,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1208.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1256.03125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "3 чекають",
+            "rect": {
+              "x": 1304.03125,
+              "y": 7.5,
+              "w": 119.96875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 чекають",
+            "title": "Хто чекає на вас, за проєктами"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 264,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 666.203125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          8,
+          8,
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 264,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 1304.03125,
+            "y": 7.5,
+            "w": 119.96875,
+            "h": 32
+          },
+          "text": "Потрібні ви 3",
+          "last": true,
+          "fill": "color(srgb 0.222902 0.198118 0.158588)"
+        },
+        "toast": {
+          "x": 1142.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8Потрібні ви3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 2,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1440-uk-dark-docked": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 872,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "accounts",
+        "controls": [
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 470.5,
+              "y": 7.5,
+              "w": 237.203125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 707.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 755.703125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 803.703125,
+              "y": 7.5,
+              "w": 123.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 926.828125,
+              "y": 7.5,
+              "w": 97.171875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 1024,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 1072,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 264,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 418.8125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 264,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": null,
+        "toast": {
+          "x": 822.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": {
+          "x": 1120,
+          "y": 0,
+          "w": 320,
+          "h": 900
+        },
+        "labelsShown": true,
+        "labelsHidden": false,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 0,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": false,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1000-en-light": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 752,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "accounts labels chip",
+        "controls": [
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 466.5,
+              "y": 7.5,
+              "w": 206.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 672.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 720.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 768.625,
+              "y": 7.5,
+              "w": 33,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 801.625,
+              "y": 7.5,
+              "w": 44.6875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 846.3125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 894.3125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "3 waiting",
+            "rect": {
+              "x": 942.3125,
+              "y": 7.5,
+              "w": 45.6875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 waiting",
+            "title": "Who is waiting for you, by project"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 260,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 414.8125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 260,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 942.3125,
+            "y": 7.5,
+            "w": 45.6875,
+            "h": 32
+          },
+          "text": "3",
+          "last": true,
+          "fill": "color(srgb 0.926588 0.89302 0.823529)"
+        },
+        "toast": {
+          "x": 702.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": false,
+        "labelsHidden": true,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8Needs you3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 0,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1000-en-dark": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 752,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "accounts labels chip",
+        "controls": [
+          {
+            "name": "Find a task",
+            "rect": {
+              "x": 466.5,
+              "y": 7.5,
+              "w": 206.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Find a task",
+            "title": null
+          },
+          {
+            "name": "Filter",
+            "rect": {
+              "x": 672.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Filter",
+            "title": "Filter"
+          },
+          {
+            "name": "Create",
+            "rect": {
+              "x": 720.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Create",
+            "title": "Create"
+          },
+          {
+            "name": "Orchestrator panel",
+            "rect": {
+              "x": 768.625,
+              "y": 7.5,
+              "w": 33,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Orchestrator panel",
+            "title": "Orchestrator panel"
+          },
+          {
+            "name": "Toggle the task panel",
+            "rect": {
+              "x": 801.625,
+              "y": 7.5,
+              "w": 44.6875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Toggle the task panel",
+            "title": "Toggle the task panel"
+          },
+          {
+            "name": "Recent agents",
+            "rect": {
+              "x": 846.3125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Recent agents",
+            "title": "Recent agents"
+          },
+          {
+            "name": "More actions",
+            "rect": {
+              "x": 894.3125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "More actions",
+            "title": "More actions"
+          },
+          {
+            "name": "3 waiting",
+            "rect": {
+              "x": 942.3125,
+              "y": 7.5,
+              "w": 45.6875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 waiting",
+            "title": "Who is waiting for you, by project"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 260,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 414.8125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 working"
+          }
+        ],
+        "gaps": [
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 260,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 942.3125,
+            "y": 7.5,
+            "w": 45.6875,
+            "h": 32
+          },
+          "text": "3",
+          "last": true,
+          "fill": "color(srgb 0.222902 0.198118 0.158588)"
+        },
+        "toast": {
+          "x": 702.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": false,
+        "labelsHidden": true,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5OrchestratorTasks8Needs you3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 0,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1000-uk-light": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 752,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "accounts labels chip",
+        "controls": [
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 466.5,
+              "y": 7.5,
+              "w": 206.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 672.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 720.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 768.625,
+              "y": 7.5,
+              "w": 33,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 801.625,
+              "y": 7.5,
+              "w": 44.6875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 846.3125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 894.3125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "3 чекають",
+            "rect": {
+              "x": 942.3125,
+              "y": 7.5,
+              "w": 45.6875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 чекають",
+            "title": "Хто чекає на вас, за проєктами"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 260,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 414.8125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 260,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 942.3125,
+            "y": 7.5,
+            "w": 45.6875,
+            "h": 32
+          },
+          "text": "3",
+          "last": true,
+          "fill": "color(srgb 0.926588 0.89302 0.823529)"
+        },
+        "toast": {
+          "x": 702.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": false,
+        "labelsHidden": true,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8Потрібні ви3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 0,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "1000-uk-dark": {
+      "reading": {
+        "bars": 1,
+        "extraRows": 0,
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 752,
+          "h": 48
+        },
+        "overflow": 0,
+        "fit": "accounts labels chip",
+        "controls": [
+          {
+            "name": "Знайти задачу",
+            "rect": {
+              "x": 466.5,
+              "y": 7.5,
+              "w": 206.125,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Знайти задачу",
+            "title": null
+          },
+          {
+            "name": "Фільтр",
+            "rect": {
+              "x": 672.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Фільтр",
+            "title": "Фільтр"
+          },
+          {
+            "name": "Створити",
+            "rect": {
+              "x": 720.625,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Створити",
+            "title": "Створити"
+          },
+          {
+            "name": "Панель оркестратора",
+            "rect": {
+              "x": 768.625,
+              "y": 7.5,
+              "w": 33,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Панель оркестратора",
+            "title": "Панель оркестратора"
+          },
+          {
+            "name": "Показати або сховати панель задач",
+            "rect": {
+              "x": 801.625,
+              "y": 7.5,
+              "w": 44.6875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "Показати або сховати панель задач",
+            "title": "Показати або сховати панель задач"
+          },
+          {
+            "name": "Недавні агенти",
+            "rect": {
+              "x": 846.3125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Недавні агенти",
+            "title": "Недавні агенти"
+          },
+          {
+            "name": "Більше дій",
+            "rect": {
+              "x": 894.3125,
+              "y": 7.5,
+              "w": 32,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": true,
+            "label": "Більше дій",
+            "title": "Більше дій"
+          },
+          {
+            "name": "3 чекають",
+            "rect": {
+              "x": 942.3125,
+              "y": 7.5,
+              "w": 45.6875,
+              "h": 32
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": "3 чекають",
+            "title": "Хто чекає на вас, за проєктами"
+          },
+          {
+            "name": "harbor-ledger-service",
+            "rect": {
+              "x": 260,
+              "y": 13.71875,
+              "w": 138.8125,
+              "h": 19.5625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "harbor-ledger-service"
+          },
+          {
+            "name": "5",
+            "rect": {
+              "x": 414.8125,
+              "y": 14.796875,
+              "w": 19.6875,
+              "h": 17.390625
+            },
+            "covered": false,
+            "iconOnly": false,
+            "label": null,
+            "title": "5 працюють"
+          }
+        ],
+        "gaps": [
+          16,
+          32,
+          0,
+          16,
+          16,
+          0,
+          0,
+          16,
+          16
+        ],
+        "overlaps": [],
+        "truncated": [],
+        "covered": [],
+        "unnamed": [],
+        "name": {
+          "x": 260,
+          "y": 13.71875,
+          "w": 138.8125,
+          "h": 19.5625
+        },
+        "chip": {
+          "rect": {
+            "x": 942.3125,
+            "y": 7.5,
+            "w": 45.6875,
+            "h": 32
+          },
+          "text": "3",
+          "last": true,
+          "fill": "color(srgb 0.222902 0.198118 0.158588)"
+        },
+        "toast": {
+          "x": 702.015625,
+          "y": 56,
+          "w": 281.984375,
+          "h": 62
+        },
+        "panel": null,
+        "labelsShown": false,
+        "labelsHidden": true,
+        "texts": "harbor-ledger-serviceClaudeMainCodexMain5ОркестраторЗадачі8Потрібні ви3DecisionDecide: Merge the two migrations?",
+        "inRow": {
+          "accounts": 0,
+          "status": true,
+          "search": true,
+          "filter": true,
+          "create": true,
+          "orchestrator": true,
+          "recentAgents": true,
+          "more": true,
+          "needsYou": true,
+          "viewSwitch": false,
+          "hiddenPill": false,
+          "createButtons": false,
+          "funnel": false,
+          "reasonChips": false
+        },
+        "tasksPanel": 1
+      }
+    },
+    "390-en-light": {
+      "h": 52,
+      "w": 390,
+      "text": "harbor-ledger-service3",
+      "targets": [
+        {
+          "x": 4,
+          "w": 236,
+          "h": 44
+        },
+        {
+          "x": 242,
+          "w": 52,
+          "h": 44
+        },
+        {
+          "x": 296,
+          "w": 44,
+          "h": 44
+        },
+        {
+          "x": 342,
+          "w": 44,
+          "h": 44
+        }
+      ],
+      "desktopBars": 0,
+      "menuRows": [
+        "new-agent",
+        "new-task",
+        "new-pipeline",
+        "tasks",
+        "pipelines",
+        "hidden",
+        "view-board",
+        "view-catalog",
+        "accounts",
+        "host",
+        "activity",
+        "team",
+        "self-update",
+        "settings",
+        "help",
+        "rules"
+      ]
+    },
+    "390-en-dark": {
+      "h": 52,
+      "w": 390,
+      "text": "harbor-ledger-service3",
+      "targets": [
+        {
+          "x": 4,
+          "w": 236,
+          "h": 44
+        },
+        {
+          "x": 242,
+          "w": 52,
+          "h": 44
+        },
+        {
+          "x": 296,
+          "w": 44,
+          "h": 44
+        },
+        {
+          "x": 342,
+          "w": 44,
+          "h": 44
+        }
+      ],
+      "desktopBars": 0,
+      "menuRows": [
+        "new-agent",
+        "new-task",
+        "new-pipeline",
+        "tasks",
+        "pipelines",
+        "hidden",
+        "view-board",
+        "view-catalog",
+        "accounts",
+        "host",
+        "activity",
+        "team",
+        "self-update",
+        "settings",
+        "help",
+        "rules"
+      ]
+    },
+    "390-uk-light": {
+      "h": 52,
+      "w": 390,
+      "text": "harbor-ledger-service3",
+      "targets": [
+        {
+          "x": 4,
+          "w": 236,
+          "h": 44
+        },
+        {
+          "x": 242,
+          "w": 52,
+          "h": 44
+        },
+        {
+          "x": 296,
+          "w": 44,
+          "h": 44
+        },
+        {
+          "x": 342,
+          "w": 44,
+          "h": 44
+        }
+      ],
+      "desktopBars": 0,
+      "menuRows": [
+        "new-agent",
+        "new-task",
+        "new-pipeline",
+        "tasks",
+        "pipelines",
+        "hidden",
+        "view-board",
+        "view-catalog",
+        "accounts",
+        "host",
+        "activity",
+        "team",
+        "self-update",
+        "settings",
+        "help",
+        "rules"
+      ]
+    },
+    "390-uk-dark": {
+      "h": 52,
+      "w": 390,
+      "text": "harbor-ledger-service3",
+      "targets": [
+        {
+          "x": 4,
+          "w": 236,
+          "h": 44
+        },
+        {
+          "x": 242,
+          "w": 52,
+          "h": 44
+        },
+        {
+          "x": 296,
+          "w": 44,
+          "h": 44
+        },
+        {
+          "x": 342,
+          "w": 44,
+          "h": 44
+        }
+      ],
+      "desktopBars": 0,
+      "menuRows": [
+        "new-agent",
+        "new-task",
+        "new-pipeline",
+        "tasks",
+        "pipelines",
+        "hidden",
+        "view-board",
+        "view-catalog",
+        "accounts",
+        "host",
+        "activity",
+        "team",
+        "self-update",
+        "settings",
+        "help",
+        "rules"
+      ]
+    }
+  },
+  "failures": [
+    "2254-en-light: 1 Tasks panel controls or panels on the page",
+    "2254-en-light-docked: 1 Tasks panel controls or panels on the page",
+    "2254-en-dark: 1 Tasks panel controls or panels on the page",
+    "2254-en-dark-docked: 1 Tasks panel controls or panels on the page",
+    "2254-uk-light: 1 Tasks panel controls or panels on the page",
+    "2254-uk-light-docked: 1 Tasks panel controls or panels on the page",
+    "2254-uk-dark: 1 Tasks panel controls or panels on the page",
+    "2254-uk-dark-docked: 1 Tasks panel controls or panels on the page",
+    "1960-en-light: 1 Tasks panel controls or panels on the page",
+    "1960-en-light-docked: 1 Tasks panel controls or panels on the page",
+    "1960-en-dark: 1 Tasks panel controls or panels on the page",
+    "1960-en-dark-docked: 1 Tasks panel controls or panels on the page",
+    "1960-uk-light: 1 Tasks panel controls or panels on the page",
+    "1960-uk-light-docked: 1 Tasks panel controls or panels on the page",
+    "1960-uk-dark: 1 Tasks panel controls or panels on the page",
+    "1960-uk-dark-docked: 1 Tasks panel controls or panels on the page",
+    "1440-en-light: 1 Tasks panel controls or panels on the page",
+    "1440-en-light-docked: 1 Tasks panel controls or panels on the page",
+    "1440-en-dark: 1 Tasks panel controls or panels on the page",
+    "1440-en-dark-docked: 1 Tasks panel controls or panels on the page",
+    "1440-uk-light: 1 Tasks panel controls or panels on the page",
+    "1440-uk-light-docked: 1 Tasks panel controls or panels on the page",
+    "1440-uk-dark: 1 Tasks panel controls or panels on the page",
+    "1440-uk-dark-docked: 1 Tasks panel controls or panels on the page",
+    "1000-en-light: 1 Tasks panel controls or panels on the page",
+    "1000-en-dark: 1 Tasks panel controls or panels on the page",
+    "1000-uk-light: 1 Tasks panel controls or panels on the page",
+    "1000-uk-dark: 1 Tasks panel controls or panels on the page"
+  ]
+}

@@ -1,87 +1,20 @@
 "use client";
 
 import { MessageCircleQuestionMark, GalleryHorizontalEnd, TriangleAlert } from "lucide-react";
-import { useState } from "react";
 
-import { ArrowRight } from "@/components/icons";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
-import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale, type TFunction } from "@/lib/i18n";
+
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 
 import { usePrototypeNoticesFor } from "./prototypeReviewStore";
 
-/**
- * The orchestrator pane's word that a prototype waits, above its message
- * field where the task chips stand: one line per waiting task, with the action
- * that takes the operator to that task and opens its review. Absent while
- * nothing waits, so the composer keeps the layout it had. Two lines at most
- * stand there, one on the phone, where the line is the task's name and its
- * action; the rest fold behind one count, so many waiting tasks never push
- * the message field away.
- */
-
-export function PrototypeNoticeRow({ project }: { project: string }) {
-  const { t } = useLocale();
-  const notices = usePrototypeNoticesFor(project);
-  const [all, setAll] = useState(false);
-  const mobile = useIsMobile();
-  const SHOWN = mobile ? 1 : 2;
-  if (!notices.length) return null;
-  const rows = all ? notices : notices.slice(0, SHOWN);
-  const folded = notices.length - rows.length;
-  return (
-    <ul role="list" aria-label={t("proto.notice.list")} data-prototype-notices={notices.length} className="m-0 flex list-none flex-col gap-1 p-0">
-      {rows.map((notice) => (
-        <li
-          key={notice.id}
-          role="status"
-          data-prototype-notice={notice.taskId}
-          {...(notice.undelivered ? { "data-prototype-notice-undelivered": "" } : {})}
-          className={`flex min-w-0 items-center gap-1.5 rounded-control border py-0.5 pl-2 pr-0.5 text-label ${notice.undelivered ? "border-warning/30 bg-warning-soft text-warning" : "border-accent/30 bg-accent-soft text-accent"}`}
-        >
-          <NoticeMark notice={notice} className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          {/* The phone gives the line to the task's name; the mark and the action already say what waits. */}
-          <span className={mobile ? "sr-only" : "shrink-0 font-semibold"}>{noticeWord(t, notice)}</span>
-          <span className="min-w-0 flex-1 truncate font-medium text-primary" title={notice.roundTitle ? `${notice.title} · ${notice.roundTitle}` : notice.title}>
-            {notice.title}
-            {notice.roundTitle ? <span data-prototype-notice-round="" className="font-normal text-muted"> · {notice.roundTitle}</span> : null}
-          </span>
-          <button
-            type="button"
-            data-prototype-notice-open={notice.taskId}
-            aria-label={t(notice.undelivered ? "proto.notice.undeliveredAria" : notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title })}
-            className="inline-flex min-h-7 shrink-0 items-center gap-1 rounded-control px-2 font-semibold text-accent hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11"
-            onClick={() => openPrototypeReview({ ...notice.target, from: "notice" })}
-          >
-            {t(notice.asks === "questions" && !notice.undelivered ? "proto.notice.answer" : "proto.notice.open")}
-            <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-          </button>
-        </li>
-      ))}
-      {folded > 0 || (all && notices.length > SHOWN) ? (
-        <li className="flex">
-          <button
-            type="button"
-            data-prototype-notice-more={folded}
-            aria-expanded={all}
-            className="inline-flex min-h-6 items-center rounded-control px-2 text-label font-semibold text-accent hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11"
-            onClick={() => setAll((held) => !held)}
-          >
-            {all ? t("proto.notice.fewer") : t("proto.notice.more", { count: folded })}
-          </button>
-        </li>
-      ) : null}
-    </ul>
-  );
-}
-
-/** The same word where the composer and its lines are put away: one chip
-    with the count, opening the first waiting review. The folded seat's strip
-    draws it with its words; the phone board's seat card, which has no room
-    beside its title, draws the mark, the short word and the count in a full
-    touch target on a line of its own under the seat's words, level with its
-    title. Absent while nothing waits. */
+/** The word that a prototype or a question waits where the seat's «Рішення»
+    column is put away: one chip with the count, opening the first waiting
+    review. The folded seat's strip draws it with its words; the phone
+    board's seat card, which has no room beside its title, draws the mark,
+    the short word and the count in a full touch target on a line of its own
+    under the seat's words, level with its title. Absent while nothing waits. */
 export function PrototypeNoticeChip({ project, compact = false }: { project: string; compact?: boolean }) {
   const { t } = useLocale();
   const notices = usePrototypeNoticesFor(project);

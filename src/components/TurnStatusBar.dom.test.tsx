@@ -358,3 +358,25 @@ test("a fresh window that never saw the starting window counts from the transcri
   }, container);
   expect(container.querySelector('[data-turn-status="running"] [role="timer"]')?.textContent).toBe("52s");
 });
+
+test("a running agent that stands still paints no working bar; one on a check names the check", () => {
+  const now = Date.parse("2026-10-12T10:00:00.000Z");
+  setSystemTime(new Date(now));
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const running = (agentActivity: NonNullable<FileEntry["agentActivity"]>) =>
+    ({ ...file({ startedAt: now - 400_000, endedAt: null }, "stalled", { mtime: (now - 840_000) / 1000 }), proc: "running", agentActivity }) as StatusFile;
+
+  render(running({ lastRecordAt: now - 14 * 60_000 }), container);
+  expect(container.querySelector('[data-turn-status="running"]')).toBeNull();
+  expect(container.querySelector('[data-turn-status="idle"]')?.textContent).toBe("idle 14m");
+  expect(container.textContent).not.toContain("working");
+
+  render(running({ lastRecordAt: now - 60_000, checking: true }), container);
+  expect(container.querySelector('[data-turn-status="running"]')).toBeNull();
+  expect(container.querySelector('[data-turn-status="checking"]')?.textContent).toContain("waiting on a check");
+  expect(container.textContent).not.toContain("working…");
+
+  render(running({ lastRecordAt: now - 60_000 }), container);
+  expect(container.querySelector('[data-turn-status="running"]')?.textContent).toContain("working…");
+});

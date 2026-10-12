@@ -1,5 +1,7 @@
 "use client";
 
+import { CardStatusBadge } from "@/components/CardStatusBadge";
+
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
@@ -29,7 +31,7 @@ import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAg
 import { useManagedOnText } from "@/components/kanban/RemoteLanes";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
-import { pipelineTitle } from "@/components/kanban/PipelineSection";
+import { cardWaitsForCpu, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { PhoneCardPrototypeButton, usePrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
@@ -397,7 +399,7 @@ function LooseLine({ item, now }: { item: PhoneCard; now: number }) {
   const { t } = useLocale();
   const file = item.need?.kind === "conversation" ? item.need.member.file : item.firstAgent;
   const detail = askDetail(item);
-  const quiet = item.need ? null : quietState(t, file, now);
+  const quiet = item.need || (file?.agentActivity && file.proc === "running") ? null : quietState(t, file, now);
   const at = item.card.lastAgentWorkAtMs > 0 ? item.card.lastAgentWorkAtMs : file ? file.mtime * 1000 : 0;
   /* A stalled phrase already says how long it has been quiet. */
   const age = askAge(t, item) ?? (at > 0 && !quiet?.stalled ? ageText(t, at, now * 1000) : null);
@@ -521,7 +523,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   const priority = item.kind === "task" && card.priority !== "normal" ? card.priority : null;
   /* Who has the card (§5), said in one line in place of its motion and the lane's reason. */
   const state = item.kind === "task" ? cardState(card, now) : null;
-  const motion = <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />;
+  /* A loose row that shows the agent's activity badge in its head draws no motion line. */
+  const motion = loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />;
   /* The task's review row is already where a waiting round is answered. */
   const answerRow = onAnswer && state && cardAnswers(state) && !(state.subject.kind === "form" && item.waitsOnPrototype) ? state : null;
   const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project].filter(Boolean).join(", ");
@@ -559,6 +562,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
             {priority === "high" ? <ArrowUp className="h-[14px] w-[14px]" /> : <ArrowDown className="h-[14px] w-[14px]" />}
           </span>
         ) : null}
+        {loose && item.firstAgent?.agentActivity ? <CardStatusBadge file={item.firstAgent} /> : null}
         <NeedBadge item={item} />
       </span>
       {state ? (
