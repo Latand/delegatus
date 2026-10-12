@@ -18,6 +18,7 @@ import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { RuntimeOperationCommand } from "./contracts";
 import type { PendingPermissionRequest } from "./permissionRequests";
 import { dispatchStructuredControl } from "./structuredControls";
+import { applyConversationAction } from "@/lib/conversation/actions";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { applyConversationMigration } from "@/lib/accounts/migration/conversationCommand";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -56,6 +57,11 @@ function structuredConversation(
     parentConversationId?: `conversation_${string}`;
     registry?: AgentRegistry;
     pendingPermissions?: PendingPermissionRequest[];
+    /** Open native questions or plans: the host's request id and the
+        transcript tool use it answers. */
+    pendingQuestions?: Array<{ id: string; toolUseId: string }>;
+    /** Open requests the host recorded no tool use for. */
+    unboundAttention?: string[];
     pipeline?: boolean;
   } = {},
 ): { registry: AgentRegistry; path: string; conversationId: string } {
@@ -89,8 +95,9 @@ function structuredConversation(
       protocolVersion: "fake-v1",
       writerClaimEpoch: 1,
       activeTurnRef: "turn-live",
-      pendingAttention: (options.pendingPermissions ?? []).map((request) => request.id),
+      pendingAttention: [...(options.pendingPermissions ?? []).map((request) => request.id), ...(options.pendingQuestions ?? []).map((question) => question.id), ...(options.unboundAttention ?? [])],
       ...(options.pendingPermissions ? { pendingPermissions: options.pendingPermissions } : {}),
+      ...(options.pendingQuestions ? { pendingToolUses: options.pendingQuestions } : {}),
       activeFlags: [],
     },
     claimEpoch: 1,
@@ -170,6 +177,81 @@ test("conversation_action permission on a structured host with nothing pending s
     { registry: fixture.registry, client: null, enabled: () => true },
   );
   expect(result).toEqual({ status: 409, body: { error: "no tool permission request is pending on this conversation" } });
+});
+
+/* docs/design/attention-auto-resolve.md, acceptance 3: a worker's native
+   question waits on its project's seat first, and the seat's answer reaches
+   that exact request through the same durable answer the question card sends. */
+test("conversation_action answer resolves only the host request bound to the tool use the caller read, never a permission or a successor", async () => {
+  const fixture = structuredConversation({ engine: "claude", pendingPermissions: [SAFETY_REQUEST], pendingQuestions: [
+    { id: "question-a", toolUseId: "toolu_a" }, { id: "question-b", toolUseId: "toolu_b" },
+  ] });
+  const commands: RuntimeOperationCommand[] = [];
+  const client = {
+    command: async (command: RuntimeOperationCommand) => {
+      commands.push(command);
+      return { operationId: command.operationId!, receipt: { operationId: command.operationId!, status: "answered", conversationId: fixture.conversationId }, replayed: false };
+    },
+  } as unknown as RuntimeHostClient;
+  const resolution = { behavior: "allow", updatedInput: { answers: { "Roll out now?": "Tomorrow" } } };
+  const answered = await dispatchStructuredControl(
+    { path: fixture.path, conversationId: "", action: "answer", operationId: "op-answer", requestId: "toolu_b", resolution },
+    { registry: fixture.registry, client, enabled: () => true, kick: () => {} },
+  );
+  expect(answered).toMatchObject({ status: 200, body: { ok: true, structured: true, target: fixture.conversationId, operationId: "op-answer" } });
+  expect(commands).toEqual([{ kind: "answer", operationId: "op-answer", idempotencyKey: "op-answer", conversationId: fixture.conversationId, attentionId: "question-b", resolution }]);
+
+  const dispatch = (target: ReturnType<typeof structuredConversation>, requestId?: string) => dispatchStructuredControl(
+    { path: target.path, conversationId: "", action: "answer", resolution, ...(requestId ? { requestId } : {}) },
+    { registry: target.registry, client, enabled: () => true, kick: () => {} },
+  );
+  /* The caller read toolu_old; the host has since replaced it with a new plan
+     that names another tool use, or holds a request that names none. */
+  expect(await dispatch(structuredConversation({ engine: "claude", pendingQuestions: [{ id: "host-new-plan", toolUseId: "toolu_new" }] }), "toolu_old"))
+    .toMatchObject({ status: 409 });
+  const unbound = structuredConversation({ engine: "claude", unboundAttention: ["host-new-plan"] });
+  expect(await dispatch(unbound, "toolu_old")).toMatchObject({ status: 409 });
+  /* Only a permission is open, and no tool use named at all. */
+  expect(await dispatch(structuredConversation({ engine: "claude", pendingPermissions: [SAFETY_REQUEST] }), SAFETY_REQUEST.id))
+    .toMatchObject({ status: 409 });
+  expect(await dispatch(fixture)).toMatchObject({ status: 400 });
+  expect(commands).toHaveLength(1);
+});
+
+/* The seat read plan toolu_old_plan from the transcript; before its answer
+   arrived the host cancelled that plan and raised another. The approval must
+   not reach the successor, and a still-pending match receives its answer. */
+test("conversation_action answer through the real control boundary never approves a plan the caller did not read", async () => {
+  const commands: RuntimeOperationCommand[] = [];
+  const client = {
+    command: async (command: RuntimeOperationCommand) => {
+      commands.push(command);
+      return { operationId: command.operationId!, receipt: { operationId: command.operationId!, status: "answered", conversationId: command.conversationId }, replayed: false };
+    },
+  } as unknown as RuntimeHostClient;
+  const answer = (fixture: ReturnType<typeof structuredConversation>) => applyConversationAction(
+    { action: "answer", conversationId: "", transcriptPath: fixture.path, requestId: "toolu_old_plan", operationId: "op-plan", answer: { approve: true } },
+    {
+      registry: () => fixture.registry,
+      structuredEnabled: () => true,
+      dispatchStructuredControl: (request) => dispatchStructuredControl(request, { registry: fixture.registry, client, enabled: () => true, kick: () => {} }),
+      interruptConversation: async () => { throw new Error("unexpected"); },
+      killConversation: async () => { throw new Error("unexpected"); },
+      resumeConversation: async () => { throw new Error("unexpected"); },
+      compactConversation: async () => { throw new Error("unexpected"); },
+      answerDialogKey: async () => { throw new Error("unexpected"); },
+      pendingQuestion: async () => ({ kind: "plan", toolUseId: "toolu_old_plan", transcriptPath: fixture.path, pid: 1, paneTarget: null, askedAt: "2026-10-12T09:00:00.000Z" }),
+    },
+  );
+
+  const replaced = structuredConversation({ engine: "claude", pendingQuestions: [{ id: "host-new-plan", toolUseId: "toolu_new_plan" }] });
+  expect(await answer(replaced)).toMatchObject({ status: 409 });
+  expect(await answer(structuredConversation({ engine: "claude", unboundAttention: ["host-new-plan"] }))).toMatchObject({ status: 409 });
+  expect(commands).toEqual([]);
+
+  const matching = structuredConversation({ engine: "claude", pendingQuestions: [{ id: "host-old-plan", toolUseId: "toolu_old_plan" }] });
+  expect(await answer(matching)).toMatchObject({ status: 200, body: { ok: true, structured: true, operationId: "op-plan" } });
+  expect(commands).toEqual([{ kind: "answer", operationId: "op-plan", idempotencyKey: "op-plan", conversationId: matching.conversationId, attentionId: "host-old-plan", resolution: { behavior: "allow" } }]);
 });
 
 test("structured compact enters the durable command channel for the owned codex thread", async () => {

@@ -11,9 +11,10 @@ const globals = globalThis as typeof globalThis & { __delegatusVoiceSessions?: C
 export function companionSessions(): CompanionLiveSessions {
   return globals.__delegatusVoiceSessions ??= (() => {
     const storage = new CompanionStorage();
-    const apiProvider = new OpenAILiveProvider();
-    const provider = process.env.LLV_VOICE_BACKEND === "codex" ? new CodexLiveProvider() : apiProvider;
-    const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, companionDeliveryPaths), new CompanionBoardReads(companionBoardReadPaths), provider, { apiProvider });
+    // The settings choose each new call's backend: the API with its key (the
+    // default), or Codex V3 on a managed account's plan.
+    const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, companionDeliveryPaths), new CompanionBoardReads(companionBoardReadPaths),
+      new OpenAILiveProvider(), { codexProvider: new CodexLiveProvider() });
     // A session a previous Viewer minted has no owner here. Close it at once; no browser has to ask for it.
     void service.recover().catch(() => undefined);
     return service;

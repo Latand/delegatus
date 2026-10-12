@@ -490,6 +490,16 @@ export function describeMcpCall(
     const kind = string(target.kind) || "target";
     const undo = args.undo === true;
     const cleared = Array.isArray(result.dismissed) ? result.dismissed.length : 0;
+    /* A seat handing a wait routed to it to the operator's decision form. */
+    if (args.escalate !== undefined) {
+      return {
+        icon: kind === "conversation" ? "conversation" : "pipeline",
+        verb: undo ? "Withdrawing" : "Escalating",
+        title: undo ? `Taking back an escalated ${kind}` : `Asking the operator about a ${kind}`,
+        subtitle: replaySubtitle(result, undo ? "" : compact(string(record(args.escalate).reviewId))),
+        links: kind === "conversation" ? conversationLink({ conversationId: string(target.conversationId) }) : entityLink("pipeline", string(target.pipelineId)),
+      };
+    }
     return {
       icon: kind === "conversation" ? "conversation" : kind === "task" ? "task" : "pipeline",
       verb: undo ? "Flagging" : "Clearing",

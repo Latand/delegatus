@@ -11,6 +11,16 @@
  *   &placement=overlay    the panel floating over the board
  *   &seat=beside          the orchestrator seat open beside the board
  *   &overview=1           the Overview instead of the delegatus board
+ *   &done=1               «Готово» pinned above the decisions and the report log (docs/design/done-section.md):
+ *                         a visible change with its before/after, a deploy, a
+ *                         publication, ten technical fixes, three without a PR,
+ *                         an incident and an account limit
+ *   &scenario=auto-resolve  docs/design/attention-auto-resolve.md: three asks
+ *                         from seats since handed on, a deployer's question its
+ *                         seat answers, a worker's question the seat escalated,
+ *                         and a stage's own decision in a project with no seat
+ *   &state=before         that scenario as it stood before Delegatus cleared
+ *                         and routed it (after, by default)
  */
 import { createRoot } from "react-dom/client";
 
@@ -20,6 +30,10 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { DismissalSubjectRequest } from "@/lib/attention/dismissalTypes";
+import type { DoneItemV1 } from "@/lib/done/types";
+import { attentionSystemClears } from "@/lib/attention/reconcile";
+import { conversationRouteKey, type AttentionEscalationMark } from "@/lib/attention/routeTypes";
+import { stampAttentionRoutes, waitingRoundIds } from "@/lib/attention/routing";
 import type { ReportLogEntry, ReportLogPage } from "@/lib/bridge/reportLog";
 import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -238,6 +252,103 @@ seatFile.bridgeAsk = SEAT_ASKS.at(-1)!;
 /* The operator last looked at the log before the two newest entries. */
 try { localStorage.setItem(`llvReportLogSeen:${D}`, "1202"); } catch { /* private mode */ }
 
+const seats: Record<string, string> = { [D]: seatDelegatus, [S]: seatShop };
+
+/* ── ?scenario=auto-resolve (docs/design/attention-auto-resolve.md) ───────
+   The 11:18Z panel's shape over the same board: asks from seats since handed
+   on, a deployer's question its seat can answer, a question the seat
+   escalated, and a stage's decision in a project with no seat. «After» runs
+   the server's own pure rules over it: the clears Delegatus writes and the
+   routes `/api/files` stamps. */
+const AUTO = params.get("scenario") === "auto-resolve";
+const AUTO_AFTER = params.get("state") !== "before";
+const say = (uk: string, en: string) => (LANG === "en" ? en : uk);
+const AUTO_IDS: Record<string, string> = {};
+/* Seats handed on draw no tile (#1841): the seat record lists them. */
+const AUTO_RETIRED_PATHS: string[] = [];
+if (AUTO) {
+  const asked = (path: string, id: string, gist: string, ago: number) => {
+    const entry = files.find((file) => file.path === path)!;
+    entry.lastTurn = { startedAt: (now - ago - 300) * 1_000, endedAt: (now - ago) * 1_000 } as FileEntry["lastTurn"];
+    entry.lastAssistantMessageAt = (now - ago) * 1_000;
+    entry.operatorAsk = { id, messageAt: (now - ago) * 1_000, gist };
+    return entry;
+  };
+  /* Three seats this project had before its current one: each ended on a
+     question to the operator, and each was handed on since. */
+  const retired = [
+    say("Чи переносити нічні звіти на 08:00?", "Move the nightly reports to 08:00?"),
+    say("Закривати старі лейни після злиття автоматично?", "Close old lanes automatically after a merge?"),
+    say("Залишити старий вебхук до понеділка?", "Keep the old webhook until Monday?"),
+  ].map((gist, index) => {
+    const path = conversation(D, say(`Оркестратор, попередній ${index + 1}`, `Orchestrator, previous ${index + 1}`), { ...role("orchestrator"), proc: "done", mtime: now - (6 + index) * 3_600 });
+    const entry = asked(path, `ask:retired-${index + 1}`, gist, (6 + index) * 3_600);
+    AUTO_RETIRED_PATHS.push(path);
+    return entry.conversationId!;
+  });
+  AUTO_IDS.retired = retired.join(",");
+  /* A session the operator started, whose prose ask they have since answered
+     in the conversation: its card keeps the reason, cleared, with Undo. */
+  const replied = conversation(D, say("Звіт про продажі за вересень", "September sales report"), { ...role("builder") });
+  AUTO_IDS.replied = asked(replied, "ask:analyst-september", say("Рахувати повернення в цьому звіті чи окремо?", "Count returns in this report or separately?"), 50 * MIN).conversationId!;
+  task(D, "t-september", "assigned", say("Звіт про продажі за вересень", "September sales report"), { assignments: [assign(replied)], icon: "chart-column" });
+  /* A deployer the seat spawned asks the operator what its seat can decide. */
+  const deployer = conversation(D, say("Викатка релізу 1.9", "Roll out release 1.9"), {
+    durableLineage: { kind: "spawn", role: "deployer", depth: 1, parentConversationId: idOf(seatDelegatus), reviewsConversationId: null, memberships: [] },
+  });
+  AUTO_IDS.deployer = asked(deployer, "ask:deployer-rollout", say("Викочувати 1.9 зараз, поки черга порожня, чи чекати вечора?", "Roll 1.9 out now while the queue is empty, or wait for the evening?"), 12 * MIN).operatorAsk!.id;
+  task(D, "t-rollout", "assigned", say("Викатка релізу 1.9", "Roll out release 1.9"), { assignments: [assign(deployer)], icon: "rocket" });
+  /* shop-web: a builder's question its seat could not decide: it asked the
+     operator in a decision form on the task and escalated the wait to it. */
+  const builder = conversation(S, say("Оплата частинами", "Pay in instalments"), {
+    durableLineage: { kind: "spawn", role: "builder", depth: 1, parentConversationId: idOf(seatShop), reviewsConversationId: null, memberships: [] },
+  });
+  AUTO_IDS.escalated = asked(builder, "ask:builder-instalments", say("Яким провайдером розстрочки користуватися?", "Which instalment provider should I use?"), 40 * MIN).operatorAsk!.id;
+  AUTO_IDS.escalationRound = "round-instalments";
+  task(S, "t-instalments", "assigned", say("Оплата частинами", "Pay in instalments"), { assignments: [assign(builder)], icon: "credit-card",
+    /* The seat's decision form, published when it escalated. */
+    ...(AUTO_AFTER ? { prototypeReview: { latestReviewId: AUTO_IDS.escalationRound, waitingReviewId: AUTO_IDS.escalationRound, rounds: 1, createdAt: iso(5 * MIN), asks: "questions",
+      title: say("Провайдер розстрочки: банк-партнер чи швидший сервіс?", "Instalment provider: the partner bank or the faster service?") } } : {}) });
+  /* tg-bot has no seat: a diagnose stage reported its own question in its summary. */
+  const diagnose = lane(B, "lane-diagnose", say("Чекають на вас: що знімати автоматично", "Waiting for you: what clears on its own"), ["t-diagnose"], "needs_decision", [
+    { id: "diagnose", state: "needs_decision", ago: 25 * MIN, role: "researcher" },
+  ], { stateDetail: "stage verdict: needs_decision" });
+  const attempt = diagnose.runs[0]!.attempts[0]!;
+  attempt.verdict = { status: "needs_decision" };
+  attempt.report = {
+    seq: 1, at: iso(25 * MIN), actor: { kind: "agent", conversationId: attempt.conversationId, role: "researcher" }, verdict: { status: "needs_decision" },
+    summary: say("Знімати рядки, які сервер довів завершеними, автоматично (з Undo) чи лише позначати їх? Рекомендую знімати.",
+      "Clear rows the server proved settled on their own (with Undo), or only mark them? I recommend clearing them."),
+    provenance: { state: "complete", head: null, branch: "lane/diagnose", uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
+  } as unknown as typeof attempt.report;
+  task(B, "t-diagnose", "assigned", say("Чекають на вас: що знімати автоматично", "Waiting for you: what clears on its own"), { icon: "search" });
+
+  if (AUTO_AFTER) {
+    /* What the reconciliation proves and writes, on the board's own clock. */
+    const retiredSeats = new Set(retired);
+    const operatorWroteAt = new Map([[AUTO_IDS.replied!, (now - 20 * MIN) * 1_000]]);
+    for (const clear of attentionSystemClears(files, now, { canonicalConversationId: (id) => id, retiredSeats, operatorWroteAt, pipeline: (id) => pipelines.find((row) => row.id === id) ?? null })) {
+      const entry = files.find((file) => file.path === clear.path)!;
+      entry.attentionDismissal = { at: iso(2 * MIN), by: { kind: "system", rule: clear.rule }, reasonId: clear.reasonId };
+    }
+    /* What `/api/files` stamps: each project's seat and the one escalation,
+       which names the waiting decision round and no question of its own. */
+    const escalation: AttentionEscalationMark = {
+      key: conversationRouteKey(AUTO_IDS.escalated), at: iso(5 * MIN), seat: idOf(seatShop), taskId: "t-instalments", reviewId: AUTO_IDS.escalationRound,
+    };
+    const waiting = waitingRoundIds(tasks as unknown as BoardTask[]);
+    const seatIds = new Set([...Object.values(seats).map(idOf), ...retired]);
+    stampAttentionRoutes(files, pipelines, now, {
+      seatFor: (project) => (seats[project] ? idOf(seats[project]!) : null),
+      canonicalProject: (project) => project,
+      isSeatConversation: (id) => seatIds.has(id),
+      escalation: (key) => (key === escalation.key ? escalation : null),
+      formWaiting: (reviewId) => waiting.has(reviewId),
+    });
+  }
+}
+(window as unknown as { __needsYouAutoResolve?: Record<string, string> }).__needsYouAutoResolve = AUTO_IDS;
+
 /* The dismissal route, recorded the way the server records it: a
    conversation's reason on its entry, a lane's instant on the lane, a
    question's resolution in the report log, which takes it off its seat. */
@@ -277,12 +388,54 @@ function dismiss(subjects: DismissalSubjectRequest[], undo: boolean): unknown[] 
   return done;
 }
 
+/* «Готово»: finished work the operator accepts, answered and recorded the
+   way `/api/attention/done` does. Invented sentences, numbers and pictures. */
+const DONE = params.has("done");
+const doneFrame = (bleed: boolean) => {
+  const card = (y: number, title: string, line: string) => `<g opacity="${bleed ? 0.72 : 1}"><rect x="40" y="${y}" width="640" height="150" rx="18" fill="#1b1f29" stroke="#2c3240"/>`
+    + `<text x="72" y="${y + 56}" font-family="sans-serif" font-size="30" font-weight="700" fill="#e8eaf0">${title}</text>`
+    + `<text x="72" y="${y + 104}" font-family="sans-serif" font-size="22" fill="#9aa3b5">${line}</text></g>`;
+  const body = card(28, "Ключі ідемпотентності", "для повернень коштів") + card(156, "Backoff для повторів вебхуків", "Експоненційна затримка з jitter") + card(284, "Ліміт на /refunds", "20 на хвилину для продавця, далі 429");
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="720" height="460" viewBox="0 0 720 460"><rect width="720" height="460" fill="#0f1218"/>${body}</svg>`)}`;
+};
+const doneAt = (secondsAgo: number) => iso(secondsAgo);
+const donePr = (number: number) => ({ repository: "example/delegatus", number, url: `https://github.com/example/delegatus/pull/${number}` });
+const done = (key: string, over: Partial<DoneItemV1>): DoneItemV1 => ({
+  key, kind: "pr", look: "technical", project: D, at: doneAt(6 * 3_600), createdAt: doneAt(6 * 3_600), title: "", icon: null, refs: {},
+  frame: null, frameCheckedAt: doneAt(6 * 3_600), acknowledgedAt: null, acknowledgedBy: null, ...over,
+});
+const TECHNICAL: Array<[number, string, string]> = [
+  [2698, "Видалення акаунта спершу звіряє файл на диску; старі домівки йдуть в архів.", "user-x"],
+  [2699, "Повідомлення агенту доходять і під час прибирання; прогрес відправки чесний.", "send"],
+  [2708, "Друга відмова хука зберігається після падіння процесу.", "shield"],
+  [2709, "Агент не стартує, коли вільної пам’яті менше за нижню межу.", "memory-stick"],
+  [2710, "Тести бекенду працюють в ізольованому стані й не чіпають живий.", "flask-conical"],
+  [2717, "Налаштування акаунтів читаються для того проєкту, якому належать.", "settings"],
+  [2694, "Повідомлення до Claude під час його ходу стають у чергу.", "messages-square"],
+  [2704, "HTTP MCP зберігає ідентичність після міграції; скасування клієнта не зачіпає інших.", "plug"],
+  [2705, "Мерджер приймає тестові контракти, які погодило рев’ю.", "git-merge"],
+  [2723, "Автомердж чекає лише обов’язкових перевірок main.", "circle-check"],
+];
+const doneItems: DoneItemV1[] = DONE ? [
+  done("pr:example/delegatus#2691", { look: "visible", at: doneAt(8 * 3_600), title: "Лендінг: картки в демо більше не просвічують одна крізь одну", icon: "layers", refs: { pr: donePr(2691), pipelineId: "lane-landing" },
+    frame: { src: doneFrame(false), before: doneFrame(true), caption: "Демо на лендінгу" } }),
+  done("deploy:fixture-deploy", { kind: "deploy", look: "deploy", project: null, at: doneAt(5 * 3_600), refs: { deploymentId: "fixture-deploy", sha: "1c41d361".padEnd(40, "0"), phase: "succeeded" } }),
+  done("report:fixture-publication", { kind: "report", look: "publication", at: doneAt(5.5 * 3_600), title: "Лендінг опубліковано з новим демо", refs: { reportId: "fixture-publication" } }),
+  ...TECHNICAL.map(([number, title, icon], index) => done(`pr:example/delegatus#${number}`, { at: doneAt(7 * 3_600 - index * 600), title, icon, refs: { pr: donePr(number) } })),
+  done("pipeline:lane-voice-models:done", { kind: "pipeline", look: "closed", at: doneAt(4 * 3_600), title: "Аналіз моделей для голосового режиму", icon: "audio-lines", refs: { pipelineId: "lane-voice-models" } }),
+  done("pipeline:lane-merge-order:done", { kind: "pipeline", look: "closed", at: doneAt(4.5 * 3_600), title: "Порядок об’єднання механізмів злиття", icon: "git-pull-request", refs: { pipelineId: "lane-merge-order" } }),
+  done("task:t-shop-tray", { kind: "task", look: "closed", project: S, at: doneAt(3 * 3_600), title: "Прибрано порожній лоток прихованих", icon: "archive", refs: { taskIds: ["t-shop-tray"] } }),
+  done("report:fixture-incident", { kind: "report", look: "incident", at: doneAt(9 * 3_600), title: "Сім ліній зависли після перемикання швидкості; етапи перезапущено.", refs: { reportId: "fixture-incident" } }),
+  done("limit:codex:acct-b:session:1", { kind: "limit", look: "limit", project: null, at: doneAt(6.2 * 3_600),
+    refs: { account: { engine: "codex", accountId: "acct-b", window: "session", label: "B" }, limit: { from: doneAt(6.2 * 3_600), to: doneAt(4 * 3_600), lanes: 16 } } }),
+] : [];
+(window as unknown as { __doneFixture?: { count: number } }).__doneFixture = { count: doneItems.length };
+
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: "scheme", desktopBoard: "kanban", taskPanelOpen: false },
 } as unknown as BoardProjectStateV1;
 
-const seats: Record<string, string> = { [D]: seatDelegatus, [S]: seatShop };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -312,13 +465,23 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const dismissed = dismiss(subjects, body.undo === true);
     return json({ ok: true, dismissed, alreadyClear: [], changed: [], at: new Date().toISOString(), by: { kind: "operator" }, undo: body.undo === true });
   }
+  if (DONE && url.pathname === "/api/attention/done") {
+    if (method === "GET") return json({ ok: true, items: doneItems.filter((item) => !item.acknowledgedAt), revision: 1 });
+    const body = JSON.parse(String(init?.body)) as { keys: string[]; undo?: boolean; surface?: "desktop" | "phone" };
+    const changed = doneItems.filter((item) => body.keys.includes(item.key) && Boolean(item.acknowledgedAt) === (body.undo === true));
+    for (const item of changed) {
+      item.acknowledgedAt = body.undo ? null : new Date().toISOString();
+      item.acknowledgedBy = body.undo ? null : { kind: "operator", surface: body.surface === "phone" ? "phone" : "desktop" };
+    }
+    return json({ ok: true, changed });
+  }
   if (url.pathname === "/api/projects/settings") {
     return json({ ok: true, project: url.searchParams.get("project") ?? D, mergeOnReview: { enabled: true, changedAt: iso(86_400), changedBy: "operator" }, bridgeReports: { enabled: true, changedAt: iso(86_400), changedBy: "operator" }, github: "example/delegatus" });
   }
   if (url.pathname === "/api/orchestrator/seat") {
     if (url.searchParams.get("scope") === "all") {
       const all = Object.values(seats);
-      return json({ all: { conversationIds: all.map(idOf), paths: all, previous: { conversationIds: [], paths: [] } } });
+      return json({ all: { conversationIds: all.map(idOf), paths: all, previous: { conversationIds: AUTO_RETIRED_PATHS.map(idOf), paths: AUTO_RETIRED_PATHS } } });
     }
     const project = url.searchParams.get("project") ?? D;
     const path = seats[project];

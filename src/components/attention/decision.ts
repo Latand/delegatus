@@ -7,7 +7,7 @@ import type { TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
-import { attentionReason, type ConversationReason } from "../attention";
+import { attentionReason, reasonAsksOperator, type ConversationReason } from "../attention";
 import type { NeedReason } from "./needReason";
 
 /**
@@ -114,7 +114,7 @@ export function reasonLine(t: TFunction, reason: ConversationReason): string {
  */
 export function decisionLine(t: TFunction, file: FileEntry, now: number = Date.now() / 1000): string | null {
   const reason = attentionReason(file, now);
-  if (!reason || reason.dismissal) return null;
+  if (!reason || !reasonAsksOperator(reason)) return null;
   const decision = decisionText(t, reason);
   const role = roleLabel(t, file);
   return role ? `${decision} · ${role}` : decision;
@@ -162,7 +162,12 @@ export function conversationNeedText(t: TFunction, reason: Pick<ConversationReas
 }
 
 /** The stage a lane waits on, in the operator's words: the cursor's, or the
-    review stage a needs_review lane stands on (#1938). */
+    review stage a needs_review lane stands on (#1938). Empty when the lane
+    names none. */
+export function laneStageLabel(t: TFunction, pipeline: Pipeline, stageId: string | null): string {
+  return laneStageName(t, pipeline, stageId);
+}
+
 function laneStageName(t: TFunction, pipeline: Pipeline, stageId: string | null): string {
   const stage = stageId ? pipeline.stages.find((entry) => entry.id === stageId) : null;
   return stage ? stageCardLabel(t, stage, stageLatestAttemptPlace(pipeline, stage.id)).toLocaleLowerCase() : "";
@@ -182,6 +187,8 @@ export function clearedByText(t: TFunction, by: DismissedBy): string {
   if (by.kind === "operator") return t("needs.clearedByYou");
   if (by.kind === "manager") return t("needs.clearedByOrchestrator");
   if (by.kind === "gateway") return t("needs.clearedByGateway");
+  /* Delegatus itself, with the evidence that proved the reason settled. */
+  if (by.kind === "system") return t(`needs.clearedRule.${by.rule}`);
   const role = by.role?.trim();
   return role ? roleNameById(t, role) : t("needs.clearedByAgent");
 }

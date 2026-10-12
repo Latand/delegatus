@@ -13,8 +13,7 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 test("settings are off by default; saving a key returns availability and writes owner-only", () => {
   const storage = new CompanionStorage();
-  expect(storage.settings()).toMatchObject({ enabled: false, keySource: "missing" });
-  expect(storage.settings()).not.toHaveProperty("backend");
+  expect(storage.settings()).toMatchObject({ enabled: false, keySource: "missing", backend: "api" });
   storage.saveKey("synthetic-provider-credential");
   expect(fs.statSync(configFilePath("openai-api-key")).mode & 0o777).toBe(0o600);
   expect(JSON.stringify(storage.settings())).not.toContain("synthetic-provider-credential");
@@ -55,19 +54,17 @@ test("malformed state fails closed instead of losing reservations or session aut
   fs.writeFileSync(statePath("voice-companion.json"), JSON.stringify(document));
 });
 
-test("a demo stored by an earlier build reads as off, the real voice stays on, and the next write drops the field; no update selects a backend", () => {
+test("a demo stored by an earlier build reads as off, the real voice stays on as the API, and no update selects anything but the API or Codex", () => {
   const file = path.join(process.env.LLV_STATE_DIR!, "voice-companion.json");
   const stored = (backend: string, enabled: boolean) => fs.writeFileSync(file, JSON.stringify({ version: 1, settings: { enabled, backend, monthlyCapUsd: 20 }, charges: {}, sessions: {} }));
   stored("demo", true);
   const storage = new CompanionStorage();
-  expect(storage.settings()).toMatchObject({ enabled: false, monthlyCapUsd: 20 });
-  expect(storage.settings()).not.toHaveProperty("backend");
+  expect(storage.settings()).toMatchObject({ enabled: false, monthlyCapUsd: 20, backend: "api" });
   storage.updateSettings({ monthlyCapUsd: 25 });
   const written = JSON.parse(fs.readFileSync(file, "utf8")) as { settings: Record<string, unknown> };
-  expect(written.settings).toEqual({ enabled: false, monthlyCapUsd: 25 });
+  expect(written.settings).toEqual({ enabled: false, monthlyCapUsd: 25, backend: "api" });
   stored("official-realtime", true);
-  expect(storage.settings()).toMatchObject({ enabled: true });
-  expect(storage.settings()).not.toHaveProperty("backend");
+  expect(storage.settings()).toMatchObject({ enabled: true, backend: "api" });
   stored("something-else", true);
   expect(() => storage.settings()).toThrow("COMPANION_STATE_UNAVAILABLE");
   stored("official-realtime", false);
@@ -109,6 +106,50 @@ test("call usage shows observed spend while live and only complete settlement is
   expect(storage.usageFor(session.id)).toMatchObject({ callUsd: 0.3, month: "2026-11", monthUsd: 0 });
 });
 
+test("the backend is a stored choice: the API by default, Codex when chosen", () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const storage = new CompanionStorage();
+  expect(storage.settings().backend).toBe("api");
+  expect(storage.updateSettings({ backend: "codex" }).backend).toBe("codex");
+  expect(storage.settings()).toMatchObject({ backend: "codex", monthlyCapUsd: 20 });
+  expect(storage.updateSettings({ backend: "api" }).backend).toBe("api");
+  const file = path.join(root, "state", "voice-companion.json");
+  fs.writeFileSync(file, JSON.stringify({ version: 1, settings: { enabled: true, backend: "codex", monthlyCapUsd: 20 }, charges: {}, sessions: {} }));
+  expect(storage.settings()).toMatchObject({ enabled: true, backend: "codex" });
+});
+
+test("a Codex call's usage counts its seconds on the server clock and its plan window; settings keep the last Codex call apart from the API one", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let now = Date.parse("2026-10-10T07:00:00Z");
+  const storage = new CompanionStorage(() => now);
+  const { CompanionAdmission } = await import("./admission");
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unused"); } }, () => now);
+  const session = admission.create({ project: "usage", locale: "en", startedBy: { operator: true } });
+  storage.change(document => { Object.assign(document.sessions[session.id], { backend: "codex", usage: { seconds: 0, responses: {} } }); });
+  expect(storage.usageFor(session.id)).toEqual({ backend: "codex", callSeconds: 0, callFinal: false, plan: null, planStartPercent: null });
+  const plan = { type: "pro", primary: { usedPercent: 23, resetsAt: 1791999000, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: 1792400000, windowMinutes: 10080 }, limitReached: false, observedAt: now };
+  storage.change(document => { Object.assign(document.sessions[session.id].usage!, { startedAt: now, plan, planStart: 21 }); });
+  now += 95_600;
+  expect(storage.usageFor(session.id)).toEqual({ backend: "codex", callSeconds: 95, callFinal: false, plan, planStartPercent: 21 });
+  storage.change(document => { document.sessions[session.id].usage!.seconds = 96.2; });
+  now += 400;
+  admission.emit(session.id, { type: "session.closed", reason: "operator" });
+  admission.retire(session.id);
+  now += 60_000;
+  expect(storage.usageFor(session.id)).toEqual({ backend: "codex", callSeconds: 96, callFinal: true, plan, planStartPercent: 21 });
+  expect(storage.settings().lastCodexSession).toEqual({ seconds: 96.2, endedAt: now - 60_000, plan });
+  expect(storage.settings().lastSession).toBeUndefined();
+  // An API call that ended later is the API's last call; the Codex one stays the Codex last call.
+  const api = admission.create({ project: "usage", locale: "en" });
+  storage.reserve(api.id, 0.5);
+  storage.change(document => { document.sessions[api.id].usage = { seconds: 30, responses: {} }; });
+  storage.settle(api.id, 0.3);
+  admission.emit(api.id, { type: "session.closed", reason: "operator" });
+  admission.retire(api.id);
+  expect(storage.settings()).toMatchObject({ lastSession: { usd: 0.3, seconds: 30, endedAt: now, incomplete: false }, lastCodexSession: { seconds: 96.2, plan } });
+  expect(storage.usageFor(api.id)).toEqual({ callUsd: 0.3, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.3, monthCapUsd: 20 });
+});
+
 test("stored session authority and backend token details reject malformed data", async () => {
   fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
   const storage = new CompanionStorage();
@@ -119,7 +160,10 @@ test("stored session authority and backend token details reject malformed data",
   const file = path.join(root, "state", "voice-companion.json");
   for (const patch of [{ startedBy: { memberId: "m_fixture", cookie: "forbidden" } }, { startedBy: { operator: false } },
     { currentProject: 0 }, { reportWatermarks: { valid: -1 } }, { spokenReports: [1] },
-    { usage: { seconds: 0, responses: { r: { complete: true, usd: 0, tokens: { input: 1, cached: 1, cacheWrite: 1, output: 0 } } } } }]) {
+    { usage: { seconds: 0, responses: { r: { complete: true, usd: 0, tokens: { input: 1, cached: 1, cacheWrite: 1, output: 0 } } } } },
+    { usage: { seconds: 0, responses: {}, startedAt: "soon" } }, { usage: { seconds: 0, responses: {}, planStart: 101 } },
+    { usage: { seconds: 0, responses: {}, plan: { type: "pro", primary: { usedPercent: 140, resetsAt: null, windowMinutes: 300 }, secondary: null, limitReached: false, observedAt: 1 } } },
+    { usage: { seconds: 0, responses: {}, plan: { type: "pro", primary: null, secondary: null, limitReached: "no", observedAt: 1 } } }]) {
     const document = structuredClone(valid);
     Object.assign(document.sessions[session.id], patch);
     fs.writeFileSync(file, JSON.stringify(document));

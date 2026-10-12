@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { buildNeedsYouQueue } from "@/components/attention/attentionQueue";
 import { needsYouSections } from "@/components/attention/needsYouPanel";
+import { conversationNeed, SYSTEM_CLEAR_CARD_SECONDS } from "@/components/attention/needReason";
 import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
+import { translate } from "@/lib/i18n/core";
 import { needsYouEntries, needsYouAnswer, needsYouEvidence, type NeedsYouEvidencePorts } from "./needsYouRead";
 
 const now = Date.parse("2026-10-09T00:00:00Z") / 1000;
@@ -50,7 +52,8 @@ test("role-bearing rows retain localized lane labels and the conversation's ques
       const answer = needsYouAnswer(body, null, now, "project-a", { ...ports(), tasks: [], pipelines: [pipeline] }, { locale });
       expect(answer.count).toBe(2);
       expect(answer.rows.find(row => row.kind === "lane-decision")!.line).toContain(labels[locale].toLocaleLowerCase());
-      expect(answer.rows.find(row => row.kind === "question")!.line).toBe("Choose");
+      /* The question in the agent's words, and one sentence on what to do. */
+      expect(answer.rows.find(row => row.kind === "question")).toMatchObject({ question: "Choose", line: translate(locale, "needs.ask.question") });
     }
   }
 });
@@ -153,4 +156,79 @@ test("the report's bounded read finds stale rows beyond the first panel page", (
   expect(report.rows[0]).toMatchObject({ id: "q-59", stale: true });
   expect(report.count).toBe(60);
   expect(report.staleCount).toBe(1);
+});
+
+test("waits routed to the seat leave the operator's count and are counted for the seat", () => {
+  const body = fixture();
+  const ask = body.files.find(f => f.name === "ask")!;
+  ask.attentionRoute = { key: "reason:operator-ask", owner: "seat", seat: "conversation_seat" };
+  const decisionLane = body.pipelines[0]!;
+  decisionLane.attentionRoute = { key: "lane:decision:lane-decision:none", owner: "seat", seat: "conversation_seat" };
+  const answer = needsYouAnswer(body, decision, now, "project-a", ports(body));
+  expect(answer.rows.some(r => r.kind === "ask")).toBe(false);
+  expect(answer.rows.some(r => r.kind === "lane-decision")).toBe(false);
+  expect(answer.routedToSeat).toBe(2);
+  expect(answer.count).toBe(needsYouAnswer(fixture(), decision, now, "project-a", ports()).count - 2);
+  /* A stamp drawn for another wait covers nothing. */
+  ask.attentionRoute = { key: "reason:an-older-ask", owner: "seat", seat: "conversation_seat" };
+  expect(needsYouAnswer(body, decision, now, "project-a", ports(body)).rows.some(r => r.kind === "ask")).toBe(true);
+});
+
+test("a wait the seat escalated to a decision form draws no row of its own and is not the seat's to count", () => {
+  const body = fixture();
+  const ask = body.files.find(f => f.name === "ask")!;
+  const before = needsYouAnswer(body, decision, now, "project-a", ports(body));
+  ask.attentionRoute = { key: "reason:operator-ask", owner: "form", seat: "conversation_seat", form: { taskId: "task-1", reviewId: "round-1" } };
+  const answer = needsYouAnswer(body, decision, now, "project-a", ports(body));
+  expect(answer.rows.some(r => r.kind === "ask")).toBe(false);
+  expect(answer.count).toBe(before.count - 1);
+  expect(answer.routedToSeat).toBeUndefined();
+});
+
+test("a reason Delegatus cleared is in the cleared list with its rule, and a restored one is not", () => {
+  const body = fixture();
+  const ask = body.files.find(f => f.name === "ask")!;
+  const by = { kind: "system", rule: "operator-replied" } as const;
+  ask.attentionDismissal = { at, by, reasonId: "operator-ask" };
+  const record = { subject: ask.conversationId!, conversationId: ask.conversationId!, path: ask.path, at, by, reason: "ask" as const, reasonId: "operator-ask" };
+  const answer = needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [record] });
+  expect(answer.rows.some(r => r.kind === "ask")).toBe(false);
+  expect(answer.cleared.find(r => r.kind === "ask")).toMatchObject({ cleared: { by }, undo: { kind: "conversation", reasonId: "operator-ask" } });
+  delete ask.attentionDismissal;
+  const restored = needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [{ ...record, restoredAt: at, restoredBy: { kind: "operator" } }] });
+  expect(restored.rows.some(r => r.kind === "ask")).toBe(true);
+  expect(restored.cleared.some(r => r.kind === "ask")).toBe(false);
+});
+
+/* Acceptance 2: an automatic clear usually follows its source going quiet
+   (an answered ask is no longer raised). The record keeps what it hid, so
+   the cleared list and the card still name the reason, who cleared it and
+   Undo after the source stops raising it, and after a reload. */
+test("a reason Delegatus cleared stays in the cleared list and on the card with Undo after its source stops raising it", () => {
+  const body = fixture();
+  const ask = body.files.find(f => f.name === "ask")!;
+  const by = { kind: "system", rule: "operator-replied" } as const;
+  const cleared = { reason: "ask" as const, raisedAt: now - 100, title: "ask", project: "project-a" };
+  const record = { subject: ask.conversationId!, conversationId: ask.conversationId!, path: ask.path, at, by, reason: "ask" as const, reasonId: "operator-ask", cleared };
+  /* The next projection: no ask any more, the record still on the file. */
+  delete ask.operatorAsk;
+  ask.attentionDismissal = { at, by, reasonId: "operator-ask", cleared };
+  const answer = needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [record] });
+  expect(answer.cleared.filter(r => r.kind === "ask")).toEqual([
+    { id: "operator-ask", kind: "ask", title: "ask", taskId: null, cleared: { at, by, note: null }, undo: { kind: "conversation", conversationId: ask.conversationId } },
+  ]);
+  const card = conversationNeed(ask, now);
+  expect(card?.cleared).toMatchObject({ by, need: { kind: "ask", key: "operator-ask" } });
+  expect(conversationNeed(ask, now + SYSTEM_CLEAR_CARD_SECONDS + 200)).toBeNull();
+
+  /* The conversation fell out of the projection altogether: the list keeps it by its own project. */
+  const gone = { ...body, files: body.files.filter(f => f !== ask) };
+  expect(needsYouAnswer(gone, decision, now, "project-a", { ...ports(gone), dismissals: [record] }).cleared.some(r => r.id === "operator-ask")).toBe(true);
+  expect(needsYouAnswer(gone, decision, now, "project-b", { ...ports(gone), dismissals: [record] }).cleared.some(r => r.id === "operator-ask")).toBe(false);
+
+  /* Brought back by the operator: it is no longer cleared anywhere. */
+  delete ask.attentionDismissal;
+  const restored = { ...record, restoredAt: at, restoredBy: { kind: "operator" } as const };
+  expect(needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [restored] }).cleared.some(r => r.id === "operator-ask")).toBe(false);
+  expect(conversationNeed(ask, now)).toBeNull();
 });

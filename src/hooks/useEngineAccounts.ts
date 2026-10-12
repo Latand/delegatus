@@ -729,10 +729,18 @@ export function createEngineAccountsStore(
       const { active, accounts, hidden, migration, autoBalance } = accountResponse(await response.json(), engine);
       if (generation !== requestGeneration) return false;
       activeRequest = null;
+      const loginSucceeded = accounts.some((account) => {
+        const previous = snapshot.accounts.find((candidate) => candidate.id === account.id);
+        if (engine === "claude") return previous?.login && NONTERMINAL_CLAUDE_LOGIN_PHASES.has(previous.login.phase)
+          && previous.login.operationId === account.login?.operationId && account.login.phase === "authenticated";
+        return engine === "codex" && previous?.loginPending && !account.loginPending
+          && (account.loginState === "completed" || account.loginState === "authenticated");
+      });
       setSnapshot({
         ...snapshot,
         active,
         accounts: currentLogins(accounts),
+        limitsVersion: snapshot.limitsVersion + (loginSucceeded ? 1 : 0),
         hidden,
         migration,
         autoBalance,
