@@ -9339,6 +9339,9 @@ describe("role memory: rules window and the rule line", () => {
       { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." },
       { scope: "role", role: "visual-critic", rule: "Judge the 390 px Ukrainian frame first: Ukrainian labels run about a third longer than English, and clipping shows there first.", why: "A button clipped only at 390 px in Ukrainian." },
     ]);
+    for (const role of ["orchestrator", "maintainer"] as const) seed(`seat-${role}`, "build", 10, "orchestrator", [
+      { scope: "role", role, rule: `Inspect settled evidence before the ${role} reports progress.`, why: "A report missed a completion proof." },
+    ]);
     /* A second project whose one role holds more rules than the desktop window is tall, opened only to measure the window. */
     const LONG_RULES = 14;
     for (let n = 1; n <= LONG_RULES; n++) seed(`p-long-${n}`, "build", (n + 3) * 24 * 60, "builder", [
@@ -9419,6 +9422,25 @@ describe("role memory: rules window and the rule line", () => {
           }
           expect(await page.locator('[data-rules-section="role"] [data-learned-rule]').count()).toBe(3);
           cases.push({ lang, width, surface: "window-from-card", ...fromCard, file: await shot("window-from-card") });
+          for (const role of ["orchestrator", "maintainer"] as const) {
+            const tab = page.locator(`[data-rules-role="${role}"]`);
+            await tab.click();
+            await tab.scrollIntoViewIfNeeded();
+            await page.waitForFunction((role) => document.querySelector('[data-rules-section="role"] [data-learned-rule]')?.textContent?.includes(`the ${role} reports progress`), role);
+            const geometry = await tab.evaluate((node) => {
+              const box = node.getBoundingClientRect(), row = node.parentElement!.getBoundingClientRect();
+              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, rowLeft: row.left, rowRight: row.right, rowTop: row.top, rowBottom: row.bottom, clipped: node.scrollWidth - node.clientWidth, selected: node.getAttribute("aria-selected") };
+            });
+            expect(geometry.left).toBeGreaterThanOrEqual(geometry.rowLeft - 1);
+            expect(geometry.right).toBeLessThanOrEqual(geometry.rowRight + 1);
+            expect(geometry.top).toBeGreaterThanOrEqual(geometry.rowTop - 1);
+            expect(geometry.bottom).toBeLessThanOrEqual(geometry.rowBottom + 1);
+            expect(geometry.clipped).toBeLessThanOrEqual(1);
+            expect(geometry.selected).toBe("true");
+            cases.push({ lang, width, surface: `${role}-tab`, ...geometry, file: await shot(`${role}-tab`) });
+          }
+          await page.locator('[data-rules-role="builder"]').click();
+          await page.waitForFunction(() => document.querySelectorAll('[data-rules-section="role"] [data-learned-rule]').length === 3);
           /* One tap removes a rule; it is archived, not gone, and Undo brings it back. */
           const target = page.locator('[data-rules-section="role"] [data-learned-rule]').first();
           const ruleId = (await target.getAttribute("data-learned-rule"))!;

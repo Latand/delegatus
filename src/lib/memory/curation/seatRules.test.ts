@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { learnedRulesBlock, projectView, leaveLessons, recordLessonRequest, roleMemoryCollection, roleScope } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
-import { claimPass, patchPass } from "./store";
+import { curationStatus, claimPass, patchPass } from "./store";
+import { leaveLessonForSeat } from "../roleStage";
 import { CURATOR_CHECKLIST } from "./brief";
 
 const project = "curator-seat";
@@ -47,7 +48,8 @@ test.each(["orchestrator", "maintainer"])("curator can retain and rank active %s
 
 test.each(["orchestrator", "maintainer"])("curator can move into %s, widen, merge, archive and undo", role => {
   const one = seed("builder", "Inspect the transcript tail before reporting an agent as stalled.");
-  const two = seed(role, "Read the newest transcript messages before classifying an agent as stalled.");
+  const two = leaveLessonForSeat({ project, conversationId: "seat" }, { lesson: { scope: "role", role, rule: "Read the newest transcript messages before classifying an agent as stalled.", why: "The activity signal missed recent transcript work." } }).left[0]!.id;
+  expect(curationStatus(project).newLessons).toBe(2);
   const builder = roleScope(project, "builder"), target = roleScope(project, role), wide = `role:*:${role}`;
   const pass = claimPass({ project, repoDir: sandbox, now: Date.now() })!;
   applyCuration(pass, { scopes: scopes({ [builder]: [], [target]: [one, two] }), move: [{ id: one, to: target, note: "The seat owns this reporting check." }] });
@@ -67,4 +69,16 @@ test("the curator brief names both readers and directs it to the seat's mandate"
   expect(CURATOR_CHECKLIST).toContain("orchestrator seat and the board maintainer read rules");
   expect(CURATOR_CHECKLIST).toContain("get_orchestrator full:true");
   expect(CURATOR_CHECKLIST).not.toContain("no learned-rule level");
+});
+
+
+test("the curator can transfer a seat-written defect to its project wake agenda", async () => {
+  const { memoryProblemSignals } = await import("../roleProblems");
+  const id = leaveLessonForSeat({ project, conversationId: "seat" }, { lesson: { scope: "role", rule: "Inspect transcript activity before reporting stalled work.", why: "A status observation needed a second source." } }).left[0]!.id;
+  const scope = roleScope(project, "orchestrator");
+  const pass = claimPass({ project, repoDir: sandbox, now: Date.now() })!;
+  applyCuration(pass, { scopes: scopes({ [scope]: [] }), problem: [{ id, statement: "The status signal is broken.", evidence: "A transcript advanced while the signal remained stalled.", note: "The retained entry describes a concrete defect." }] });
+  expect(memoryProblemSignals(project, [])).toHaveLength(1);
+  expect(memoryProblemSignals("another-project", [])).toEqual([]);
+  expect(projectView(project).scopes.find(entry => entry.scope === scope)!.left[0]!.reason).toBe("problem");
 });

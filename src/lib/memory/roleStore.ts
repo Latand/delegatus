@@ -15,7 +15,7 @@ import { renderLearnedRules } from "./roleRender";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
-  type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type RuleView, type ScopeView, type StageLessonView,
+  type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type StageRuleSource, type SeatRuleSource, type RuleView, type ScopeView, type StageLessonView,
   type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry, type RulePrivacyHint, type ProblemInput,
 } from "./roleTypes";
 
@@ -238,26 +238,38 @@ export function versionedRule(tx: RuleTransaction, current: RoleMemoryRule, text
   return { updated, version };
 }
 
-/** Accepts one stage answer in one transaction, retaining versions and the scope bound. */
-export function leaveLessons(input: {
-  request: Pick<LessonRequestRow, "pipelineId" | "stageId" | "attempt">;
+interface LessonWriteInput {
   source: RuleSource;
   lessons: readonly LessonInput[];
   none: string | null;
   rewrite?: RewriteInput;
   problem?: ProblemInput;
   now?: string;
-}): { left: LeftLesson[]; none: string | null; problem?: ProblemInput } {
+}
+
+/** Stage answers retain the request's one-answer budget. */
+export function leaveLessons(input: Omit<LessonWriteInput, "source"> & { source: StageRuleSource; request: Pick<LessonRequestRow, "pipelineId" | "stageId" | "attempt"> }) {
+  return writeLessonAnswer(input);
+}
+
+/** A designated seat leaves practice without creating a stage request. */
+export function leaveSeatLessons(input: Omit<LessonWriteInput, "source" | "none" | "problem"> & { source: SeatRuleSource }) {
+  return writeLessonAnswer({ ...input, none: null });
+}
+
+/** Both writers share versions, duplicate merging, bounds and privacy hints. */
+function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequestRow, "pipelineId" | "stageId" | "attempt"> }): { left: LeftLesson[]; none: string | null; problem?: ProblemInput } {
   const now = input.now ?? new Date().toISOString();
   const project = canonicalProject(input.source.project);
   if (project === "*" || Number(input.lessons.length > 0) + Number(input.rewrite !== undefined) + Number(input.none !== null) + Number(input.problem !== undefined) !== 1
     || input.lessons.length > MAX_LESSONS_PER_ATTEMPT) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite, lesson or problem for a concrete project");
   joinMovedScopes(now);
   const result = roleMemoryCollection(true)!.boundedPatch(4096, (tx) => {
-    const request = tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt));
-    if (request?.kind !== "request") throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "this stage attempt was not asked for a lesson");
-    if (request.none !== null || request.rewrote || request.ruleIds.length || request.problem) throw new RoleMemoryRefusal("LESSON_LIMIT", "this stage attempt already answered its lesson request");
-    if (input.problem) {
+    const requested = input.request ? tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt)) : null;
+    const request = requested?.kind === "request" ? requested : null;
+    if (input.request && !request) throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "this stage attempt was not asked for a lesson");
+    if (request && (request.none !== null || request.rewrote || request.ruleIds.length || request.problem)) throw new RoleMemoryRefusal("LESSON_LIMIT", "this stage attempt already answered its lesson request");
+    if (input.problem && request) {
       tx.put({ ...request, problem: input.problem });
       return { left: [], none: null, problem: input.problem };
     }
@@ -278,7 +290,7 @@ export function leaveLessons(input: {
       for (const changed of retained.changed) tx.put(changed);
       const revision = held.revision + 1;
       tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }]) });
-      tx.put({ ...request, rewrote: target.id });
+      if (request) tx.put({ ...request, rewrote: target.id });
       return { left: [{ action: "rewrite" as const, id: updated.id, version, scope, state: updated.state, scopeChars: scopeChars(retained.active), archived: retained.archived, hints: updated.hints }], none: null };
     }
     for (const lesson of input.lessons) {
@@ -303,8 +315,8 @@ export function leaveLessons(input: {
       const stored = outcome.changed.find((entry) => entry.id === incoming.id)!;
       left.push({ action: "lesson", id: incoming.id, scope, state: stored.state, ...(stored.mergedInto ? { mergedInto: stored.mergedInto } : {}), scopeChars: scopeChars(outcome.active), archived: outcome.archived, hints });
     }
-    const none = input.none ?? request.none;
-    tx.put({ ...request, ruleIds: [...request.ruleIds, ...left.map((entry) => entry.id)], none });
+    const none = input.none ?? request?.none ?? null;
+    if (request) tx.put({ ...request, ruleIds: [...request.ruleIds, ...left.map((entry) => entry.id)], none });
     return { left, none };
   });
   /* The agents' publication gate reads the new lesson from now on; a file
@@ -458,7 +470,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints, tasks,
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
-    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.stageId,
+    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.stageId,
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
     ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),
     ...(row.curatedAt ? { curatedAt: row.curatedAt } : {}),

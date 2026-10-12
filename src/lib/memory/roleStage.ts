@@ -4,7 +4,7 @@ import { ROLE_IDS } from "@/lib/roles/types";
 import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
 import { LESSON_MATCH_MIN_CHARS, lettersAndDigits } from "./roleConsolidate";
 import { lessonRequestLines, type HandedFindings } from "./roleRender";
-import { leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
+import { leaveSeatLessons, leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
 import { assertGenericRule, problemInput } from "./roleProblems";
 import { scopeKind } from "./roleScopes";
 import { roleMemoryEnabled } from "./settings";
@@ -125,11 +125,11 @@ export interface LeaveLessonResult {
 
 /** leave_lesson: the calling conversation's attempt that was asked for a lesson, resolved by the server. */
 export function leaveLessonForConversation(pipelines: readonly Pipeline[], conversationId: string | null, args: LessonAnswerArgs, now = new Date().toISOString()): LeaveLessonResult {
-  if (!conversationId) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "a lesson is left by a stage's own conversation, and this call carries no conversation identity");
+  if (!conversationId) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "a lesson is left by a stage that was asked for one, or by a project's designated orchestrator seat; this conversation is neither");
   const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
     .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
     .map((attempt) => ({ pipeline, stage: pipeline.stages.find((candidate) => candidate.id === run.stageId) ?? null, stageId: run.stageId, attempt }))));
-  if (!held.length) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "this conversation is not running a pipeline stage");
+  if (!held.length) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "a lesson is left by a stage that was asked for one, or by a project's designated orchestrator seat; this conversation is neither");
   const requested = held.map((entry) => ({ ...entry, request: lessonRequest(entry.pipeline.id, entry.stageId, entry.attempt.n) }))
     .filter((entry) => entry.request).sort((a, b) => b.request!.at.localeCompare(a.request!.at));
   const target = requested[0] ?? null;
@@ -152,4 +152,25 @@ export function leaveLessonForConversation(pipelines: readonly Pipeline[], conve
     lessons: parsed.lessons, none: parsed.none, rewrite: parsed.rewrite, problem: parsed.problem, now,
   });
   return { pipelineId: target.pipeline.id, stageId: target.stageId, attempt: target.attempt.n, ...result };
+}
+
+/** The binding supplies the fresh server-authorized designation, never the caller's arguments. */
+export function leaveLessonForSeat(seat: { project: string | null; conversationId: string }, args: LessonAnswerArgs, now = new Date().toISOString()) {
+  if (!seat.project || seat.project === "*") throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "the designated seat has no concrete project");
+  if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
+  try {
+    const parsed = parseLessons(args, "orchestrator");
+    if (parsed.none !== null) throw new RoleMemoryRefusal("LESSON_INVALID", "an unasked seat gives lesson or rewrite; there is no request to decline");
+    if (parsed.problem) throw new RoleMemoryRefusal("LESSON_IS_PROBLEM", "a seat handles its own defects");
+    if (parsed.rewrite) {
+      const row = roleMemoryCollection()?.get(`r:${parsed.rewrite.id}`);
+      if (row?.kind === "rule") assertGenericRule(parsed.rewrite.rule, scopeKind(row.scope));
+    }
+    const result = leaveSeatLessons({ source: { origin: "seat", project: seat.project, roleId: "orchestrator", fixRound: false, conversationId: seat.conversationId }, lessons: parsed.lessons, rewrite: parsed.rewrite, now });
+    return { project: seat.project, roleId: "orchestrator" as const, ...result };
+  } catch (error) {
+    if (error instanceof RoleMemoryRefusal && error.code === "LESSON_IS_PROBLEM") throw new RoleMemoryRefusal(error.code, "this names a defect: find or create its board task with create_task. Tell the operator in chat when it is critical. For a practice that holds on other tasks, express the generic check without the project's fact");
+    if (error instanceof RoleMemoryRefusal && error.code === "LESSON_ABOUT_ONE_TASK") throw new RoleMemoryRefusal(error.code, "the rule names one task or run; it belongs on that task's card. If it holds elsewhere, say it without the identifier");
+    throw error;
+  }
 }

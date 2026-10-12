@@ -145,9 +145,10 @@ import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAut
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
+import { leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
-import { RoleMemoryRefusal, storedLessonTexts } from "@/lib/memory/roleStore";
+import { RoleMemoryRefusal, storedLessonTexts, withoutStoredLessons } from "@/lib/memory/roleStore";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -2458,9 +2459,16 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 }
 
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem });
+    const caller = attributionOf(dependencies);
+    const seat = caller.kind === "manager" && caller.conversationId
+      ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
+      : null;
+    if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
+    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem };
+    const result = seat ? leaveLessonForSeat(seat, answer) : leaveLessonForConversation(
+      dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer,
+    );
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
@@ -5042,7 +5050,9 @@ async function sendMessageToOrchestrator(
     if (link) {
       try {
         return await dispatchControl(control)("/api/orchestrator/message", {
-          project, machine: link.install, text: requiredMessageText(args),
+          project, machine: link.install, text: bound?.sendPayload
+            ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
+            : withoutStoredLessons(requiredMessageText(args)),
           clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
         }, callerCapabilityHeaders());
       } catch (error) {
@@ -7073,7 +7083,7 @@ function orchestratorSendDownstreamKey(key: string): string {
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
   const named = required(args, "project");
-  const message = requiredMessageText(args);
+  const message = text(args.machine) ? withoutStoredLessons(requiredMessageText(args)) : requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
   // Match HTTP admission: a designated seat takes precedence even when the
