@@ -5,7 +5,7 @@ import { ENGINE_MODELS } from "@/lib/agent/models";
 import { GLYPH_STATE, modelGlyphKind, modelGlyphName } from "./modelGlyph";
 
 test("every catalogued Claude and Codex model has its glyph, by family", () => {
-  expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "sonnet", "sonnet", "haiku"]);
+  expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "sonnet", "sonnet", "haiku", "haiku", "haiku"]);
   expect(ENGINE_MODELS.codex.map((option) => [option.id, modelGlyphKind("codex", option.id)])).toEqual([
     ["gpt-6-astra", "astra"],
     ["gpt-6.1-sol", "sol"],
@@ -41,6 +41,9 @@ test("the accessible name takes the catalogue's full label", () => {
   expect(modelGlyphName("codex", "gpt-6-astra")).toBe("GPT-6-Astra");
   expect(modelGlyphName("claude", "opus")).toBe("Opus 5.5");
   expect(modelGlyphName("claude", "fable-5-1")).toBe("Fable 5.1");
+  expect(modelGlyphName("claude", "haiku")).toBe("Haiku 5.5");
+  expect(modelGlyphName("claude", "claude-haiku-5-5")).toBe("Haiku 5.5");
+  expect(modelGlyphName("claude", "claude-haiku-4-5")).toBe("Haiku 4.5");
 });
 
 test("every stage state has exactly one glyph reading", () => {

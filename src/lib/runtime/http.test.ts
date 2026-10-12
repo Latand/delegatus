@@ -158,6 +158,27 @@ for (const sqliteMode of ["off", "sqlite"] as const) {
   }
 }
 
+test("runtime sends preserve handler ingress before body validation", async () => {
+  const { DeliveryProgressStore, setDeliveryProgressStoreForTests } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  progress.note("ingress-runtime", "conv-one", { waitReason: "queued" });
+  setDeliveryProgressStoreForTests(progress);
+  const client = { command: async () => ({ operationId: "ingress-runtime", replayed: false,
+    receipt: { operationId: "ingress-runtime", status: "queued" } }) } as unknown as RuntimeHostClient;
+  try {
+    const input = request({ conversationId: "conv-one", text: "continue", idempotencyKey: "ingress-runtime-key" });
+    const readBody = input.json.bind(input);
+    let validatedAt = 0;
+    input.json = async () => { await Bun.sleep(25); validatedAt = Date.now(); return readBody(); };
+    const before = Date.now();
+    expect((await handleRuntimeCommand(input, "send", { enabled: () => true, structuredEnabled: () => true, client: () => client })).status).toBe(202);
+    const at = progress.get("ingress-runtime")?.ingressAt;
+    expect(at).toBeString();
+    expect(Date.parse(at!)).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(at!)).toBeLessThan(validatedAt);
+  } finally { setDeliveryProgressStoreForTests(null); progress.close(); }
+});
+
 test("runtime command HTTP handling preserves validation, CSRF, status, and conflict contracts", async () => {
   const commands: unknown[] = [];
   const client = {
