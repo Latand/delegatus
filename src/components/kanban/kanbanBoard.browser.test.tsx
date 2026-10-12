@@ -26378,1010 +26378,34 @@ describe("issue report advisory preview", () => {
 });
 
 describe("prototype review on a task: the card's button, the review and the orchestrator's notice", () => {
-  /*
-   * A task's prototype review as the operator meets it. The card's foot
-   * carries the review button in each of its states; the orchestrator's pane
-   * says a prototype is ready above its message field, and «Go to prototype»
-   * brings the task up and opens its review; the review shows one variant or
-   * four, an original beside its change, a video, forty pictures in one
-   * variant, a combination chosen with a dictated comment, the saved decision
-   * and the earlier round; a name of 60 characters with a caption of 200 read
-   * in full, and a close while speech is still transcribed asks first; speech
-   * started in one round stays in it while another round is pressed. Measured at 1440, 1000 and 390, in English and
-   * Ukrainian, light and dark: nothing overlaps and nothing leaves its frame.
-   * A card's review button carries its word at every desktop width with no
-   * reason line beside it, and is cut out whole in each of its five states;
-   * the phone's card carries the same button, which opens the review in one
-   * tap; the phone's seat chip says the word with its count; the accent in a
-   * decided review marks exactly the chosen variants, and the sheet's round
-   * line is never cut under its header; the line over the picture parts the variant's name from the caption,
-   * the slider's two labels stand clear of both drawn pictures, and a delivery
-   * line keeps its mark on the first line of its words.
-   *
-   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "prototype review"
-   *
-   * The video is a two-second test pattern `ffmpeg` writes beside the bundle,
-   * and the microphone is Chromium's fake device answered by the fixture's
-   * transcription. Frames go to PROTOTYPE_REVIEW_PNG_DIR (default
-   * `.artifacts/prototype-review/`); readings to
-   * `evidence/prototype-review/readings.json`.
-   */
-  const SIZES = [
-    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false },
-    { name: "pane-1000", viewport: { width: 1000, height: 700 }, phone: false },
-    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
-  ] as const;
-  const only = (process.env.PROTOTYPE_REVIEW_ONLY ?? "").split(",").filter(Boolean);
-
-  /* Every pair of the named regions that overlaps, and every one that leaves
-     the frame: the reading the gate is about. */
-  const measure = (page: Page, frame: string, regions: Record<string, string>) => page.evaluate(({ frame, regions }) => {
-    const host = document.querySelector<HTMLElement>(frame);
-    if (!host) return { missing: [frame], overlaps: [] as string[], outside: [] as string[], boxes: {} as Record<string, number[]> };
-    const bounds = host.getBoundingClientRect();
-    const boxes: [string, DOMRect][] = [];
-    const missing: string[] = [];
-    for (const [name, selector] of Object.entries(regions)) {
-      const found = [...document.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0);
-      if (!found.length) missing.push(name);
-      found.forEach((element, at) => boxes.push([found.length > 1 ? `${name}#${at + 1}` : name, element.getBoundingClientRect()]));
-    }
-    const overlaps: string[] = [];
-    for (let i = 0; i < boxes.length; i += 1) for (let j = i + 1; j < boxes.length; j += 1) {
-      const [an, a] = boxes[i]!, [bn, b] = boxes[j]!;
-      if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push(`${an} × ${bn}`);
-    }
-    const outside = boxes.filter(([, box]) => box.left < bounds.left - 0.5 || box.right > bounds.right + 0.5 || box.top < bounds.top - 0.5 || box.bottom > bounds.bottom + 0.5).map(([name]) => name);
-    const round = (value: number) => Math.round(value * 10) / 10;
-    return { missing, overlaps, outside, boxes: Object.fromEntries(boxes.map(([name, box]) => [name, [round(box.left), round(box.top), round(box.width), round(box.height)]])) };
-  }, { frame, regions });
-
-  browserTest("prototype review: card button states, the orchestrator notice and its jump, and the review's variants, pair, video, forty pictures, combination and decision", async () => {
-    const out = path.resolve(".artifacts/prototype-review");
-    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
-    fs.mkdirSync(out, { recursive: true });
-    fs.mkdirSync(pngDir, { recursive: true });
-    fs.mkdirSync("evidence/prototype-review", { recursive: true });
-    const video = path.join(out, "proto-video.webm");
-    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12:duration=2", "-c:v", "libvpx", "-b:v", "400k", video]);
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/proto-video.webm": () => new Response(Bun.file(video), { headers: { "content-type": "video/webm", "accept-ranges": "bytes" } }),
-    });
-    const launch: LaunchOptions = { ...LAUNCH, args: [...(LAUNCH.args ?? []), "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] };
-    let browser = await chromium.launch(launch);
-    const failures: string[] = [];
-    const readings: Record<string, unknown> = {};
-    const url = `${server.base}?proto=1`;
-    const REVIEW = "[data-prototype-review]";
-    /* What each waiting task's line has to name: the card's own first line, which «Go to prototype» lands on. This fixture keeps its task texts in English in both languages. */
-    const TASK_TITLES: Record<string, string> = { "t-search": "Restore search results after the index rebuild", "t-links": "Repair old links in the release notes", "t-upload": "Redesign attachment upload for large files" };
-    const DESKTOP_REGIONS = {
-      header: `${REVIEW} [role=dialog] > header`,
-      rail: `${REVIEW} aside`,
-      toolbar: `${REVIEW} [data-prototype-stage] > div:first-child`,
-      canvas: `${REVIEW} [data-prototype-canvas]`,
-      strip: `${REVIEW} [data-prototype-strip]`,
-      footer: `${REVIEW} [role=dialog] > footer`,
-    };
-    const DESKTOP_PARTS = {
-      variant: `${REVIEW} [data-prototype-variant]`,
-      caption: `${REVIEW} [data-prototype-caption]`,
-      tools: `${REVIEW} [data-prototype-stage] > div:first-child > span:last-child > *`,
-      rounds: `${REVIEW} [data-prototype-rounds]`,
-      close: `${REVIEW} [data-prototype-close]`,
-      heading: `${REVIEW} [role=dialog] > header > div:not([data-prototype-rounds])`,
-      field: `${REVIEW} [data-prototype-comment-field]`,
-      save: `${REVIEW} [data-prototype-save]`,
-      decisionComment: `${REVIEW} [data-prototype-comment]`,
-      delivery: `${REVIEW} [data-prototype-delivery]`,
-      chosen: `${REVIEW} [data-prototype-chosen]`,
-    };
-    const PHONE_REGIONS = {
-      header: "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-header]",
-      body: "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]",
-      footer: "[data-mobile2-sheet=prototype-review] > div:last-child",
-    };
-    const PHONE_PARTS = {
-      chips: `${REVIEW} [data-prototype-variant]`,
-      choose: `${REVIEW} [data-prototype-choose]`,
-      caption: `${REVIEW} [data-prototype-caption]`,
-      tools: `${REVIEW} [data-prototype-stage] > div:first-child > span:last-child > *`,
-      canvas: `${REVIEW} [data-prototype-canvas]`,
-      strip: `${REVIEW} [data-prototype-strip]`,
-    };
+  browserTest("prototype review: card states, choices, history and unavailable media remain usable with the gallery", async () => {
+    const out = path.resolve(".artifacts/prototype-review"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
     try {
-      for (const size of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
-        const label = `${size.name}-${lang}-${scheme}`;
-        if (only.length && !only.some((part) => label.includes(part))) continue;
-        if (!browser.isConnected()) browser = await chromium.launch(launch);
-        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
-        const { context, page, pageErrors } = await openFixture(browser, url, size.viewport, scheme, lang, "reduce", size.phone);
-        await context.addInitScript(`try { if (!localStorage.getItem("llv.prototypeReview.seen")) localStorage.setItem("llv.prototypeReview.seen", '["r-upload"]'); } catch {}`);
-        await page.reload();
-        /* The phone's sheet draws the decision in its own footer, outside the review's scrolling body. */
-        const scope = size.phone ? "[data-mobile2-sheet=prototype-review]" : REVIEW;
-        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `${label}-${name}.png`) });
-        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
-        /* The review's own frame: regions that must not overlap, then the
-           parts inside them, each kind among its own. */
-        const frameCheck = async (name: string) => {
-          const frame = size.phone ? "[data-mobile2-sheet=prototype-review]" : `${REVIEW} [role=dialog]`;
-          const regions = await measure(page, frame, size.phone ? PHONE_REGIONS : DESKTOP_REGIONS);
-          const parts = await measure(page, frame, size.phone ? PHONE_PARTS : DESKTOP_PARTS);
-          const sideways = await page.evaluate((phone) => {
-            const scroller = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]" : "[data-prototype-review] [role=dialog]");
-            return scroller ? scroller.scrollWidth - scroller.clientWidth : -1;
-          }, size.phone);
-          /* Chips and thumbnails are rows that scroll on purpose: what leaves the frame there is off screen, not on top of anything. */
-          const scrolled = (entry: string) => /^(chips|variant|tools)/.test(entry) && size.phone;
-          /* On the phone a frame is drawn at its own height and the sheet's body scrolls: a part below the fold is scrolled to, and only a part out to a side is outside. */
-          const beside = (entry: string) => { const box = parts.boxes[entry]; return Boolean(box && (box[0]! < -0.5 || box[0]! + box[2]! > size.viewport.width + 0.5)); };
-          const outside = [...regions.outside, ...parts.outside.filter((entry) => !scrolled(entry) && (!size.phone || beside(entry)))];
-          /* The phone's chips stand in the sheet's sticky head: a part of the body scrolled up under that head is covered by it, not on top of it. */
-          const headBottom = size.phone ? await page.evaluate(() => document.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect().bottom ?? 0) : 0;
-          const underHead = (pair: string) => {
-            const [a, b] = pair.split(" × ") as [string, string];
-            const other = /^chips/.test(a) ? b : /^chips/.test(b) ? a : null;
-            return Boolean(size.phone && other && (parts.boxes[other]?.[1] ?? Infinity) < headBottom - 0.5);
-          };
-          const partOverlaps = parts.overlaps.filter((pair) => !underHead(pair));
-          record(`${name}-geometry`, { regions: regions.boxes, overlaps: [...regions.overlaps, ...partOverlaps], underHead: parts.overlaps.filter(underHead), outside, sideways });
-          if (regions.overlaps.length || partOverlaps.length) failures.push(`${label} ${name}: overlapping ${[...regions.overlaps, ...partOverlaps].join(", ")}`);
-          if (outside.length) failures.push(`${label} ${name}: outside the review's frame: ${outside.join(", ")}`);
-          if (sideways > 0) failures.push(`${label} ${name}: the review scrolls sideways by ${sideways}px`);
-          /* The phone's sheet is the screen: its footer stands at the screen's foot, under the sheet's 6 px inset, whatever the stage holds. */
-          if (size.phone) {
-            const footGap = await page.evaluate(() => Math.round((innerHeight - document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] > :last-child")!.getBoundingClientRect().bottom) * 10) / 10);
-            record(`${name}-foot-gap`, footGap);
-            if (footGap > 6.5) failures.push(`${label} ${name}: an empty band of ${footGap}px under the sheet's footer`);
-          }
-        };
-        const stageState = () => page.evaluate(() => {
-          const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;
-          const canvas = review.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
-          const inside = (element: Element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.left >= canvas.left - 0.5 && box.right <= canvas.right + 0.5 && box.top >= canvas.top - 0.5 && box.bottom <= canvas.bottom + 0.5; };
-          const media = [...review.querySelectorAll<HTMLElement>("[data-prototype-canvas] img, [data-prototype-canvas] video")];
-          return {
-            slide: review.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage ?? null,
-            caption: review.querySelector("[data-prototype-caption]")?.textContent ?? null,
-            captionParts: ["number", "name", "text"].map((part) => review.querySelector(`[data-prototype-caption-${part}]`)?.textContent ?? null),
-            position: review.querySelector("[data-prototype-position]")?.textContent ?? null,
-            canvas: [Math.round(canvas.width), Math.round(canvas.height)],
-            media: media.map((element) => { const box = element.getBoundingClientRect(); return [Math.round(box.width), Math.round(box.height)]; }),
-            mediaInside: media.every(inside),
-            loaded: media.every((element) => (element instanceof HTMLImageElement ? element.complete && element.naturalWidth > 0 : (element as HTMLVideoElement).readyState >= 1)),
-            pair: review.querySelector<HTMLElement>("[data-prototype-pair]")?.dataset.prototypePair ?? null,
-            thumbs: review.querySelectorAll("[data-prototype-thumb]").length,
-            chosen: [...document.querySelectorAll<HTMLElement>("[data-prototype-chosen]")].map((element) => element.dataset.prototypeChosen),
-            round: review.dataset.prototypeRoundShown ?? document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
-          };
-        });
-        /* The line over the picture reads number, name, a dash, caption: the name ends where the dash stands. */
-        const captionParted = (name: string, state: { caption: string | null; captionParts: (string | null)[] }) => {
-          const [number, variantName, text] = state.captionParts;
-          if (!number || !variantName || !text || state.caption !== `${number}${variantName} — ${text}`) failures.push(`${label} ${name}: the line over the picture runs the name into the caption: ${JSON.stringify(state.caption)}`);
-        };
-        /* A delivery line: the mark on the first line of its words, the retry inside the review and a full target on the phone. */
-        const deliveryRow = async (name: string) => {
-          const row = await page.evaluate((frameSelector) => {
-            const line = document.querySelector<HTMLElement>("[data-prototype-delivery]")!;
-            const frame = document.querySelector<HTMLElement>(frameSelector)!.getBoundingClientRect();
-            const said = line.querySelector<HTMLElement>("[data-prototype-delivery-said]");
-            const mark = said?.querySelector("svg")?.getBoundingClientRect() ?? null;
-            /* The words' own lines, read off the text: the span that holds them is one box however often it wraps. */
-            const text = document.createRange();
-            if (said?.lastElementChild) text.selectNodeContents(said.lastElementChild);
-            const words = [...text.getClientRects()].filter((box) => box.width > 0);
-            const retry = line.querySelector<HTMLElement>("[data-prototype-retry]")?.getBoundingClientRect() ?? null;
-            const first = words[0] ?? null;
-            const round = (value: number) => Math.round(value * 10) / 10;
-            return {
-              state: line.dataset.prototypeDelivery, lines: new Set(words.map((box) => Math.round(box.top))).size,
-              mark: mark ? [round(mark.left), round(mark.top), round(mark.width), round(mark.height)] : null,
-              firstLine: first ? [round(first.left), round(first.top), round(first.width), round(first.height)] : null,
-              markOnFirstLine: Boolean(mark && first && (mark.top + mark.bottom) / 2 > first.top && (mark.top + mark.bottom) / 2 < first.bottom && mark.right <= first.left + 0.5),
-              retry: retry ? [round(retry.left), round(retry.top), round(retry.width), round(retry.height)] : null,
-              retryInside: !retry || (retry.left >= frame.left - 0.5 && retry.right <= frame.right + 0.5 && retry.top >= frame.top - 0.5 && retry.bottom <= frame.bottom + 0.5),
-            };
-          }, size.phone ? "[data-mobile2-sheet=prototype-review]" : `${REVIEW} [role=dialog]`);
-          record(`${name}-delivery-row`, row);
-          if (!row.markOnFirstLine || !row.retry || !row.retryInside || (size.phone && row.retry[3]! < 44)) failures.push(`${label} ${name}: the delivery line reads ${JSON.stringify(row)}`);
-        };
-        const showVariant = (number: number) => page.locator(size.phone ? `${REVIEW} button[data-prototype-variant="${number}"]` : `${REVIEW} [data-prototype-show="${number}"]`).click();
-        const choose = async (number: number) => {
-          if (size.phone) await showVariant(number);
-          await page.locator(`${REVIEW} [data-prototype-choose="${number}"]`).click();
-        };
-        const settle = () => page.waitForTimeout(250);
-        const posts = () => page.evaluate(() => (window as unknown as { protoPosts: { taskId: string; retry?: boolean }[] }).protoPosts);
-        /* Each task card on the phone's board: whether it waits, the words
-           that say why, its review button, and its lines measured against each
-           other and the card. The button stands under the card's face, inside
-           the card's frame, so the face stays the card's one tap. */
-        const phoneCards = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-phone-card^="task:"]')].map((cardElement) => {
-          const shell = cardElement.closest<HTMLElement>("[data-phone-card-frame]") ?? cardElement;
-          const frame = shell.getBoundingClientRect();
-          const drawn = (element: Element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
-          const button = shell.querySelector<HTMLElement>("[data-phone-card-prototype-button]");
-          const pill = button?.firstElementChild as HTMLElement | null | undefined;
-          const lines = [...cardElement.children, ...(button ? [button] : [])].filter(drawn);
-          const overlaps: string[] = [];
-          for (let i = 0; i < lines.length; i += 1) for (let j = i + 1; j < lines.length; j += 1) {
-            const a = lines[i]!.getBoundingClientRect(), b = lines[j]!.getBoundingClientRect();
-            if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push(`#${i + 1} × #${j + 1}`);
-          }
-          const own = button?.getBoundingClientRect();
-          return {
-            task: cardElement.dataset.phoneCard!.slice("task:".length), needs: cardElement.dataset.needs === "1" || cardElement.dataset.edge === "warning",
-            /* A line that only says a prototype is ready is gone; the button is the card's one new element. */
-            line: Boolean(cardElement.querySelector("[data-phone-card-prototype]")),
-            button: button && own && drawn(button) ? {
-              state: button.dataset.prototypeState ?? null, text: button.textContent?.trim() ?? "", size: [Math.round(own.width), Math.round(own.height)],
-              insideFace: cardElement.contains(button), clipped: Boolean(pill && pill.scrollWidth > pill.clientWidth + 0.5),
-            } : null,
-            reasons: [...cardElement.querySelectorAll<HTMLElement>("[data-phone-card-badge], [data-phone-card-ask]"), ...(button ? [button] : [])].filter(drawn).map((element) => element.textContent?.trim() ?? "").filter(Boolean),
-            overlaps, outside: lines.flatMap((element, at) => { const b = element.getBoundingClientRect(); return b.left < frame.left - 0.5 || b.right > frame.right + 0.5 || b.top < frame.top - 0.5 || b.bottom > frame.bottom + 0.5 ? [`#${at + 1}`] : []; }),
-          };
-        }));
-        /* In a review, the accent belongs to the choice: the variants drawn on
-           the accent's soft fill are exactly the chosen ones, whichever one is
-           on the stage. On a freshly opened decided round, the stage shows the
-           first chosen variant. */
-        const accentCheck = async (name: string, opensOnChoice: boolean) => {
-          const reading = await page.evaluate(() => {
-            const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;
-            const probe = document.createElement("span");
-            probe.className = "bg-accent-soft";
-            review.appendChild(probe);
-            const soft = getComputedStyle(probe).backgroundColor;
-            probe.remove();
-            return {
-              soft,
-              variants: [...review.querySelectorAll<HTMLElement>("[data-prototype-variant]")].map((element) => {
-                const style = getComputedStyle(element);
-                const current = element.getAttribute("aria-pressed") === "true" || Boolean(element.querySelector('[aria-current="true"]'));
-                return { number: Number(element.dataset.prototypeVariant), chosen: element.dataset.chosen === "1", current, background: style.backgroundColor, border: style.borderTopColor, accented: style.backgroundColor === soft };
-              }),
-            };
-          });
-          record(`${name}-accent`, reading);
-          const accented = reading.variants.filter((entry) => entry.accented).map((entry) => entry.number);
-          const chosen = reading.variants.filter((entry) => entry.chosen).map((entry) => entry.number);
-          if (!chosen.length || JSON.stringify(accented) !== JSON.stringify(chosen)) failures.push(`${label} ${name}: the accent marks ${JSON.stringify(accented)} while ${JSON.stringify(chosen)} were chosen`);
-          const current = reading.variants.find((entry) => entry.current);
-          if (opensOnChoice && current?.number !== chosen[0]) failures.push(`${label} ${name}: the decided round opened on variant ${current?.number}, not on the first chosen ${chosen[0]}`);
-        };
-        /* The sheet's line naming the round and its task is whole or wholly
-           scrolled away: never cut by the sheet's header. */
-        const contextCheck = async (name: string) => {
-          if (!size.phone) return;
-          const reading = await page.evaluate(() => {
-            const header = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-header]")!.getBoundingClientRect();
-            const line = document.querySelector<HTMLElement>("[data-prototype-context]")!.getBoundingClientRect();
-            const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]")!;
-            /* The variants' chips stand whole under the round's line, and none is cut through its words on the left. */
-            const words = document.querySelector<HTMLElement>("[data-prototype-context-line]")!.getBoundingClientRect();
-            const row = document.querySelector<HTMLElement>("[data-prototype-chips]")!.getBoundingClientRect();
-            const cut = [...document.querySelectorAll<HTMLElement>("[data-prototype-chips] > button")].map((chip) => chip.getBoundingClientRect()).filter((chip) => chip.left < row.left - 0.5 && chip.right - row.left > 12).length;
-            return { headerBottom: Math.round(header.bottom * 10) / 10, line: [Math.round(line.top * 10) / 10, Math.round(line.bottom * 10) / 10], scrolled: body.scrollTop, whole: line.top >= header.bottom - 0.5, hidden: line.bottom <= header.bottom + 0.5, chips: { top: Math.round(row.top * 10) / 10, under: row.top >= words.bottom - 0.5, cut } };
-          });
-          record(`${name}-context`, reading);
-          if (!reading.whole && !reading.hidden) failures.push(`${label} ${name}: the sheet's round line is cut by its header: ${JSON.stringify(reading)}`);
-          if (!reading.chips.under || reading.chips.cut) failures.push(`${label} ${name}: the variants' chips are cut: ${JSON.stringify(reading.chips)}`);
-        };
-        const closeReview = async () => {
-          await page.keyboard.press("Escape");
-          await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
-        };
-        try {
-          /* 1. The board: one button per state. */
-          let openTask: (taskId: string) => Promise<void>;
-          if (size.phone) {
-            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
-            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
-            if (await tab.count()) await tab.first().click();
-            await page.waitForTimeout(400);
-            openTask = async (taskId) => {
-              const phoneCard = page.locator(`[data-phone-card="task:${taskId}"]`).first();
-              await phoneCard.scrollIntoViewIfNeeded();
-              await phoneCard.click();
-              const row = page.locator(`[data-phone-task-prototype="${taskId}"]`);
-              await row.waitFor({ timeout: 10_000 });
-              await row.scrollIntoViewIfNeeded();
-            };
-            /* The phone's card carries the review button under its face: the
-               mark and the word while a round waits, a full touch target. */
-            const cards = await phoneCards();
-            record("cards", cards);
-            const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
-            for (const task of ["t-search", "t-upload", "t-links"]) if (!byTask[task]) failures.push(`${label}: the phone board draws no card for ${task}`);
-            for (const entry of cards) {
-              if (entry.needs && !entry.reasons.length) failures.push(`${label}: the phone card of ${entry.task} waits on the operator without a word why`);
-              if (entry.line) failures.push(`${label}: the phone card of ${entry.task} still draws a line that only says a prototype is ready`);
-              if (entry.overlaps.length || entry.outside.length || entry.button?.clipped) failures.push(`${label}: the phone card of ${entry.task} overlaps ${entry.overlaps.join(", ")}, leaves the card ${entry.outside.join(", ")} or clips its review button: ${JSON.stringify(entry.button)}`);
-              if (entry.button && (entry.button.insideFace || entry.button.size[0]! < 44 || entry.button.size[1]! < 44)) failures.push(`${label}: the review button of ${entry.task} is not a full target of its own: ${JSON.stringify(entry.button)}`);
-            }
-            const phoneStates = { "t-search": "ready", "t-upload": "opened", "t-links": "ready" } as const;
-            for (const [task, state] of Object.entries(phoneStates)) if (byTask[task]?.button?.state !== state || byTask[task]?.button?.text !== tr("proto.button.word")) failures.push(`${label}: the phone card of ${task} carries the review button ${JSON.stringify(byTask[task]?.button)}`);
-            if (cards.some((entry) => entry.button && !["t-search", "t-upload", "t-links", "t-export", "t-disk"].includes(entry.task))) failures.push(`${label}: a phone card with no review carries a review button`);
-            await page.locator('[data-phone-card="task:t-search"]').first().scrollIntoViewIfNeeded();
-            await shot("cards");
-            for (const [task, state] of Object.entries(phoneStates)) {
-              const shell = page.locator(`[data-phone-card-frame="task:${task}"]`);
-              await shell.scrollIntoViewIfNeeded();
-              await shell.screenshot({ path: path.join(pngDir, `${label}-card-${task === "t-links" ? "newer-round" : state}.png`) });
-            }
-            /* One tap on the card's button opens the review over the board. */
-            const cardTap = page.locator('[data-phone-card-prototype-button="t-upload"]');
-            await cardTap.scrollIntoViewIfNeeded();
-            await cardTap.click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await settle();
-            const tapped = await page.evaluate(() => ({ review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, board: Boolean(document.querySelector("[data-phone-kanban]")), taskScreen: Boolean(document.querySelector("[data-phone-task-prototype]")) }));
-            record("card-tap", tapped);
-            await shot("card-tap");
-            if (tapped.review !== "t-upload" || tapped.taskScreen) failures.push(`${label}: one tap on the card's review button read ${JSON.stringify(tapped)}`);
-            await closeReview();
-            await settle();
-          } else {
-            await page.waitForSelector("[data-prototype-button]", { state: "attached", timeout: 30_000 });
-            const tab = page.locator('.tabs-nav [data-tab="assigned"]');
-            if (await tab.count() && await tab.first().isVisible()) await tab.first().click();
-            await page.waitForTimeout(400);
-            openTask = async (taskId) => {
-              const button = page.locator(`[data-prototype-button="${taskId}"]`);
-              await button.scrollIntoViewIfNeeded();
-              await button.click();
-            };
-            const cards = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-prototype-button]")].map((button) => {
-              const cardElement = button.closest<HTMLElement>(".card")!;
-              const foot = button.closest<HTMLElement>(".foot")!;
-              const box = (element: Element) => element.getBoundingClientRect();
-              const own = box(button);
-              const others = [...foot.children].filter((child) => child !== button && box(child).width > 0 && !child.classList.contains("spacer"));
-              const style = getComputedStyle(button);
-              return {
-                task: button.dataset.prototypeButton, state: button.dataset.prototypeState, text: button.textContent?.trim() ?? "", aria: button.getAttribute("aria-label"),
-                word: Boolean(button.querySelector<HTMLElement>(".proto-word")?.getBoundingClientRect().width),
-                /* «Ask» and «+ Agent» share one line: neither is left alone below the other. */
-                actionsTogether: (() => {
-                  const ask = foot.querySelector<HTMLElement>("[data-ask-orchestrator]"), agent = foot.querySelector<HTMLElement>("[data-add-agent]");
-                  return !ask || !agent || Math.abs((box(ask).top + box(ask).bottom) / 2 - (box(agent).top + box(agent).bottom) / 2) < 2;
-                })(),
-                /* Any drawn line in the foot that says only that a prototype is ready: there must be none. */
-                reason: [...foot.querySelectorAll<HTMLElement>(".foot-meta")].filter((line) => box(line).width > 0 && /prototype|прототип/i.test(line.textContent ?? "")).map((line) => line.textContent?.trim() ?? "")[0] ?? null,
-                background: style.backgroundColor, color: style.color, size: [Math.round(own.width), Math.round(own.height)],
-                insideCard: own.left >= box(cardElement).left - 0.5 && own.right <= box(cardElement).right + 0.5,
-                overlaps: others.filter((other) => { const b = box(other); return own.left < b.right - 0.5 && b.left < own.right - 0.5 && own.top < b.bottom - 0.5 && b.top < own.bottom - 0.5; }).length,
-                footLines: new Set([...others, button].map((child) => { const b = box(child); return Math.round((b.top + b.bottom) / 2); })).size,
-              };
-            }));
-            record("cards", cards);
-            const states = Object.fromEntries(cards.map((entry) => [entry.task, entry.state]));
-            const expected = { "t-search": "ready", "t-upload": "opened", "t-export": "decided", "t-links": "ready", "t-disk": "unsent" };
-            if (JSON.stringify(states) !== JSON.stringify(expected) && Object.entries(expected).some(([task, state]) => states[task] !== state)) failures.push(`${label}: the card buttons read ${JSON.stringify(states)}`);
-            if (cards.length !== 5) failures.push(`${label}: ${cards.length} review buttons on the board, expected the five tasks with a review`);
-            /* The foot lines each card had before its word moved into the button: none may grow. */
-            const footBefore: Record<string, number> = size.name === "desktop-1440" ? { "t-search": 2, "t-upload": 2, "t-links": 2, "t-export": 1, "t-disk": 1 } : { "t-search": 1, "t-upload": 1, "t-links": 1, "t-export": 1, "t-disk": 1 };
-            for (const entry of cards) {
-              if (!entry.insideCard || entry.overlaps) failures.push(`${label}: the button of ${entry.task} leaves its card or overlaps the foot: ${JSON.stringify(entry)}`);
-              if (entry.footLines > (footBefore[entry.task ?? ""] ?? 2)) failures.push(`${label}: the foot of ${entry.task} wraps onto ${entry.footLines} lines, ${footBefore[entry.task ?? ""]} before`);
-              if (!entry.actionsTogether) failures.push(`${label}: «Ask» and «+ Agent» of ${entry.task} stand on different lines`);
-              /* Every state says the word: a number alone reads as a count. */
-              if (!entry.word || entry.text !== tr("proto.button.word")) failures.push(`${label}: the ${entry.state} button of ${entry.task} says ${JSON.stringify(entry.text)}`);
-            }
-            /* A waiting button names itself to assistive tech at every width; its word is drawn where the foot has room. */
-            const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
-            if (!byTask["t-search"]?.aria?.includes(tr("proto.title").split(" ")[0]!.slice(0, 5)) && !byTask["t-search"]?.aria?.toLowerCase().includes(tr("proto.button.word").toLowerCase())) failures.push(`${label}: the waiting button is unnamed: ${byTask["t-search"]?.aria}`);
-            /* A waiting card says so on its button, in its word and in the accent, at every desktop width; no reason line repeats it. */
-            for (const task of ["t-search", "t-upload", "t-links"]) {
-              const entry = byTask[task];
-              if (!entry || !entry.word || entry.text !== tr("proto.button.word") || entry.reason !== null) failures.push(`${label}: the waiting card of ${task} draws the word ${entry?.word} (${JSON.stringify(entry?.text)}) and the line ${JSON.stringify(entry?.reason)}`);
-            }
-            if (cards.some((entry) => entry.reason !== null)) failures.push(`${label}: a card's foot says a prototype is ready beside its button`);
-            if (!byTask["t-export"]?.aria?.includes("2 · ") || !byTask["t-disk"]?.aria?.includes("2 · ")) failures.push(`${label}: the decided buttons do not name the chosen variants: ${JSON.stringify(cards.map((entry) => entry.aria))}`);
-            if (byTask["t-search"]?.background === byTask["t-upload"]?.background) failures.push(`${label}: a waiting unopened review is not highlighted against an opened one`);
-            await page.locator(card("t-search")).scrollIntoViewIfNeeded();
-            await shot("cards");
-            /* The button cut out whole in each of its states. */
-            const stateShots = { "t-search": "ready", "t-upload": "opened", "t-export": "decided", "t-disk": "unsent", "t-links": "newer-round" } as const;
-            const cutouts: Record<string, unknown> = {};
-            for (const [task, name] of Object.entries(stateShots)) {
-              const status = await page.locator(card(task)).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? null);
-              const columnTab = page.locator(`.tabs-nav [data-tab="${status}"]`);
-              if (status && await columnTab.count() && await columnTab.first().isVisible()) await columnTab.first().click();
-              await page.locator(card(task)).scrollIntoViewIfNeeded();
-              await settle();
-              const whole = await page.evaluate((selector) => {
-                const cardElement = document.querySelector<HTMLElement>(selector)!;
-                const button = cardElement.querySelector<HTMLElement>("[data-prototype-button]")!.getBoundingClientRect();
-                const own = cardElement.getBoundingClientRect();
-                return { button: [Math.round(button.left), Math.round(button.top), Math.round(button.width), Math.round(button.height)], inCard: button.left >= own.left - 0.5 && button.right <= own.right + 0.5 && button.top >= own.top - 0.5 && button.bottom <= own.bottom + 0.5, onScreen: button.left >= 0 && button.top >= 0 && button.right <= window.innerWidth && button.bottom <= window.innerHeight };
-              }, card(task));
-              cutouts[name] = whole;
-              if (!whole.inCard || !whole.onScreen) failures.push(`${label}: the ${name} button of ${task} is not whole in its cut-out: ${JSON.stringify(whole)}`);
-              await page.locator(card(task)).screenshot({ path: path.join(pngDir, `${label}-card-${name}.png`) });
-            }
-            record("card-cutouts", cutouts);
-            if (await tab.count() && await tab.first().isVisible()) await tab.first().click();
-          }
-
-          /* 1b. A waiting review is counted where everything that needs the
-             operator is counted, and its row goes to the task and opens the
-             review. The three waiting tasks stand beside the board's other
-             waits; the choice saved further down takes exactly one of them out. */
-          const needsYouCount = () => page.evaluate((phone) => {
-            if (phone) return Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0");
-            return Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN");
-          }, size.phone);
-          const tabCount = async () => Number(/^\((\d+)\)/.exec(await page.title())?.[1] ?? "0");
-          const waitingBefore = await needsYouCount();
-          {
-            const LIST = size.phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
-            await page.locator(size.phone ? "[data-mobile2-attention-count]" : "[data-attention-count]").click();
-            await page.waitForSelector(`${LIST} [data-attention-prototype]`, { timeout: 10_000 });
-            await settle();
-            const rows = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-needs-you-row]`)].map((row) => ({
-              id: row.dataset.needsYouRow, prototype: row.dataset.attentionPrototype ?? row.querySelector<HTMLElement>("[data-attention-prototype]")?.dataset.attentionPrototype ?? null,
-              text: row.textContent, dismiss: Boolean(row.querySelector("[data-needs-you-dismiss]")), height: Math.round(row.getBoundingClientRect().height),
-            })), LIST);
-            const geometry = await measure(page, LIST, { rows: `${LIST} [data-needs-you-row]` });
-            const prototypes = rows.filter((row) => row.prototype);
-            record("needs-you", { count: waitingBefore, tab: await tabCount(), rows: rows.length, prototypes: prototypes.map((row) => ({ task: row.prototype, height: row.height, dismiss: row.dismiss })), overlaps: geometry.overlaps, outside: geometry.outside.filter((entry) => !size.phone || !/^rows/.test(entry)) });
-            await shot("needs-you");
-            if (JSON.stringify(prototypes.map((row) => row.prototype).sort()) !== JSON.stringify(["t-links", "t-search", "t-upload"])) failures.push(`${label}: the needs-you list names the waiting reviews of ${JSON.stringify(prototypes.map((row) => row.prototype))}`);
-            if (rows.length !== waitingBefore || (!size.phone && await tabCount() !== waitingBefore)) failures.push(`${label}: the needs-you control counts ${waitingBefore}, the tab ${await tabCount()} and the list holds ${rows.length} rows`);
-            if (geometry.overlaps.length || prototypes.some((row) => row.dismiss || !row.text?.includes(tr("proto.notice.ready")) || (size.phone && row.height < 44))) failures.push(`${label}: a waiting review's needs-you row is broken: ${JSON.stringify({ prototypes, overlaps: geometry.overlaps })}`);
-            record("needs-you-text", prototypes.map((row) => ({ task: row.prototype, text: rows.find((entry) => entry.prototype === row.prototype)?.text ?? null })));
-            /* On the phone a prototype's row is built as its neighbours: titles start and chevrons stand in one column. */
-            if (size.phone) {
-              const columns = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-attention-row]`)].map((row) => ({
-                row: row.dataset.attentionRow,
-                title: Math.round(row.querySelector<HTMLElement>(":scope > span > span.text-body")?.getBoundingClientRect().left ?? -1),
-                chevron: Math.round(row.querySelector<SVGElement>(":scope > svg:last-child")?.getBoundingClientRect().left ?? -1),
-              })), LIST);
-              record("needs-you-columns", columns);
-              const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
-              if (spread(columns.map((entry) => entry.title)) > 2 || spread(columns.map((entry) => entry.chevron)) > 2) failures.push(`${label}: the needs-you rows do not line up: ${JSON.stringify(columns)}`);
-            }
-            for (const row of rows.filter((entry) => entry.prototype)) if (!row.text?.includes(TASK_TITLES[row.prototype!]!)) failures.push(`${label}: the needs-you row of ${row.prototype} does not name its task: «${row.text}»`);
-            await page.locator(`${LIST} [data-attention-prototype="t-links"]`).click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await page.waitForTimeout(500);
-            const landed = await page.evaluate((phone) => ({
-              review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null,
-              round: document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
-              task: phone ? Boolean(document.querySelector('[data-phone-task-prototype="t-links"]')) : Boolean(document.querySelector('[data-kanban-board] .card[data-id="task:t-links"]')),
-            }), size.phone);
-            record("needs-you-jump", landed);
-            if (landed.review !== "t-links" || landed.round !== "r-links-2" || !landed.task) failures.push(`${label}: the needs-you row did not go to the task and open its waiting round: ${JSON.stringify(landed)}`);
-            await closeReview();
-            if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
-            else if (await page.locator("[data-needs-you-close]").count()) await page.locator("[data-needs-you-close]").click();
-            await settle();
-          }
-
-          /* 2. The orchestrator's notice and its jump. */
-          if (!size.phone) {
-            /* Where the seat is folded to its strip, the strip carries the notice as one chip; unfolded, the composer carries the lines. */
-            const chip = page.locator("[data-kanban-seat] [data-prototype-notice-chip]");
-            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) {
-              await chip.waitFor({ timeout: 15_000 });
-              const strip = await measure(page, "[data-kanban-seat] [data-seat-head]", { parts: "[data-kanban-seat] [data-seat-head] > *" });
-              const chipLabel = await chip.getAttribute("aria-label");
-              record("notice-strip", { ...strip, text: await chip.textContent(), label: chipLabel, count: await chip.getAttribute("data-prototype-notice-chip") });
-              if (!Object.values(TASK_TITLES).some((title) => chipLabel?.includes(title))) failures.push(`${label}: the folded seat's notice chip names no task: «${chipLabel}»`);
-              if (strip.overlaps.length || strip.outside.length || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the folded seat's notice chip overlaps ${strip.overlaps.join(", ")}, leaves the strip ${strip.outside.join(", ")} or miscounts`);
-              await shot("notice-folded");
-              await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
-            }
-            /* Unfolded, the seat's «Рішення» column lists every waiting round (variant 3 of
-               docs/design/operator-decision-forms.md); the composer carries no notice lines. */
-            if (!await page.locator("[data-orchestrator-panel] [data-decision-column]").count()) await page.locator("[data-decision-strip]").click();
-            await page.locator('[data-decision-tab="decisions"]').click();
-            await page.waitForSelector("[data-decision-list='3']", { timeout: 15_000 });
-            if (await chip.count()) failures.push(`${label}: the unfolded seat repeats the notice as a chip`);
-            if (await page.locator("[data-orchestrator-conversation] [data-prototype-notice]").count()) failures.push(`${label}: the composer still carries notice lines beside the «Рішення» column`);
-            const notice = await measure(page, "[data-decision-list]", { row: "[data-decision-list] [data-decision-row]", card: "[data-decision-list] [data-decision-card]" });
-            const listed = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-decision-list] [data-decision-row], [data-decision-list] [data-decision-card]")].map((row) => row.dataset.decisionRow ?? row.dataset.decisionReview));
-            record("notice", { ...notice, listed });
-            if (listed.length !== 3 || !listed.includes("r-search")) failures.push(`${label}: the «Рішення» column lists ${JSON.stringify(listed)}, expected the three waiting rounds`);
-            /* The list scrolls inside the column, so a folded row below the fold is in place; rows never overlap. */
-            if (notice.overlaps.length) failures.push(`${label}: the column's rows overlap ${notice.overlaps.join(", ")}`);
-            await shot("notice");
-            if (await page.locator('[data-decision-row="r-search"]').count()) await page.locator('[data-decision-row="r-search"]').click();
-            await page.locator('[data-decision-review="r-search"] [data-decision-thumbs] button').first().click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await page.waitForTimeout(600);
-            const jump = await page.evaluate(() => {
-              const cardElement = document.querySelector<HTMLElement>('[data-kanban-board] .card[data-id="task:t-search"]');
-              const box = cardElement?.getBoundingClientRect();
-              return { review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, cardOnScreen: Boolean(box && box.bottom > 0 && box.top < window.innerHeight && box.right > 0 && box.left < window.innerWidth) };
-            });
-            record("jump", jump);
-            if (jump.review !== "t-search" || !jump.cardOnScreen) failures.push(`${label}: «Go to prototype» did not bring the task up and open its review: ${JSON.stringify(jump)}`);
-          } else {
-            /* The phone board's seat card carries the notice with its count; a tap goes to the task and opens the review over it. */
-            const chip = page.locator("[data-mobile2-seat-card] [data-prototype-notice-chip]");
-            await chip.waitFor({ timeout: 15_000 });
-            const seatCard = await measure(page, "[data-mobile2-seat-card]", { parts: "[data-mobile2-seat-card] > *" });
-            const chipBox = (await chip.boundingBox())!;
-            /* The chip says the word with the count, and the seat's title beside it is read whole. */
-            const seatWords = await page.evaluate(() => {
-              const word = document.querySelector<HTMLElement>("[data-mobile2-seat-card] [data-prototype-notice-chip-word]");
-              const titles = [...document.querySelectorAll<HTMLElement>("[data-mobile2-seat-card] button span.truncate")].filter((element) => element.getBoundingClientRect().width > 0);
-              return { chip: document.querySelector("[data-mobile2-seat-card] [data-prototype-notice-chip]")?.textContent ?? null, word: word?.textContent ?? null, wordClipped: Boolean(word && word.scrollWidth > word.clientWidth + 0.5), titleClipped: titles.some((element) => element.scrollWidth > element.clientWidth + 0.5) };
-            });
-            const chipLabel = await chip.getAttribute("aria-label");
-            record("notice", { ...seatCard, ...seatWords, label: chipLabel, count: await chip.getAttribute("data-prototype-notice-chip"), chipSize: [Math.round(chipBox.width), Math.round(chipBox.height)] });
-            if (!Object.values(TASK_TITLES).some((title) => chipLabel?.includes(title))) failures.push(`${label}: the seat card's notice chip names no task: «${chipLabel}»`);
-            if (seatCard.overlaps.length || seatCard.outside.length || chipBox.height < 44 || chipBox.width < 44 || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the seat card's notice chip reads ${JSON.stringify({ seatCard, chipBox })}`);
-            if (seatWords.word !== tr("proto.button.word") || seatWords.chip !== `${tr("proto.button.word")}3` || seatWords.wordClipped || seatWords.titleClipped) failures.push(`${label}: the seat card's chip and title read ${JSON.stringify(seatWords)}`);
-            await shot("notice");
-            await chip.click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await page.waitForTimeout(500);
-            const jump = await page.evaluate(() => ({ review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, taskScreen: Boolean(document.querySelector('[data-phone-task-prototype="t-search"]')) }));
-            record("jump", jump);
-            if (jump.review !== "t-search" || !jump.taskScreen) failures.push(`${label}: the seat card's notice did not bring the task up and open its review: ${JSON.stringify(jump)}`);
-            await shot("jump");
-            await page.keyboard.press("Escape");
-            await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
-            const row = await page.locator('[data-phone-task-prototype="t-search"]').evaluate((element) => {
-              const box = element.getBoundingClientRect();
-              return { text: element.textContent, state: element.getAttribute("data-prototype-state"), height: Math.round(box.height), right: box.right, width: window.innerWidth, background: getComputedStyle(element).backgroundColor };
-            });
-            record("task-row", row);
-            /* Opened a moment ago through the notice and left undecided: the row keeps its mark and drops the «ready» highlight. */
-            if (row.state !== "opened" || row.height < 44 || row.right > row.width) failures.push(`${label}: the task screen's review row reads ${JSON.stringify(row)}`);
-            await shot("task-row");
-            await page.locator('[data-phone-task-prototype="t-search"]').click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await page.waitForTimeout(500);
-          }
-
-          /* 3. Four variants. */
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await shot("four-variants");
-          const four = await stageState();
-          record("four-variants", four);
-          await frameCheck("four-variants");
-          captionParted("four-variants", four);
-          if (await page.locator(`${REVIEW} [data-prototype-variant]`).count() !== 4) failures.push(`${label}: the review does not list four variants`);
-          if (!four.caption?.includes(lang === "en" ? "Compact list" : "Компактний список") || !four.caption.startsWith("1") || four.position?.trim() !== "1 / 3" || !four.mediaInside || !four.loaded) failures.push(`${label}: the first picture reads ${JSON.stringify(four)}`);
-
-          /* 4. Arrows walk the pictures into the next variant: a pair. */
-          if (!size.phone) for (let step = 0; step < 3; step += 1) await page.keyboard.press("ArrowRight");
-          else await showVariant(2);
-          await settle();
-          if (!size.phone) {
-            const side = await stageState();
-            record("pair-side", side);
-            await shot("pair-side");
-            await frameCheck("pair-side");
-            const sides = await measure(page, "[data-prototype-canvas]", { side: "[data-prototype-pair-side]" });
-            if (side.pair !== "side" || side.media.length !== 2 || sides.overlaps.length || sides.outside.length || !side.mediaInside || !side.caption?.startsWith("2")) failures.push(`${label}: the pair side by side reads ${JSON.stringify({ side, sides })}`);
-            await page.locator('[data-prototype-pair-mode="slider"]').click();
-            await settle();
-          }
-          await page.locator("[data-prototype-split]").fill("35");
-          await settle();
-          const slider = await stageState();
-          const clip = await page.evaluate(() => getComputedStyle(document.querySelectorAll<HTMLElement>("[data-prototype-pair] img")[1]!).clipPath);
-          /* The two names against what each picture really paints inside its box. */
-          const sliderLabels = await page.evaluate((phone) => {
-            const round = (value: number) => Math.round(value * 10) / 10;
-            const canvas = document.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
-            const drawn = [...document.querySelectorAll<HTMLImageElement>("[data-prototype-pair] img")].map((image) => {
-              const box = image.getBoundingClientRect();
-              const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
-              const width = image.naturalWidth * scale, height = image.naturalHeight * scale;
-              return { left: box.left + (box.width - width) / 2, top: box.top + (box.height - height) / 2, right: box.left + (box.width + width) / 2, bottom: box.top + (box.height + height) / 2 };
-            });
-            const labels = [...document.querySelectorAll<HTMLElement>("[data-prototype-pair-label]")].map((element) => {
-              const box = element.getBoundingClientRect();
-              return {
-                side: element.dataset.prototypePairLabel, box: [round(box.left), round(box.top), round(box.width), round(box.height)],
-                inside: box.width > 0 && box.left >= canvas.left - 0.5 && box.right <= canvas.right + 0.5 && box.top >= canvas.top - 0.5 && box.bottom <= canvas.bottom + 0.5,
-                overPicture: drawn.some((picture) => box.left < picture.right - 0.5 && picture.left < box.right - 0.5 && box.top < picture.bottom - 0.5 && picture.top < box.bottom - 0.5),
-              };
-            });
-            /* The track and the two names end where the changed picture's drawn
-               edges are; on the phone the picture runs edge to edge and they keep the sheet's 16 px inset. */
-            const track = document.querySelector<HTMLElement>("[data-prototype-split]")!.getBoundingClientRect();
-            const changed = drawn[0]!;
-            const inset = phone ? 16 : 0;
-            const names = labels.map((entry) => [entry.box[0]!, entry.box[0]! + entry.box[2]!]);
-            const fitted = Math.abs(track.left - changed.left - inset) <= 2 && Math.abs(changed.right - track.right - inset) <= 2 && Math.abs(names[0]![0]! - changed.left - inset) <= 2 && Math.abs(changed.right - names[1]![1]! - inset) <= 2;
-            return { drawn: drawn.map((picture) => [round(picture.left), round(picture.top), round(picture.right - picture.left), round(picture.bottom - picture.top)]), labels, track: [round(track.left), round(track.right)], fitted };
-          }, size.phone);
-          record("pair-slider", { ...slider, clip, labels: sliderLabels });
-          captionParted("pair-slider", slider);
-          if (sliderLabels.labels.length !== 2 || sliderLabels.labels.some((entry) => !entry.inside || entry.overPicture) || sliderLabels.labels[0]!.box[0]! + sliderLabels.labels[0]!.box[2]! > sliderLabels.labels[1]!.box[0]!) failures.push(`${label}: the slider's labels lie over a picture, leave the stage or meet: ${JSON.stringify(sliderLabels)}`);
-          await shot("pair-slider");
-          await frameCheck("pair-slider");
-          if (slider.pair !== "slider" || slider.media.length !== 2 || !slider.mediaInside || !clip.includes("65%")) failures.push(`${label}: the pair slider reads ${JSON.stringify({ slider, clip })}`);
-          if (!sliderLabels.fitted) failures.push(`${label}: the slider's track and names do not end at the picture's edges: ${JSON.stringify(sliderLabels)}`);
-
-          /* 5. Forty pictures in one variant. */
-          await showVariant(3);
-          await settle();
-          await page.locator(`${REVIEW} [data-prototype-thumb]`).last().click();
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await settle();
-          const forty = await stageState();
-          const strip = await page.evaluate(() => {
-            const element = document.querySelector<HTMLElement>("[data-prototype-strip]")!;
-            const current = element.querySelector<HTMLElement>("[aria-current=true]")!.getBoundingClientRect();
-            const box = element.getBoundingClientRect();
-            return { scrolls: element.scrollWidth > element.clientWidth, tall: element.scrollHeight - element.clientHeight, currentInView: current.left >= box.left - 0.5 && current.right <= box.right + 0.5, height: Math.round(box.height) };
-          });
-          record("forty", { ...forty, strip });
-          await shot("forty-pictures");
-          await frameCheck("forty-pictures");
-          captionParted("forty-pictures", forty);
-          if (forty.thumbs !== 40 || forty.position?.trim() !== "40 / 40" || !strip.scrolls || strip.tall > 0 || !strip.currentInView || !forty.mediaInside) failures.push(`${label}: forty pictures read ${JSON.stringify({ forty, strip })}`);
-
-          /* 6. A video. */
-          await showVariant(4);
-          await page.locator(`${REVIEW} [data-prototype-thumb]`).last().click();
-          await page.waitForFunction(() => (document.querySelector<HTMLVideoElement>("[data-prototype-video]")?.readyState ?? 0) >= 2, undefined, { timeout: 15_000 });
-          await settle();
-          const videoState = await stageState();
-          const videoSize = await page.evaluate(() => { const element = document.querySelector<HTMLVideoElement>("[data-prototype-video]")!; return [element.videoWidth, element.videoHeight, element.controls]; });
-          record("video", { ...videoState, videoSize });
-          await shot("video");
-          await frameCheck("video");
-          if (!videoState.mediaInside || videoSize[0] !== 640 || videoSize[2] !== true || videoState.position?.trim() !== "3 / 3") failures.push(`${label}: the video reads ${JSON.stringify({ videoState, videoSize })}`);
-
-          /* 7. Full size in the existing viewer, with the variant's number, its name and the caption. */
-          await showVariant(1);
-          await settle();
-          await page.locator("[data-prototype-fullsize]").click();
-          await page.waitForSelector("[data-lightbox-position]", { timeout: 5_000 });
-          await page.waitForTimeout(300);
-          const viewer = await page.evaluate(() => ({ position: document.querySelector("[data-lightbox-position]")?.textContent ?? null, caption: document.querySelector("[data-lightbox-caption]")?.textContent ?? null }));
-          record("viewer", viewer);
-          await shot("full-size");
-          if (!viewer.caption?.includes(lang === "en" ? "1 · Compact list — results, desktop" : "1 · Компактний список — результати, десктоп") || viewer.position?.trim() !== "1 / 3") failures.push(`${label}: the full-size viewer does not count as the review does: ${JSON.stringify(viewer)}`);
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
-          if (!await page.locator(REVIEW).count()) failures.push(`${label}: Escape in the viewer closed the review too`);
-
-          /* 7b. A tall phone frame on the stage: fitted on the desktop, the stage's whole width on the phone. */
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await settle();
-          const tallFrame = await stageState();
-          record("tall-frame", tallFrame);
-          await shot("tall-frame");
-          await frameCheck("tall-frame");
-          const [tallWidth, tallHeight] = tallFrame.media[0] ?? [0, 0];
-          if (tallFrame.position?.trim() !== "3 / 3" || (size.phone ? Math.abs(tallWidth! - size.viewport.width) > 1 : !tallFrame.mediaInside || tallHeight! < tallFrame.canvas[1]! - 30)) failures.push(`${label}: the tall phone frame reads ${JSON.stringify(tallFrame)}`);
-
-          /* 7c. A pair full screen is one picture with a switch that puts the original in its place, at the same zoom. */
-          await showVariant(2);
-          await settle();
-          await page.locator("[data-prototype-fullsize]").click();
-          await page.waitForSelector("[data-lightbox-compare]", { timeout: 5_000 });
-          await page.locator(`[role=dialog] button[aria-label="${tr("lightbox.zoomIn")}"]`).click();
-          await page.locator('[data-lightbox-compare-side="before"]').click();
-          await settle();
-          const pairViewer = await page.evaluate(() => {
-            const shown = [...document.querySelectorAll<HTMLImageElement>("img[data-lightbox-side]")].filter((image) => !image.hidden);
-            const sides = [...document.querySelectorAll<HTMLElement>("[data-lightbox-compare-side]")].map((element) => [element.dataset.lightboxCompareSide, element.getAttribute("aria-pressed"), element.textContent]);
-            return { shown: shown.map((image) => image.dataset.lightboxSide), position: document.querySelector("[data-lightbox-position]")?.textContent ?? null, caption: document.querySelector("[data-lightbox-caption]")?.textContent ?? null, zoom: document.querySelector("[role=dialog] [data-lightbox-position]")?.parentElement?.textContent ?? null, sides };
-          });
-          record("viewer-pair", pairViewer);
-          await shot("viewer-pair-original");
-          if (JSON.stringify(pairViewer.shown) !== JSON.stringify(["before"]) || pairViewer.position?.trim() !== "1 / 3" || !pairViewer.caption?.includes(tr("proto.pair.original")) || !pairViewer.zoom?.includes("140%") || JSON.stringify(pairViewer.sides) !== JSON.stringify([["before", "true", tr("lightbox.original")], ["after", "false", tr("lightbox.changed")]])) failures.push(`${label}: the pair full screen reads ${JSON.stringify(pairViewer)}`);
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
-
-          /* 8. A combination and a dictated comment. */
-          if (size.phone) { await choose(2); await choose(3); } else { await page.keyboard.press("2"); await page.keyboard.press("3"); }
-          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
-          const stop = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
-          await stop.waitFor({ timeout: 10_000 });
-          await page.waitForTimeout(1_200);
-          await shot("dictating");
-          await frameCheck("dictating");
-          await contextCheck("dictating");
-          /* A saved decision cannot be changed, so the shortcut saves nothing while the recording runs. */
-          await page.locator("[data-prototype-comment-field]").press("Control+Enter");
-          await page.waitForTimeout(300);
-          if ((await posts()).some((post) => post.taskId === "t-search") || await page.locator(`${scope} [data-prototype-decision]`).count()) failures.push(`${label}: Ctrl+Enter saved the decision while the comment was still being dictated`);
-          await stop.click();
-          const spoken = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
-          await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, spoken, { timeout: 10_000 });
-          await settle();
-          const combination = await stageState();
-          record("combination", combination);
-          await shot("combination");
-          await frameCheck("combination");
-          await contextCheck("combination");
-          if (JSON.stringify(combination.chosen) !== JSON.stringify(["2", "3"])) failures.push(`${label}: the combination reads ${JSON.stringify(combination.chosen)}`);
-
-          /* 9. Escape with an unsaved comment asks first. */
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-prototype-guard]", { timeout: 5_000 });
-          await shot("unsaved-guard");
-          await contextCheck("unsaved-guard");
-          const guard = await measure(page, "body", { guard: "[data-prototype-guard]", actions: "[data-prototype-guard] button" });
-          record("guard", guard);
-          if (guard.outside.length || guard.overlaps.some((entry) => entry.includes("actions#1 × actions#2"))) failures.push(`${label}: the unsaved-comment guard is broken: ${JSON.stringify(guard)}`);
-          await page.locator("[data-prototype-guard-keep]").click();
-          if (!await page.locator(REVIEW).count() || await page.locator("[data-prototype-comment-field]").inputValue() !== spoken) failures.push(`${label}: keeping the edit lost the review or the comment`);
-
-          /* 10. Saved: the decision stays on the review and on the card, sent once. */
-          await page.locator("[data-prototype-save]").click();
-          await page.waitForSelector(`${scope} [data-prototype-decision]`, { timeout: 10_000 });
-          await settle();
-          const decided = await page.evaluate(() => ({
-            chosen: [...document.querySelectorAll<HTMLElement>("[data-prototype-decision] [data-prototype-chosen]")].map((element) => element.textContent),
-            comment: document.querySelector("[data-prototype-decision] [data-prototype-comment]")?.textContent ?? null,
-            delivery: document.querySelector<HTMLElement>("[data-prototype-delivery]")?.dataset.prototypeDelivery ?? null,
-            deliveryText: document.querySelector("[data-prototype-delivery]")?.textContent ?? null,
-            time: document.querySelector("[data-prototype-decision] time")?.textContent ?? null,
-          }));
-          const sent = (await posts()).filter((post) => post.taskId === "t-search");
-          record("decided", { ...decided, posts: sent });
-          await shot("decided");
-          await contextCheck("decided");
-          await frameCheck("decided");
-          await accentCheck("decided", false);
-          if (decided.comment !== spoken || decided.delivery !== "sent" || decided.chosen.length !== 2 || !decided.time || sent.length !== 1) failures.push(`${label}: the saved decision reads ${JSON.stringify({ decided, sent })}`);
-          await closeReview();
-          if (!size.phone) {
-            await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-prototype-button="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
-            const after = await page.locator('[data-prototype-button="t-search"]').textContent();
-            if (after?.trim() !== tr("proto.button.word")) failures.push(`${label}: the card says ${after} after the choice`);
-            await page.locator(card("t-search")).scrollIntoViewIfNeeded();
-            await page.locator(card("t-search")).screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
-            const leftColumn = await page.waitForSelector('[data-decision-list] [data-decision-review="r-search"], [data-decision-row="r-search"]', { state: "detached", timeout: 10_000 }).then(() => true, () => false);
-            if (!leftColumn) failures.push(`${label}: the decided review stays in the «Рішення» column`);
-          } else {
-            await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-phone-task-prototype="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
-            await shot("task-row-decided");
-            await page.goBack();
-            await page.waitForTimeout(400);
-            /* The choice checks the card's button, which keeps its word; the card that still waits keeps its own. */
-            const after = await phoneCards();
-            record("cards-after-choice", after.filter((entry) => entry.task === "t-search" || entry.task === "t-upload"));
-            const searchAfter = after.find((entry) => entry.task === "t-search")?.button;
-            const uploadAfter = after.find((entry) => entry.task === "t-upload")?.button;
-            if (searchAfter?.state !== "decided" || searchAfter.text !== tr("proto.button.word") || uploadAfter?.state !== "opened" || uploadAfter.text !== tr("proto.button.word")) failures.push(`${label}: after the choice the phone cards read ${JSON.stringify(after.map((entry) => [entry.task, entry.button]))}`);
-            const shell = page.locator('[data-phone-card-frame="task:t-search"]');
-            await shell.scrollIntoViewIfNeeded();
-            await shell.screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
-          }
-
-          /* The choice took exactly this review out of the count. */
-          await page.waitForFunction(({ phone, want }) => (phone
-            ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
-            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN")) === want, { phone: size.phone, want: waitingBefore - 1 }, { timeout: 10_000 }).catch(() => {});
-          const waitingAfterChoice = await needsYouCount();
-          if (waitingAfterChoice !== waitingBefore - 1) failures.push(`${label}: ${waitingAfterChoice} wait after the choice, expected ${waitingBefore - 1}`);
-
-          /* 11. One variant, saved into a project with no orchestrator. */
-          await openTask("t-upload");
-          if (size.phone) await page.locator('[data-phone-task-prototype="t-upload"]').click();
-          await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await settle();
-          await shot("one-variant");
-          await frameCheck("one-variant");
-          record("one-variant", await stageState());
-          if (await page.locator(`${REVIEW} [data-prototype-variant]`).count() !== 1) failures.push(`${label}: the one-variant review lists more than one`);
-
-          /* 11a. The longest name and the longest caption the schema admits:
-             the number, the name and the caption are all read inside the stage. */
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await settle();
-          const longest = await page.evaluate(() => {
-            const stage = document.querySelector<HTMLElement>("[data-prototype-stage]")!.getBoundingClientRect();
-            const line = document.querySelector<HTMLElement>("[data-prototype-caption]")!;
-            const part = (name: string) => {
-              const element = line.querySelector<HTMLElement>(`[data-prototype-caption-${name}]`);
-              const boxes = element ? [...element.getClientRects()] : [];
-              return {
-                text: element?.textContent ?? null,
-                left: Math.round(Math.min(...boxes.map((box) => box.left)) * 10) / 10,
-                right: Math.round(Math.max(...boxes.map((box) => box.right)) * 10) / 10,
-                lines: new Set(boxes.map((box) => Math.round(box.top))).size,
-                inside: boxes.length > 0 && boxes.every((box) => box.width > 0 && box.left >= stage.left - 0.5 && box.right <= stage.right + 0.5 && box.right <= window.innerWidth + 0.5),
-              };
-            };
-            /* A point in the middle of each part's last line lands on that part: nothing covers or clips it. */
-            const reachable = (name: string) => {
-              const element = line.querySelector<HTMLElement>(`[data-prototype-caption-${name}]`)!;
-              const last = [...element.getClientRects()].at(-1)!;
-              const hit = document.elementFromPoint(last.left + last.width / 2, last.top + last.height / 2);
-              return hit === element || element.contains(hit);
-            };
-            return { viewport: window.innerWidth, stage: [Math.round(stage.left), Math.round(stage.right)], clipped: line.scrollWidth - line.clientWidth, number: part("number"), name: part("name"), caption: part("text"), reachable: { number: reachable("number"), name: reachable("name"), caption: reachable("text") } };
-          });
-          record("longest-name-and-caption", longest);
-          await shot("longest-name-and-caption");
-          await frameCheck("longest-name-and-caption");
-          if (longest.name.text?.length !== 60 || (longest.caption.text?.length ?? 0) < 190) failures.push(`${label}: the boundary case shows a name of ${longest.name.text?.length} and a caption of ${longest.caption.text?.length} characters`);
-          if (!longest.number.inside || !longest.name.inside || !longest.caption.inside || longest.clipped > 0) failures.push(`${label}: the longest name and caption leave the stage: ${JSON.stringify(longest)}`);
-          if (!longest.reachable.number || !longest.reachable.name || !longest.reachable.caption) failures.push(`${label}: part of the longest name and caption is covered: ${JSON.stringify(longest.reachable)}`);
-          await page.locator(`${REVIEW} [data-prototype-step="previous"]`).click();
-
-          /* 11b. Closing while speech is transcribed, with nothing typed, asks
-             first; the words that come back afterwards are kept and saved once. */
-          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 2_500; });
-          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
-          const stopSpeech = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
-          await stopSpeech.waitFor({ timeout: 10_000 });
-          await page.waitForTimeout(1_600);
-          await stopSpeech.click();
-          await stopSpeech.waitFor({ state: "detached", timeout: 5_000 });
-          const emptyWhileTranscribed = await page.locator("[data-prototype-comment-field]").inputValue();
-          await page.keyboard.press("Escape");
-          await page.waitForTimeout(300);
-          const asked = { field: emptyWhileTranscribed, review: await page.locator(REVIEW).count(), guard: await page.locator("[data-prototype-guard]").count() };
-          await shot("transcribing-guard").catch(() => {});
-          await contextCheck("transcribing-guard");
-          const late = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
-          const arrived = asked.review === 1 && await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, late, { timeout: 10_000 }).then(() => true, () => false);
-          const stillAsking = await page.locator("[data-prototype-guard]").count();
-          if (stillAsking) await page.locator("[data-prototype-guard-keep]").click();
-          record("transcribing-guard", { ...asked, arrived, guardAfterArrival: stillAsking });
-          if (asked.field !== "" || asked.review !== 1 || asked.guard !== 1 || !arrived || stillAsking !== 1) throw new Error(`closing while speech was transcribed read ${JSON.stringify({ ...asked, arrived, stillAsking })}`);
-          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 0; });
-
-          await page.locator(`${REVIEW} [data-prototype-choose="1"]`).click();
-          await page.locator("[data-prototype-save]").click();
-          await page.waitForSelector(`${scope} [data-prototype-delivery="no-orchestrator"]`, { timeout: 10_000 });
-          await settle();
-          await shot("no-orchestrator");
-          await frameCheck("no-orchestrator");
-          await deliveryRow("no-orchestrator");
-          const unsent = await page.locator("[data-prototype-delivery]").textContent();
-          record("no-orchestrator", unsent);
-          const keptSpeech = { comment: await page.locator(`${scope} [data-prototype-decision] [data-prototype-comment]`).textContent(), posts: (await posts()).filter((post) => post.taskId === "t-upload").length };
-          record("transcribed-comment-saved", keptSpeech);
-          if (keptSpeech.comment !== late || keptSpeech.posts !== 1) failures.push(`${label}: the comment kept through the guard was saved as ${JSON.stringify(keptSpeech)}`);
-          if (!unsent?.includes(tr("proto.delivery.no-orchestrator"))) failures.push(`${label}: with no orchestrator the review says ${unsent}`);
-          await closeReview();
-          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
-
-          await page.waitForFunction(({ phone, want }) => (phone
-            ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
-            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN")) === want, { phone: size.phone, want: waitingBefore - 2 }, { timeout: 10_000 }).catch(() => {});
-          const waitingAfterBoth = await needsYouCount();
-          record("needs-you-after", { before: waitingBefore, afterChoice: waitingAfterChoice, afterBoth: waitingAfterBoth, tab: await tabCount() });
-          /* The newer round of the links task still waits, with the board's other waits. */
-          if (waitingAfterBoth !== waitingBefore - 2) failures.push(`${label}: ${waitingAfterBoth} wait after two choices, expected ${waitingBefore - 2}`);
-
-          /* 12. A newer round after a decision, and the earlier round still opens. */
-          await openTask("t-links");
-          if (size.phone) await page.locator('[data-phone-task-prototype="t-links"]').click();
-          await page.waitForSelector(`${REVIEW} [data-prototype-rounds]`, { timeout: 10_000 });
-          await settle();
-          const newer = await stageState();
-          await shot("newer-round");
-          await frameCheck("newer-round");
-          await page.locator('[data-prototype-round="r-links-1"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-decision="r-links-1"]`, { timeout: 5_000 });
-          await settle();
-          await shot("earlier-round");
-          await frameCheck("earlier-round");
-          await accentCheck("earlier-round", true);
-          const earlier = await stageState();
-          record("rounds", { newer: newer.round, earlier: earlier.round, earlierChosen: earlier.chosen });
-          if (newer.round !== "r-links-2" || earlier.round !== "r-links-1" || JSON.stringify(earlier.chosen) !== JSON.stringify(["1"])) failures.push(`${label}: the rounds read ${JSON.stringify({ newer: newer.round, earlier: earlier.round, chosen: earlier.chosen })}`);
-
-          /* 12a. Speech belongs to the round it was started in: while it is
-             recorded and transcribed the other round does not open, and the
-             words land in the waiting round only. */
-          await page.locator('[data-prototype-round="r-links-2"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-decide="r-links-2"]`, { timeout: 5_000 });
-          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 2_000; });
-          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
-          const stopPinned = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
-          await stopPinned.waitFor({ timeout: 10_000 });
-          await page.waitForTimeout(1_200);
-          /* A press the way the operator makes it: a click on the tab's middle, through anything drawn over it. */
-          const tryEarlier = () => page.evaluate(() => {
-            const tab = document.querySelector<HTMLButtonElement>('[data-prototype-round="r-links-1"]')!;
-            const box = tab.getBoundingClientRect();
-            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-            (hit instanceof HTMLElement ? hit : tab).click();
-            return { disabled: tab.disabled, title: tab.title };
-          });
-          const duringRecording = await tryEarlier();
-          await settle();
-          const shownRecording = (await stageState()).round;
-          await shot("dictating-round-pinned");
-          await frameCheck("dictating-round-pinned");
-          if (shownRecording !== "r-links-2") {
-            failures.push(`${label}: pressing the earlier round while speech was recorded showed ${shownRecording}`);
-            await page.locator('[data-prototype-round="r-links-2"]').click();
-          }
-          await stopPinned.click();
-          await stopPinned.waitFor({ state: "detached", timeout: 5_000 });
-          const duringTranscription = await tryEarlier();
-          await settle();
-          const shownTranscribing = (await stageState()).round;
-          const pinnedWords = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
-          const landed = await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, pinnedWords, { timeout: 10_000 }).then(() => true, () => false);
-          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 0; });
-          await page.locator('[data-prototype-round="r-links-1"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-decision="r-links-1"]`, { timeout: 5_000 });
-          const earlierComment = await page.locator(`${scope} [data-prototype-decision] [data-prototype-comment]`).textContent().catch(() => null);
-          await page.locator('[data-prototype-round="r-links-2"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-decide="r-links-2"]`, { timeout: 5_000 });
-          const keptInWaiting = await page.locator("[data-prototype-comment-field]").inputValue();
-          const pinned = { duringRecording, shownRecording, duringTranscription, shownTranscribing, landed, earlierComment, keptInWaiting, linksPosts: (await posts()).filter((post) => post.taskId === "t-links").length };
-          record("dictation-round-pinned", pinned);
-          if (!duringRecording.disabled || !duringTranscription.disabled || duringRecording.title !== tr("proto.round.speaking") || shownRecording !== "r-links-2" || shownTranscribing !== "r-links-2" || !landed || earlierComment?.includes(pinnedWords) || keptInWaiting !== pinnedWords || pinned.linksPosts !== 0) failures.push(`${label}: speech left the round it was started in: ${JSON.stringify(pinned)}`);
-          /* The dictated comment is unsaved: closing asks, and discarding closes. */
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-prototype-guard]", { timeout: 5_000 });
-          await page.locator("[data-prototype-guard-discard]").click();
-          await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
-          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
-
-          /* 13. Files no longer readable: the variants and the decision stay. */
-          await openTask("t-export");
-          if (size.phone) await page.locator('[data-phone-task-prototype="t-export"]').click();
-          await page.waitForSelector(`${REVIEW} [data-prototype-gone]`, { timeout: 10_000 });
-          await settle();
-          await shot("files-gone");
-          await frameCheck("files-gone");
-          await accentCheck("files-gone", true);
-          const goneState = await page.evaluate(() => ({ retired: Boolean(document.querySelector("[data-prototype-retired]")), banner: document.querySelector("[data-prototype-retired]")?.textContent ?? "", decision: Boolean(document.querySelector("[data-prototype-decision]")), images: document.querySelectorAll("[data-prototype-canvas] img").length }));
-          record("files-gone", goneState);
-          if (!goneState.retired || !goneState.decision || goneState.images) failures.push(`${label}: a retired round reads ${JSON.stringify(goneState)}`);
-          if (lang === "en" && /\d+\/\d+\/\d{4}/.test(goneState.banner)) failures.push(`${label}: the files-gone banner writes a numeric date: ${goneState.banner}`);
-          await closeReview();
-          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
-
-          /* 14. A send that failed: the decision is kept and one retry sends it. */
-          await openTask("t-disk");
-          if (size.phone) await page.locator('[data-phone-task-prototype="t-disk"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-delivery="failed"]`, { timeout: 10_000 });
-          await settle();
-          await shot("send-failed");
-          await frameCheck("send-failed");
-          await accentCheck("send-failed", true);
-          await deliveryRow("send-failed");
-          /* The first retry comes back unconfirmed and offers itself again; the second lands. */
-          await page.evaluate(() => { (window as unknown as { protoRetryAnswers: string[] }).protoRetryAnswers = ["uncertain"]; });
-          await page.locator("[data-prototype-retry]").click();
-          await page.waitForSelector(`${scope} [data-prototype-delivery="uncertain"]`, { timeout: 10_000 });
-          await settle();
-          await shot("send-uncertain");
-          await frameCheck("send-uncertain");
-          await deliveryRow("send-uncertain");
-          await page.locator("[data-prototype-retry]").click();
-          await page.waitForSelector(`${scope} [data-prototype-delivery="sent"]`, { timeout: 10_000 });
-          const retries = (await posts()).filter((post) => post.taskId === "t-disk");
-          record("retry", { posts: retries, button: await page.locator("[data-prototype-retry]").count() });
-          if (retries.length !== 2 || retries.some((post) => post.retry !== true) || await page.locator("[data-prototype-retry]").count()) failures.push(`${label}: the retry sent ${JSON.stringify(retries)} and the button ${await page.locator("[data-prototype-retry]").count() ? "stays" : "went"}`);
-          await shot("retry-sent");
-          await closeReview();
-          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-        } catch (error) {
-          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}${pageErrors.length ? ` (page errors: ${pageErrors.join(" | ")})` : ""}`);
-          await shot("failed-here").catch(() => {});
-        } finally {
-          await context.close();
-        }
+      const { context, page } = await openFixture(browser, `${server.base}?proto=1`, VIEWPORT, "light", "en", "reduce");
+      for (const [task, state] of [["t-search", "ready"], ["t-upload", "ready"], ["t-export", "decided"], ["t-links", "ready"]]) {
+        const button = page.locator(`[data-prototype-button="${task}"]`);
+        expect(await button.getAttribute("data-prototype-state")).toBe(state);
       }
-    } finally {
-      await browser.close();
-      server.stop();
-    }
-    if (!only.length) fs.writeFileSync("evidence/prototype-review/readings.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
-    else fs.writeFileSync(path.join(out, "partial-readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
-    if (failures.length) throw new Error(failures.join("\n"));
-  }, 1_800_000);
+      await page.locator('[data-prototype-button="t-search"]').click();
+      await page.locator('[data-prototype-gallery]').waitFor();
+      expect(await page.locator('[data-prototype-tile]').count()).toBe(49);
+      await page.locator('[data-prototype-choose="1"]').click();
+      await page.keyboard.press("3");
+      await page.locator('[data-prototype-comment-field]').fill("Combine the compact list with the dense table.");
+      await page.locator('[data-prototype-save]').click();
+      await page.locator('[data-prototype-decision]').waitFor();
+      const posts = await page.evaluate(() => (window as unknown as { protoPosts: { chosen: number[]; comment: string }[] }).protoPosts);
+      expect(posts.at(-1)?.chosen).toEqual([1, 3]);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-prototype-button="t-export"]').click();
+      await page.locator('[data-prototype-retired]').waitFor();
+      expect(await page.locator('[data-prototype-gone]').count()).toBeGreaterThan(0);
+      expect(await page.locator('[data-prototype-save]').count()).toBe(0);
+      await context.close();
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });
 
 describe("orchestrator wires after a seat action", () => {
@@ -29261,6 +28285,7 @@ describe("short questionnaire rendered evidence", () => {
     const readings: unknown[] = [];
     try {
       for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        if (process.env.PROTOTYPE_QUESTION_ONLY && process.env.PROTOTYPE_QUESTION_ONLY !== `${lang}-${scheme}`) continue;
         for (const taskId of ["t-search", "t-upload", "t-links", "t-disk", "t-export"]) {
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 1440, height: 900 }, scheme, lang, "reduce", false);
           try {
@@ -29280,7 +28305,8 @@ describe("short questionnaire rendered evidence", () => {
               await opener.scrollIntoViewIfNeeded();
               await opener.click();
             }
-            await page.waitForSelector("[data-prototype-questions]");
+            await page.waitForSelector("[data-prototype-review] [data-prototype-questions]");
+            const review = page.locator("[data-prototype-review]");
             const reading = await capturePrototypeQuestions(page, false);
             expect(reading.sideways).toBeLessThanOrEqual(1);
             expect(reading.pillOverflow).toBe(0);
@@ -29299,11 +28325,11 @@ describe("short questionnaire rendered evidence", () => {
             readings.push({ lang, scheme, taskId, width: 1440, ...reading });
             if (taskId === "t-search" || taskId === "t-upload") {
               /* Arrows in a single-choice group move focus and answer together, Other included, and never the gallery. */
-              const checkedOf = (id: string) => page.locator(`[data-prototype-question="${id}"] [role="radio"]`).evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-checked") === "true"));
+              const checkedOf = (id: string) => review.locator(`[data-prototype-question="${id}"] [role="radio"]`).evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-checked") === "true"));
               const focusedOption = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-option") ?? (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-other"));
-              const position = () => page.locator("[data-prototype-position]").first().textContent().catch(() => null);
+              const position = () => review.locator("[data-prototype-position]").first().textContent().catch(() => null);
               const before = taskId === "t-upload" ? await position() : null;
-              await page.locator('[data-prototype-option="place:0"]').focus();
+              await review.locator('[data-prototype-option="place:0"]').focus();
               const places = (await checkedOf("place")).length;
               await page.keyboard.press("ArrowRight");
               expect((await checkedOf("place")).slice(0, 2)).toEqual([false, true]);
@@ -29317,21 +28343,21 @@ describe("short questionnaire rendered evidence", () => {
               expect(await focusedOption()).toBe(`place:${places - 1}`);
               await page.keyboard.press("ArrowRight");
               expect((await checkedOf("place"))[0]).toBe(true);
-              await page.locator('[data-prototype-option="timing:0"]').focus();
+              await review.locator('[data-prototype-option="timing:0"]').focus();
               await page.keyboard.press("ArrowLeft");
               expect(await focusedOption()).toBe("timing");
-              expect(await page.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("true");
+              expect(await review.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("true");
               expect((await checkedOf("timing")).filter(Boolean)).toHaveLength(1);
               await page.keyboard.press("ArrowRight");
               expect(await focusedOption()).toBe("timing:0");
-              expect(await page.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("false");
+              expect(await review.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("false");
               expect((await checkedOf("timing"))[0]).toBe(true);
               if (taskId === "t-upload") expect(await position()).toBe(before);
             }
             if (taskId === "t-links") {
-              await page.locator('[data-prototype-option="place:1"]').click();
-              await page.locator('[data-prototype-save]').click();
-              await page.waitForSelector('[data-prototype-decision]');
+              await review.locator('[data-prototype-option="place:1"]').click();
+              await review.locator('[data-prototype-save]').click();
+              await review.locator('[data-prototype-decision]').waitFor();
               const posted = await page.evaluate(() => (window as unknown as { protoPosts: Array<{ answers: Array<{ questionId: string; options: number[] }> }> }).protoPosts.at(-1));
               expect(posted?.answers[0]?.options).toEqual([0,1]);
               const settled = await capturePrototypeQuestions(page, false);
@@ -29342,8 +28368,8 @@ describe("short questionnaire rendered evidence", () => {
               await page.screenshot({ path: path.join(out, `${label}-answered.png`) });
             }
             if (taskId === "t-search") {
-              await page.locator('[data-prototype-skip]').click();
-              await page.waitForSelector('[data-prototype-skipped]');
+              await review.locator('[data-prototype-skip]').click();
+              await review.locator('[data-prototype-skipped]').waitFor();
               const skipped = await capturePrototypeQuestions(page, false);
               expect(skipped.readonly).toBe(true); expect(skipped.hints).toBe(0); expect(skipped.unpickedFaded).toBe(true);
               expect(skipped.statusLine).toBe(lang === "uk" ? "Пропущено, взято рекомендовані" : "Skipped, recommended answers taken");
@@ -29359,7 +28385,10 @@ describe("short questionnaire rendered evidence", () => {
         }
       }
       fs.mkdirSync("evidence/prototype-review", { recursive: true });
-      fs.writeFileSync("evidence/prototype-review/questions.json", JSON.stringify(readings, null, 2) + "\n");
+      const file = "evidence/prototype-review/questions.json";
+      const prior = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as { lang: string; scheme: string }[] : [];
+      const retained = process.env.PROTOTYPE_QUESTION_ONLY ? prior.filter(row => `${row.lang}-${row.scheme}` !== process.env.PROTOTYPE_QUESTION_ONLY) : [];
+      fs.writeFileSync(file, JSON.stringify([...retained, ...readings], null, 2) + "\n");
     } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
   }, 900_000);
 });
@@ -29683,7 +28712,7 @@ describe("operator decision forms: the «Рішення» column beside the seat
   const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   const waitingCount = (page: Page, phone: boolean) => page.evaluate((onPhone) => onPhone
     ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
-    : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "0"), phone);
+    : Number((document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? document.querySelector("[data-needs-you-title]")?.textContent?.match(/\d+\s*$/)?.[0] ?? "0")), phone);
   const readMirror = (page: Page, list: string) => page.evaluate(({ list, ids }) => {
     const root = document.querySelector<HTMLElement>(list);
     const frame = root?.getBoundingClientRect();
@@ -29760,7 +28789,7 @@ describe("operator decision forms: the «Рішення» column beside the seat
           await page.waitForSelector(`[data-decision-list] [data-decision-review="${SEAT_ASK}"], [data-decision-row="${SEAT_ASK}"]`, { state: "detached", timeout: 10_000 });
           await page.waitForFunction(({ phone, expected }) => (phone
             ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
-            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "0")) === expected, { phone, expected: before - 1 }, { timeout: 15_000 }).catch(() => {});
+            : Number((document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? document.querySelector("[data-needs-you-title]")?.textContent?.match(/\d+\s*$/)?.[0] ?? "0"))) === expected, { phone, expected: before - 1 }, { timeout: 15_000 }).catch(() => {});
           /* The sheet that stood in for the column closes as any sheet does. */
           if (await page.locator("[data-decision-sheet]").count()) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-decision-sheet]", { state: "detached", timeout: 5_000 }); }
           await openList();
@@ -30854,4 +29883,185 @@ describe("the seat column and the agent window keep 60% of the conversation", ()
     fs.writeFileSync(path.join(EVIDENCE, "board.json"), `${JSON.stringify({ floor: FLOOR, frames, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 900_000);
+});
+
+
+describe("prototype review: none fits and the tile gallery", () => {
+  const SIZES = [
+    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false, columns: 5 },
+    { name: "pane-1000", viewport: { width: 1000, height: 700 }, phone: false, columns: 3 },
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true, columns: 2 },
+  ];
+  browserTest("prototype review: none fits and the tile gallery at desktop and phone widths", async () => {
+    const out = path.resolve(".artifacts/prototype-review"); fs.mkdirSync(out, { recursive: true });
+    const video = path.join(out, "proto-video.webm");
+    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12:duration=2", "-c:v", "libvpx", "-b:v", "400k", video]);
+    const server = await serveEvidenceFixture(out, undefined, { "/proto-video.webm": () => new Response(Bun.file(video), { headers: { "content-type": "video/webm" } }) });
+    const browser = await chromium.launch(LAUNCH);
+    const evidencePath = "evidence/prototype-review/none-fits-gallery.json";
+    const readings: Record<string, unknown> = fs.existsSync(evidencePath) ? JSON.parse(fs.readFileSync(evidencePath, "utf8")) : {};
+    const only = (process.env.PROTOTYPE_REVIEW_ONLY ?? "").split(",").filter(Boolean);
+    try {
+      for (const size of SIZES) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const name = `${size.name}-${locale}-${theme}`;
+        if (only.length && !only.some(filter => name.includes(filter))) continue;
+        const context = await browser.newContext({ viewport: size.viewport, locale: locale === "uk" ? "uk-UA" : "en-GB", isMobile: size.phone, hasTouch: size.phone, colorScheme: theme, reducedMotion: "reduce" });
+        await context.addInitScript(language => localStorage.setItem("llv_lang", language), locale);
+        const page = await context.newPage();
+        await page.route("**/api/operator/settings", route => route.fulfill({ json: { language: locale } }));
+        await page.goto(`${server.base}?proto=1&duplicate-frames=1&lang=${locale}`);
+        await page.evaluate(theme => { document.documentElement.setAttribute("data-theme", theme); localStorage.setItem("llv-theme", theme); }, theme);
+        await page.locator('[data-prototype-button="t-search"], [data-phone-card-prototype-button="t-search"]').first().waitFor();
+        await page.locator(size.phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]').click();
+        await page.locator('[data-prototype-gallery]').waitFor();
+        const capture = async (state: string) => { await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-tile] img")].filter(img => { const box = img.getBoundingClientRect(); return box.bottom > 0 && box.top < innerHeight; }).every(img => img.complete && img.naturalWidth > 0)); await page.screenshot({ path: path.join(out, `${name}-${state}.png`) }); };
+        const geometry = await page.evaluate(({ width, phone }) => {
+          const gallery = document.querySelector<HTMLElement>("[data-prototype-gallery]")!;
+          const scroll = phone ? gallery.closest<HTMLElement>("[data-mobile2-sheet-body]")! : gallery;
+          const bounds = gallery.getBoundingClientRect(); gallery.scrollLeft = 10000;
+          const tiles = [...gallery.querySelectorAll<HTMLElement>("[data-prototype-tile]")];
+          const squares = [...gallery.querySelectorAll<HTMLElement>("[data-prototype-tile-square]")].map(el => el.getBoundingClientRect());
+          const captions = [...gallery.querySelectorAll<HTMLElement>("[data-prototype-tile-caption]")].map(el => {
+            const range = document.createRange(); range.selectNodeContents(el);
+            const own = el.getBoundingClientRect(); const text = range.getBoundingClientRect();
+            return { text: el.textContent, fits: text.left >= own.left - .5 && text.right <= own.right + .5 && text.bottom <= own.bottom + .5 };
+          });
+          return {
+            tiles: tiles.length, stage: !!document.querySelector("[data-prototype-stage]"), strip: !!document.querySelector("[data-prototype-strip]"),
+            columns: getComputedStyle(document.querySelector("[data-prototype-grid]")!).gridTemplateColumns.split(" ").length,
+            scrollLeft: gallery.scrollLeft, vertical: scroll.scrollHeight > scroll.clientHeight,
+            contained: tiles.every(el => el.getBoundingClientRect().right <= Math.min(bounds.right, width) + .5),
+            squares: squares.every(box => Math.abs(box.width - box.height) <= .5),
+            numbers: tiles.every(el => el.querySelector("[data-prototype-tile-number]")?.textContent === el.closest<HTMLElement>("[data-prototype-group]")?.dataset.prototypeGroup),
+            captions,
+          };
+        }, { width: size.viewport.width, phone: size.phone });
+        expect(geometry.stage).toBe(false); expect(geometry.strip).toBe(false);
+        expect(geometry.tiles).toBe(49); expect(geometry.columns).toBe(size.columns);
+        expect(geometry.scrollLeft).toBe(0); expect(geometry.vertical).toBe(true);
+        expect(geometry.contained).toBe(true); expect(geometry.squares).toBe(true); expect(geometry.numbers).toBe(true);
+        expect(geometry.captions.every(caption => caption.fits)).toBe(true);
+        await capture("rest");
+        const tile = page.locator('[data-prototype-tile="1:f0"]');
+        const src = await tile.locator("img").getAttribute("src"); await tile.click();
+        await page.locator('[data-lightbox-position]').waitFor();
+        expect(await page.locator('[role=dialog]:has([data-lightbox-position]) img:visible').first().getAttribute("src")).toBe(src);
+        await capture("enlarged"); await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-prototype-tile") === "1:f0");
+        const returned = await tile.evaluate(el => { const box = el.getBoundingClientRect(); const body = el.closest<HTMLElement>("[data-mobile2-sheet-body]"); const scroll = (body ?? el.closest<HTMLElement>("[data-prototype-gallery]")!).getBoundingClientRect(); const context = body?.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect(); return box.top >= Math.max(scroll.top, context?.bottom ?? scroll.top) - .5 && box.bottom <= scroll.bottom + .5; });
+        expect(returned).toBe(true);
+        const duplicateTile = page.locator('[data-prototype-tile="2:f0"]');
+        const duplicateSrc = await duplicateTile.locator("img").getAttribute("src");
+        expect(duplicateSrc).toBe(src);
+        await duplicateTile.click(); await page.locator('[data-lightbox-position]').waitFor();
+        const duplicateOpened = { position: await page.locator('[data-lightbox-position]').innerText(), caption: await page.locator('[data-lightbox-caption]').innerText() };
+        expect(duplicateOpened.position).toBe("4 / 48");
+        expect(duplicateOpened.caption).toContain(locale === "uk" ? "2 · Дві колонки" : "2 · Two columns");
+        await capture("duplicate-frame");
+        await page.keyboard.press("ArrowLeft");
+        expect(await page.locator('[data-lightbox-position]').innerText()).toBe("3 / 48");
+        await page.keyboard.press("ArrowRight");
+        expect(await page.locator('[data-lightbox-position]').innerText()).toBe("4 / 48");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-prototype-tile") === "2:f0");
+        const duplicateReturned = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-tile"));
+        await page.locator('[data-prototype-choose="1"]').first().click(); await capture("picked");
+        await page.locator('[data-prototype-comment-field]').fill(locale === "uk" ? "Спростити всі варіанти." : "Simplify every variant."); await capture("pickedtext");
+        await page.locator('[data-prototype-comment-field]').fill("");
+        await page.locator('[data-prototype-reject]').click();
+        const armed = await page.locator('[data-prototype-variant]').evaluateAll(rows => rows.every(el => el.getAttribute("data-chosen") === "0")); expect(armed).toBe(true);
+        expect(await page.locator('[data-prototype-save]').innerText()).toBe(translate(locale, "proto.reject.save"));
+        const postsBefore = await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length);
+        await page.locator('[data-prototype-save]').click(); await page.locator('[data-prototype-reject-needs]').waitFor();
+        expect(await page.locator('[data-prototype-comment-field]').getAttribute("aria-invalid")).toBe("true");
+        expect(await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length)).toBe(postsBefore);
+        await capture("asks");
+        const footer = await page.evaluate(() => {
+          const chip = document.querySelector<HTMLElement>("[data-prototype-reject]")!.getBoundingClientRect();
+          const actions = [...document.querySelectorAll<HTMLElement>("[data-prototype-actions] button")].map(el => el.getBoundingClientRect());
+          const prompt = document.querySelector<HTMLElement>("[data-prototype-reject-needs]")!.getBoundingClientRect();
+          const colors = getComputedStyle(document.querySelector<HTMLElement>("[data-prototype-save]")!);
+          const luminance = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(channel => channel / 255).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, i) => sum + channel * [.2126, .7152, .0722][i]!, 0);
+          const luminances = [luminance(colors.color), luminance(colors.backgroundColor)].sort((a, b) => a - b);
+          const contrast = (luminances[1]! + .05) / (luminances[0]! + .05);
+          return { chipHeight: chip.height, actionHeights: actions.map(box => box.height), oneRow: actions.every(box => Math.abs(box.top - actions[0]!.top) < .5), promptVisible: prompt.bottom <= innerHeight, contrast, overlaps: actions.some(box => box.left < chip.right && box.right > chip.left && box.top < chip.bottom && box.bottom > chip.top) };
+        });
+        expect(footer.overlaps).toBe(false); expect(footer.promptVisible).toBe(true); expect(footer.oneRow).toBe(true);
+        expect(footer.contrast).toBeGreaterThanOrEqual(4.5);
+        expect(footer.actionHeights.every(height => Math.abs(height - footer.chipHeight) < .5)).toBe(true);
+        if (size.phone) expect(footer.chipHeight).toBe(44);
+        const corrections = locale === "uk" ? "Спростити всі варіанти." : "Simplify every variant.";
+        await page.locator('[data-prototype-comment-field]').fill(corrections); await capture("armed");
+        await page.locator('[data-prototype-save]').click(); await page.locator('[data-prototype-rejected]').waitFor();
+        const posted = await page.evaluate(() => (window as unknown as { protoPosts: Record<string, unknown>[] }).protoPosts.at(-1));
+        expect(posted).toEqual({ taskId: "t-search", reviewId: "r-search", chosen: [], comment: corrections, reject: true });
+        expect(await page.locator('[data-prototype-comment]').innerText()).toBe(corrections); await capture("rejected");
+        await page.keyboard.press("Escape");
+        const cardButton = page.locator(size.phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]');
+        expect(await cardButton.getAttribute("aria-label")).toContain(locale === "uk" ? "Прототип відхилено" : "Prototype rejected");
+        if (size.phone) {
+          await page.locator('[data-phone-card="task:t-search"]').click();
+          const row = page.locator('[data-phone-task-prototype="t-search"]');
+          await row.waitFor();
+          expect(await row.innerText()).toContain(locale === "uk" ? "відхилено" : "rejected");
+        }
+        readings[name] = { geometry, returned, duplicateOpened, duplicateReturned, armed, footer, posted, frames: ["rest", "enlarged", "duplicate-frame", "picked", "pickedtext", "asks", "armed", "rejected"].map(state => `.artifacts/prototype-review/${name}-${state}.png`) };
+        fs.mkdirSync(path.dirname(evidencePath), { recursive: true }); fs.writeFileSync(evidencePath, `${JSON.stringify(readings, null, 2)}\n`);
+        await context.close();
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});
+
+
+describe("operator decision forms: rejecting the task's prototype variants", () => {
+  browserTest("none fits needs corrections in the form and sends an empty choice as rejection", async () => {
+    const out = path.resolve(".artifacts/prototype-review/decision-rejection");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator("[data-decision-strip]").click();
+          }
+          const card = page.locator('[data-decision-card="open"]');
+          await card.waitFor({ timeout: 30_000 });
+          const reject = card.locator("[data-decision-reject]");
+          await reject.click();
+          expect(await reject.getAttribute("aria-checked")).toBe("true");
+          expect(await card.locator("[data-decision-send]").isEnabled()).toBe(false);
+          await card.locator("[data-decision-comment]").fill("Redo all variants with fewer controls.");
+          const send = card.locator("[data-decision-send]");
+          expect(await send.textContent()).toContain(translate(lang, "proto.reject.save"));
+          await send.scrollIntoViewIfNeeded();
+          const geometry = await send.evaluate((element, width) => {
+            const box = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+            return { height: box.height, inside: box.left >= 0 && box.right <= width && box.top >= 0 && box.bottom <= innerHeight,
+              overflow: document.documentElement.scrollWidth > width,
+              uncovered: hit === element || element.contains(hit), background: getComputedStyle(element).backgroundColor };
+          }, width);
+          expect(geometry.inside).toBe(true); expect(geometry.uncovered).toBe(true);
+          expect(geometry.overflow).toBe(false);
+          expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
+          if (phone) expect(geometry.height).toBeGreaterThanOrEqual(44);
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}-corrections.png`) });
+          await send.click();
+          await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 1);
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: { reviewId: string; reject?: boolean; chosen: number[]; comment: string }[] }).decisionPosts);
+          expect(posts[0]).toMatchObject({ reviewId: `pr_${"c".repeat(32)}`, reject: true, chosen: [], comment: "Redo all variants with fewer controls." });
+          await page.waitForFunction(() => !document.querySelector(`[data-decision-card="open"][data-decision-review="pr_${"c".repeat(32)}"]`));
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, lang, scheme, geometry, posts });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync("evidence/prototype-review/decision-rejection.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 300_000);
 });

@@ -1007,3 +1007,8 @@ test("the board walk clears only rows that ask nothing and replaces the shipped 
   expect(orchestratorMandateForDelivery(shipped)).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(orchestratorMandateForDelivery(shipped.replace("Take its sections", "Walk its sections"))).toContain("Walk its sections");
 });
+
+
+test("the role table names the gated prototype lane", () => {
+  expect(orchestratorRoleTable(ROLE_DEFAULTS)).toContain("Prototype lane: prototype → critic → proto-fix (2 rounds) → publish");
+});
