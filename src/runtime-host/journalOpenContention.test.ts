@@ -22,6 +22,14 @@ async function recovering(filename: string, holdMs = 0): Promise<{ stop: () => P
   return { stop: async () => { child.kill(); await child.exited; } };
 }
 
+/** Another process holding a write transaction on `filename`, for `holdMs` or until stopped. */
+async function writing(filename: string, holdMs = 0): Promise<{ stop: () => Promise<void> }> {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/journalWriterLockHolder.ts"), filename, String(holdMs)], { stdout: "pipe", stderr: "inherit" });
+  const { value } = await child.stdout.getReader().read();
+  if (!new TextDecoder().decode(value).startsWith("held")) throw new Error("the writer lock holder did not start");
+  return { stop: async () => { child.kill(); await child.exited; } };
+}
+
 test.skipIf(!linux)("an open waits while another process recovers the WAL", async () => {
   const filename = existingJournal("released.sqlite");
   const holder = await recovering(filename, 1000);
@@ -52,6 +60,38 @@ test.skipIf(!linux)("an open refuses by name after the bound when the recovery l
     expect(waitedMs).toBeLessThan(RUNTIME_JOURNAL_BUSY_TIMEOUT_MS + 10_000);
   } finally { await holder.stop(); }
   // The refused open left nothing behind that blocks the next one.
+  const journal = await RuntimeJournal.open(filename);
+  try { expect(journal.isWritable()).toBe(true); } finally { journal.close(); }
+}, 60_000);
+
+test("an open waits while another process holds a write transaction", async () => {
+  const filename = existingJournal("writer-released.sqlite");
+  const holder = await writing(filename, 1000);
+  try {
+    const started = performance.now();
+    const journal = await RuntimeJournal.open(filename);
+    const waitedMs = performance.now() - started;
+    try { expect(journal.isWritable()).toBe(true); } finally { journal.close(); }
+    expect(waitedMs).toBeGreaterThanOrEqual(900);
+    expect(waitedMs).toBeLessThan(RUNTIME_JOURNAL_BUSY_TIMEOUT_MS);
+  } finally { await holder.stop(); }
+}, 30_000);
+
+test("an open refuses by name after the bound when a write transaction is never released", async () => {
+  const filename = existingJournal("writer-persistent.sqlite");
+  const holder = await writing(filename);
+  try {
+    const started = performance.now();
+    let refusal: (Error & { code?: string; cause?: { code?: string } }) | undefined;
+    try { (await RuntimeJournal.open(filename)).close(); } catch (error) { refusal = error as typeof refusal; }
+    const waitedMs = performance.now() - started;
+    expect(refusal?.message).toBe(`runtime journal is still locked by another process after waiting ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS} ms (SQLITE_BUSY)`);
+    expect(refusal?.code).toBe("SQLITE_BUSY");
+    expect(refusal?.cause?.code).toBe("SQLITE_BUSY");
+    // One wait, not one per statement of a batch.
+    expect(waitedMs).toBeGreaterThanOrEqual(RUNTIME_JOURNAL_BUSY_TIMEOUT_MS - 500);
+    expect(waitedMs).toBeLessThan(RUNTIME_JOURNAL_BUSY_TIMEOUT_MS + 2_000);
+  } finally { await holder.stop(); }
   const journal = await RuntimeJournal.open(filename);
   try { expect(journal.isWritable()).toBe(true); } finally { journal.close(); }
 }, 60_000);

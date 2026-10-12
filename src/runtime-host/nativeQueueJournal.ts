@@ -53,13 +53,22 @@ export class NativeQueueJournal {
        entries they mirror, which are never deleted: at most two ids per
        unsettled entry (admission refuses a conversation's 2001st), and at most
        one, its unresolved mutation, per settled entry. */
-    db.exec(`BEGIN IMMEDIATE; DELETE FROM native_queue_operation_holds;
-      INSERT OR IGNORE INTO native_queue_operation_holds(operation_id, entry_id)
-        SELECT entry_id, entry_id FROM native_queue_entries WHERE json_extract(state_json, '$.state') NOT IN ('delivered', 'removed', 'refused');
-      INSERT OR IGNORE INTO native_queue_operation_holds(operation_id, entry_id)
+    /* One statement per exec: Bun reports only the last statement's failure
+       of a batch, so a BEGIN IMMEDIATE refused for a peer's lock would let
+       every following statement wait out the busy timeout again. */
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec("DELETE FROM native_queue_operation_holds");
+      db.exec(`INSERT OR IGNORE INTO native_queue_operation_holds(operation_id, entry_id)
+        SELECT entry_id, entry_id FROM native_queue_entries WHERE json_extract(state_json, '$.state') NOT IN ('delivered', 'removed', 'refused')`);
+      db.exec(`INSERT OR IGNORE INTO native_queue_operation_holds(operation_id, entry_id)
         SELECT json_extract(state_json, '$.mutationOperationId'), entry_id FROM native_queue_entries
-        WHERE json_extract(state_json, '$.mutationOperationId') IS NOT NULL AND json_extract(state_json, '$.mutationOperationId') <> entry_id;
-      COMMIT;`);
+        WHERE json_extract(state_json, '$.mutationOperationId') IS NOT NULL AND json_extract(state_json, '$.mutationOperationId') <> entry_id`);
+      db.exec("COMMIT");
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   /** True when this id names a retained entry, settled or not. */

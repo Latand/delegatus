@@ -417,7 +417,7 @@ export class RuntimeJournal {
       return journal;
     } catch (error) {
       journal.close();
-      throw error;
+      throw runtimeJournalOpenRefusal(error);
     }
   }
 
@@ -436,86 +436,90 @@ export class RuntimeJournal {
        WAL reads the wal-index, and a peer that is the file's only connection
        (a read-only reader included) rebuilds that index under the recovery
        lock as it opens. Without a wait, a generation that opens in that
-       window dies with SQLITE_BUSY_RECOVERY. */
+       window dies with SQLITE_BUSY_RECOVERY. Each pragma runs alone because
+       Bun reports only the last failure of a batch, and a lock that outlasts
+       the wait anywhere in the open ends it by name. */
     try {
-      this.db.exec(`PRAGMA busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;`);
+      for (const pragma of [`busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}`, "journal_mode = WAL", "synchronous = FULL", "foreign_keys = ON", "auto_vacuum = INCREMENTAL"]) {
+        this.db.exec(`PRAGMA ${pragma}`);
+      }
+      this.nativeQueue = new NativeQueueJournal(this.db);
+      if (filename !== ":memory:") {
+        for (const candidate of [filename, `${filename}-wal`, `${filename}-shm`]) {
+          if (fs.existsSync(candidate)) fs.chmodSync(candidate, 0o600);
+        }
+      }
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS journal_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS events (
+          seq INTEGER PRIMARY KEY, event_id TEXT NOT NULL, scope TEXT NOT NULL, revision INTEGER NOT NULL,
+          kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+          occurred_at TEXT NOT NULL, recorded_at TEXT NOT NULL, producer_kind TEXT NOT NULL,
+          producer_account_id TEXT, producer_key TEXT, producer_host_epoch INTEGER,
+          operation_id TEXT, causation_id TEXT, correlation_id TEXT,
+          prev_hash TEXT NOT NULL, hash TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS scope_revisions (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS projections (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL, state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS entities (
+          kind TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL,
+          state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL, updated_at INTEGER,
+          PRIMARY KEY(kind, id)
+        );
+        CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, event_seq INTEGER NOT NULL, state TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS producer_receipts (producer_kind TEXT NOT NULL, producer_key TEXT NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(producer_kind, producer_key));
+        CREATE TABLE IF NOT EXISTS operations (
+          operation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+          request_hash TEXT NOT NULL, request_json TEXT NOT NULL,
+          receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL, orphaned_since INTEGER,
+          UNIQUE(conversation_id, idempotency_key)
+        );
+        CREATE TABLE IF NOT EXISTS delivery_operation_actions (
+          operation_id TEXT PRIMARY KEY,
+          winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
+          claimed_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS consumer_cursors (
+          consumer TEXT PRIMARY KEY, completed_seq INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS consumer_checkpoints (
+          event_id TEXT NOT NULL, consumer TEXT NOT NULL, completed_at INTEGER NOT NULL,
+          PRIMARY KEY(event_id, consumer)
+        );
+        CREATE TABLE IF NOT EXISTS viewer_deployments (
+          deployment_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
+          request_hash TEXT NOT NULL, status_json TEXT NOT NULL,
+          active INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS viewer_deployments_one_active
+          ON viewer_deployments(active) WHERE active = 1;
+      `);
+      this.migrateOperationIdempotencyScope();
+      this.migrateOperationOrphanedSince();
+      this.migrateOperationProjectionPending();
+      this.migrateLegacyEvents();
+      this.migrateEntityUpdatedAt();
+      this.retainLegacyStopAdmissions();
+      this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id); CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision); CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL;");
+      this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
+      this.metaSetDefault("seq", "0");
+      this.metaSetDefault("published_seq", this.metaOr("seq", "0"));
+      this.metaSetDefault("hash", "0".repeat(64));
+      this.metaSetDefault("anchor_seq", "0");
+      this.metaSetDefault("anchor_hash", "0".repeat(64));
+      this.metaSetDefault("host_epoch", "1");
+      this.metaSetDefault("health", "ready");
+      this.metaSetDefault("files_revision", "0");
+      this.sessionHostMetadata = new SessionHostMetadata(this.db);
+      this.initialization = this.initialize();
     } catch (error) {
       this.db.close();
       throw runtimeJournalOpenRefusal(error);
     }
-    this.nativeQueue = new NativeQueueJournal(this.db);
-    if (filename !== ":memory:") {
-      for (const candidate of [filename, `${filename}-wal`, `${filename}-shm`]) {
-        if (fs.existsSync(candidate)) fs.chmodSync(candidate, 0o600);
-      }
-    }
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS journal_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS events (
-        seq INTEGER PRIMARY KEY, event_id TEXT NOT NULL, scope TEXT NOT NULL, revision INTEGER NOT NULL,
-        kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL,
-        occurred_at TEXT NOT NULL, recorded_at TEXT NOT NULL, producer_kind TEXT NOT NULL,
-        producer_account_id TEXT, producer_key TEXT, producer_host_epoch INTEGER,
-        operation_id TEXT, causation_id TEXT, correlation_id TEXT,
-        prev_hash TEXT NOT NULL, hash TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS scope_revisions (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS projections (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL, state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS entities (
-        kind TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL,
-        state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL, updated_at INTEGER,
-        PRIMARY KEY(kind, id)
-      );
-      CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, event_seq INTEGER NOT NULL, state TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS producer_receipts (producer_kind TEXT NOT NULL, producer_key TEXT NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(producer_kind, producer_key));
-      CREATE TABLE IF NOT EXISTS operations (
-        operation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
-        request_hash TEXT NOT NULL, request_json TEXT NOT NULL,
-        receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL, orphaned_since INTEGER,
-        UNIQUE(conversation_id, idempotency_key)
-      );
-      CREATE TABLE IF NOT EXISTS delivery_operation_actions (
-        operation_id TEXT PRIMARY KEY,
-        winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
-        claimed_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS consumer_cursors (
-        consumer TEXT PRIMARY KEY, completed_seq INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS consumer_checkpoints (
-        event_id TEXT NOT NULL, consumer TEXT NOT NULL, completed_at INTEGER NOT NULL,
-        PRIMARY KEY(event_id, consumer)
-      );
-      CREATE TABLE IF NOT EXISTS viewer_deployments (
-        deployment_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
-        request_hash TEXT NOT NULL, status_json TEXT NOT NULL,
-        active INTEGER NOT NULL, updated_at INTEGER NOT NULL
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS viewer_deployments_one_active
-        ON viewer_deployments(active) WHERE active = 1;
-    `);
-    this.migrateOperationIdempotencyScope();
-    this.migrateOperationOrphanedSince();
-    this.migrateOperationProjectionPending();
-    this.migrateLegacyEvents();
-    this.migrateEntityUpdatedAt();
-    this.retainLegacyStopAdmissions();
-    this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
-    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id); CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision); CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL;");
-    this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
-    this.metaSetDefault("seq", "0");
-    this.metaSetDefault("published_seq", this.metaOr("seq", "0"));
-    this.metaSetDefault("hash", "0".repeat(64));
-    this.metaSetDefault("anchor_seq", "0");
-    this.metaSetDefault("anchor_hash", "0".repeat(64));
-    this.metaSetDefault("host_epoch", "1");
-    this.metaSetDefault("health", "ready");
-    this.metaSetDefault("files_revision", "0");
-    this.sessionHostMetadata = new SessionHostMetadata(this.db);
-    this.initialization = this.initialize();
     if (!options[cooperativeOpen]) {
       try { while (!this.initialization.next().done) { /* synchronous compatibility */ } }
-      catch (error) { this.close(); throw error; }
+      catch (error) { this.close(); throw runtimeJournalOpenRefusal(error); }
     }
   }
 
