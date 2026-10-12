@@ -1369,6 +1369,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     })
     : { items: [], text: seatTickProposalMessage({
       project: input.project,
+      workers: input.workers,
       snapshotAt,
       issues,
       signals: input.signals,
