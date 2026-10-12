@@ -4399,6 +4399,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.prevColumn": "Попередня колонка",
   "kanban.nextColumn": "Наступна колонка",
   "kanban.updated": "Оновлено {age}",
+  "kanban.worked": "Остання робота {age}",
+  "kanban.editedAge": "змінено {age}",
   "kanban.justNow": "щойно",
   "kanban.activityWorking": "{count} працює",
   "kanban.activityConversations": { one: "{count} розмова", few: "{count} розмови", many: "{count} розмов", other: "{count} розмов" },
