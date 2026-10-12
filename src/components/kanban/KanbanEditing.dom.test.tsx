@@ -161,6 +161,7 @@ function mount(tasks: BoardTask[], options: { ports?: TaskMutationPorts; seat?: 
         {...(options.onRestore ? { onRestoreConversation: options.onRestore } : {})}
         {...(options.assignments ? { assignmentPorts: options.assignments } : {})}
         mutationPorts={options.ports ?? server.ports}
+        barTrail={testTrail}
       />,
     ));
   };
@@ -172,6 +173,12 @@ const cardEl = (host: HTMLElement, id: string) => [...host.querySelectorAll<HTML
 const columnOf = (host: HTMLElement, id: string) => cardEl(host, id)?.closest<HTMLElement>(".column")?.dataset.status ?? null;
 const receiptTexts = (host: HTMLElement) => [...host.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent);
 const receiptAction = (host: HTMLElement, text: string) => [...host.querySelectorAll("[data-kanban-receipt]")].find((receipt) => receipt.querySelector(".msg")?.textContent === text)?.querySelector<HTMLElement>(".act") ?? null;
+/* The project's ⋯, as far as the board needs one: the control the Hidden tray opens under, and the board's own rows of it. */
+const testTrail: NonNullable<React.ComponentProps<typeof KanbanBoard>["barTrail"]> = (_accountsInMenu, extra) => (
+  <span><button type="button" data-bar-more="" />{extra.menuRows(() => {})}</span>
+);
+/* How many things Hidden counts: the count on its row of ⋯, or none when the row is not drawn. */
+const hiddenCount = (host: HTMLElement) => host.querySelector("[data-bar-more-hidden]")?.lastElementChild?.textContent ?? null;
 const click = (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   flushSync(() => (element as HTMLElement).click());
@@ -328,7 +335,7 @@ test("× hides the group at once with a receipt and Undo, focus moves to the nex
   key(cardEl(view.host, "a"), "h");
   expect(columnOf(view.host, "a")).toBeNull();
   expect(receiptTexts(view.host)).toContain("Hidden «Merge the approved queue adapter»");
-  expect(view.host.querySelector("[data-hidden-pill]")?.getAttribute("data-count")).toBe("1");
+  expect(hiddenCount(view.host)).toBe("1");
   expect(document.activeElement).toBe(cardEl(view.host, "b"));
   await tick();
   expect(view.server.patches).toEqual([{ id: "a", body: { hide: true, expectedProject: "fixture", expectedRevision: REV(1) } }]);
@@ -572,8 +579,10 @@ test("the Hidden tray lists hidden groups, empty tasks and closed conversations,
     task("b", "done", "An old empty task", { board: "hidden" }),
     task("c", "inbox", "Write the release notes"),
   ], { files: [closed], closed: [closed.path, "/fixture/not-on-this-board.jsonl"], onRestore: (file) => restored.push(file.path) });
-  expect(view.host.querySelector("[data-hidden-pill]")?.getAttribute("data-count")).toBe("3");
-  click(view.host.querySelector("[data-hidden-pill]"));
+  expect(hiddenCount(view.host)).toBe("3");
+  /* Hidden is a row of ⋯, and its tray opens under ⋯. */
+  click(view.host.querySelector("[data-bar-more-hidden]"));
+  await tick();
   const tray = view.host.querySelector(".popover.hidden-tray")!;
   expect([...tray.querySelectorAll(".sec-label")].map((node) => node.textContent)).toEqual(["Hidden groups", "Empty tasks off the board", "Closed conversations"]);
   expect(tray.querySelector("[data-hidden-group=a] .meta")?.textContent).toContain("Hidden by an agent");
@@ -585,7 +594,8 @@ test("the Hidden tray lists hidden groups, empty tasks and closed conversations,
   await tick();
   expect(view.server.patches).toEqual([{ id: "a", body: { hide: false, expectedProject: "fixture", expectedRevision: REV(1) } }]);
 
-  click(view.host.querySelector("[data-hidden-pill]"));
+  click(view.host.querySelector("[data-bar-more-hidden]"));
+  await tick();
   click(view.host.querySelector(`.hidden-tray [data-closed-conversation="${closed.path}"] .show`));
   expect(restored).toEqual([closed.path]);
   expect(receiptTexts(view.host)).toContain("«Conversation 7» is back on the board");

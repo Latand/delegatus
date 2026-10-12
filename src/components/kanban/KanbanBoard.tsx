@@ -25,7 +25,7 @@ import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
 import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { isCardHandle, startCardGesture } from "./cardDrag";
-import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
+import { kanbanColumnTracks, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
@@ -36,7 +36,7 @@ import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
-import { BAR_WIDE_MIN, BarCreateGroup, BarIslandSlot, useBoardPaneRef } from "@/components/ProjectBar";
+import { BAR_MENU_ROW, BarCreateGroup, BarFilterMenu, BarIslandSlot, BarRecentAgents, useBarFit, useBoardPaneRef } from "@/components/ProjectBar";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
 import type { CardEditField } from "./CardInlineText";
@@ -146,14 +146,16 @@ export interface KanbanBoardProps {
   updating?: boolean;
   catalogFailures: number;
   selection: ReadonlySet<string>;
-  /** The Board / Conversations switch, given whether the bar is wide enough for labels. */
-  viewSwitch?: ReactNode | ((wide: boolean) => ReactNode);
-  /** The bar's first group (the project's name and accounts), given the bar's tier (#1801). */
-  barLead?: (wide: boolean) => ReactNode;
-  /** The bar's last groups (the panel toggles and the ⋯ menu), given the bar's tier (#1801). */
-  barTrail?: (wide: boolean) => ReactNode;
+  /** The bar's first group (the project's name and accounts) (#1801). */
+  barLead?: () => ReactNode;
+  /** The bar's last groups (the panel toggles and the ⋯ menu), given whether the row gave the
+      account switches up to ⋯, and what the board adds to them (#1801). */
+  barTrail?: (accountsInMenu: boolean, extra: BarTrailExtra) => ReactNode;
+  /** The recent agents' list, which the bar opens under its icon: every agent of the project,
+      reached without leaving the board. */
+  recentAgents?: (close: () => void, countSlot: HTMLElement | null) => ReactNode;
   /** A panel beside the board and under the bar (the project's Tasks panel), so the bar spans it
-      and the attention island lands over the bar instead of the panel's own header (#1801). */
+      and the panel's own header starts under the row (#1801). */
   aside?: ReactNode;
   /** The orchestrator seat above the columns (#1695 K3), given the id of the
       board region its skip link lands on. */
@@ -167,9 +169,9 @@ export interface KanbanBoardProps {
   focusNonce?: number;
   /** A reader opened: the same seen-stamp opening a conversation leaves. */
   onConversationOpened?: (path: string) => void;
-  /** Conversations, the project's every conversation: for what no card draws (review decks, collapsed workers)
-      and conversations this board's files do not carry. */
-  onOpenConversations: () => void;
+  /** The project's every conversation, for what no card draws (review decks, collapsed workers) and
+      conversations this board's files do not carry: where a board without `recentAgents` sends a card's link. */
+  onOpenConversations?: () => void;
   /** «+ Agent» in the bar: a draft on a card of its own, a task in the making (K9a). */
   onNewAgent?: () => void;
   /** «+ Agent» on a card: a draft in that card, seeded with its task's text. */
@@ -231,8 +233,14 @@ const NO_READERS: readonly OpenReader[] = [];
 const NO_REMOTE_AGENTS: readonly RemoteAgentView[] = [];
 const NO_REMOTE_FOR_CARD: readonly RemoteAgentView[] = [];
 /** Parts of the board's root that belong to the Viewer, where the board answers no key. */
-/** Least space the full attention chip leaves the bar's ⋯ menu before it drops its label. */
-const CHIP_CLEARANCE = 8;
+/** What the board hands the bar's last groups: its own rows of ⋯ and the panel group's last segment. */
+export interface BarTrailExtra {
+  /** The board's rows of the ⋯ menu: the Hidden tray. */
+  menuRows: (close: () => void) => ReactNode;
+  /** The recent agents' control, the panel group's last segment. */
+  panelsTail: ReactNode;
+}
+
 const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
 const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
 
@@ -360,15 +368,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const asideRef = useRef<HTMLDivElement>(null);
   const hasAside = Boolean(props.aside);
   const [mode, setMode] = useState<KanbanLayoutMode>("wide");
-  /* The header bar's tier (#1801): labelled controls from BAR_WIDE_MIN of bar, icons below. */
-  const [barWide, setBarWide] = useState(true);
-  const [barWrap, setBarWrap] = useState(false);
-  const [reasonsBelowBar, setReasonsBelowBar] = useState(false);
-  /* The full attention chip would reach into ⋯ (measured, so it follows the locale's label and the
-     digits of the count); the chip then keeps its dot and count, as it does in a compact bar. */
-  const [chipCrowded, setChipCrowded] = useState(false);
-  /* Even compact, the bar's groups would run into the chip with the open agents' slot in the row. */
-  const [barTight, setBarTight] = useState(false);
+  /* The header bar (#1801): one row that measures itself and gives up, in a fixed order, the
+     fewest things at which it fits (`useBarFit`). */
+  const barRef = useRef<HTMLElement>(null);
+  /* The recent agents' list under its icon; a card's link to more conversations opens it too. */
+  const [recentOpen, setRecentOpen] = useState(false);
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
   const [reasonFilter, setReasonFilter] = useState<TaskReasonFilter | undefined>();
@@ -728,9 +732,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const beside = barWidth - (aside?.getBoundingClientRect().width ?? 0);
       const seatWidth = seat?.getBoundingClientRect().width ?? 0;
       setMode(kanbanLayoutModeBeside(beside, seatWidth));
-      setBarWide(barWidth >= BAR_WIDE_MIN);
-      setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
-      setReasonsBelowBar(barWidth < 1168);
     };
     const settled = () => {
       // Release transient layers before asking for the settled layout. This
@@ -746,44 +747,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return () => { observer?.disconnect(); element.removeEventListener(COLUMN_LAYOUT_END, settled); if (frame) cancelAnimationFrame(frame); };
   }, [hasAside, seatSide]);
 
-  /* The chip is fixed over the bar's right reserve and the bar's groups can run into it (the uk
-     label is the widest). With the bar's own filters in the row, measure the chip in its full form
-     against ⋯ and compact it only when they would touch. Measuring takes the attribute off and puts
-     it back inside one task, so nothing is drawn between and the verdict does not depend on the
-     last one. The open agents' slot is measured in the compact row the same way: where even that
-     row runs into the chip, the slot is not drawn (the agents stay open, Alt+J brings the window),
-     and whether it is drawn depends on the width alone, never on how many agents are open. */
-  useLayoutEffect(() => {
-    const bar = rootRef.current?.querySelector<HTMLElement>('.bar[data-bar="project"]');
-    if (!bar) { setChipCrowded(false); setBarTight(false); return; }
-    const fit = () => {
-      const chip = bar.querySelector<HTMLElement>("[data-attention-count]");
-      const more = bar.querySelector<HTMLElement>('[data-bar-group="more"]');
-      if (!chip || !more) return;
-      const touches = () => chip.getBoundingClientRect().left < more.getBoundingClientRect().right + CHIP_CLEARANCE;
-      const compact = bar.hasAttribute("data-bar-compact");
-      const tight = bar.hasAttribute("data-bar-tight");
-      bar.removeAttribute("data-bar-tight");
-      let crowded = false;
-      if (!reasonsBelowBar) {
-        bar.removeAttribute("data-bar-compact");
-        crowded = touches();
-      }
-      bar.setAttribute("data-bar-compact", "");
-      const squeezed = !barWrap && touches();
-      if (!compact) bar.removeAttribute("data-bar-compact");
-      if (tight) bar.setAttribute("data-bar-tight", "");
-      setChipCrowded(crowded);
-      setBarTight(squeezed);
-    };
-    fit();
-    if (typeof ResizeObserver !== "function") return;
-    const resize = new ResizeObserver(fit);
-    resize.observe(bar);
-    const mutation = typeof MutationObserver === "function" ? new MutationObserver(fit) : null;
-    mutation?.observe(bar, { childList: true, subtree: true, characterData: true });
-    return () => { resize.disconnect(); mutation?.disconnect(); };
-  }, [reasonsBelowBar, barWide, barWrap, locale, hasAside, seatSide]);
+  const barFit = useBarFit(barRef, [locale, hasAside, seatSide, mode]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -1465,8 +1429,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         label: t("kanban.showHiddenTasks", { count: hiddenCount }),
         disabled: hiddenCount === 0,
         onSelect: () => {
-          const pill = rootRef.current?.querySelector<HTMLElement>("[data-hidden-pill]");
-          if (pill) queueMicrotask(() => menu.setOpen({ anchor: pill, value: { kind: "tray" } }));
+          /* The tray opens under the control that leads to it: ⋯ on a project, the pill on the Overview. */
+          const anchor = rootRef.current?.querySelector<HTMLElement>("[data-hidden-pill], [data-bar-more]");
+          if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "tray" } }));
         },
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
@@ -2506,7 +2471,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, [show, t]);
 
-  const viewSwitch = typeof props.viewSwitch === "function" ? props.viewSwitch(barWide) : props.viewSwitch;
   /* The Overview narrows permanently, so its columns read «3 of 41» and an
      empty one says so, exactly as they do under a search. */
   const searching = query.trim().length > 0;
@@ -2684,7 +2648,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const cardOpenStage = useStableCallback(openStage);
   const cardFocus = useStableCallback(focusCard);
   const cardOpenAttempt = useStableCallback(openRecorded);
-  const cardOpenConversations = useStableCallback(onOpenConversations);
+  /* A card's link to more conversations: the recent agents' list, where the bar has one. */
+  const hasRecentAgents = Boolean(props.recentAgents);
+  const cardOpenConversations = useStableCallback(() => {
+    if (hasRecentAgents) setRecentOpen(true);
+    else onOpenConversations?.();
+  });
   const cardSaveHold = useStableCallback((card: KanbanCardModel, hold: Partial<TaskHold> | null) => {
     setHoldEditing(null);
     const hasOwner = card.task?.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state));
@@ -2793,9 +2762,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     />
   ) : null;
 
-  /* The search field and the Hidden pill, shared by the project's bar and the Overview's. */
-  const searchField = (group?: string) => (
-    <label className="search" data-bar-group={group}>
+  /* The search field, shared by the project's bar and the Overview's. */
+  const searchField = () => (
+    <label className="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
       <input
         type="search"
@@ -2808,8 +2777,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
     </label>
   );
   const representedReasons = [...new Set(KANBAN_STATUSES.flatMap((status) => model.columns[status].cards.flatMap(taskReasonFiltersOfCard)))];
-  const reasonFilterControls = (belowBar = false) => representedReasons.length ? (
-    <div className={`reason-filters${belowBar ? " reason-filter-row" : ""}`} role="group" aria-label={t("kanban.filterReasons")} data-reason-filters="">
+  const reasonCount = (reason: TaskReasonFilter) => KANBAN_STATUSES.reduce((sum, status) => sum + model.columns[status].cards.filter((card) => taskReasonFiltersOfCard(card).includes(reason)).length, 0);
+  /* The Overview's reason chips; a project's bar holds the reasons in its one filter menu. */
+  const reasonFilterControls = () => representedReasons.length ? (
+    <div className="reason-filters" role="group" aria-label={t("kanban.filterReasons")} data-reason-filters="">
       {representedReasons.map((reason) => (
         <button key={reason} type="button" className="reason-filter" data-reason-filter={reason} aria-pressed={reasonFilter === reason}
           onClick={() => setReasonFilter((current) => current === reason ? undefined : reason)}>
@@ -2818,27 +2789,46 @@ export function KanbanBoard(props: KanbanBoardProps) {
       ))}
     </div>
   ) : null;
-  const searchTools = (group?: string) => (
-    <div className="bar-find" data-bar-group={group}>
-      {searchField()}
-      {props.overview || !reasonsBelowBar ? reasonFilterControls() : null}
-    </div>
+  const hiddenGlyph = (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6 0 10 8 10 8a17.7 17.7 0 0 1-3.2 4.1" /><path d="M6.6 6.6C3.9 8.5 2 12 2 12s4 8 10 8a10.9 10.9 0 0 0 4.4-.9" /></svg>
   );
-  /* Narrow, the project's pill is icon and count, the shape Tasks has (#1801), and its name moves to the tooltip. */
-  const hiddenPill = (labelled: boolean) => (
+  /* The Overview's Hidden pill. */
+  const hiddenPill = (
     <button
       type="button"
       className="btn hidden-pill"
       data-count={hiddenCount}
       data-hidden-pill=""
       aria-label={t("kanban.hiddenAria", { count: hiddenCount })}
-      title={labelled ? undefined : t("kanban.hiddenAria", { count: hiddenCount })}
       onClick={(event) => menu.setOpen({ anchor: event.currentTarget, value: { kind: "tray" } })}
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6 0 10 8 10 8a17.7 17.7 0 0 1-3.2 4.1" /><path d="M6.6 6.6C3.9 8.5 2 12 2 12s4 8 10 8a10.9 10.9 0 0 0 4.4-.9" /></svg>
-      {labelled ? <>{t("kanban.hidden")} </> : null}<span className="count num">{hiddenCount}</span>
+      {hiddenGlyph}
+      {t("kanban.hidden")} <span className="count num">{hiddenCount}</span>
     </button>
   );
+  /* What the board adds to the bar's last groups. Hidden left the row for ⋯ (it is used rarely, and
+     a count is enough inside a menu); its tray opens where it always did, under the control that
+     now leads to it. */
+  const barExtra: BarTrailExtra = {
+    menuRows: (close) => hiddenCount ? (
+      <button
+        type="button"
+        className={BAR_MENU_ROW}
+        data-bar-more-hidden=""
+        aria-label={t("kanban.hiddenAria", { count: hiddenCount })}
+        onClick={() => {
+          close();
+          const anchor = rootRef.current?.querySelector<HTMLElement>("[data-bar-more]");
+          if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "tray" } }));
+        }}
+      >
+        <span className="inline-flex h-[15px] w-[15px] shrink-0 [&>svg]:h-full [&>svg]:w-full">{hiddenGlyph}</span>
+        <span className="min-w-0 flex-1">{t("kanban.hidden")}</span>
+        <span className="font-normal tabular-nums text-muted">{hiddenCount}</span>
+      </button>
+    ) : null,
+    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} /> : null,
+  };
 
   return (
     <AccountChoiceContext.Provider value={accountChoice}>
@@ -2847,8 +2837,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       <CardFlights placements={placements} rootRef={rootRef} />
       {props.overview ? null : <SeatActionWires rootRef={rootRef} phone={false} seatRefs={seatRefs} tasks={storedTasks} pipelines={pipelines} files={files} onJump={jumpToWiredCard} />}
       {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is
-          happening, one spacer, find, view, create, panels, more. The two ends are the project's own
-          (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}
+          happening, one spacer, find, create, panels, more. The two ends are the project's own
+          (`barLead`, `barTrail`); the row's last item is the Viewer's attention island. */}
       {props.overview ? (
         /* The Overview keeps the bar it had before the project board's header was put in order
            (#1801 was the project board only), and the tools wrapping under the island on its
@@ -2862,9 +2852,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
           {reachStatus}
           <span className="grow" />
           <div className="bar-tools">
-            {searchTools()}
-            {hiddenPill(true)}
-            {viewSwitch ? <span className="view-switch">{viewSwitch}</span> : null}
+            <div className="bar-find">
+              {searchField()}
+              {reasonFilterControls()}
+            </div>
+            {hiddenPill}
           </div>
           {props.onNewAgent ? (
             <div className="bar-create">
@@ -2875,41 +2867,41 @@ export function KanbanBoard(props: KanbanBoardProps) {
           ) : null}
         </header>
       ) : (
-        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined} data-bar-compact={reasonsBelowBar || chipCrowded ? "" : undefined} data-bar-tight={barTight ? "" : undefined}>
-          {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
-          <span className="summary" data-bar-group="status">
+        <header ref={barRef} className="bar" data-bar="project" data-hidden-count={hiddenCount}>
+          {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead()}</div> : null}
+          {/* Who works is a dot and a number; the words are the tooltip's. */}
+          <span className="summary" data-bar-group="status" title={reachStatus ? undefined : t("kanban.summaryWorking", { count: model.totals.working })}>
             {reachStatus ?? (
               <>
                 <span className="dot" aria-hidden="true" />
-                <span className="num" data-bar-working="">{t("kanban.summaryWorking", { count: model.totals.working })}</span>
+                <span className="num" data-bar-working="" aria-label={t("kanban.summaryWorking", { count: model.totals.working })}>{model.totals.working}</span>
                 {props.updating ? <span className="bar-note" data-bar-updating="">{t("dash.updating")}</span> : null}
               </>
             )}
           </span>
           <OpenAgentsPill count={windowAgents.length} open={windowOpen} onOpen={windowOpen ? leaveWindow : reopenWindow} />
           <span className="grow" />
-          {searchTools("find")}
-          <div className="bar-group" data-bar-group="view">
-            {hiddenPill(barWide)}
-            {viewSwitch ? <span className="bar-slot view-switch">{viewSwitch}</span> : null}
+          {/* The search and its one filter: the reasons and «Needs you», which was the island's funnel. */}
+          <div className="bar-find" data-bar-group="find">
+            {searchField()}
+            <BarFilterMenu
+              reasons={representedReasons.filter((reason) => reason !== "needs-you").map((reason) => ({ id: reason, label: t(`kanban.filterReason.${reason}`), count: reasonCount(reason) }))}
+              active={reasonFilter}
+              onPick={(id) => setReasonFilter(id as TaskReasonFilter | undefined)}
+              needs={{ label: t("kanban.filterReason.needs-you"), count: reasonCount("needs-you") }}
+            />
           </div>
-          {/* Both creation surfaces write into this project's board. Narrow, the two are one `+`
-              with a two-row menu. */}
+          {/* Both creation surfaces write into this project's board: one `+` with a two-row menu. */}
           <div className="bar-slot">
             <BarCreateGroup
-              wide={barWide}
-              task={{ onClick: openNewTask, expanded: composingTask }}
-              agent={props.onNewAgent ? { onClick: props.onNewAgent, disabled: !loaded } : null}
               onMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "create" } })}
               menuOpen={menu.open?.value.kind === "create" || composingTask}
             />
           </div>
-          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barWide)}</div> : null}
+          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit.includes("accounts"), barExtra)}</div> : null}
           <BarIslandSlot />
         </header>
       )}
-
-      {!props.overview && reasonsBelowBar ? reasonFilterControls(true) : null}
 
       <div className={`kb-body${seatSide ? " seat-side" : ""}`}>
       {seatSide && seatView}

@@ -78,6 +78,7 @@ function mount(tasks: BoardTask[], ports: TaskMutationPorts, extra: Partial<Kanb
       onOpenConversations={() => {}}
       seatRefs={null}
       mutationPorts={ports}
+      barTrail={testTrail}
       {...extra}
     />,
   ));
@@ -87,6 +88,12 @@ function mount(tasks: BoardTask[], ports: TaskMutationPorts, extra: Partial<Kanb
 
 const columnOf = (host: HTMLElement, id: string) => host.querySelector(`.card[data-id="task:${id}"]`)?.closest<HTMLElement>(".column")?.dataset.status ?? null;
 const receiptTexts = (host: HTMLElement) => [...host.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent);
+/* The project's ⋯, as far as the board needs one: the control the Hidden tray opens under, and the board's own rows of it. */
+const testTrail: NonNullable<React.ComponentProps<typeof KanbanBoard>["barTrail"]> = (_accountsInMenu, extra) => (
+  <span><button type="button" data-bar-more="" />{extra.menuRows(() => {})}</span>
+);
+/* How many things Hidden counts: the count on its row of ⋯, or none when the row is not drawn. */
+const hiddenCount = (host: HTMLElement) => host.querySelector("[data-bar-more-hidden]")?.lastElementChild?.textContent ?? null;
 const click = (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   flushSync(() => (element as HTMLElement).click());
@@ -165,7 +172,7 @@ test("four columns hold every task; an empty task taken off the board is counted
   expect(columnOf(host, "b")).toBe("assigned");
   expect(columnOf(host, "c")).toBe("done");
   expect(columnOf(host, "d")).toBeNull();
-  expect(host.querySelector("[data-hidden-pill]")?.getAttribute("data-count")).toBe("1");
+  expect(hiddenCount(host)).toBe("1");
   expect(host.querySelector(".column[data-status=blocked] .empty")?.textContent).toContain("Nothing waiting");
 });
 

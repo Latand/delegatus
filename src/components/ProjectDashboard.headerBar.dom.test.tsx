@@ -3,13 +3,18 @@
  *
  * Before it, a project showed two stacked bars that told the same facts twice
  * («N branches running» over «N agents working», «N need you» beside the
- * island, «N tasks on the board» beside «Tasks N»), carried two search
- * affordances, and a view switch whose pressed segment the board's button
- * reset painted exactly like the other. These cases hold the bar to: one bar,
- * every fact once, one search, a switch that marks its side and stays put when
- * the view changes, and every control that existed still reachable (in the bar
- * or behind its ⋯) except Undo and Redo, which the operator took out of the
- * header (a kanban undo is #1856).
+ * island, «N tasks on the board» beside «Tasks N») and carried two search
+ * affordances. These cases hold the bar to: one bar, every fact once, one
+ * search, and every action still reachable (in the row, in its one filter or
+ * behind its ⋯) except Undo and Redo, which the operator took out of the header
+ * (a kanban undo is #1856).
+ *
+ * The row is the operator's choice of 2026-10-12: the board is the one desktop
+ * view, so the Board | Conversations switch is gone and the list it led to
+ * opens under the recent-agents icon; the two create buttons are one «+»; the
+ * reason chips and the island's funnel are one filter joined to the search;
+ * Hidden is a row of ⋯; and the bar gives up, in a fixed order, the fewest
+ * things at which the row fits (`useBarFit`).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -53,6 +58,21 @@ dom.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
   const rect = measureRect.call(this);
   return this.classList?.contains("kb") || this.hasAttribute?.("data-project-bar") ? { ...rect, width: barWidth, right: barWidth } as DOMRect : rect;
 } as typeof measureRect;
+/* The board's bar measures its own content against its box (`useBarFit`). The row here is as wide
+   as the case says it needs, less what each step it has taken gives back, so the hook's order and
+   its stopping point are the real ones. */
+let rowNeeds = 0;
+const STEP_GIVES: Record<string, number> = { accounts: 300, labels: 150, chip: 90, tight: 40, find: 80 };
+const isBoardBar = (element: HTMLElement) => element.matches?.('header.bar[data-bar="project"]');
+Object.defineProperty(dom.HTMLElement.prototype, "clientWidth", { configurable: true, get(this: HTMLElement) { return isBoardBar(this) ? barWidth : 0; } });
+Object.defineProperty(dom.HTMLElement.prototype, "scrollWidth", {
+  configurable: true,
+  get(this: HTMLElement) {
+    if (!isBoardBar(this)) return 0;
+    const taken = (this.getAttribute("data-fit") ?? "").split(" ").filter(Boolean);
+    return rowNeeds - taken.reduce((sum, step) => sum + (STEP_GIVES[step] ?? 0), 0);
+  },
+});
 const G = globalThis as Record<string, unknown>;
 
 /* Switchable surface: the same selection has to be published by the desktop
@@ -184,11 +204,12 @@ afterAll(async () => {
 });
 
 let roots: Root[] = [];
-/* The Viewer's attention island as the Viewer hands it to the board: four buttons in a fixed box. */
+/* The Viewer's attention island as the Viewer hands it to the bar. */
 let island: ReactNode = null;
 beforeEach(() => {
   roots = [];
   island = null;
+  rowNeeds = 0;
   mobile = false;
   projectCounter += 1;
   PROJECT = `header-bar-${projectCounter}`;
@@ -248,7 +269,7 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
   const root = createRoot(host as unknown as Element);
   flushSync(() =>
     root.render(
-      <BarIslandProvider island={island}>
+      <BarIslandProvider island={() => island}>
       <ProjectDashboard
         files={files}
         flows={[]}
@@ -329,165 +350,154 @@ test("the Board's bar has one search, and the message search moved into ⋯", as
   expect(searches).toBe(1);
 });
 
-test("Conversations shows one search too: the message search in the bar's find slot", async () => {
-  const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  await settle();
-  click(host.querySelector('button[data-view-tab="list"]'));
-  expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
-  await settle();
-
-  expect(host.querySelectorAll("header.bar, [data-project-bar]")).toHaveLength(1);
-  expect(host.querySelectorAll('[data-project-bar] input[type="search"], [data-project-bar] [data-testid="dash-search"]')).toHaveLength(1);
-  expect(openMore(host).querySelector('[data-testid="dash-search"]')).toBeNull();
-});
-
-test("the view switch marks its selected side", async () => {
+test("the bar holds no view switch: the Board is the one desktop view", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
 
-  const board = host.querySelector('button[data-view-tab="kanban"]') as HTMLElement;
-  const list = host.querySelector('button[data-view-tab="list"]') as HTMLElement;
-  expect(board.getAttribute("aria-pressed")).toBe("true");
-  expect(list.getAttribute("aria-pressed")).toBe("false");
-  /* Pressing the other side moves the mark with the view. */
-  click(list);
-  expect(await waitFor(() => host.querySelector('button[data-view-tab="list"]')?.getAttribute("aria-pressed") === "true")).toBe(true);
-  expect(host.querySelector('button[data-view-tab="kanban"]')!.getAttribute("aria-pressed")).toBe("false");
+  expect(host.querySelector("[data-project-view-tabs], button[data-view-tab]")).toBeNull();
+  expect(bar(host).querySelector('[data-bar-group="view"]')).toBeNull();
+  /* The groups, in the order the row is read. */
+  const groups = Array.from(bar(host).querySelectorAll("[data-bar-group]")).map((element) => element.getAttribute("data-bar-group"));
+  expect(groups).toEqual(["where", "status", "find", "create", "trail", "panels", "more"]);
 });
 
-/* The switch's own boxes, as the bar draws them: the group and its segments. */
-const viewSwitch = (host: HTMLElement) => bar(host).querySelector("[data-project-view-tabs]") as HTMLElement;
-const viewSegments = (host: HTMLElement) => Array.from(viewSwitch(host).querySelectorAll("button[data-view-tab]")) as HTMLElement[];
-
-test("the selected side is painted as well as announced, and the group is one 32 px box", async () => {
+test("the recent agents are the panel group's last segment: an icon with its name, and the list under it", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
 
-  const group = viewSwitch(host);
-  /* One bordered 32 px group, the height every other control in the bar has. */
-  expect(group.className).toContain("h-8");
-  expect(group.className).toContain("border");
-  expect(group.className).toContain("shrink-0");
-  /* Nothing lets the group take the row's spare width, which is how it grew into one wide pill. */
-  for (const stretch of ["w-full", "flex-1", "grow"]) expect(group.className).not.toContain(stretch);
+  const panels = bar(host).querySelector('[data-bar-group="panels"]') as HTMLElement;
+  expect(Array.from(panels.children).map((child) => child.hasAttribute("data-orchestrator-toggle") ? "orchestrator" : child.hasAttribute("data-task-panel-toggle") ? "tasks" : child.hasAttribute("data-bar-recent") ? "recent" : child.tagName)).toEqual(["orchestrator", "tasks", "recent"]);
+  const toggle = panels.querySelector("[data-bar-recent-toggle]") as HTMLElement;
+  /* A quiet icon: no words in the row, its name in the tooltip and for assistive technology. */
+  expect(text(toggle)).toBe("");
+  expect(toggle.querySelector("svg")).not.toBeNull();
+  expect(toggle.getAttribute("aria-label")).toBe(en["dash.recentAgents"]);
+  expect(toggle.getAttribute("title")).toBe(en["dash.recentAgents"]);
+  expect(toggle.getAttribute("aria-haspopup")).toBe("dialog");
 
-  const [board, list] = viewSegments(host);
-  expect(board!.getAttribute("aria-pressed")).toBe("true");
-  expect(list!.getAttribute("aria-pressed")).toBe("false");
-  /* The pressed segment paints differently from the quiet one: the defect this
-     replaced announced the side and painted both alike. */
-  expect(board!.className).not.toBe(list!.className);
-  expect(board!.className).toContain("text-accent");
-  expect(list!.className).toContain("text-secondary");
-  expect(list!.className).not.toContain("text-accent");
-
-  /* And the paint follows the view, rather than staying on the side it started. */
-  click(list);
-  expect(await waitFor(() => viewSegments(host)[1]?.getAttribute("aria-pressed") === "true")).toBe(true);
-  const [boardAfter, listAfter] = viewSegments(host);
-  expect(listAfter!.className).toContain("text-accent");
-  expect(boardAfter!.className).toContain("text-secondary");
+  click(toggle);
+  const list = bar(host).querySelector("[data-bar-recent-list]") as HTMLElement;
+  expect(list.getAttribute("aria-label")).toBe(en["dash.recentAgents"]);
+  expect(list.querySelector("[data-desktop-conversations-scroll]")).not.toBeNull();
+  expect(host.querySelector("[data-kanban-board]")).not.toBeNull();
+  /* Escape and the close button both put it away. */
+  click(list.querySelector(`button[aria-label="${en["common.close"]}"]`));
+  expect(bar(host).querySelector("[data-bar-recent-list]")).toBeNull();
 });
 
-test("both segments are ordinary buttons, so the switch is reachable from the keyboard", async () => {
-  const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+test("the reasons and «Needs you» are one filter joined to the search, and the row shows no reason chip", async () => {
+  boardTasks = [{
+    id: "t1", project: PROJECT, text: "Write the release notes", status: "inbox", placement: "unplaced", assignments: [],
+    createdAt: "2026-09-14T10:00:00.000Z", updatedAt: "2026-09-14T10:00:00.000Z", revision: "task-v1:rev-1",
+  } as unknown as BoardTask];
+  let funnel = false;
+  const { BarNeedsFilterProvider } = await import("@/components/ProjectBar");
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  const draw = () => flushSync(() => root.render(
+    <BarNeedsFilterProvider value={{ available: true, active: funnel, toggle: () => { funnel = !funnel; draw(); } }}>
+      <ProjectDashboard files={[alphaOf(), betaOf()]} flows={[]} pipelines={[]} workflows={[]} tasks={boardTasks} project={PROJECT} loaded openNonce={0} archived={false} catalogKnown catalogConversationCount={2} onArchive={() => {}} onUnarchive={() => {}} />
+    </BarNeedsFilterProvider>,
+  ));
+  draw();
+  roots.push(root);
+  const page = host as unknown as HTMLElement;
+  expect(await waitFor(() => page.querySelector('.card[data-id="task:t1"]') !== null)).toBe(true);
   await settle();
 
-  for (const segment of viewSegments(host)) {
-    expect(segment.tagName).toBe("BUTTON");
-    expect(segment.getAttribute("type")).toBe("button");
-    expect(segment.hasAttribute("tabindex")).toBe(false);
-    expect(segment.hasAttribute("disabled")).toBe(false);
-    expect(segment.className).toContain("focus-visible:ring");
-  }
-  viewSegments(host)[1]!.focus();
-  expect(dom.document.activeElement?.getAttribute("data-view-tab")).toBe("list");
+  expect(page.querySelector(".reason-filter, .reason-filter-row, [data-reason-filters]")).toBeNull();
+  const find = bar(page).querySelector('[data-bar-group="find"]') as HTMLElement;
+  expect(find.querySelector("[data-kanban-search]")).not.toBeNull();
+  const toggle = find.querySelector("[data-bar-filter-toggle]") as HTMLElement;
+  expect(toggle.getAttribute("aria-label")).toBe(en["dash.filter"]);
+  expect(toggle.getAttribute("title")).toBe(en["dash.filter"]);
+  expect(toggle.querySelector("[data-bar-filter-dot]")).toBeNull();
+
+  click(toggle);
+  const menu = () => find.querySelector("[data-bar-filter-menu]") as HTMLElement;
+  /* «Needs you» first, with its key; then every task and each other reason the board shows, counted. */
+  const needs = menu().querySelector("[data-bar-filter-needs]") as HTMLElement;
+  expect(text(needs)).toContain(en["kanban.filterReason.needs-you"]);
+  expect(text(needs)).toContain("F");
+  expect(needs.getAttribute("aria-checked")).toBe("false");
+  /* The funnel is the Viewer's filter: the row toggles it, and the icon says the board is narrowed. */
+  click(needs);
+  expect(funnel).toBe(true);
+  expect(menu().querySelector("[data-bar-filter-needs]")!.getAttribute("aria-checked")).toBe("true");
+  expect(find.querySelector("[data-bar-filter-dot]")).not.toBeNull();
+  expect(find.querySelector("[data-bar-filter-toggle]")!.getAttribute("aria-label")).toBe(en["dash.filterOn"]);
+  click(menu().querySelector("[data-bar-filter-needs]"));
+  expect(funnel).toBe(false);
+  expect(find.querySelector("[data-bar-filter-dot]")).toBeNull();
 });
 
-/* The bound: a narrow segment is a fixed 32 px square (w-8) and carries no text,
-   so neither locale can widen it; two of them plus the group's two 1 px borders
-   is the whole switch. happy-dom lays nothing out, so the bound is read off the
-   boxes the bar asks for; a browser measures the group at exactly these 66 px
-   at 1280 in both locales, against 32 px for a bare icon control beside it. */
-const NARROW_SWITCH_BOUND = 2 * 32 + 2;
+test("the filter lists every other reason with its count; a reason narrows and closes, «All tasks» clears", async () => {
+  const { BarFilterMenu } = await import("@/components/ProjectBar");
+  let active: string | undefined;
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  const draw = () => flushSync(() => root.render(
+    <BarFilterMenu
+      reasons={[{ id: "queued", label: en["kanban.filterReason.queued"], count: 3 }, { id: "no-reason", label: en["kanban.filterReason.no-reason"], count: 1 }]}
+      active={active}
+      onPick={(id) => { active = id; draw(); }}
+      needs={{ label: en["kanban.filterReason.needs-you"], count: 2 }}
+    />,
+  ));
+  draw();
+  roots.push(root);
+  const find = host as unknown as HTMLElement;
+  const menu = () => find.querySelector("[data-bar-filter-menu]") as HTMLElement;
 
-async function assertNarrowSwitchBound(lang: "en" | "uk") {
-  barWidth = 1032;
-  setLocale(lang);
-  try {
-    const host = mount();
-    expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-    await settle();
+  click(find.querySelector("[data-bar-filter-toggle]"));
+  /* With no Viewer behind it the funnel has nothing to narrow, so its row is inert. */
+  expect((menu().querySelector("[data-bar-filter-needs]") as HTMLButtonElement).disabled).toBe(true);
+  expect(Array.from(menu().querySelectorAll("[data-bar-filter-reason]")).map((row) => [row.getAttribute("data-bar-filter-reason"), text(row)])).toEqual([
+    ["", en["dash.filterAll"]],
+    ["queued", `${en["kanban.filterReason.queued"]}3`],
+    ["no-reason", `${en["kanban.filterReason.no-reason"]}1`],
+  ]);
+  expect(menu().querySelector('[data-bar-filter-reason=""]')!.getAttribute("aria-checked")).toBe("true");
 
-    const segments = viewSegments(host);
-    expect(segments).toHaveLength(2);
-    let bound = 2;
-    for (const segment of segments) {
-      /* A fixed square, never padding that grows with the label. */
-      expect(segment.className).toContain("w-8");
-      expect(segment.className).not.toContain("px-3");
-      expect(text(segment)).toBe("");
-      expect(segment.querySelector("svg")).not.toBeNull();
-      bound += 32;
-    }
-    expect(bound).toBeLessThanOrEqual(NARROW_SWITCH_BOUND);
-    /* The words are still there for a pointer and for assistive technology. */
-    const names = [translate(lang, "kanban.viewTab"), translate(lang, "dash.viewList")];
-    for (const [index, segment] of segments.entries()) {
-      expect(segment.getAttribute("aria-label")).toBe(names[index]!);
-      expect(segment.getAttribute("title")).toBe(names[index]!);
-    }
-  } finally {
-    setLocale("en");
-  }
-}
-
-test("narrow, the switch is bounded to two fixed squares that say their names in the title", async () => {
-  await assertNarrowSwitchBound("en");
+  click(menu().querySelector('[data-bar-filter-reason="queued"]'));
+  expect(active).toBe("queued");
+  expect(find.querySelector("[data-bar-filter-menu]")).toBeNull();
+  expect(find.querySelector("[data-bar-filter-dot]")).not.toBeNull();
+  click(find.querySelector("[data-bar-filter-toggle]"));
+  expect(menu().querySelector('[data-bar-filter-reason="queued"]')!.getAttribute("aria-checked")).toBe("true");
+  /* The same reason again lets it go; so does «All tasks». */
+  click(menu().querySelector('[data-bar-filter-reason=""]'));
+  expect(active).toBeUndefined();
+  expect(find.querySelector("[data-bar-filter-dot]")).toBeNull();
 });
 
-test("uk: the narrow switch keeps that bound, with the Ukrainian names in the title", async () => {
-  await assertNarrowSwitchBound("uk");
-});
-
-test("wide, each segment carries its own label once: no segment holds both names", async () => {
-  const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  await settle();
-
-  const segments = viewSegments(host);
-  expect(segments).toHaveLength(2);
-  expect(text(segments[0]!)).toBe(en["kanban.viewTab"]);
-  expect(text(segments[1]!)).toBe(en["dash.viewList"]);
-  /* One label per segment and no third segment: the group cannot read as one
-     wide control holding «Board» and «Conversations» together. */
-  expect(text(viewSwitch(host))).toBe(`${en["kanban.viewTab"]}${en["dash.viewList"]}`);
-  for (const segment of segments) expect(segment.className).toContain("px-3");
-});
-
-test("every control the two bars held is still reachable, wide", async () => {
+test("with room, every daily control is in the row, labelled where the row has words", async () => {
   const host = mount([alphaOf(), betaOf()]);
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
   expect(await waitFor(() => bar(host).querySelector("[data-account-switch-engine]") !== null)).toBe(true);
 
   const inBar = bar(host);
-  expect(inBar.getAttribute("data-bar-tier")).toBe("wide");
-  for (const selector of ["[data-kanban-search]", "[data-hidden-pill]", "[data-view-tab=kanban]", "[data-view-tab=list]", "[data-new-task]", "[data-new-agent]", "[data-orchestrator-toggle]", "[data-task-panel-toggle]", "[data-account-switch-engine]"]) {
+  expect(inBar.getAttribute("data-fit")).toBe("");
+  for (const selector of ["[data-kanban-search]", "[data-bar-filter-toggle]", "[data-bar-create]", "[data-orchestrator-toggle]", "[data-task-panel-toggle]", "[data-bar-recent-toggle]", "[data-bar-more]", "[data-account-switch-engine]"]) {
     expect({ selector, found: inBar.querySelector(selector) !== null }).toEqual({ selector, found: true });
   }
-  expect(text(inBar.querySelector("[data-orchestrator-toggle]"))).toContain(en["orchPanel.title"]);
+  /* What left the row: the two create buttons, the Hidden pill and the view switch. */
+  expect(inBar.querySelector("[data-new-task], [data-new-agent], [data-hidden-pill], [data-view-tab]")).toBeNull();
+  /* Orchestrator and Tasks say their names while the row has room. */
+  expect(text(inBar.querySelector("[data-orchestrator-toggle] [data-fit-label]"))).toBe(en["orchPanel.title"]);
+  expect(text(inBar.querySelector("[data-task-panel-toggle] [data-fit-label]"))).toBe(en["tasks.panelTitle"]);
 
   const menu = openMore(host);
   const rows = text(menu);
   for (const label of [en["search.open"], en["sound.mute"], en["sound.settings"], en["trash.toArchive"], en["trash.deleteProject"]]) {
     expect({ label, found: rows.includes(label) }).toEqual({ label, found: true });
   }
-  /* The account switch stays in the bar while it is wide, so ⋯ does not repeat it. */
+  /* The account switch stays in the bar while it has room, so ⋯ does not repeat it. */
   expect(menu.querySelector("[data-account-switch-engine]")).toBeNull();
   const account = inBar.querySelector("[data-account-switch-engine] button") as HTMLElement;
   expect(account.getAttribute("data-account-switch-appearance")).toBe("bar");
@@ -496,21 +506,17 @@ test("every control the two bars held is still reachable, wide", async () => {
   expect(menu.querySelector('[data-testid="sound-settings"]')).not.toBeNull();
 });
 
-test("narrow, the bar keeps one row: icons, one + with both creators, and the accounts behind ⋯", async () => {
-  barWidth = 1032;
+test("a short row gives up the fewest things, in order: the accounts first, then the words of Orchestrator and Tasks", async () => {
+  /* 100 px short: the accounts' 300 px are enough, and nothing else is given up. */
+  barWidth = 1100;
+  rowNeeds = 1200;
   const host = mount([alphaOf(), betaOf()]);
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
 
   const inBar = bar(host);
-  expect(inBar.getAttribute("data-bar-tier")).toBe("narrow");
-  expect(inBar.querySelector("[data-account-switch-engine]")).toBeNull();
-  expect(text(inBar.querySelector("[data-orchestrator-toggle]"))).toBe("");
-  expect(inBar.querySelector("[data-orchestrator-toggle]")!.getAttribute("aria-label")).toBe(en["orchPanel.toggleAria"]);
-  expect(text(inBar.querySelector('[data-view-tab="list"]'))).toBe("");
-  expect(inBar.querySelector('[data-view-tab="list"]')!.getAttribute("aria-label")).toBe(en["dash.viewList"]);
-
-  expect(inBar.querySelector("[data-new-task]")).toBeNull();
+  expect(inBar.getAttribute("data-fit")).toBe("accounts");
+  /* One + with both creators, at every width. */
   click(inBar.querySelector("[data-bar-create]"));
   const create = host.querySelector('.menu[role="menu"]') as HTMLElement;
   expect(text(create)).toContain(en["dash.newTask"]);
@@ -524,6 +530,38 @@ test("narrow, the bar keeps one row: icons, one + with both creators, and the ac
   /* They are a section of ⋯ that opens in place, its rows mounted while it is closed. */
   expect(row.closest("[data-bar-menu-section]")!.getAttribute("data-bar-menu-section")).toBe("accounts");
   expect(menu.querySelector('[data-bar-menu-head="accounts"]')?.getAttribute("aria-expanded")).toBe("false");
+  /* The toggles keep their names for a pointer and for assistive technology at every step. */
+  expect(inBar.querySelector("[data-orchestrator-toggle]")!.getAttribute("aria-label")).toBe(en["orchPanel.toggleAria"]);
+  expect(inBar.querySelector("[data-orchestrator-toggle]")!.getAttribute("title")).toBe(en["orchPanel.toggleAria"]);
+  expect(inBar.querySelector("[data-task-panel-toggle]")!.getAttribute("title")).toBe(en["tasks.panelToggleAria"]);
+});
+
+test("each further step is taken only when the one before it was not enough, and the row never wraps", async () => {
+  const stepsAt = async (needs: number) => {
+    barWidth = 1000;
+    rowNeeds = needs;
+    const host = mount();
+    expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+    await settle();
+    const fit = bar(host).getAttribute("data-fit");
+    expect(bar(host).hasAttribute("data-bar-wrap")).toBe(false);
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    dom.document.body.replaceChildren();
+    projectCounter += 1;
+    PROJECT = `header-bar-${projectCounter}`;
+    boards = { [PROJECT]: seededBoard() };
+    resetSelectionSessionsForTest();
+    return fit;
+  };
+  expect(await stepsAt(1000)).toBe("");
+  expect(await stepsAt(1300)).toBe("accounts");
+  expect(await stepsAt(1301)).toBe("accounts labels");
+  expect(await stepsAt(1451)).toBe("accounts labels chip");
+  expect(await stepsAt(1541)).toBe("accounts labels chip tight");
+  expect(await stepsAt(1581)).toBe("accounts labels chip tight find");
+  /* Past the last step the bar keeps them all and stays one row. */
+  expect(await stepsAt(2400)).toBe("accounts labels chip tight find");
 });
 
 test("Undo and Redo are gone from the header, its ⋯ and Ctrl+Z, even with a close in the log (#1856)", async () => {
@@ -571,60 +609,22 @@ test("⋯ draws no rule next to a group with nothing in it", async () => {
   expect(menu.getAttribute("data-bar-menu-view")).toBe("rest");
 });
 
-test("the view switch keeps its place when the view changes: Conversations reserves the create group", async () => {
-  for (const width of [2292, 1032]) {
-    barWidth = width;
-    const host = mount();
-    expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-    await settle();
-    const order = (root: HTMLElement) => Array.from(root.querySelectorAll("[data-bar-group]"))
-      .map((element) => element.getAttribute("data-bar-group"))
-      .filter((group) => group === "view" || group === "create" || group === "panels" || group === "more");
-    const boardCreate = bar(host).querySelector('[data-bar-group="create"]') as HTMLElement;
-    const boardControls = Array.from(boardCreate.querySelectorAll("button")).map((element) => text(element));
-    expect(order(bar(host))).toEqual(["view", "create", "panels", "more"]);
-
-    click(host.querySelector('button[data-view-tab="list"]'));
-    expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
-    await settle();
-    const listBar = bar(host);
-    expect(order(listBar)).toEqual(["view", "create", "panels", "more"]);
-    const reserve = listBar.querySelector("[data-bar-create-reserve]") as HTMLElement;
-    expect(reserve.getAttribute("aria-hidden")).toBe("true");
-    expect(reserve.hasAttribute("inert")).toBe(true);
-    /* Same controls, same words: the same width (measured by the board-geometry capture), so nothing
-       right of the spacer moves. */
-    expect(Array.from(reserve.children).map((element) => text(element))).toEqual(boardControls);
-    expect(reserve.querySelector("button")).toBeNull();
-    for (const root of roots) flushSync(() => root.unmount());
-    roots = [];
-    dom.document.body.replaceChildren();
-    PROJECT = `${PROJECT}-narrow`;
-    boards = { [PROJECT]: seededBoard() };
-    resetSelectionSessionsForTest();
-  }
-});
-
-test("+ is an icon in the control's own colour, never a glyph", async () => {
+test("+ is one control: an icon in the control's own colour, never a glyph, opening the two-row menu", async () => {
   /* The hover colour of each control is measured by the board-geometry capture. */
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
 
-  for (const selector of ["[data-new-task]", "[data-new-agent]"]) {
-    const control = bar(host).querySelector(selector) as HTMLElement;
-    expect(control.querySelector("svg")).not.toBeNull();
-    expect(control.querySelector(".plus")).toBeNull();
-    expect(text(control).trim().startsWith("+")).toBe(false);
-  }
-});
-
-test("1602 px of bar (a 1850 px viewport) is the narrow tier: the uk labels did not fit there", async () => {
-  barWidth = 1602;
-  const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  await settle();
-  expect(bar(host).getAttribute("data-bar-tier")).toBe("narrow");
+  const controls = Array.from(bar(host).querySelectorAll('[data-bar-group="create"] button')) as HTMLElement[];
+  expect(controls).toHaveLength(1);
+  const control = controls[0]!;
+  expect(control.hasAttribute("data-bar-create")).toBe(true);
+  expect(control.querySelector("svg")).not.toBeNull();
+  expect(control.querySelector(".plus")).toBeNull();
+  expect(text(control)).toBe("");
+  expect(control.getAttribute("aria-label")).toBe(en["dash.create"]);
+  expect(control.getAttribute("title")).toBe(en["dash.create"]);
+  expect(control.getAttribute("aria-haspopup")).toBe("menu");
 });
 
 test("the Tasks panel opens under the Board's one bar, so the bar spans it and stays one row", async () => {
@@ -646,31 +646,25 @@ test("the Tasks panel opens under the Board's one bar, so the bar spans it and s
   expect(bar(host).contains(panel)).toBe(false);
   expect(panel.closest(".kb-body")?.previousElementSibling).toBe(bar(host));
   expect(bar(host).querySelector("[data-task-panel-toggle]")!.getAttribute("aria-pressed")).toBe("true");
-  /* 1032 px of bar is one row whether the panel is open or not; only a bar under 768 px wraps. */
-  expect(bar(host).hasAttribute("data-bar-wrap")).toBe(false);
 
   /* The toggle in the bar still closes it. */
   click(bar(host).querySelector("[data-task-panel-toggle]"));
   expect(await waitFor(() => host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) === null)).toBe(true);
 });
 
-test("a bar under 768 px, and only there, wraps", async () => {
-  barWidth = 700;
-  const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  await settle();
-  expect(bar(host).hasAttribute("data-bar-wrap")).toBe(true);
-});
-
-test("uk: the switch, the working count and ⋯ read in Ukrainian", async () => {
+test("uk: the row's names and ⋯ read in Ukrainian, and who works is a number with its words in the tooltip", async () => {
   setLocale("uk");
   try {
     const host = mount();
     expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
     await settle();
-    expect(text(host.querySelector('button[data-view-tab="kanban"]'))).toContain(translate("uk", "kanban.viewTab"));
-    expect(text(host.querySelector('button[data-view-tab="list"]'))).toContain(translate("uk", "dash.viewList"));
-    expect(text(bar(host).querySelector("[data-bar-working]"))).toBe(translate("uk", "kanban.summaryWorking", { count: 0 }));
+    /* A dot and a number in the row; the sentence is the tooltip's and the accessible name. */
+    expect(text(bar(host).querySelector("[data-bar-working]"))).toBe("0");
+    expect(bar(host).querySelector("[data-bar-working]")!.getAttribute("aria-label")).toBe(translate("uk", "kanban.summaryWorking", { count: 0 }));
+    expect(bar(host).querySelector('[data-bar-group="status"]')!.getAttribute("title")).toBe(translate("uk", "kanban.summaryWorking", { count: 0 }));
+    expect(bar(host).querySelector("[data-bar-recent-toggle]")!.getAttribute("title")).toBe(translate("uk", "dash.recentAgents"));
+    expect(bar(host).querySelector("[data-bar-filter-toggle]")!.getAttribute("title")).toBe(translate("uk", "dash.filter"));
+    expect(text(bar(host).querySelector("[data-orchestrator-toggle] [data-fit-label]"))).toBe(translate("uk", "orchPanel.title"));
     const menu = openMore(host);
     expect(text(menu)).toContain(translate("uk", "search.open"));
   } finally {
@@ -678,29 +672,37 @@ test("uk: the switch, the working count and ⋯ read in Ukrainian", async () => 
   }
 });
 
-test("narrow, Hidden is its icon and count, the shape Tasks has; wide, it keeps its label", async () => {
-  barWidth = 1032;
-  const narrow = mount();
-  expect(await waitFor(() => narrow.querySelector("[data-kanban-board]") !== null)).toBe(true);
+test("Hidden is a row of ⋯ with its count, drawn only while something is hidden", async () => {
+  const none = mount();
+  expect(await waitFor(() => none.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
-  const pill = bar(narrow).querySelector("[data-hidden-pill]") as HTMLElement;
-  expect(pill.querySelector("svg")).not.toBeNull();
-  expect(text(pill)).not.toContain(en["kanban.hidden"]);
-  expect(pill.getAttribute("title")).toBe(pill.getAttribute("aria-label"));
-  expect(pill.querySelector(".count")).not.toBeNull();
+  expect(bar(none).querySelector("[data-hidden-pill]")).toBeNull();
+  expect(openMore(none).querySelector("[data-bar-more-hidden]")).toBeNull();
   for (const root of roots) flushSync(() => root.unmount());
   roots = [];
   dom.document.body.replaceChildren();
 
-  barWidth = 2292;
-  const wide = mount();
-  expect(await waitFor(() => wide.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  /* A conversation closed on the board is one hidden thing. */
+  projectCounter += 1;
+  PROJECT = `header-bar-${projectCounter}`;
+  boards = { [PROJECT]: { ...seededBoard(), prefs: { ...seededBoard().prefs, hidden: ["/beta"] } } };
+  resetSelectionSessionsForTest();
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
-  expect(text(bar(wide).querySelector("[data-hidden-pill]"))).toContain(en["kanban.hidden"]);
+  expect(bar(host).querySelector("[data-hidden-pill]")).toBeNull();
+  const row = openMore(host).querySelector("[data-bar-more-hidden]") as HTMLElement;
+  expect(text(row)).toContain(en["kanban.hidden"]);
+  expect(text(row)).toMatch(/[1-9]/);
+  expect(row.querySelector("svg")).not.toBeNull();
+  /* The row closes ⋯ and opens the tray under it. */
+  click(row);
+  await settle();
+  expect(host.querySelector("[data-bar-more-menu]")).toBeNull();
+  expect(await waitFor(() => host.querySelector(".hidden-tray") !== null)).toBe(true);
 });
 
-test("narrow, the create menu's two rows carry icons, like the ⋯ rows", async () => {
-  barWidth = 1032;
+test("the create menu's two rows carry icons, like the ⋯ rows", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
@@ -710,28 +712,38 @@ test("narrow, the create menu's two rows carry icons, like the ⋯ rows", async 
   for (const item of items) expect(item.querySelector("svg.ico")).not.toBeNull();
 });
 
-test("narrow Conversations: a short search label and only the live count, so only the name truncates", async () => {
+test("a project with nothing in it draws the same bar: its two ends, the message search, no board controls", async () => {
   barWidth = 1032;
-  const host = mount([running(), betaOf()]);
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(
+    <BarIslandProvider island={() => <div data-test-island=""><button type="button">waiting</button></div>}>
+      <ProjectDashboard files={[]} flows={[]} pipelines={[]} workflows={[]} tasks={[]} project={PROJECT} loaded openNonce={0} archived={false} catalogKnown={false} catalogConversationCount={0} onArchive={() => {}} onUnarchive={() => {}} onOpenSearch={() => { searches += 1; }} onToggleOrchestratorPanel={() => {}} />
+    </BarIslandProvider>,
+  ));
+  roots.push(root);
+  const page = host as unknown as HTMLElement;
+  expect(await waitFor(() => page.querySelector("[data-project-bar]") !== null)).toBe(true);
   await settle();
-  click(host.querySelector('button[data-view-tab="list"]'));
-  expect(await waitFor(() => host.querySelector("[data-project-bar]") !== null)).toBe(true);
-  await settle();
-  const find = host.querySelector('[data-project-bar] [data-testid="dash-search"]') as HTMLElement;
+
+  const leaf = page.querySelector("[data-project-bar]") as HTMLElement;
+  expect(page.querySelectorAll("header.bar, [data-project-bar]")).toHaveLength(1);
+  expect(leaf.querySelector("[data-project-view-tabs], [data-bar-create-reserve], [data-bar-create], [data-bar-recent]")).toBeNull();
+  /* Narrow, it is in the two steps its width asks for: the accounts in ⋯, the toggles as icons. */
+  expect(leaf.getAttribute("data-fit")).toBe("accounts labels");
+  const find = leaf.querySelector('[data-testid="dash-search"]') as HTMLElement;
   expect(text(find).trim()).toBe(en["dash.searchShort"]);
   /* The full wording and its «/» hint stay as the name and the tooltip. */
   expect(find.getAttribute("aria-label")).toBe(en["search.open"]);
   expect(find.getAttribute("title")).toBe(en["search.open"]);
-  const status = text(host.querySelector('[data-project-bar] [data-bar-group="status"]'));
-  expect(status).toMatch(/running/);
-  expect(status).not.toMatch(/tree/);
-  /* Short now, it holds its width and the name is what gives way: the board-geometry capture
-     measures that neither the search nor the status truncates. */
   expect(uk["dash.searchShort"]).toBe("Пошук");
+  /* The island is this bar's last item too, in the row. */
+  expect(leaf.querySelector("[data-bar-island-slot] [data-test-island]")).not.toBeNull();
+  expect(leaf.className).not.toContain("236");
 });
 
-test("Tab reaches the attention island right after ⋯, where it is drawn, on both views", async () => {
+test("the attention island is the row's last item, so Tab reaches it right after ⋯", async () => {
   island = (
     <div data-test-island="">
       <button type="button" data-island-first="">waiting</button>
@@ -756,12 +768,9 @@ test("Tab reaches the attention island right after ⋯, where it is drawn, on bo
   const order = tabbable();
   const firstInBody = order.find((element) => element.closest(".kb-body"));
   expect(order.indexOf(host.querySelector("[data-island-first]") as HTMLElement)).toBeLessThan(order.indexOf(firstInBody!));
-
-  click(host.querySelector('button[data-view-tab="list"]'));
-  expect(await waitFor(() => host.querySelector("[data-project-bar]") !== null)).toBe(true);
-  await settle();
-  expect(host.querySelectorAll("[data-test-island]")).toHaveLength(1);
-  expect(afterMore()?.hasAttribute("data-island-first")).toBe(true);
+  /* It is in the bar itself, the last thing in it, and the bar keeps no reserve for a box drawn over it. */
+  expect(bar(host).lastElementChild?.hasAttribute("data-bar-island-slot")).toBe(true);
+  expect(bar(host).querySelector("[data-bar-island-slot] [data-test-island]")).not.toBeNull();
 });
 
 test("`/` and `u` keep their meaning on the Viewer's controls the bar brought into the board", async () => {

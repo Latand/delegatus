@@ -86,65 +86,69 @@
 .kb .bar .search svg { position: absolute; left: 9px; top: 8px; width: 15px; height: 15px; color: var(--color-muted); pointer-events: none; }
 .kb .bar-find { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .kb .reason-filters { display: flex; min-width: 0; max-width: 420px; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
-/* Under the bar the row is the bar's second line: the same surface, with the bottom border the bar
-   gives on its own (the bar's border is then the row's, so no line runs between them). The page
-   scrolls from the row's lower edge, so scrolled content never touches a chip, and the Orchestrator
-   row keeps its one 12 px gap from that edge. The row is 8 + 18 + 8 + 1 px; the reader and the
-   draft take that height out of theirs twice (--reason-row-h), so the row costs the card nothing. */
-.kb > .reason-filter-row {
-  flex: 0 0 auto; flex-wrap: wrap; max-width: none; padding: 8px var(--kb-edge); overflow: visible;
-  background: var(--surface-card); border-bottom: 1px solid var(--border-default);
-}
-.kb > .bar:has(+ .reason-filter-row) { border-bottom: 0; }
-.kb:has(> .reason-filter-row) { --reason-row-h: 35px; }
 .kb .reason-filter { flex: 0 0 auto; min-height: 18px; padding: 0 6px; border: 1px solid var(--border-default); border-radius: 999px; background: var(--surface-card); color: var(--color-secondary); font-size: 10px; line-height: 16px; white-space: nowrap; }
 .kb .reason-filter[aria-pressed="true"] { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 12%, var(--surface-card)); color: var(--color-primary); }
 
 /* The project board's one header bar (#1801, docs/design/board-header.md): one
    48 px row at every desktop width, 32 px controls, 8 px inside a group and
-   16 px between groups. Nothing wraps; when the row is short the search field
-   gives way first, then the project name. The Viewer's attention island is
-   fixed over the right end of this row, which stays clear for it. The slots
-   (`.bar-slot`) hold the Viewer's own components, styled by their utilities. */
+   16 px between groups. Nothing wraps and nothing is drawn over the row: the
+   Viewer's attention island is its last item, in the flow. When the row is
+   short the search field gives way first; after it the bar takes the fewest
+   steps of `data-fit` (ProjectBar's `useBarFit`) at which the row fits and the
+   project name is whole. The slots (`.bar-slot`) hold the Viewer's own
+   components, styled by their utilities. */
 .kb .bar[data-bar="project"] {
   display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; height: 48px; flex-shrink: 0;
-  padding: 0 236px 0 var(--kb-edge);
+  padding: 0 var(--kb-edge);
 }
 .kb .bar[data-bar="project"] :is(.bar-group, .bar-slot) { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-/* The search gives way first. Wide, the lead never shrinks below its content; narrow, it holds
-   only the project name, which then truncates down to its 48 px floor, so a long name never
-   pushes the row into the island's reserve. */
-.kb .bar[data-bar="project"] .bar-lead { flex-shrink: 1; }
-.kb .bar[data-bar="project"][data-bar-tier="narrow"] .bar-lead { min-width: 48px; }
+/* The lead holds the project name and the account switches. It shrinks only once the search sits
+   at its floor, and what shrinks is the name: a truncated name is what asks for the next step. */
+.kb .bar[data-bar="project"] .bar-lead { flex-shrink: 1; min-width: 48px; }
 /* The panel toggles and the ⋯ menu are two groups: 16 px apart, like every other pair of groups. */
 .kb .bar[data-bar="project"] .bar-trail { gap: 16px; }
 .kb .bar[data-bar="project"] .summary { white-space: nowrap; flex-shrink: 0; }
 .kb .bar[data-bar="project"] .grow { flex: 1 1 0; min-width: 0; }
-/* The search gives way first, down to 112 px, and the project name only after it: a board narrowed
-   by a seat or the docked needs-you panel keeps its name whole while the search has room to give.
+/* The find group: the field and the one filter, joined into one control. The search gives way
+   first, down to the 144 px that keep «Знайти задачу» whole, and the project name only after it.
    Flex shrinks every item in proportion to factor × basis, so a factor of 100 still took a quarter
-   pixel from the lead, and Chrome draws the ellipsis for it. At 100 000 the lead's share of the at
-   most 128 px the search gives stays under half a layout unit (1/128 px) and rounds to nothing;
-   once the search sits at its floor the rest falls to the lead as before. */
-.kb .bar[data-bar="project"] .bar-find { flex: 1 100000 240px; max-width: 420px; min-width: 112px; }
-.kb .bar[data-bar="project"] .bar-find .search { flex: 0 1 auto; max-width: none; min-width: 0; }
-/* Filters share the search row in a wide bar; below 1168 px of bar width the component
-   puts them in their own wrapping row beneath the bar. */
-/* Keep the field's placeholder readable in both locales and include that
-   floor in the group's minimum, so its children cannot overlap later controls. */
-.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) { flex-basis: 440px; max-width: 536px; min-width: min-content; flex-direction: row; align-items: center; gap: 8px; }
-.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) .search { flex: 1 1 144px; min-width: 144px; }
-.kb .bar[data-bar="project"] .reason-filters { flex: 0 0 auto; max-width: calc(100% - 72px); }
+   pixel from the lead, and Chrome draws the ellipsis for it. At 100 000 the lead's share of what
+   the search gives stays under half a layout unit and rounds to nothing; once the search sits at
+   its floor the rest falls to the lead. */
+.kb .bar[data-bar="project"] .bar-find { flex: 1 100000 360px; max-width: 440px; min-width: min-content; flex-direction: row; align-items: center; gap: 0; }
+.kb .bar[data-bar="project"] .bar-find .search { flex: 1 1 220px; min-width: 144px; max-width: none; }
 .kb .bar[data-bar="project"] .search input { width: 100%; }
-/* The attention island is fixed over the bar's 236 px reserve. Under 1168 px of bar the controls
-   crowd it, and the uk label is wider than the reserve leaves: the chip keeps its dot and count
-   (the button keeps its aria-label and title) so it stays clear of the panel toggles and ⋯. */
-.kb .bar[data-bar="project"][data-bar-compact] [data-attention-chip-label] { display: none; }
-/* A bar under 768 px (a narrow desktop window) cannot hold the groups beside the island's
-   reserve in one row; there, and only there, they wrap. The bar's own width decides, since it
-   spans the Tasks panel: a board narrowed by the panel keeps its one-row bar. */
-.kb .bar[data-bar="project"][data-bar-wrap] { flex-wrap: wrap; height: auto; padding: 8px 236px 8px var(--kb-edge); row-gap: 8px; }
-.kb .bar[data-bar="project"][data-bar-wrap] .grow { display: none; }
+/* The field and the filter share one border: the field draws none on its right. A joined control
+   keeps its focus ring, which is drawn as a shadow, and drops only its resting shadow. */
+.kb .bar[data-bar="project"] .bar-find .search input { border-right-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.kb .bar[data-bar="project"] [data-bar-filter] > button { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.kb .bar[data-bar="project"] [data-bar-filter] > button:not(:focus-visible) { box-shadow: none; }
+/* The panel group is one segmented control, so the row never shows a run of identical buttons. The
+   bar of a leaf without a board (`[data-project-bar]`) draws the same group. */
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button { border-radius: 0; }
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] :is(button, [data-bar-recent] > button):not(:focus-visible) { box-shadow: none; }
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > * + button,
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > * + [data-bar-recent] > button { border-left-width: 0; }
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:first-child { border-top-left-radius: var(--radius-control); border-bottom-left-radius: var(--radius-control); }
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:last-child { border-top-right-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control); }
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > [data-bar-recent] > button { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
+/* The one primary action: while something waits, the needs-you chip is the only filled control in
+   the row, so the eye goes there first; at zero it is outlined and muted. */
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-attention-count]:has([data-attention-dot]):not([aria-expanded="true"]) {
+  background: color-mix(in srgb, var(--color-warning) 16%, var(--surface-card));
+  border-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
+}
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-attention-count]:has([data-attention-dot]):not([aria-expanded="true"]):hover { background: color-mix(in srgb, var(--color-warning) 24%, var(--surface-card)); }
+
+/* What the bar gives up, step by step (`BAR_FIT_STEPS`). The bar of a leaf without a board
+   (`[data-project-bar]`) takes the first two from its width. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="accounts"] [data-bar-group="where"] > :not(h1) { display: none; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-fit-label] { display: none; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] :is([data-orchestrator-toggle], [data-task-panel-toggle]) { padding-left: 8px; padding-right: 8px; }
+.kb .bar[data-bar="project"][data-fit~="chip"] [data-attention-chip-label] { display: none; }
+.kb .bar[data-bar="project"][data-fit~="tight"], .kb .bar[data-bar="project"][data-fit~="tight"] .bar-trail { gap: 8px; }
+/* The last step, on a window narrower than the board is made for: the field may go under its placeholder. */
+.kb .bar[data-bar="project"][data-fit~="find"] .bar-find .search { min-width: 64px; }
 
 /* The Overview's bar, as it was before #1801 (that lane was the project board only). The
    Viewer's attention island is fixed to the top-right corner just under the header row, over
@@ -166,8 +170,7 @@
 .kb[data-mode="tabs"] .bar[data-bar="overview"] .summary { display: none; }
 /* On the two narrow faces the controls come first and the search field takes
    what is left: the attention island's card, when it opens over the right end
-   of this row, covers part of the field instead of the view tabs. */
-.kb[data-mode="scroll"] .bar[data-bar="overview"] .view-switch, .kb[data-mode="tabs"] .bar[data-bar="overview"] .view-switch { order: 1; }
+   of this row, covers part of the field instead of the Hidden pill. */
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .hidden-pill, .kb[data-mode="tabs"] .bar[data-bar="overview"] .hidden-pill { order: 2; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-find, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find { order: 3; min-width: 0; flex-basis: 160px; }
 /* Tabbed (narrowest) face: the island's card spans most of the first row
@@ -874,17 +877,13 @@
    - a reader or agent draft inside a task card sits in a column that already
      scrolls, so it takes the viewport minus the bar and the column's chrome
      (100dvh - 180px), and never less than min(700px, 84dvh), which keeps it
-     above the old min(620px, 74vh) at every window height. The
-     reason-filter row, when it stands under the bar, comes out of the result
-     twice: its height pushes the card down, and the reader's lower edge rises
-     by the same height again, which keeps the share of a launched reader the
-     window shows above what the layout without the row gives. The old height
+     above the old min(620px, 74vh) at every window height. The old height
      stays the floor.
    The phone does not use these: its conversation screen (MobileFocusView)
    already fills the viewport. */
 .kb {
   --seat-default-h: 75dvh;
-  --conv-in-card-h: max(min(620px, 74dvh), max(min(700px, 84dvh), 100dvh - 180px) - 2 * var(--reason-row-h, 0px));
+  --conv-in-card-h: max(min(620px, 74dvh), max(min(700px, 84dvh), 100dvh - 180px));
 }
 
 /* ── Page: the orchestrator seat above the board (K3) ────────────────────── */
@@ -954,22 +953,15 @@
   display: grid; visibility: hidden; pointer-events: none; contain: strict;
 }
 .kb .reader-park > .reader-host { grid-area: 1 / 1; min-height: 0; }
-/* The header's pill: the open agents with the window closed. It stands in a
-   slot of one width and height whether or not anything is open, so nothing in
-   the header moves when the first agent opens or the last one closes, on one
-   row or wrapped. It keeps one form at every width: it names the agents it
+/* The header's pill: the open agents with the window closed. Its slot takes
+   room only while it holds the pill, and the row's spacer and search take up
+   the difference. It keeps one form at every width: it names the agents it
    counts and stands as tall as the header's other buttons. */
-.kb .bar .open-agents-slot { flex: 0 0 auto; width: 104px; height: 32px; display: flex; align-items: center; }
-/* A wrapped bar breaks its rows on the search's basis, so the search gives up
-   the slot and its gap there: the first row asks for what it did before the
-   slot, keeps the search beside the project's name, and the rows stay where
-   they were. The search still grows into whatever the row leaves it. */
-.kb .bar[data-bar="project"][data-bar-wrap] .bar-find { flex-basis: calc(240px - 104px - 16px); }
+.kb .bar .open-agents-slot { flex: 0 0 auto; height: 32px; display: flex; align-items: center; }
+.kb .bar .open-agents-slot:not(:has(button)) { display: none; }
 .kb .bar .open-agents-pill { max-width: 100%; padding: 0 8px 0 10px; }
 .kb .bar .open-agents-pill .num { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kb .bar .open-agents-pill svg { flex-shrink: 0; width: 13px; height: 13px; color: var(--color-secondary); }
-/* Where even the crowded row runs into the attention chip, the slot is not drawn. */
-.kb .bar[data-bar="project"][data-bar-tight] .open-agents-slot { display: none; }
 .kb .or-list { list-style: none; margin: 0; padding: 0; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .kb .or-seg { position: relative; display: flex; align-items: center; }
 .kb .or-seg + .or-seg { border-top: 1px solid var(--border-default); }
