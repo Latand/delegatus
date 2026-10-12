@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { workAggregateCpuQuota as productQuota } from "../src/lib/runtime/cpuPlacement";
-import { cpuPlacementFiles, installCpuPlacement, workAggregateCpuQuota } from "./install-cpu-placement.mjs";
+import { activationSteps, cpuPlacementFiles, installCpuPlacement, workAggregateCpuQuota } from "./install-cpu-placement.mjs";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -41,4 +41,58 @@ test.skipIf(process.platform !== "linux")("the command writes under XDG_CONFIG_H
   expect(result.stdout).toContain("Nothing is active yet. To apply:\nsystemctl --user daemon-reload");
   const refused = spawnSync(process.execPath, [path.join(import.meta.dir, "install-cpu-placement.mjs"), "--unit", "x; rm -rf /"], { encoding: "utf8", env: { NODE_ENV: "test", PATH: process.env.PATH, XDG_CONFIG_HOME: config } });
   expect(refused.status).toBe(2);
+});
+
+// A restart left the service in its old cgroup while a spared process held it
+// (2026-10-11); the printed steps stop, wait for the path to be released and
+// start through exit cleanup, against a stand-in systemctl.
+test.skipIf(process.platform !== "linux")("the printed move stops, waits for the old cgroup and always starts", () => {
+  const steps = activationSteps("viewer.service");
+  expect(steps.some((step) => /systemctl --user restart/.test(step))).toBe(false);
+  const move = steps.find((step) => step.startsWith("( trap"))!;
+  for (const releasedAfter of [2, 1000]) {
+    const bin = sandbox();
+    const calls = path.join(bin, "calls");
+    fs.writeFileSync(path.join(bin, "systemctl"), `#!/bin/sh
+echo "$*" >> "${calls}"
+if [ "$2" = show ]; then
+  shows=$(grep -c show "${calls}")
+  [ "$shows" -lt ${releasedAfter} ] && echo /app.slice/viewer.service
+fi
+exit 0
+`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const result = spawnSync("sh", ["-e", "-c", move], { encoding: "utf8", env: { NODE_ENV: "test", PATH: `${bin}:${process.env.PATH}` } });
+    expect(result.status).toBe(0);
+    const lines = fs.readFileSync(calls, "utf8").trim().split("\n");
+    expect(lines[0]).toBe("--user stop viewer.service");
+    expect(lines.at(-1)).toBe("--user start viewer.service");
+    expect(lines.filter((line) => line.includes(" show ")).length).toBe(releasedAfter === 2 ? 2 : 60);
+  }
+});
+
+test.skipIf(process.platform !== "linux")("activation cleanup starts after stop or wait errors and termination under errexit", () => {
+  const move = activationSteps("viewer.service").find((step) => step.startsWith("( trap"))!;
+  for (const shell of ["sh", "bash"]) {
+    for (const failure of ["stop", "show", "sleep", "HUP", "INT", "TERM"]) {
+      const bin = sandbox();
+      const calls = path.join(bin, "calls");
+      fs.writeFileSync(path.join(bin, "systemctl"), `#!/bin/sh
+echo "$*" >> "${calls}"
+if [ "$2" = "${failure}" ]; then exit 1; fi
+if [ "$2" = show ]; then echo /app.slice/viewer.service; fi
+exit 0
+`, { mode: 0o755 });
+      fs.writeFileSync(path.join(bin, "sleep"), `#!/bin/sh
+${failure === "sleep" ? "exit 1" : `kill -${failure} "$PPID"`}
+`, { mode: 0o755 });
+      const result = spawnSync(shell, ["-e", "-c", move], { encoding: "utf8",
+        env: { NODE_ENV: "test", PATH: `${bin}:${process.env.PATH}` } });
+      expect(result.status).toBe(failure === "HUP" ? 129 : failure === "INT" ? 130 : failure === "TERM" ? 143 : 1);
+      const lines = fs.readFileSync(calls, "utf8").trim().split("\n");
+      expect(lines[0]).toBe("--user stop viewer.service");
+      expect(lines.at(-1)).toBe("--user start viewer.service");
+      expect(lines.filter((line) => line.includes(" start ")).length).toBe(1);
+    }
+  }
 });

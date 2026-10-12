@@ -4,15 +4,18 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import type { BoardTask } from "@/lib/tasks/types";
 import { prototypeRoot, storedMediaPath } from "./store";
 import type { PrototypeReviewRead, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundRead, PrototypeRoundView } from "./types";
-import { currentPrototypeSummary, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded } from "./model";
+import { currentPrototypeSummary, prototypeDeliveryPhase, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded } from "./model";
 export { prototypeReviewSummary, prototypeReviewNotices } from "./model";
-export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[], index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals()): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
+export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[], index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals(), now = Date.now()): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
   return tasks.map(({ prototypeReviews, prototypeReviewReplica, ...task }) => {
     const summary = currentPrototypeSummary(prototypeReviewSummary(prototypeReviews ?? []) ?? prototypeReviewReplica?.summary ?? task.prototypeReview);
     const record = summary?.waitingReviewId ? index.get(`prototype:${summary.waitingReviewId}`) : undefined;
     if (!summary) return task;
     const { waitingDismissal: _held, ...current } = summary;
-    return { ...task, prototypeReview: { ...current, ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) } };
+    /* Only this installation drives a decision's delivery, so only its own rounds say how it goes. */
+    const held = prototypeReviews?.at(-1)?.decision;
+    return { ...task, prototypeReview: { ...current, ...(current.decision && held ? { decision: { ...current.decision, phase: prototypeDeliveryPhase(held.delivery, now) } } : {}),
+      ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) } };
   });
 }
 /** What a caller that names itself with a capability gets on a shared board
@@ -61,8 +64,11 @@ export function readPrototypeReviews(task: BoardTask): PrototypeReviewRead {
       return fs.realpathSync(place) === place && fs.lstatSync(place).isFile();
     } catch { return false; /* Copy is absent on linked installations and after retention. */ }
   };
+  const now = Date.now();
   const rounds = (task.prototypeReviews ?? []).map(round => {
-    const publicRound = prototypeRoundMetadata(round);
+    const metadata = prototypeRoundMetadata(round);
+    const publicRound = metadata.decision && round.decision
+      ? { ...metadata, decision: { ...metadata.decision, delivery: { ...metadata.decision.delivery, phase: prototypeDeliveryPhase(round.decision.delivery, now) } } } : metadata;
     const mediaView = (media: PrototypeMediaView) => {
       const available = !round.mediaRemovedAt && stored(round.id,media);
       const url = !available ? null : media.mime.startsWith("image/")
@@ -73,7 +79,7 @@ export function readPrototypeReviews(task: BoardTask): PrototypeReviewRead {
     return { ...publicRound, variants: publicRound.variants.map(v => ({ ...v, frames: v.frames.map(({ image,original,...frame }) => ({ ...frame, image: mediaView(image), ...(original ? { original: mediaView(original) } : {}) })),
       videos: v.videos.map(video => ({ ...video, media: mediaView(video.media) })) })) };
   });
-  const summary = withPrototypeReviewSummaries([task])[0]!.prototypeReview;
+  const summary = withPrototypeReviewSummaries([task], undefined, now)[0]!.prototypeReview;
   return { taskId: task.id, rounds: withSuperseded(rounds, task.id), summary, waitingReviewId: summary?.waitingDismissal ? null : summary?.waitingReviewId ?? null };
 }
 

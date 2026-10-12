@@ -43,7 +43,8 @@ import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
-import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import { fireTasksChanged } from "@/components/tasks/taskApi";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -2777,7 +2778,9 @@ const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
   const summary = prototypeReviewSummary(rounds)!;
   const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
-  return { ...summary, ...(waitingDismissal ? { waitingDismissal } : {}) };
+  /* As the Viewer's own read: a decision this installation delivers carries its delivery's phase on the card too. */
+  const phase = rounds.at(-1)?.decision?.delivery.phase;
+  return { ...summary, ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -2867,7 +2870,25 @@ if (PROTO) {
     protoRounds["t-export"] = [answered];
   }
   protoPublish();
-  Object.assign(window, { protoPosts });
+  /* A driver's hands on the background delivery (`&proto=1`): `protoSavePhase`
+     answers a save as the Viewer does, its message saved or on its way;
+     `protoHoldSave()` keeps the next save unwritten and unanswered
+     until `protoReleaseSave()`, so a frame shows the review before the server
+     has written the decision; `protoPhase(task, phase)` moves a decided round's delivery. */
+  let releaseSave: (() => void) | null = null;
+  Object.assign(window, {
+    protoPosts,
+    protoHoldSave: () => { (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave = new Promise<void>((resolve) => { releaseSave = resolve; }); },
+    protoReleaseSave: () => { releaseSave?.(); releaseSave = null; delete (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave; },
+    protoPhase: (taskId: string, phase: PrototypeDeliveryPhase) => {
+      const decided = protoRounds[taskId]?.at(-1);
+      if (!decided?.decision) return;
+      const state: PrototypeDeliveryState = phase === "delivered" ? "sent" : phase === "attention" ? "failed" : phase === "waiting-seat" ? "no-orchestrator" : "pending";
+      decided.decision = { ...decided.decision, delivery: { state, retryable: state !== "sent", phase } };
+      protoPublish();
+      fireTasksChanged();
+    },
+  });
 }
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
@@ -3111,12 +3132,12 @@ if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: nu
 Object.assign(window, { launchRun });
 
 /* The account picker's driver block (kanbanBoard.browser.test.tsx, "account chips with the weekly limit left"):
-   `&accountpicker=1` gives any scenario the accounts the build's brief names. Each session window is looser than
-   its weekly one, so the sidebar footer's line (the tightest window) and the chip name the same number. */
+   `&accountpicker=1` gives any scenario the accounts the build's brief names. The sidebar footer's line and the
+   chip both name the weekly window. */
 const ACCOUNT_PICKER = new URLSearchParams(location.search).has("accountpicker");
-const pickerReading = (weeklyUsed: number | null, sessionUsed: number) => ({
+const pickerReading = (weeklyUsed: number | null, sessionUsed: number | null) => ({
   state: "fresh", checkedAt: iso(5 * MIN),
-  session: { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
+  session: sessionUsed === null ? null : { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
   weekly: weeklyUsed === null ? null : { usedPercent: weeklyUsed, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 },
 });
 const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<typeof pickerReading> | null, signedOut = false) => ({
@@ -3126,7 +3147,19 @@ const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<t
 /* `&pickeractive=team` makes the long-labelled account the Claude active one, and `&pickerdelay=<ms>` holds the
    accounts reply back, so the readings land after the chooser is open. */
 const PICKER_PARAMS = new URLSearchParams(location.search);
-const pickerAccounts = {
+/* `&sidebarweekly=1` (the "sidebar names each account's weekly limit" block): Claude «Main» with 77 % of its week
+   and 36 % of its 5-hour window left, «Work» with a week only, «Night» with a 5-hour window only; Codex weekly
+   only, as its plans report. */
+const SIDEBAR_WEEKLY = PICKER_PARAMS.has("sidebarweekly");
+const pickerAccounts = SIDEBAR_WEEKLY ? {
+  claude: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Main", "Max", pickerReading(23, 64)), pickerRow("work", "Work", "Max", pickerReading(59, null)),
+    pickerRow("night", "Night", "Pro", pickerReading(null, 30)),
+  ] },
+  codex: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Personal", "Pro", pickerReading(22, null)), pickerRow("review", "Review", "Plus", pickerReading(77, null)),
+  ] },
+} : {
   claude: { active: PICKER_PARAMS.get("pickeractive") ?? "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
     pickerRow("default", "Main", "Max", pickerReading(8, 5)), pickerRow("work", "Work", "Max", pickerReading(59, 44)),
     pickerRow("backup", "Backup", "Pro", pickerReading(93, 70)), pickerRow("old", "Old login", "Pro", null, true),
@@ -3199,16 +3232,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
+      /* A held save has not been written yet: the decision is recorded only once it is released. */
+      await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
       const held = rounds.find((entry) => entry.id === body.reviewId);
       if (!held) return json({ error: "prototype review not found" }, 404);
+      const phase = (window as unknown as { protoSavePhase?: PrototypeDeliveryPhase }).protoSavePhase;
       if (body.retry && held.decision) {
         /* A driver may queue what the next retries answer; with nothing queued a retry lands. */
         const state = (window as unknown as { protoRetryAnswers?: PrototypeDeliveryState[] }).protoRetryAnswers?.shift() ?? "sent";
-        held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent" } };
+        held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent", ...(phase ? { phase: state === "sent" ? "delivered" as const : "delivering" as const } : {}) } };
       }
       else if (!held.decision) {
-        const state = protoSaveState[taskId] ?? "sent";
-        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };
+        const state = phase === "saved" || phase === "delivering" ? "pending" : protoSaveState[taskId] ?? "sent";
+        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
       }
       protoPublish();
     }
