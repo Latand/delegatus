@@ -256,6 +256,14 @@ accounts trigger, `/` for search), found by their labels in the product's own
 dictionaries, so both languages work. Frames navigate in place. Language changes reload visible frames;
 frames farther down refresh when the reader approaches them.
 
+On a touch phone the frames are pictures the page scrolls over. `layout()` in
+`main.js` sets `pointer-events: none` on a frame that runs the phone layout
+while the primary pointer is a finger and the frame is not full screen, so the
+browser itself scrolls the page, with its own momentum, whatever a swipe starts
+on. The landing's tabs change a frame's screen, and the full-screen control
+opens the demo for use. A window with a mouse keeps its frames interactive at
+any width.
+
 ## Decisions where the brief was open
 
 - **Frames, not captures.** The product in an iframe keeps its own layout,
@@ -341,7 +349,7 @@ retry without acknowledging readiness, and retry must recover three results
 in the same iframe. Acknowledgements are checked against the rendered DOM.
 `--search-failure-only` isolates the empty-response and retry check.
 
-To check phone swipes, run `CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-swipe=after` after building. It drives 390×844 touch gestures at DPR 3 over the hero's demo, the conversation frame's composer, each demo frame, the install prompt and plain text in both languages. For the page-scroll measurement it places nested scroll areas at the edge in the swipe direction; a long composer draft separately verifies that the inner area still scrolls before that edge. The check writes `swipe-after.json` to `LANDING_RENDER_DIR` and requires page travel of at least 80% of the plain-text control in either direction. It also checks that a quick flick coasts after release. Use `--check-swipe=before` to record an unchanged or published baseline without asserting it.
+To check phone swipes, run `CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-swipe=after` after building. It drives touch gestures at DPR 3 at 390×844 and 375×667 in both languages: a vertical swipe in each direction and a diagonal one over the hero's demo, the install prompt, the conversation composer, each demo frame and plain text. It sets up no nested scroll area, so a frame that takes any of the gesture shows. The page must move within 4 px of what it moves over plain text, in the same direction, with no backwards step in a per-frame `scrollY` trace, and no scroll area inside a frame may change its position. It also checks who may touch a frame: `pointer-events` is `none` on every frame at both phone sizes, in a phone turned sideways, and on the touch tablet's handset; `auto` at 1440×900 and in a 600 px mouse window, and on the tablet's run and open frames. A tap on the landing tab under each frame still switches its screen, and the run frame takes touch in full screen only. The check writes `swipe-after.json` to `LANDING_RENDER_DIR`. Use `--check-swipe=before` to record an unchanged or published baseline without asserting it.
 
 The driver records load, tabs and repeated
 EN/UK switches after visiting the lower sections. Chrome traces record script
@@ -363,5 +371,3 @@ which clears pending conversation intent; an initial conversation can no
 longer finish opening over a later Search selection. Readiness timeouts show
 a localized retry control. Reloaded frames also wait for acknowledgement;
 elapsed time alone never marks a frame ready.
-
-`--check-swipe-feedback` covers the other half: a finger that moves steadily and then rests over the run and phone frames. The page has to follow it 1:1, hold still while it rests, and never reverse. It runs twice, once with Chromium's stable touch coordinates and once with `Touch.screenY` carrying the landing's scroll, the semantics seen in an iPhone Safari recording where the page alternated over a demo. The second run fails on a frame that reads the finger as a difference between two readings taken in a frame that moved in between, which is what made the landing jump back and forth. Playwright's WebKit can only tap, so this check models the iPhone coordinates in Chromium.
