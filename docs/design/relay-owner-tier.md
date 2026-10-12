@@ -318,12 +318,15 @@ function that both call. Then:
 
 | Last message, trimmed | Answer |
 |---|---|
-| exactly `[ignore]` | `{ action: "ignore", text: "", reply_to: null }` |
+| exactly `[ignore]` | an owner-facing reply saying that the agent ended without reporting completion or a successful handoff, and asking the owner to open the project's seat and resend the request |
 | exactly `[handoff]`, and the request listed tools | `{ action: "handoff", … }`, completed as `declined` / `handoff` (`runner.ts:491-492`) |
-| exactly `[handoff]` without tools, or empty | invalid: `failed` / `invalid_answer` |
+| exactly `[handoff]` without tools, or empty | the same actionable owner-facing reply as a silent `[ignore]` result |
 | anything else | `{ action: "reply", text, reply_to: <the owner's message id> }`, cut to `answer.max_chars` code points with a final `…` when longer; the whole text stays in the conversation |
 
 `checkedAnswer` (`protocol.ts:255-288`) then runs on it as for every answer.
+The runner enforces this outcome after the lower-level sentinel parser. It
+keeps explicit replies and service handoffs, and uses a short failure and
+retry instruction when the reply budget cannot hold the full explanation.
 
 No progress events are sent for an owner run. Progress lines are posted in
 the chat (`relay.md` §A.7), and an owner run's working notes can name paths
@@ -466,7 +469,7 @@ exporting that helper, so the escaping has one source. The prompt:
 <tools>                        (only when non-empty)
 [Input.tools as JSON]
 </tools>
-[Your last message in this turn is posted in that chat, where other people can read it. Never put secrets, keys, tokens, passwords, file contents or paths from this computer in it. Nobody can answer a question during this turn; ask the owner in your reply instead. Reply within about two minutes: while you work, the chat's next messages to this assistant are held or answered by the service. This turn is stopped at {hard cap} minutes. For longer work, start it and reply with what you started: message the project's orchestrator with send_message_to_orchestrator, or create a task or a pipeline. Pass project on every board call; list_tasks and get_orchestrator tell you which projects exist. If you spawn an agent, pass notifyLauncher false. Write your reply as plain text of at most {max_chars} characters, as your last message. To post nothing, make your last message exactly [ignore].{ To hand this message back to the service's own assistant, which can use the tools in <tools>, make your last message exactly [handoff].}]
+[Your last message in this turn is posted in that chat, where other people can read it. Never put secrets, keys, tokens, passwords, file contents or paths from this computer in it. Nobody can answer a question during this turn; ask the owner in your reply instead. Reply within about two minutes: while you work, the chat's next messages to this assistant are held or answered by the service. This turn is stopped at {hard cap} minutes. For longer work, start it and reply with what you started: message the project's orchestrator with send_message_to_orchestrator, or create a task or a pipeline. Pass project on every board call; list_tasks and get_orchestrator tell you which projects exist. If you spawn an agent, pass notifyLauncher false. Write your reply as plain text of at most {max_chars} characters, as your last message. Always report an outcome to the owner; an empty reply or [ignore] cannot complete this request.{ To hand this message back to the service's own assistant, which can use the tools in <tools>, make your last message exactly [handoff].}]
 ```
 
 Why this shape:

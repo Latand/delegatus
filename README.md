@@ -364,6 +364,12 @@ you set per launch, stage or role. Agents use the bundled [MCP server](#mcp-serv
 to reach the board, tasks, pipelines and each other's conversations. The
 orchestrator does its work through the same server.
 
+Hosted Codex sessions and account operations support CLI 0.154.0, 0.159.0
+and 0.162.1. An unpinned version is refused before its app-server starts;
+the error names the supported versions and regeneration script. See the
+[protocol boundary](docs/design/codex-pinned-protocol.md) for compatibility
+checks and the approval router's remaining replay work.
+
 Claude and Codex keep separate memories. `search_memory` lets an agent on
 either engine query what both have learned. With shared memory switched on
 for a project, each message you send to a Claude or Codex agent also carries
@@ -916,8 +922,9 @@ messages never wait on it.
 
 To give the service itself `CPUWeight=1000` beside the agents, run
 `node bin/install-cpu-placement.mjs`. It writes three files under
-`$HOME/.config/systemd/user` and prints the reload and restart that apply them;
-restart at a quiet moment. Dedicated CPUs for production need root; see
+`$HOME/.config/systemd/user` and prints the reload, stop and start that apply
+them; run them at a quiet moment. A plain restart can leave the service in its
+old cgroup. Dedicated CPUs for production need root; see
 [the design](docs/design/cpu-placement.md).
 
 ## Platform support

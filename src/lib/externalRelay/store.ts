@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
 import type { ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
+import type { OwnerBridgeContext } from "./ownerBridgeContext";
 
 export type RelayTargetSettings = {
   id: string;
@@ -94,7 +95,7 @@ export type RunRecord = {
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
-  ownerTurn?: { clientAttemptId: string; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
+  ownerTurn?: { clientAttemptId: string; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
   requestId: string;
   leaseId: string;
   relayId: string;
