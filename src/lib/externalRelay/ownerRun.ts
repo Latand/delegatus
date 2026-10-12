@@ -14,7 +14,11 @@ import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision } 
 import type { OwnerInstruction } from "./profile";
 import type { RelayTargetSettings } from "./store";
 import { json } from "./prompt";
+import { readOwnerStepObservation } from "./stepObservation";
+import type { RelayStepObservation } from "./progressSteps";
 import { ownerNeedsClarification } from "./ownerBridgeContext";
+
+export type OwnerTurnObservation = SpawnedTurnObservation & RelayStepObservation;
 
 export function ownerRunPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number): string {
   const input = request.input;
@@ -61,16 +65,16 @@ function ownerMissingOutcomeAnswer(request: ExternalRelayRequest, owner: OwnerIn
 
 export interface OwnerRunPorts {
   launch(body: Record<string, unknown>, authorize?: () => void): Promise<ReportSpawnResult>;
-  observe(run: SpawnedTurn): Promise<SpawnedTurnObservation>;
+  observe(run: SpawnedTurn, progressSteps?: boolean): Promise<OwnerTurnObservation>;
   stop(conversationId: string, action: "interrupt" | "kill", clientAttemptId?: string): Promise<void>;
   pollMs?: number;
   stopRetryMs?: number;
 }
 const productionPorts: OwnerRunPorts = {
   launch: (body, authorize) => launchAutonomousConversation(body, authorize, { structured: true }),
-  async observe(run) {
+  async observe(run, progressSteps) {
     const { defaultSeatTickSources } = await import("@/lib/monitor/seatTickSources");
-    return observeOwnerTurn(run, defaultSeatTickSources());
+    return observeOwnerTurn(run, defaultSeatTickSources(), progressSteps);
   },
   async stop(conversationId, action, clientAttemptId) {
     const { applyConversationAction } = await import("@/lib/conversation/actions");
@@ -92,8 +96,11 @@ const productionPorts: OwnerRunPorts = {
 };
 
 class OwnerPromptCleanupPending extends Error {}
-export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">): Promise<SpawnedTurnObservation> {
+export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">, progressSteps = false): Promise<OwnerTurnObservation> {
   const observed = await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, scrubOwnerOutput));
+  if (progressSteps && observed.conversationId) {
+    Object.assign(observed, readOwnerStepObservation(sources.registry(), observed.conversationId));
+  }
   const receipt = sources.registry().spawnReceiptForClientAttempt(run.clientAttemptId);
   const prompt = receipt && Object.values(sources.registry().readOnlySnapshot().heldDeliveries)
     .find(row => row.command.operationId === `spawn_message_${receipt.launchId}`);
@@ -235,6 +242,7 @@ export function runOwnerAgent(input: {
   accountId: string | null; hardCapMs: number; ports?: OwnerRunPorts;
   authorize?: () => void; credentials?: readonly string[];
   onConversation(conversationId: string): void;
+  onProgress?(observed: RelayStepObservation): void;
 }): EphemeralAgentRun {
   if (ownerNeedsClarification(input.owner)) {
     input.authorize?.();
@@ -350,10 +358,11 @@ export function runOwnerAgent(input: {
         stopped = "kill"; cancelStatus = "failed"; persistStop(); await applyStop(); return;
       }
       while (!settled && !stopped) {
-        const observed = await ports.observe(turn);
+        const observed = await ports.observe(turn, !!input.onProgress);
         if (settled || stopped) break;
         authorize();
         if (observed.state === "failed" || observed.turnError) { cancel("failed"); break; }
+        input.onProgress?.({ currentTool: observed.currentTool, writingAnswer: observed.writingAnswer || observed.state === "ended" });
         if (observed.state === "ended") {
           const answer = ownerAnswer(observed.finalText ?? null, input.request, input.owner, input.credentials);
           // A silent final message cannot discharge the owner's request. A

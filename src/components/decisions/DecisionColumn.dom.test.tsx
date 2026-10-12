@@ -276,9 +276,11 @@ for (const state of ["failed", "uncertain", "no-orchestrator"] as const) {
 }
 
 const settle = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
-const recordAt = (state: "pending" | "uncertain" | "sent") => seatDecision({ decision: { chosen: [], answers: [{ questionId: "when", options: [0] }, { questionId: "why", options: [0] }], comment: "", at: "2026-10-11T14:46:00.000Z", delivery: { state, retryable: state !== "sent" } } });
+const recordAt = (state: "pending" | "uncertain" | "failed" | "no-orchestrator" | "sent") => seatDecision({ decision: { chosen: [], answers: [{ questionId: "when", options: [0] }, { questionId: "why", options: [0] }], comment: "", at: "2026-10-11T14:46:00.000Z", delivery: { state, retryable: state !== "sent" } } });
 
 for (const [name, answers] of [
+  ["a failed answer that the worker recovers", [{ state: "failed" }, { state: "uncertain" }, { state: "sent" }]],
+  ["an answer waiting for a seat that the worker finds", [{ state: "no-orchestrator" }, { state: "pending" }, { state: "sent" }]],
   ["a pending answer that turns uncertain", [{ state: "pending" }, { state: "uncertain" }, { state: "sent" }]],
   ["a read the server could not answer, or one that never arrived,", [{ status: 503 }, { thrown: true }, { status: 409 }, { state: "sent" }]],
 ] as const) {
@@ -288,7 +290,7 @@ for (const [name, answers] of [
     let at = 0;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       calls.push({ method: init?.method ?? "GET" });
-      const answer: { state?: "pending" | "uncertain" | "sent"; status?: number; thrown?: true } = answers[Math.min(at++, answers.length - 1)]!;
+      const answer: { state?: "pending" | "uncertain" | "failed" | "no-orchestrator" | "sent"; status?: number; thrown?: true } = answers[Math.min(at++, answers.length - 1)]!;
       if (answer.thrown) throw new TypeError("offline");
       if (answer.status) return new Response(JSON.stringify({ error: "prototype decision is busy" }), { status: answer.status });
       return new Response(JSON.stringify({ project: "project-a", decisions: [], round: recordAt(answer.state!) }), { status: 200 });
@@ -335,4 +337,31 @@ test("a refused retry says why and keeps the action", async () => {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   expect(host.querySelector("[data-decision-retry-error]")?.textContent).toContain("prototype decision is busy");
   expect(host.querySelector("[data-decision-retry]")).not.toBeNull();
+});
+
+
+test("an undelivered notice keeps the feed's saved answer and follows background recovery", async () => {
+  setDecisionRecordPollForTests(1);
+  publishPrototypeNotices([{ id: `prototype-delivery:${TASK}`, project: "project-a", taskId: "task-1", reviewId: TASK, title: "Self-update window", undelivered: true,
+    createdAt: "2026-10-11T14:46:00.000Z", target: { kind: "prototype-review", taskId: "task-1", reviewId: TASK } }]);
+  let state: "failed" | "sent" = "failed";
+  const methods: string[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    methods.push(init?.method ?? "GET");
+    const round = { ...recordAt(state), id: TASK, taskId: "task-1", taskTitle: "Self-update window" };
+    return new Response(JSON.stringify({ project: "project-a", decisions: [], round }), { status: 200 });
+  }) as typeof fetch;
+  const host = await render(<DecisionPointer target={{ reviewId: TASK, project: "project-a", title: "Deploy tonight?" }} />);
+  await settle(5);
+  expect(host.querySelector('[data-decision-card="answered"]')).not.toBeNull();
+  expect(host.querySelector("[data-decision-retry]")).not.toBeNull();
+  expect(host.querySelector("[data-decision-pointer-open]")).toBeNull();
+  state = "sent";
+  for (let wait = 0; wait < 40 && !host.querySelector('[data-decision-delivery="sent"]'); wait++) await settle(5);
+  expect(host.querySelector('[data-decision-delivery="sent"]')).not.toBeNull();
+  expect(host.querySelector("[data-decision-retry]")).toBeNull();
+  expect(methods.every(method => method === "GET")).toBe(true);
+  const settled = methods.length;
+  await settle(20);
+  expect(methods).toHaveLength(settled);
 });

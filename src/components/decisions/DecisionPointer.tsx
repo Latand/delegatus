@@ -32,12 +32,13 @@ export function decisionPointerOf(event: ToolEvent): DecisionPointerTarget | nul
   return { reviewId, project, title: typeof title === "string" ? title : typeof mcp.args.title === "string" ? mcp.args.title : "" };
 }
 
-/* A recorded answer is read again while its message is on its way: pending,
-   or uncertain until the receipt settles it. A read the server could not
+/* A recorded answer is read again while the background worker still owes
+   its message: pending, uncertain, failed or waiting for a seat. Only sent
+   settles delivery. A read the server could not
    answer (busy, down, offline) is tried again on the same pace. The first
    reads follow closely; past them the record keeps checking, slower. */
 const recordPoll = { ms: 4000, slowMs: 30_000, fast: 30 };
-const UNSETTLED = new Set(["pending", "uncertain"]);
+const UNSETTLED = new Set(["pending", "uncertain", "failed", "no-orchestrator"]);
 const transientRead = (status: number) => status === 409 || status === 429 || status >= 500;
 
 export function setDecisionRecordPollForTests(ms: number | null): void {
@@ -49,7 +50,7 @@ export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
   const { t } = useLocale();
   /* The phone has no column: the call says only what the press does. */
   const phone = useIsMobile();
-  const waiting = usePrototypeNoticesFor(target.project).some((notice) => notice.reviewId === target.reviewId);
+  const waiting = usePrototypeNoticesFor(target.project).some((notice) => notice.reviewId === target.reviewId && !notice.undelivered);
   const [record, setRecord] = useState<OperatorDecisionView | null>(null);
   /* Each retry reads the record again and polls it while the message travels. */
   const [reads, setReads] = useState(0);

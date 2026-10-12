@@ -1,0 +1,21 @@
+{
+  "driver": "src/lib/memory/curation/curator.eval.test.ts",
+  "engine": "codex",
+  "model": "gpt-6.1-sol",
+  "effort": "high",
+  "isolated": true,
+  "cases": {
+    "task": true,
+    "reader": true,
+    "builder": true,
+    "project": true,
+    "global": true,
+    "mixed": true,
+    "stale": true,
+    "instructions": true,
+    "code": true,
+    "all": true,
+    "some": true,
+    "opposite": true
+  }
+}
