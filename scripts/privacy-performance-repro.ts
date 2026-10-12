@@ -92,9 +92,10 @@ async function main(): Promise<void> {
   if (!configPath) fail("usage: bun scripts/privacy-performance-repro.ts <external-private-config.json>");
   const config = loadConfig(configPath);
   const repository = config.repository;
-  for (const ref of [config.baseline, config.candidate, config.inputBase, config.inputHead]) {
-    git(repository, ["rev-parse", "--verify", `${ref}^{commit}`]);
-  }
+  config.baseline = git(repository, ["rev-parse", "--verify", `${config.baseline}^{commit}`]);
+  config.candidate = git(repository, ["rev-parse", "--verify", `${config.candidate}^{commit}`]);
+  config.inputBase = git(repository, ["rev-parse", "--verify", `${config.inputBase}^{commit}`]);
+  config.inputHead = git(repository, ["rev-parse", "--verify", `${config.inputHead}^{commit}`]);
   const root = mkdtempSync(join(tmpdir(), "privacy-performance-repro-"));
   const worktrees: string[] = [];
   const baselineDir = join(root, "baseline");

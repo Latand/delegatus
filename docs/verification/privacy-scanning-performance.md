@@ -114,12 +114,12 @@ The table reports medians and names cold and warm cache states explicitly.
 
 | Privacy step | Cache state | Before CPU-s | After CPU-s | Reduction | Before wall-s | After wall-s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Pre-commit | Cold | 3.776 | 0.816 | 4.63× | 3.502 | 0.741 |
-| Pre-commit | Repeated input / warm cache | 4.096 | 0.362 | 11.33× | 3.826 | 0.301 |
-| Pre-push | Cold | 4.022 | 0.860 | 4.68× | 3.768 | 0.752 |
-| Pre-push | Repeated input / warm cache | 3.967 | 0.414 | 9.58× | 3.658 | 0.337 |
+| Pre-commit | Cold | 3.778 | 0.672 | 5.62× | 3.520 | 0.568 |
+| Pre-commit | Repeated input / warm cache | 3.570 | 0.306 | 11.65× | 3.276 | 0.255 |
+| Pre-push | Cold | 3.687 | 0.874 | 4.22× | 3.381 | 0.759 |
+| Pre-push | Repeated input / warm cache | 3.788 | 0.472 | 8.02× | 3.505 | 0.399 |
 
-The 5× target is met for repeat local scans with a populated content/policy cache. Cold scans still run every detector; their measured reductions are shown separately and remain below 5× when the corresponding row says so. The warm reduction also exceeds 5× when dividing the smallest baseline sample by the largest revised sample.
+The 5× target is met for repeat local scans with a populated content/policy cache. Cold scans still run every detector; pre-push cold measured 4.22×. The warm reduction also exceeds 5× under the conservative ratio of the smallest baseline sample to the largest candidate sample: 8.21× for pre-commit and 5.31× for pre-push.
 
 ### Equivalence and checks
 
@@ -196,7 +196,7 @@ and output paths:
 {
   "repository": "<checkout containing the pinned commits>",
   "baseline": "0846ab8fbdbcdccb60ee5d08c3989ccb87f83893",
-  "candidate": "<commit containing the optimized scanner>",
+  "candidate": "9ec8f28da0525704fbe9205c4c632ded66827274",
   "inputBase": "2703f64dfca51141de9ed1b195a94c2e99f06f36",
   "inputHead": "8fb84d9275e97c9051999ed5016678f6508629f7",
   "knownValuesFile": "<private plaintext snapshot file>",
