@@ -33,6 +33,12 @@ import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { autoRotationCardNotice, type AutoRotationAttempt } from "@/lib/monitor/seatAutoRotation";
 import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
+import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
+import { createProfileService } from "@/lib/memory/profileService";
+import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
+import type { RoleMemoryProjectView } from "@/lib/memory/roleTypes";
+import { directProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
+import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 
 /*
  * The one rendered-evidence driver for the kanban board. Every case here runs
@@ -115,6 +121,248 @@ describe("CPU admission queue", () => {
       fs.writeFileSync("evidence/cpu-queue/readings.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 60_000);
+});
+
+describe("memory profile", () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("direct-call timings reach the visible page", async () => {
+    // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
+    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView; credentialHome: string };
+    const credentials = readClaudeCredentials(input.credentialHome);
+    const token = credentials.state === "present" ? credentials.document.claudeAiOauth?.accessToken : null;
+    if (typeof token !== "string") throw Error("benchmark credential unavailable");
+    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const rows = new Map<string, ProfileRow>();
+    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: async () => directProfileCaller(token, MEMORY_PROFILE_MODEL) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(input.rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        if (request.method === "GET") return Response.json(service.read(input.rules.project, new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en"));
+        const body = await request.json(); const run = service.start(input.rules.project, body.locale);
+        const encoder = new TextEncoder(); let off: (() => void) | undefined; let closed = false;
+        return new Response(new ReadableStream({
+          start(controller) { off = run.subscribe(view => { if (!closed) controller.enqueue(encoder.encode(JSON.stringify(view) + "\n")); }); void run.done.then(() => { if (!closed) { closed = true; off?.(); controller.close(); } }); },
+          cancel() { closed = true; off?.(); },
+        }), { headers: { "Content-Type": "application/x-ndjson" } });
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const timings: unknown[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width: 1440, height: 900 }, "light", lang, "reduce");
+        try {
+          await page.locator("[data-profile-summarize]").waitFor();
+          for (const mode of ["cold", "cached"] as const) {
+            const started = performance.now();
+            await page.locator("[data-profile-summarize]").click();
+            await page.waitForFunction(() => {
+              const scroller = document.querySelector<HTMLElement>("[data-memory-profile]");
+              if (!scroller) return false;
+              const band = scroller.getBoundingClientRect();
+              return [...scroller.querySelectorAll<HTMLElement>("[data-profile-ready] h3, [data-profile-ready] h4")].some(title => {
+                const rect = title.getBoundingClientRect();
+                return rect.bottom > Math.max(0, band.top) && rect.top < Math.min(innerHeight, band.bottom) && rect.right > band.left && rect.left < band.right;
+              });
+            });
+            const firstMs = Math.round(performance.now() - started);
+            await page.locator('[data-memory-profile][aria-busy="false"]').waitFor();
+            const totalMs = Math.round(performance.now() - started);
+            expect(service.read(input.rules.project, lang).run?.errors).toEqual([]);
+            timings.push({ lang, mode, model: MEMORY_PROFILE_MODEL, ruleCount: input.rules.scopes.reduce((n, scope) => n + scope.active.length, 0), firstMs, totalMs });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "timings.json"), JSON.stringify(timings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+  browserTest("summary, slices and states render at desktop and phone widths in both locales and schemes", async () => {
+    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const rules = sampleMemory();
+    const rows = new Map<string, ProfileRow>();
+    let calls = 0;
+    const service = createProfileService({ rules: () => structuredClone(rules), read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: "haiku", prepare: async () => async (_, locale) => {
+      calls++;
+      const answer = sampleAnswer(locale === "uk");
+      const character = locale === "uk" ? "Ж" : "W";
+      const unbroken = (length: number) => character.repeat(length);
+      answer.headline = unbroken(80);
+      answer.text = unbroken(80);
+      for (const topic of answer.topics) {
+        topic.title = unbroken(35);
+        if (topic.text) topic.text = unbroken(100);
+      }
+      return answer;
+    } });
+    let state: "none" | "ready" | "running" | "error" | "stale" | "empty" = "none";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(state === "empty" ? { ...rules, scopes: [] } : rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        const locale = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        if (request.method === "POST") {
+          const body = await request.json(); const run = service.start("garden", body.locale); await run.done;
+          state = "ready";
+          return new Response(JSON.stringify(run.latest) + "\n", { headers: { "Content-Type": "application/x-ndjson" } });
+        }
+        const view: MemoryProfileView = service.read("garden", locale);
+        if (state === "none") { view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null; }
+        if (state === "running" || state === "error") view.run = { state: state === "running" ? "running" : "failed", startedAt: "2026-01-01", errors: state === "error" ? [{ scope: "overall", code: "account" }] : [] };
+        if (state === "stale") { view.stale = true; view.changes = { added: 2, rewritten: 1, removed: 1 }; }
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const readings: unknown[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        state = "none";
+        const before = calls;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-memory-profile]").waitFor();
+          expect(calls).toBe(before);
+          await page.locator("[data-profile-summarize]").click();
+          const headline = lang === "uk" ? "Ж".repeat(80) : "W".repeat(80);
+          await page.getByText(headline, { exact: true }).first().waitFor();
+          await page.screenshot({ path: path.join(out, `ready-${width}-${scheme}-${lang}.png`) });
+          const geometry = await page.evaluate(() => {
+            const profile = document.querySelector<HTMLElement>("[data-memory-profile]")!;
+            const window = document.querySelector<HTMLElement>("[data-rules-window]")!;
+            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] > h3")!;
+            const summarize = profile.querySelector<HTMLElement>("[data-profile-summarize]")!;
+            const headlineRect = headline.getBoundingClientRect();
+            const card = headline.parentElement!.getBoundingClientRect();
+            const chipHeights = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height));
+            const summarizeRect = summarize.getBoundingClientRect();
+            const pills = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill] > span")];
+            return { overflow: profile.scrollWidth - profile.clientWidth, fullWidthHeadline: Math.abs(headlineRect.left - (card.left + 17)) <= 1 && Math.abs(headlineRect.right - (card.right - 17)) <= 1, maxChipHeight: Math.max(...chipHeights), left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
+              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top,
+              truncatedPills: pills.filter(pill => pill.scrollWidth > pill.clientWidth).length, pills: pills.map(pill => ({ width: pill.getBoundingClientRect().width, maxWidth: getComputedStyle(pill).maxWidth })) };
+          });
+          expect(geometry.overflow).toBeLessThanOrEqual(1); expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.headlineButtonOverlap).toBe(false);
+          expect(geometry.fullWidthHeadline).toBe(true);
+          expect(geometry.maxChipHeight).toBeLessThanOrEqual(30);
+          expect(geometry.truncatedPills).toBeGreaterThan(0);
+          readings.push({ width, scheme, lang, geometry });
+          await page.locator("[data-profile-slice] button").last().scrollIntoViewIfNeeded();
+          await page.locator("[data-profile-slice] button").last().click();
+          await page.locator("[data-rules-section]").waitFor();
+          await page.screenshot({ path: path.join(out, `rules-${width}-${scheme}-${lang}.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      for (const next of ["none", "running", "error", "stale", "empty"] as const) {
+        state = next;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width: 390, height: 844 }, "light", "uk", "reduce", true);
+        try {
+          await page.locator("[data-memory-profile]").waitFor();
+          if (next === "running") await page.getByRole("status").waitFor();
+          if (next === "error") await page.getByRole("alert").waitFor();
+          if (next === "stale") await page.locator("[data-profile-stale]").waitFor();
+          if (next === "empty") {
+            expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+            await page.getByText(translate("uk", "memoryProfile.emptyTitle"), { exact: true }).waitFor();
+          }
+          await page.screenshot({ path: path.join(out, `${next}-390-light-uk.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
+describe("memory profile window: one top, whole rows, level order, named topic", () => {
+  browserTest("the window top and header hold across Profile and All rules, no rule row is cut, levels keep the All rules order, a topic drill names its topic", async () => {
+    const out = path.resolve(".artifacts/memory-profile-window"); fs.mkdirSync(out, { recursive: true });
+    const rules = sampleMemory();
+    /* The store lists every-project first; the page must put this project's level ahead of it. */
+    rules.scopes = [rules.scopes[1]!, rules.scopes[0]!, ...rules.scopes.slice(2)];
+    const texts = ["Inspect stored scope guidance before changing its readers, then record which readers the change reaches.", "Run each touched test file by path under isolated state; a broad sweep reaches the operator's live registry.", "Read the current scope revision before proposing a stored rewrite, since a stale write changes the record underneath the reader.", "Keep the pushed branch free of absolute home paths, account handles and tokens in docs, fixtures and messages."];
+    for (const scope of rules.scopes) scope.active.forEach((rule, index) => {
+      rule.rule = texts[(index + scope.scope.length) % texts.length]!;
+      rule.versions = [{ id: `${rule.id}-v1`, rule: texts[(index + 1) % texts.length]!, why: rule.why, hints: [], createdAt: "2026-01-01" }];
+    });
+    const rows = new Map<string, ProfileRow>();
+    const service = createProfileService({ rules: () => structuredClone(rules), read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: "haiku", prepare: async () => async (_, locale) => {
+      const answer = sampleAnswer(locale === "uk");
+      answer.topics[0]!.title = locale === "uk" ? "Ізольовані тести" : "Isolated tests";
+      return answer;
+    } });
+    type State = "none" | "ready" | "stale" | "error";
+    let state: State = "none";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        const locale = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        if (request.method === "POST") {
+          const body = await request.json(); const run = service.start("garden", body.locale); await run.done; state = "ready";
+          return new Response(JSON.stringify(run.latest) + "\n", { headers: { "Content-Type": "application/x-ndjson" } });
+        }
+        const view: MemoryProfileView = service.read("garden", locale);
+        if (state === "none") { view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null; }
+        if (state === "error") view.run = { state: "failed", startedAt: "2026-01-01", errors: [{ scope: "overall", code: "account" }] };
+        if (state === "stale") { view.stale = true; view.changes = { added: 2, rewritten: 1, removed: 1 }; }
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const readings: unknown[] = [];
+    const measureWindow = (page: Page) => page.evaluate(() => {
+      const box = document.querySelector<HTMLElement>("[data-rules-window]")!;
+      const header = box.querySelector<HTMLElement>("header")!;
+      return { top: Math.round(box.getBoundingClientRect().top), header: Math.round(header.getBoundingClientRect().height), bottom: Math.round(box.getBoundingClientRect().bottom), viewport: innerHeight };
+    });
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const phone = width === 390;
+        const seen: { state: string; top: number; header: number }[] = [];
+        for (const next of ["none", "ready", "stale", "error"] as const) {
+          state = next;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height }, scheme, lang, "reduce", phone);
+          try {
+            await page.locator("[data-memory-profile]").waitFor();
+            if (next === "ready") { await page.locator("[data-profile-summarize]").click(); await page.locator('[data-memory-profile][aria-busy="false"]').waitFor(); }
+            if (next === "stale") await page.locator("[data-profile-stale]").waitFor();
+            if (next === "error") await page.getByRole("alert").waitFor();
+            const profile = await measureWindow(page);
+            seen.push({ state: next, top: profile.top, header: profile.header });
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-${next}.png`) });
+            if (next === "ready") {
+              const names = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-profile-slice") + ":" + node.querySelector("p, h4")!.textContent));
+              expect(names[0]).toContain(translate(lang, "memoryProfile.thisProject")); expect(names[1]).toContain(translate(lang, "memoryProfile.everyProject"));
+              expect(names.slice(2).map(name => name.split(":")[0])).toEqual(["project", "machine"]);
+              await page.locator("[data-profile-pill], [data-memory-profile] section > div button").first().scrollIntoViewIfNeeded();
+              await page.getByText(lang === "uk" ? "Ізольовані тести" : "Isolated tests", { exact: false }).first().click();
+              const heading = await page.locator("[data-rules-section] h3").first().innerText();
+              expect(heading).toBe(lang === "uk" ? "Ізольовані тести" : "Isolated tests");
+              await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-topic.png`) });
+              await page.getByRole("button", { name: new RegExp(translate(lang, "memoryProfile.back")) }).click();
+            }
+            await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+            await page.locator("[data-rules-section]").first().waitFor();
+            const rulesPage = await measureWindow(page);
+            seen.push({ state: `${next}:rules`, top: rulesPage.top, header: rulesPage.header });
+            if (!phone) {
+              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header);
+              await page.locator("[data-learned-rule]").first().locator("button").first().click();
+              await page.locator("[data-rule-versions] summary").first().click();
+              /* With a rule and its earlier text open, each card shows its rows whole from the top: none starts above or ends below the card's edge. */
+              const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rules-section] > div")].flatMap(scroller => {
+                scroller.scrollTop = 0;
+                const band = scroller.getBoundingClientRect();
+                return [...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule"));
+              }));
+              expect(sliced).toEqual([]);
+            }
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules-${next}.png`) });
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        if (!phone) { expect(new Set(seen.map(item => item.top)).size).toBe(1); expect(new Set(seen.map(item => item.header)).size).toBe(1); }
+        readings.push({ width, scheme, lang, seen });
+      }
+      fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
 });
 
 describe("finding recurrence (#2648)", () => {
