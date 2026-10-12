@@ -9,6 +9,7 @@ export const ROLE_IDS = [
   "deployer",
   "merger",
   "maintainer",
+  "curator",
   "issue-reporter",
   "visual-critic",
 ] as const;

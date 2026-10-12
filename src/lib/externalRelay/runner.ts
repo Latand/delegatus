@@ -35,6 +35,8 @@ import {
 import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
+import { createRelaySteps } from "./progressSteps";
+import { readRelayStepObservation } from "./stepObservation";
 import { noteRelayProgress } from "./activity";
 import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerDelivery } from "./answers";
 import {
@@ -358,6 +360,9 @@ export async function runClaimedRequest(
       );
     if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
     let newestProgress: ExternalRelayProgress | null = null;
+    const steps = createRelaySteps(relay.features);
+    let stepLog: string | null = null;
+    let pendingServiceTools = 0;
     let leaseUnavailable = false;
     let beatBusy = false;
     let pendingBeat: Promise<void> | null = null;
@@ -373,16 +378,19 @@ export async function runClaimedRequest(
         callAbort.abort();
       }
     };
-    const beat = async () => {
+    const beat = async (stepChange = false) => {
       if (beatBusy || leaseUnavailable) return;
       beatBusy = true;
       try {
         const sentProgress = newestProgress;
+        const beatSeq = ++seq;
+        const progress = steps ? steps.beat(beatSeq, Date.now(), stepChange) : sentProgress;
+        if (progress?.kind === "step") noteRelayProgress(relay.id, target.id, progress);
         await relayCall(
           relay.api_base,
           `/requests/${encodeURIComponent(requestId)}/heartbeat`,
           "POST",
-          { lease_id: leaseId, seq: ++seq, progress: sentProgress },
+          { lease_id: leaseId, seq: beatSeq, progress },
           relay.credential,
           { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
         );
@@ -419,12 +427,16 @@ export async function runClaimedRequest(
         return acked && !leaseUnavailable;
       },
     }, runtime, (tool, done, failed) => {
-      if (request.answer.progress === "notes") {
+      if (!steps && request.answer.progress === "notes") {
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
         noteRelayProgress(relay.id, target.id, newestProgress);
       }
-    });
+    }, steps ? pending => {
+      pendingServiceTools += pending ? 1 : -1;
+      // Service tools never read the Delegatus board; their names stay local.
+      steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
+    } : undefined);
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
@@ -436,6 +448,8 @@ export async function runClaimedRequest(
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
+        steps?.observe({});
+        stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
         if (prototype && rounds === 1) {
           pendingBeat = beat();
           await pendingBeat;
@@ -452,6 +466,7 @@ export async function runClaimedRequest(
             changeRun(requestId, current => ({ ...current, conversationId }));
             recorder?.bindConversation(conversationId);
           },
+          ...(steps ? { onProgress: steps.observe } : {}),
         }) : runEphemeralAgent({
           ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (target.engine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd, codexHome: conversationCodexHome(conversation) } } : {}),
           key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
@@ -466,6 +481,7 @@ export async function runClaimedRequest(
           webSearch: profile.webSearch,
           runtime,
           onEvent: (event) => {
+            if (steps) return;
             const progress = progressForEvent(event);
             if (progress && request.answer.progress === "notes") {
               newestProgress = progress;
@@ -506,8 +522,12 @@ export async function runClaimedRequest(
         pendingBeat = beat();
         await pendingBeat;
         heartbeatTimer = setInterval(() => {
+          if (steps && !owner && !runFinished && stepLog) steps.observe(readRelayStepObservation(stepLog));
           if (!beatBusy) cancelStalledRun();
-          if (!beatBusy && !leaseUnavailable && Date.now() >= nextBeatAt) pendingBeat = beat();
+          if (!beatBusy && !leaseUnavailable) {
+            if (steps?.changeDue(Date.now())) pendingBeat = beat(true);
+            else if (Date.now() >= nextBeatAt) pendingBeat = beat();
+          }
         }, 1000);
         heartbeatTimer.unref();
       }
@@ -525,6 +545,10 @@ export async function runClaimedRequest(
       const decision = result?.status === "done"
         ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }) : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent, ignore: !loop?.sawUnknown })
         : null;
+      if (steps && decision && !("kind" in decision)) {
+        steps.observe({ writingAnswer: true });
+        if (steps.changeDue(Date.now())) { pendingBeat = beat(true); await pendingBeat; }
+      }
       if (!decision || !("kind" in decision)) { completion = decision; break; }
       await loop!.runCalls(decision.calls, rounds);
       if (leaseUnavailable) return null;
