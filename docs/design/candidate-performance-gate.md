@@ -157,9 +157,13 @@ existed, receipts whose parent contradicts their lineage edge, children with
 no edge at all, held and uncertain deliveries, transcripts for the newest 320
 conversations, and four live workers whose rows the previous release left
 live with their turns open. It returns the registry to the schema the
-previous release left. Then it plays the runtime host and the deployment
-around two Viewer releases, each its own process, with nothing of the
-caller's environment but its `PATH`:
+previous release left. It starts the candidate's own runtime host
+(`src/runtime-host/main.ts`, `candidateRuntimeHost.ts`) in the same private
+state: its own journal, fence and socket, no deployments and no stable
+listener. Every release reaches it only through the production
+`UnixRuntimeHostClient` under the production deadlines, as a deployed Viewer
+does. Then it plays the deployment around two Viewer releases, each its own
+process, with nothing of the caller's environment but its `PATH`:
 
 - **First boot**: release A opens and upgrades the registry, takes the first
   snapshot and builds the first board projection with a cold projection
@@ -170,7 +174,9 @@ caller's environment but its `PATH`:
 - **Warm operation**: release A writes grant-bearing rows every 60 ms while a
   separate process does the same over its own connection, keyed operation-id
   reads run beside them, and eight board scopes, each pinning a different
-  conversation, are asked of A over HTTP.
+  conversation, are asked of A over HTTP. Each release, while it serves,
+  asks the runtime host for a snapshot and an operation receipt twice a
+  second, the traffic of a serving Viewer.
 - **Release handover**: release B boots beside A, runs the archive pass,
   decides the same grants and builds its own first projection while A keeps
   writing and serving. Once B is ready the serving target names it, the way
@@ -187,7 +193,13 @@ caller's environment but its `PATH`:
   must draw its board, keep its selection, receive board answers while the
   writers run and answer a wheel turn. A request's time runs from the page
   issuing it to its last byte, so a wait for one of the browser's six
-  connections counts: the operator waits through it too.
+  connections counts: the operator waits through it too. That server reaches
+  the same runtime host, so the board's runtime surfaces answer as they do
+  in production. Every `/api/` request is an ordinary request except the
+  page's declared event streams (`/api/streams`, `/api/runtime/stream`,
+  `/api/logs/stream`): a failed one counts the time until it failed, one
+  still open when the window closes counts its age so far, and a 5xx or a
+  failure from any ordinary route is an error.
 
 Every board answer is compared with its scope's settled answer from before
 the first write; every worker is pinged twice a second and its progress read
@@ -221,10 +233,11 @@ verdict; it skips the browser, as does a run under an induced fault.
 | Eight-scope requests, queue wait included | p95 ≤ 5 s, max ≤ 10 s; queue depth ≤ 8; no timeout retirement; no failure across the transition | Each scope coalesces into one build, so eight scopes can never queue more than eight builds. |
 | Successor | ready ≤ 15 s; first projection ≤ 8 s; every live worker re-hosted ≤ 15 s after the switch | Open, snapshot, one archive pass and a first projection under a live writer; then the hand-over. |
 | Live workers | all re-hosted by the successor and answering at the end; no progress step lost or repeated; no gap over 20 s; no ping unanswered outside the switch window | A worker is the operator's agent: the transition may pause it, never lose its place or leave it without a host. |
+| Runtime-host calls | through the production client: p95 ≤ 250 ms, max ≤ 2 s; no call timed out or failed on the socket, the startup's included; the host alive at the end; ≥ 40 calls | Production timed out on this path while every probe passed against an idle host. A timeout is counted by the client itself for every call of the process, so a deadline reached anywhere refuses, whatever the gate's own traffic measured. |
 | Failures | no SQLITE_BUSY, no runtime timeout, no failed write; the successor reports and exits 0; the incumbent's demotion exits 0 | A refused or timed-out write loses the work it carried, which no latency bound measures. |
 | Evidence | pending and uncertain deliveries byte-identical and hot; every MCP grant decided the same by writers and the successor | Speed bought by dropping evidence or authority is a regression the latency bounds cannot see. |
 | Stability | every measured answer of every scope carries the rows, conversations and projects of its settled answer from before the first write, and its pinned conversation; no answer is empty | Rows that appear, vanish or change project read as conversations jumping on the board. The history spans eight projects, so the board's ten-project window holds all of it whichever project a write makes the newest. |
-| Browser views | each of eight views: board drawn ≤ 10 s from navigation; `/api/files` p95 ≤ 5 s, max ≤ 10 s; any other API request ≤ 10 s; main thread ≤ 1 s before the board drew, p95 ≤ 50 ms and max ≤ 500 ms after; a wheel answered ≤ 500 ms; selection held, no missing-conversation notice, a board answer while the writers ran; ≥ 50 writes, none failed | What the operator sees is the page, not the handler. The HTTP bounds above held while the page took 15-19 s to draw: `/api/accounts` enumerated every conversation of the history once per completed account migration, through a lazy reader that stats the database twice per row, and held the server's thread for two thirds of a minute-long run ("What changed" lists the page's other whole-history reads). |
+| Browser views | each of eight views: board drawn ≤ 10 s from navigation; `/api/files` p95 ≤ 5 s, max ≤ 10 s; any other ordinary API request ≤ 10 s whether answered, failed or still open, and none answered 5xx or failed; main thread ≤ 1 s before the board drew, p95 ≤ 50 ms and max ≤ 500 ms after; a wheel answered ≤ 500 ms; selection held, no missing-conversation notice, a board answer while the writers ran; ≥ 50 writes, none failed | What the operator sees is the page, not the handler. The HTTP bounds above held while the page took 15-19 s to draw: `/api/accounts` enumerated every conversation of the history once per completed account migration, through a lazy reader that stats the database twice per row, and held the server's thread for two thirds of a minute-long run ("What changed" lists the page's other whole-history reads). |
 | Sufficiency | full dataset (≥ 29,000 rows, ≥ 90 % cold); ≥ 50 writes per writer, ≥ 20 keyed reads, ≥ 8 warm builds, ≥ 64 board requests, ≥ 8 compared rounds, ≥ 2 workers, pending and uncertain deliveries present | A run that measured nothing passes nothing. |
 
 The latency numbers are the bounds the post-incident audit proposed, with the
@@ -240,7 +253,15 @@ requires the refusal to name them while every evidence invariant still holds:
 shim through `LLV_CANDIDATE_PERFORMANCE_BIN` makes release B exit 7 without a
 report, which leaves A serving and hosting its workers, and the same output
 read through the deployment adapter refuses the candidate; `--induce
-worker-kill` kills a re-hosted worker. `deployment.test.ts` requires a refused
+worker-kill` kills a re-hosted worker; `--induce runtime-stall` puts a
+pass-through socket the gate controls before the runtime host and leaves
+every call unanswered through warm operation, so the releases' own client
+deadlines time them out, and the refusal read through the host-command
+adapter and acted on by the coordinator retires the candidate without a
+promote. `candidateBrowserRun.test.ts` drives the browser helper against a
+board fast in every way but one: it passes clean, and a
+`/api/tmux/targets` that never answers or a `/api/runtime/snapshot` that
+answers 503 refuses it through the same adapter and coordinator. `deployment.test.ts` requires a refused
 candidate to be retired with the previous release still current, and an
 adapter answer without a performance report, read through the real
 host-command adapter, to be retired the same way. The full pass runs with
@@ -255,7 +276,9 @@ The board driver's case `BOARD_CAPTURE_CASE=registry-history` in
 `scripts/capture-board-geometry.ts` runs the same browser half
 (`candidateBrowserRun.ts`, same bounds) against a local production build and
 keeps each view's requests, its opening sequence and a frame of it, for
-reading what holds a connection when a bound is breached. Run it with
+reading what holds a connection when a bound is breached. Its server reaches a
+runtime host started the same way as the gate's, so the board's runtime
+surfaces answer there too. Run it with
 `CHROME_BIN` set after `bun run build`.
 
 Through `scripts/gate-slot.sh` the whole case shares one scope's CPU quota,

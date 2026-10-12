@@ -43,6 +43,7 @@ function healthy(): CandidatePerformanceMeasurements {
     workers: { count: 4, rehosted: 4, answering: 4, progressGapMaxMs: 6_500, lostProgress: 0, repeatedProgress: 0, failedPings: 0 },
     sqliteBusy: 0,
     runtimeTimeouts: 0,
+    runtimeRpc: { requests: 600, p95Ms: 4, maxMs: 120, timeouts: 0, failures: 0, hostAlive: true },
     deliveryEvidence: { pending: 16, uncertain: 8, preserved: true },
     browser: healthyBrowser(),
   };
@@ -53,7 +54,7 @@ function healthyBrowser(): CandidateBrowserMeasurements {
     views: 8,
     writes: { count: 900, p95Ms: 4, maxMs: 60, failures: 0 },
     readyMaxMs: 4_800, filesP95Ms: 1_900, filesMaxMs: 2_600, filesErrors: 0, viewsWithoutAnswerDuringWrites: 0,
-    apiMaxMs: 3_100, apiMaxRoute: "/api/accounts", bootLagMaxMs: 450, lagP95Ms: 1, lagMaxMs: 140, inputMaxMs: 160, inputsMin: 2,
+    apiMaxMs: 3_100, apiMaxRoute: "/api/accounts", apiErrors: 0, apiFirstError: null, apiUnfinished: 0, bootLagMaxMs: 450, lagP95Ms: 1, lagMaxMs: 140, inputMaxMs: 160, inputsMin: 2,
     selectionsLost: 0, staleNotices: 0,
   };
 }
@@ -319,4 +320,42 @@ test("the board in browser views is bounded, and a run without it is refused", (
   const garbled = report(healthy(), { ok: true, breaches: [] });
   (garbled.measurements!.browser as unknown as Record<string, unknown>).readyMaxMs = "fast";
   expect(candidatePerformanceEvidence(garbled)).toMatchObject({ ok: false, detail: "the candidate performance report lacks or garbles browser.readyMaxMs" });
+});
+
+/* #2761: the releases reach the candidate's runtime host through the
+   production client, and what those calls cost is part of the verdict: a
+   call that timed out or failed on the socket refuses whatever the times,
+   and so does a host that left during the run. */
+test("runtime-host calls are bounded, and a timeout or a failed call refuses", () => {
+  const measured = healthy();
+  measured.runtimeTimeouts = 3;
+  measured.runtimeRpc = { requests: 12, p95Ms: 900, maxMs: 10_004, timeouts: 3, failures: 2, hostAlive: false };
+  expect(candidatePerformanceBreaches(measured)).toEqual([
+    "3 runtime timeout(s)",
+    "runtime-host calls: measured 12, at least 40 required",
+    "runtime-host call p95 900ms exceeds 250ms",
+    "runtime-host call max 10004ms exceeds 2000ms",
+    "2 runtime-host call(s) failed on the socket",
+    "the runtime host exited during the run",
+  ]);
+  const unread = report(healthy(), { ok: true, breaches: [] });
+  delete (unread.measurements as unknown as Record<string, unknown>).runtimeRpc;
+  expect(candidatePerformanceEvidence(unread)).toMatchObject({ ok: false });
+  expect(candidatePerformanceEvidence(unread).detail).toBe("the candidate performance report lacks or garbles runtimeRpc");
+});
+
+/* #2761: an ordinary request the page is still waiting for, or one that
+   failed, is the operator's wait as much as a slow answer: a side request
+   left open past the bound and a 5xx from any route refuse the candidate. */
+test("a browser request left unanswered or answered 5xx refuses the candidate", () => {
+  const measured = healthy();
+  measured.browser = {
+    ...healthyBrowser(),
+    apiMaxMs: 30_412, apiMaxRoute: "/api/tmux/targets (unanswered)", apiUnfinished: 8,
+    apiErrors: 8, apiFirstError: "/api/runtime/snapshot HTTP 503",
+  };
+  expect(candidatePerformanceBreaches(measured)).toEqual([
+    "browser /api/tmux/targets (unanswered) 30412ms exceeds 10000ms",
+    "8 other browser API request(s) failed, first /api/runtime/snapshot HTTP 503",
+  ]);
 });

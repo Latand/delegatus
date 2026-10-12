@@ -16,7 +16,9 @@ export interface CandidateBrowserBounds {
   /** `/api/files`, from the page issuing it to its last byte. */
   filesP95Ms: number;
   filesMaxMs: number;
-  /** Any other API request the page made, measured the same way. */
+  /** Any other API request the page made, measured the same way. One still
+      open when the window closes counts its age so far, and one that failed
+      counts the time until it did. */
   apiMaxMs: number;
   /** The page's main thread before its board drew, and while it operated. */
   bootLagMaxMs: number;
@@ -33,6 +35,11 @@ export const CANDIDATE_BROWSER_BOUNDS: CandidateBrowserBounds = Object.freeze({
 
 export const CANDIDATE_BROWSER_MINIMUMS = Object.freeze({ views: 8, inputsPerView: 2, writes: 50 });
 
+/** The page's server-sent event streams: held open by design, so neither
+    their age nor their end is a request's answer. Every other `/api/` route
+    is an ordinary request, bounded and required to answer without a 5xx. */
+export const CANDIDATE_BROWSER_STREAM_ROUTES: ReadonlySet<string> = new Set(["/api/streams", "/api/runtime/stream", "/api/logs/stream"]);
+
 /** One view as it was measured. */
 export interface CandidateBrowserView {
   view: number;
@@ -40,7 +47,16 @@ export interface CandidateBrowserView {
   cards: number;
   selection: { stillSelected: boolean; checksLost: number; staleNoticeSeen: number };
   files: { answered: number; answeredDuringWrites: number; errors: number; p95Ms: number; maxMs: number; queuedMaxMs: number };
-  api: { requests: number; maxMs: number; slowestRoute: string | null };
+  api: {
+    requests: number;
+    maxMs: number;
+    slowestRoute: string | null;
+    /** Ordinary requests other than `/api/files` that answered 5xx or failed. */
+    errors: number;
+    firstError: string | null;
+    /** Ordinary requests still open when the window closed. */
+    unfinished: number;
+  };
   lag: { bootMaxMs: number; samples: number; p95Ms: number; maxMs: number };
   inputMs: number[];
 }
@@ -56,6 +72,9 @@ export interface CandidateBrowserMeasurements {
   viewsWithoutAnswerDuringWrites: number;
   apiMaxMs: number;
   apiMaxRoute: string | null;
+  apiErrors: number;
+  apiFirstError: string | null;
+  apiUnfinished: number;
   bootLagMaxMs: number;
   lagP95Ms: number;
   lagMaxMs: number;
@@ -81,6 +100,9 @@ export function summarizeBrowserViews(
     viewsWithoutAnswerDuringWrites: views.filter((view) => !view.files.answeredDuringWrites).length,
     apiMaxMs: max(views.map((view) => view.api.maxMs)),
     apiMaxRoute: slowest?.api.slowestRoute ?? null,
+    apiErrors: views.reduce((sum, view) => sum + view.api.errors, 0),
+    apiFirstError: views.find((view) => view.api.firstError)?.api.firstError ?? null,
+    apiUnfinished: views.reduce((sum, view) => sum + view.api.unfinished, 0),
     bootLagMaxMs: max(views.map((view) => view.lag.bootMaxMs)),
     lagP95Ms: max(views.map((view) => view.lag.p95Ms)),
     lagMaxMs: max(views.map((view) => view.lag.maxMs)),
@@ -116,6 +138,7 @@ export function candidateBrowserBreaches(
   over("browser input answer", measured.inputMaxMs, bounds.inputMs);
   if (measured.inputsMin < minimum.inputsPerView) breaches.push(`a browser view answered ${measured.inputsMin} input(s), at least ${minimum.inputsPerView} required`);
   if (measured.filesErrors) breaches.push(`${measured.filesErrors} browser /api/files request(s) failed`);
+  if (measured.apiErrors) breaches.push(`${measured.apiErrors} other browser API request(s) failed, first ${measured.apiFirstError ?? "unnamed"}`);
   if (measured.viewsWithoutAnswerDuringWrites) breaches.push(`${measured.viewsWithoutAnswerDuringWrites} browser view(s) received no board answer while the writers ran`);
   if (measured.selectionsLost) breaches.push(`${measured.selectionsLost} browser view(s) lost their selected conversation`);
   if (measured.staleNotices) breaches.push(`browser views showed the missing-conversation notice ${measured.staleNotices} time(s)`);

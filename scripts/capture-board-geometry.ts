@@ -7535,6 +7535,7 @@ async function registryHistoryMain(): Promise<void> {
   const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
   const { browserViewPins, measureBoardInBrowser } = await import("../src/runtime-host/candidateBrowserRun");
   const { CANDIDATE_BROWSER_BOUNDS, candidateBrowserBreaches } = await import("../src/runtime-host/candidateBrowser");
+  const { startCandidateRuntimeHost } = await import("../src/runtime-host/candidateRuntimeHost");
   /* The selected conversations' transcripts live in the sandboxed home, so
      each view's pin names a conversation the board can open. */
   const dataset = buildRegistryPerformanceDataset(STATE_DIR, undefined, { sessionsRoot: path.join(HOME, ".codex", "sessions") });
@@ -7547,7 +7548,13 @@ async function registryHistoryMain(): Promise<void> {
     bounds: CANDIDATE_BROWSER_BOUNDS, failures: [],
   };
   let server: ChildProcess | null = null;
+  let runtimeHost: Awaited<ReturnType<typeof startCandidateRuntimeHost>> | null = null;
   try {
+    /* The board's runtime surfaces read a runtime host, as an operator's
+       Viewer does; the gate's own host, in this capture's state. */
+    const hostEnv = Object.fromEntries(Object.entries(buildEnvironment(0)).filter((entry): entry is [string, string] => entry[1] !== undefined));
+    runtimeHost = await startCandidateRuntimeHost({ runtimeBin: CAPTURE_BUN, cwd: repoRoot, env: hostEnv, directory: path.join(BASE, "rt") });
+    SERVER_EXTRA_ENV.LLV_RUNTIME_HOST_SOCKET = runtimeHost.socket;
     server = startServer(port);
     await waitForServer(baseUrl, server);
     /* The views open on a server that has started and scanned once, as an
@@ -7571,6 +7578,7 @@ async function registryHistoryMain(): Promise<void> {
     report.failures.push(...candidateBrowserBreaches(result.measurements));
   } finally {
     await stop(server);
+    await runtimeHost?.stop();
   }
   fs.writeFileSync(path.join(OUT_DIR, "registry-history.json"), JSON.stringify(report, null, 2) + "\n");
   console.log(`registry history measurements: ${path.join(OUT_DIR, "registry-history.json")}`);

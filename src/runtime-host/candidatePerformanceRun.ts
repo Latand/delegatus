@@ -5,9 +5,11 @@
 
    It builds the synthetic registry (registryPerformanceDataset.ts) and the
    newest conversations' transcripts in a private home, and returns the
-   registry to the schema the previous release left. Then it plays the part of
-   the runtime host and the deployment around two Viewer releases, each its
-   own process running the candidate's code:
+   registry to the schema the previous release left. It starts the candidate's
+   own runtime host there (candidateRuntimeHost.ts), which every release
+   reaches through its production RPC client under the production deadlines.
+   Then it plays the part of the deployment around two Viewer releases, each
+   its own process running the candidate's code:
 
    - first boot: release A opens and upgrades the registry, takes the first
      snapshot and builds the first board projection with a cold projection
@@ -18,7 +20,8 @@
    - warm operation: release A writes grant-bearing rows and runs keyed
      operation-id reads while a separate writer process does the same, and
      eight board scopes, each pinning a conversation of its own, are asked of
-     it over HTTP;
+     it over HTTP, and it asks the runtime host for snapshots and operation
+     receipts as a serving Viewer does;
    - release handover: release B boots over the same registry while A keeps
      writing and serving, runs the archive pass, decides the same grants and
      builds its own first projection. Once B is ready the serving target names
@@ -36,9 +39,11 @@
    and every process it starts leaves when it does; it never reads the
    operator's state.
 
-   `--induce-slow-ms <n>` holds every write of release A for n ms, and
-   `--induce worker-kill|worker-stall` kills or stops one re-hosted worker.
-   They exist so the gate's own tests can prove such candidates are refused. */
+   `--induce-slow-ms <n>` holds every write of release A for n ms,
+   `--induce worker-kill|worker-stall` kills or stops one re-hosted worker, and
+   `--induce runtime-stall` leaves every runtime-host call unanswered through
+   warm operation. They exist so the gate's own tests can prove such
+   candidates are refused. */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -57,6 +62,7 @@ import {
   type ProjectionBuildSample,
 } from "./candidatePerformance";
 import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser } from "./candidateBrowserRun";
+import { startCandidateRuntimeHost, type CandidateRuntimeHost } from "./candidateRuntimeHost";
 import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
 const SCOPES = 8;
@@ -69,6 +75,8 @@ const WRITE_INTERVAL_MS = 60;
 const SCOPE_ROUND_MS = 1_500;
 const KEYED_READ_INTERVAL_MS = 150;
 const PING_INTERVAL_MS = 500;
+/** A serving Viewer's runtime traffic: a snapshot and a receipt read each tick. */
+const RPC_INTERVAL_MS = 500;
 /** An agent mid-turn writes an event every second or so. */
 const WORKER_STEP_MS = 1_000;
 /** A release not ready to serve after this is a failed release. */
@@ -80,7 +88,8 @@ const BUSY = /SQLITE_BUSY|database is locked/i;
 const ENTRY = path.join(import.meta.dir, "candidatePerformanceRun.ts");
 
 type Mode = "gate" | "viewer" | "writer" | "worker";
-type Induced = "worker-kill" | "worker-stall";
+type Induced = "worker-kill" | "worker-stall" | "runtime-stall";
+const INDUCED: readonly Induced[] = ["worker-kill", "worker-stall", "runtime-stall"];
 
 interface WorkerSpec { key: string; sessionId: string; transcript: string; socket: string }
 interface AdoptionRecord { appointedAt: number; adoptedAt: number; pids: Record<string, number> }
@@ -380,25 +389,6 @@ async function workerHost(spec: WorkerSpec, worker: StartedWorker) {
   });
 }
 
-function runtimeJournalClient(journal: import("@/runtime-host/journal").RuntimeJournal): import("@/lib/runtime/client").RuntimeHostClient {
-  return {
-    readSession: async (identity) => journal.readSession(identity),
-    snapshot: async () => journal.snapshot(),
-    events: async (after) => journal.replay(after),
-    waitEvents: async (after) => journal.replay(after),
-    append: async (event) => journal.append(event),
-    operation: async (event) => journal.append(event),
-    command: async (command) => journal.executeOperation(command),
-    operationStatus: async (operationId, options) => options?.currentRetryLeaf
-      ? journal.currentRetryResult(operationId)
-      : journal.operationResult(operationId),
-    retryOperation: async (operationId, nextIdempotencyKey, options) => journal.retryOperation(operationId, nextIdempotencyKey, options),
-    effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
-    transitionOperation: async (operationId, status, details) => journal.transitionOperation(operationId, status, details),
-    producerCursor: async (producerKind, eventKeyPrefix) => journal.producerCursor(producerKind, eventKeyPrefix),
-  } as import("@/lib/runtime/client").RuntimeHostClient;
-}
-
 function readTarget(file: string): string {
   try { return fs.readFileSync(file, "utf8").trim(); } catch { return ""; }
 }
@@ -542,13 +532,18 @@ async function viewerMain(): Promise<void> {
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: (request) => GET(request) });
 
     const { captureProcessIdentity } = await import("@/lib/processIdentity");
-    const { RuntimeJournal } = await import("@/runtime-host/journal");
+    const { UnixRuntimeHostClient, runtimeHostRequestTotals } = await import("@/lib/runtime/client");
     const { activateViewerRuntimeWhenCurrent, completeViewerReleaseDemotion, runStructuredHostStartup } = await import("@/lib/viewerInstrumentation");
     const { adoptStructuredHostsAtStartup } = await import("@/lib/runtime/startup");
     const { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, releaseStructuredDeliveryHostsForDemotion } = await import("@/lib/runtime/structuredDeliveryController");
     const { structuredStartupAxis } = await import("@/lib/runtime/startupStatus");
-    const journal = new RuntimeJournal(path.join(root, `release-${name}-runtime.sqlite`), { structuredHosts: true });
-    const client = runtimeJournalClient(journal);
+    /* The production client over the gate's real runtime host, under the
+       production deadlines: what it costs and every call that timed out is
+       this release's to report. */
+    const runtimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+    if (!runtimeSocket) throw new Error("no runtime host socket was given to this release");
+    const client = new UnixRuntimeHostClient(runtimeSocket);
+    const rpcLatencies: number[] = [];
     await bindStructuredDeliveryQueue([], { registry, client });
     const adoptHost = async (sessionId: string) => {
       const spec = workers.find((worker) => worker.sessionId === sessionId);
@@ -583,6 +578,7 @@ async function viewerMain(): Promise<void> {
         appointedAt,
         adoptedAt,
         adopted: Object.fromEntries([...replacements].map(([key, worker]) => [key, worker.pid])),
+        runtimeRpc: { ...runtimeHostRequestTotals(), latencies: rpcLatencies },
       });
       loop.disable();
       activationLoop.disable();
@@ -619,7 +615,6 @@ async function viewerMain(): Promise<void> {
         await filesProjectionsSettled(10_000);
         server.stop(true);
         await drainFilesResponseWorker("candidate performance release demoted", 10_000);
-        journal.close();
       }, (code) => {
         finish({ demotionExitCode: code });
         process.exit(code);
@@ -660,6 +655,19 @@ async function viewerMain(): Promise<void> {
         await Bun.sleep(KEYED_READ_INTERVAL_MS);
       }
     };
+    /* A serving Viewer's runtime traffic, through the production client: the
+       snapshot the board's runtime surfaces read and a receipt lookup. A call
+       that fails is counted by the client; its time is recorded either way. */
+    const rpcLoop = async () => {
+      for (let index = 0; !ended && !fs.existsSync(stopFile); index++) {
+        for (const call of [() => client.snapshot(), () => client.operationStatus(keyed.cold[index % Math.max(1, keyed.cold.length)] ?? `candidate-performance-${index}`)]) {
+          const startedAt = performance.now();
+          try { await call(); } catch (error) { note(`runtime host: ${String(error).slice(0, 160)}`); }
+          rpcLatencies.push(performance.now() - startedAt);
+        }
+        await Bun.sleep(RPC_INTERVAL_MS);
+      }
+    };
     let loopsStarted = false;
     let lastWatch = 0;
     let lastWaitNote = 0;
@@ -667,6 +675,7 @@ async function viewerMain(): Promise<void> {
       if (!loopsStarted && (!writesStart || fs.existsSync(writesStart))) {
         loopsStarted = true;
         if (activation !== "running") loop.enable();
+        void rpcLoop();
         if (writesStart && writeStore) {
           writing = true;
           void writeLoop();
@@ -718,14 +727,14 @@ async function viewerMain(): Promise<void> {
     await drainFilesResponseWorker("candidate performance release stopped", 30_000);
     const { fileScanCacheStatus } = await import("@/lib/scanner/scanCache");
     for (const until = performance.now() + 30_000; fileScanCacheStatus().inFlight && performance.now() < until;) await Bun.sleep(100);
-    journal.close();
     finish();
     process.exit(0);
   } catch (error) {
     if (BUSY.test(String(error))) busy += 1;
     note(`release ${name} failed: ${String(error).slice(0, 300)}`);
     for (const worker of replacements.values()) await stopWorker(worker);
-    finish({ completed: false, error: String(error).slice(0, 500), busy });
+    const { runtimeHostRequestTotals } = await import("@/lib/runtime/client");
+    finish({ completed: false, error: String(error).slice(0, 500), busy, runtimeRpc: { ...runtimeHostRequestTotals(), latencies: [] } });
     process.exit(1);
   }
 }
@@ -866,7 +875,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   const runtime = `bun ${Bun.version}`;
   const scale = Number(option("--scale") ?? "1");
   const inducedDelayMs = Number(option("--induce-slow-ms") ?? "0");
-  const induced = options("--induce").filter((name): name is Induced => name === "worker-kill" || name === "worker-stall");
+  const induced = options("--induce").filter((name): name is Induced => (INDUCED as readonly string[]).includes(name));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-candidate-performance-"));
   const log: string[] = [];
   const note = (line: string) => {
@@ -880,6 +889,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   };
   const children: ChildProcess[] = [];
   const workerPids: number[] = [];
+  let runtimeHost: CandidateRuntimeHost | null = null;
   try {
     const env = sandboxEnvironment(root);
     for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, env.CLAUDE_CODE_TMPDIR!, env.TMUX_TMPDIR!, env.LLV_STATE_DIR!, path.join(root, "w")]) {
@@ -896,6 +906,14 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     );
     previousReleaseSchema(dataset.filename);
     note(`dataset ${dataset.rows} rows, ${dataset.coldRows} cold, ${dataset.conversations.length} transcripts, seeded in ${Math.round(dataset.seedMs)}ms`);
+    /* The runtime host every release, and the browser half's server, reach
+       through the production client; it reads the same retained registry. */
+    runtimeHost = await startCandidateRuntimeHost({
+      runtimeBin: runtimeBin(), cwd: process.cwd(), env, directory: path.join(root, "rt"),
+      faults: induced.includes("runtime-stall"),
+    });
+    env.LLV_RUNTIME_HOST_SOCKET = runtimeHost.socket;
+    note(`runtime host ${runtimeHost.pid} answering`);
     const workers: WorkerSpec[] = dataset.workers.map((worker, index) => ({ ...worker, socket: path.join(root, "w", `${index}.sock`) }));
     const deliveryIds = [...dataset.pendingDeliveryIds, ...dataset.uncertainDeliveryIds];
     const deliveriesBefore = rowsOf(dataset.filename, "heldDeliveries", deliveryIds);
@@ -959,7 +977,6 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     let servingName: "a" | "b" = "a";
     const requestLatencies: number[] = [];
     let scopeFailures = 0;
-    let runtimeTimeouts = 0;
     let servingCounting = false;
     const serving = { requests: 0, failures: 0 };
     const baseline = new Map<number, Map<string, string>>();
@@ -984,7 +1001,6 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
         } catch (error) {
           scopeFailures += 1;
           if (servingCounting) serving.failures += 1;
-          if (/timed out|timeout/i.test(String(error))) runtimeTimeouts += 1;
           note(`scope ${scope}: ${String(error).slice(0, 200)}`);
           return null;
         }
@@ -1042,6 +1058,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     })();
 
     /* ---- warm operation ---- */
+    if (induced.includes("runtime-stall")) { runtimeHost.stall(true); note("induced: the runtime host stopped answering"); }
     fs.writeFileSync(file("writes-start"), "1");
     const external = child("writer", [
       "--registry", dataset.filename,
@@ -1058,6 +1075,10 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       }
     };
     await phase(WARM_MS);
+    if (induced.includes("runtime-stall")) {
+      runtimeHost.stall(false);
+      note(`induced: the runtime host answers again after holding ${runtimeHost.stalled()} call(s)`);
+    }
 
     /* ---- release handover: B boots beside the serving A ---- */
     note("warm operation measured; starting release B");
@@ -1166,6 +1187,21 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
         eventLoopMaxMs: Number.isFinite(value.eventLoopMaxMs) ? Number(value.eventLoopMaxMs) : 0,
       };
     };
+    /* Every runtime-host call either release made, read from its production
+       client: the time the gate's own traffic took, and every timeout and
+       transport failure of any call, the releases' own startup included. */
+    const rpcOf = (report: Record<string, unknown>) => (report.runtimeRpc ?? {}) as { requests?: number; timeouts?: number; failures?: number; maxMs?: number; latencies?: unknown };
+    const rpcReports = [rpcOf(aReport), rpcOf(bReport)];
+    const rpcLatencies = rpcReports.flatMap((report) => numbers(report.latencies));
+    const runtimeRpc = {
+      requests: rpcReports.reduce((sum, report) => sum + finite(report.requests), 0),
+      p95Ms: latencySummary(rpcLatencies).p95Ms,
+      maxMs: Math.round(Math.max(latencySummary(rpcLatencies).maxMs, ...rpcReports.map((report) => finite(report.maxMs)))),
+      timeouts: rpcReports.reduce((sum, report) => sum + finite(report.timeouts), 0),
+      failures: rpcReports.reduce((sum, report) => sum + finite(report.failures), 0),
+      hostAlive: !runtimeHost.exited(),
+    };
+    note(`runtime host calls: ${JSON.stringify(runtimeRpc)}${runtimeHost.exited() ? `; the runtime host exited: ${runtimeHost.log().slice(-3).join(" | ")}` : ""}`);
     const incumbentActivation = activationOf(aReport, aStartedAt);
     const successorActivation = activationOf(bReport, switchedAt);
     note(`activations: release A ${JSON.stringify(aReport.activation ?? null)}, release B ${JSON.stringify(bReport.activation ?? null)}`);
@@ -1262,7 +1298,8 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
         failedPings,
       },
       sqliteBusy: finite(aReport.busy) + finite(bReport.busy) + finite(externalOutcome.report.busy),
-      runtimeTimeouts,
+      runtimeTimeouts: runtimeRpc.timeouts,
+      runtimeRpc,
       deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, preserved: deliveryPreserved },
       browser,
     };
@@ -1295,6 +1332,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
        releases also leave on their own once this process is gone. */
     for (const pid of workerPids) { try { process.kill(pid, "SIGCONT"); process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
     for (const started of children) if (started.exitCode === null && started.signalCode === null) started.kill("SIGKILL");
+    await runtimeHost?.stop().catch(() => undefined);
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

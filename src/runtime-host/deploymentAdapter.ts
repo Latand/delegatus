@@ -22,7 +22,7 @@ import type {
 } from "@/lib/runtime/contracts";
 
 import type { ViewerDeploymentAdapter } from "./deployment";
-import { candidatePerformanceEvidence, type CandidatePerformanceEvidence } from "./candidatePerformance";
+import { candidatePerformanceDetail, candidatePerformanceEvidence, type CandidatePerformanceEvidence } from "./candidatePerformance";
 import { candidateLogExcerpt } from "./deploymentHealth";
 import { PROMOTE_ACTION_TIMEOUT_MS } from "./deploymentHotState";
 import type { McpHealthProbeAdmissions } from "./mcpHealthProbeAdmission";
@@ -357,8 +357,11 @@ function evidence(value: unknown, { candidate = false }: { candidate?: boolean }
     ...(gate === undefined ? {} : { performance: gate }),
     /* A refused performance gate refuses the candidate, whatever else passed. */
     ok: item.ok && gate?.ok !== false && missing === null,
-    /* A failed probe names its own cause; a missing rehearsal is the cause only when nothing else failed. */
-    ...(item.ok && missing ? { detail: missing } : typeof item.detail === "string" ? { detail: item.detail } : {}),
+    /* A failed probe names its own cause; a missing rehearsal or a refused
+       gate is the cause only when nothing else failed. */
+    ...(item.ok && gate?.ok === false ? { detail: candidatePerformanceDetail(gate) }
+      : item.ok && missing ? { detail: missing }
+        : typeof item.detail === "string" ? { detail: item.detail } : {}),
   };
 }
 

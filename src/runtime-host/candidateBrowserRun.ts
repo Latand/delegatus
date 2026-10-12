@@ -7,6 +7,9 @@
 
    A request's time runs from the page issuing it to its last byte, so a wait
    for a free browser connection counts: the operator waits through it too.
+   A request that failed counts the time until it did, and one still open
+   when the window closes counts its age so far; only the declared event
+   streams (`CANDIDATE_BROWSER_STREAM_ROUTES`) stay open by design.
    Main-thread delay is bounded apart for the boot (navigation to a drawn
    board) and for operation after it. */
 
@@ -15,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { CandidateBrowserMeasurements, CandidateBrowserView } from "./candidateBrowser";
-import { summarizeBrowserViews } from "./candidateBrowser";
+import { CANDIDATE_BROWSER_STREAM_ROUTES, summarizeBrowserViews } from "./candidateBrowser";
 
 export const CANDIDATE_BROWSER_VIEWS = 8;
 export const CANDIDATE_BROWSER_WINDOW_MS = 30_000;
@@ -52,7 +55,8 @@ export interface BrowserWriters {
   stopFile: string;
 }
 
-interface Request { route: string; files: boolean; status: number; ms: number; queuedMs: number; firstByteMs: number; at: number }
+/** One ordinary API request: answered with `status`, or failed with `error` and status 0. */
+interface Request { route: string; files: boolean; status: number; ms: number; queuedMs: number; firstByteMs: number; at: number; error?: string }
 
 /** What the board driver keeps beside each view's reading. */
 export interface BrowserViewDiagnostics {
@@ -60,7 +64,7 @@ export interface BrowserViewDiagnostics {
   hash: string;
   slowest: Request[];
   opening: Request[];
-  unfinished: Array<{ route: string; at: number }>;
+  unfinished: Array<{ route: string; at: number; ageMs: number }>;
   failures: Array<{ route: string; error: string }>;
   /** The document's own timing from navigation: what the page waited for before any API request. */
   document: { responseStartMs: number; responseEndMs: number; domContentLoadedMs: number; loadMs: number } | null;
@@ -164,16 +168,18 @@ export async function measureBoardInBrowser(options: {
       const requests: Request[] = [];
       const failed: { route: string; error: string }[] = [];
       let navigatedAt = 0;
-      /* Requests the page started and never finished: what can hold a connection. */
-      const open = new Map<object, { route: string; at: number }>();
+      /* Ordinary requests the page started and has not finished: what can
+         hold a connection, and what an operator is still waiting for. */
+      const open = new Map<object, { route: string; at: number; startedAt: number }>();
+      const ordinary = (url: URL) => url.pathname.startsWith("/api/") && !CANDIDATE_BROWSER_STREAM_ROUTES.has(url.pathname);
       page.on("request", (request) => {
         const url = new URL(request.url());
-        if (url.pathname.startsWith("/api/")) open.set(request, { route: url.pathname, at: Date.now() - navigatedAt });
+        if (ordinary(url)) open.set(request, { route: url.pathname, at: Date.now() - navigatedAt, startedAt: Date.now() });
       });
       page.on("requestfinished", async (request) => {
         open.delete(request);
         const url = new URL(request.url());
-        if (!url.pathname.startsWith("/api/")) return;
+        if (!ordinary(url)) return;
         const timing = request.timing();
         const response = await request.response().catch(() => null);
         requests.push({
@@ -187,9 +193,15 @@ export async function measureBoardInBrowser(options: {
         });
       });
       page.on("requestfailed", (request) => {
+        const started = open.get(request);
         open.delete(request);
         const url = new URL(request.url());
-        if (url.pathname.startsWith("/api/")) failed.push({ route: url.pathname, error: request.failure()?.errorText ?? "failed" });
+        if (!ordinary(url)) return;
+        const error = request.failure()?.errorText ?? "failed";
+        failed.push({ route: url.pathname, error });
+        /* However it ended, the page waited this long for it. */
+        const ms = started ? Date.now() - started.startedAt : 0;
+        requests.push({ route: url.pathname, files: url.pathname === "/api/files", status: 0, ms, queuedMs: 0, firstByteMs: 0, at: started?.at ?? 0, error });
       });
       navigatedAt = Date.now();
       const started = performance.now();
@@ -258,11 +270,19 @@ export async function measureBoardInBrowser(options: {
       const stillSelected = await holdsSelection(view);
       if (await view.page.locator("[data-stale-focus-notice]").count()) view.staleSeen += 1;
       const answered = view.requests.filter((request) => request.files && request.status >= 200 && request.status < 400);
-      const apiTimes = view.requests.map((request) => request.ms);
+      /* Still open as the window closes: its age so far is its time. */
+      const closedAt = Date.now();
+      const unfinished = [...view.open.values()].map((request) => ({ route: request.route, at: request.at, ageMs: closedAt - request.startedAt }));
+      const timed = [...view.requests.map((request) => ({ route: request.route, ms: request.ms })),
+        ...unfinished.map((request) => ({ route: `${request.route} (unanswered)`, ms: request.ageMs }))];
+      const slowestTimed = [...timed].sort((a, b) => b.ms - a.ms)[0];
       const slowest = [...view.requests].sort((a, b) => b.ms - a.ms);
-      /* A poll the page itself abandons for a newer one is the client's choice. */
-      const errors = view.requests.filter((request) => request.files && request.status >= 500).length
-        + view.failed.filter((failure) => failure.route === "/api/files" && failure.error !== "net::ERR_ABORTED").length;
+      /* A poll the page itself abandons for a newer one is the client's
+         choice, and its time above is still counted; a 5xx or any other
+         failure is an error. */
+      const failedRequest = (request: Request) => request.status >= 500 || (request.status === 0 && request.error !== "net::ERR_ABORTED");
+      const errors = view.requests.filter((request) => request.files && failedRequest(request)).length;
+      const otherErrors = view.requests.filter((request) => !request.files && failedRequest(request));
       readings.push({
         view: view.index,
         readyMs: view.readyMs,
@@ -276,7 +296,14 @@ export async function measureBoardInBrowser(options: {
           maxMs: Math.max(0, ...answered.map((request) => request.ms)),
           queuedMaxMs: Math.max(0, ...view.requests.filter((request) => request.files).map((request) => request.queuedMs)),
         },
-        api: { requests: view.requests.length, maxMs: Math.max(0, ...apiTimes), slowestRoute: slowest[0]?.route ?? null },
+        api: {
+          requests: view.requests.length + unfinished.length,
+          maxMs: Math.round(Math.max(0, ...timed.map((request) => request.ms))),
+          slowestRoute: slowestTimed?.route ?? null,
+          errors: otherErrors.length,
+          firstError: otherErrors[0] ? `${otherErrors[0].route} ${otherErrors[0].status ? `HTTP ${otherErrors[0].status}` : otherErrors[0].error}` : null,
+          unfinished: unfinished.length,
+        },
         lag: {
           bootMaxMs: Math.round(Math.max(0, ...bootLags)),
           samples: operatingLags.length, p95Ms: percentile(operatingLags, 0.95), maxMs: Math.round(Math.max(0, ...operatingLags)),
@@ -288,7 +315,7 @@ export async function measureBoardInBrowser(options: {
         hash: hash.replace(view.pin.conversationId, "<selected>").replace(view.pin.path, "<selected>"),
         slowest: slowest.slice(0, 5),
         opening: [...view.requests].sort((a, b) => a.at - b.at).slice(0, 60),
-        unfinished: [...view.open.values()].sort((a, b) => a.at - b.at).slice(0, 10),
+        unfinished: [...unfinished].sort((a, b) => a.at - b.at).slice(0, 10),
         /* A failed request, and an answer the server refused, with its status. */
         failures: [
           ...view.failed.filter((failure) => failure.error !== "net::ERR_ABORTED"),

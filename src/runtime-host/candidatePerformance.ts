@@ -46,6 +46,10 @@ export interface CandidatePerformanceBounds {
       every live worker re-hosted once it is appointed, and the longest any
       worker went without progress across the transition. */
   handover: { successorReadyMs: number; adoptionMs: number; workerProgressGapMs: number };
+  /** Calls from the releases to the candidate's runtime host through the
+      production client, from the call to its answer. A timeout or a transport
+      failure refuses whatever the times. */
+  runtimeRpc: { p95Ms: number; maxMs: number };
   /** Eight real browser views of the candidate's own production build (`candidateBrowser.ts`). */
   browser: CandidateBrowserBounds;
 }
@@ -58,6 +62,7 @@ export const CANDIDATE_PERFORMANCE_BOUNDS: CandidatePerformanceBounds = Object.f
   projectionWorker: Object.freeze({ coldMs: 8_000, warmP95Ms: 1_000, warmMaxMs: 2_000 }),
   scopeRequests: Object.freeze({ p95Ms: 5_000, maxMs: 10_000, maxQueueDepth: 8 }),
   handover: Object.freeze({ successorReadyMs: 15_000, adoptionMs: 15_000, workerProgressGapMs: 20_000 }),
+  runtimeRpc: Object.freeze({ p95Ms: 250, maxMs: 2_000 }),
   browser: CANDIDATE_BROWSER_BOUNDS,
 });
 
@@ -74,6 +79,7 @@ export const CANDIDATE_PERFORMANCE_MINIMUMS = Object.freeze({
   workers: 2,
   pendingDeliveries: 1,
   uncertainDeliveries: 1,
+  runtimeRpcs: 40,
 });
 
 export interface LatencySummary {
@@ -188,7 +194,12 @@ export interface CandidatePerformanceMeasurements {
     failedPings: number;
   };
   sqliteBusy: number;
+  /** Runtime-host calls of either release that reached their deadline. */
   runtimeTimeouts: number;
+  /** Every runtime-host call of both releases through the production client:
+      the count, the gate's own traffic's p95, the slowest call of any, and
+      each call that timed out or failed on the socket. */
+  runtimeRpc: { requests: number; p95Ms: number; maxMs: number; timeouts: number; failures: number; hostAlive: boolean };
   deliveryEvidence: { pending: number; uncertain: number; preserved: boolean };
   /** The board in eight real browser views of the candidate's production
       build while two writers run; null when no browser view was measured,
@@ -304,6 +315,11 @@ export function candidatePerformanceBreaches(
   if (workers.failedPings) breaches.push(`${workers.failedPings} live-worker ping(s) went unanswered outside the transition`);
   if (measured.sqliteBusy) breaches.push(`${measured.sqliteBusy} SQLITE_BUSY failure(s)`);
   if (measured.runtimeTimeouts) breaches.push(`${measured.runtimeTimeouts} runtime timeout(s)`);
+  fewer("runtime-host calls", measured.runtimeRpc.requests, minimum.runtimeRpcs);
+  over("runtime-host call p95", measured.runtimeRpc.p95Ms, bounds.runtimeRpc.p95Ms);
+  over("runtime-host call max", measured.runtimeRpc.maxMs, bounds.runtimeRpc.maxMs);
+  if (measured.runtimeRpc.failures) breaches.push(`${measured.runtimeRpc.failures} runtime-host call(s) failed on the socket`);
+  if (!measured.runtimeRpc.hostAlive) breaches.push("the runtime host exited during the run");
   fewer("pending deliveries held as evidence", measured.deliveryEvidence.pending, minimum.pendingDeliveries);
   fewer("uncertain deliveries held as evidence", measured.deliveryEvidence.uncertain, minimum.uncertainDeliveries);
   if (!measured.deliveryEvidence.preserved) breaches.push("pending or uncertain delivery evidence changed");
@@ -386,6 +402,7 @@ const MEASUREMENT_SHAPE: Shape = {
   workers: { count: "n", rehosted: "n", answering: "n", progressGapMaxMs: "n", lostProgress: "n", repeatedProgress: "n", failedPings: "n" },
   sqliteBusy: "n",
   runtimeTimeouts: "n",
+  runtimeRpc: { requests: "n", p95Ms: "n", maxMs: "n", timeouts: "n", failures: "n", hostAlive: "b" },
   deliveryEvidence: { pending: "n", uncertain: "n", preserved: "b" },
 };
 /* Present only when a browser ran; `browser: null` is read and refused. */
@@ -393,7 +410,7 @@ const BROWSER_SHAPE: Shape = {
   views: "n",
   writes: { count: "n", p95Ms: "n", maxMs: "n", failures: "n" },
   readyMaxMs: "n", filesP95Ms: "n", filesMaxMs: "n", filesErrors: "n", viewsWithoutAnswerDuringWrites: "n",
-  apiMaxMs: "n", apiMaxRoute: "s?", bootLagMaxMs: "n", lagP95Ms: "n", lagMaxMs: "n", inputMaxMs: "n", inputsMin: "n",
+  apiMaxMs: "n", apiMaxRoute: "s?", apiErrors: "n", apiFirstError: "s?", apiUnfinished: "n", bootLagMaxMs: "n", lagP95Ms: "n", lagMaxMs: "n", inputMaxMs: "n", inputsMin: "n",
   selectionsLost: "n", staleNotices: "n",
 };
 

@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { CANDIDATE_PERFORMANCE_REPORT_PREFIX, parseCandidatePerformanceReport, type CandidatePerformanceEvidence } from "./candidatePerformance";
+import { ViewerDeploymentCoordinator } from "./deployment";
 import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
+import { FakeDeploymentAdapter, healthy } from "./fixtures/fakeDeploymentAdapter";
+import { RuntimeJournal } from "./journal";
 
 /* #2761: the gate's runner, run the way `verify-candidate` runs it, against
    the synthetic registry of retained history: two Viewer releases, live
@@ -135,4 +138,60 @@ test("a live worker killed after the hand-over is refused", async () => {
   ]));
   expect(report.measurements!.handover).toMatchObject({ switched: true, demotionExitCode: 0, servingRelease: "successor" });
   expectEvidenceIntact(report);
+}, 400_000);
+
+/* The reviewer's reproduction of a stalled runtime host: every call the
+   releases make through the production client goes unanswered for the whole
+   warm operation. The client's own deadlines time them out, the gate counts
+   each one, and the verdict, read by the real host-command adapter and acted
+   on by the coordinator, retires the candidate: promote is never called and
+   the serving release keeps serving. */
+test("a runtime host that stops answering is refused through the adapter and the coordinator, and the serving release is kept", async () => {
+  const { code, stdout, report } = await runGate(["--scale", "0.1", "--induce", "runtime-stall"]);
+  expect(code).toBe(1);
+  expect(report.ok).toBe(false);
+  expect(report.induced).toEqual(["runtime-stall"]);
+  const measured = report.measurements!;
+  expect(measured.runtimeRpc.timeouts).toBeGreaterThan(0);
+  expect(measured.runtimeTimeouts).toBe(measured.runtimeRpc.timeouts);
+  expect(measured.runtimeRpc.hostAlive).toBe(true);
+  const timeouts = `${measured.runtimeTimeouts} runtime timeout(s)`;
+  expect(report.breaches).toContain(timeouts);
+  expectEvidenceIntact(report);
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-candidate-performance-coordinator-"));
+  const store = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { now: () => 1_000 });
+  try {
+    const adapter = new FakeDeploymentAdapter();
+    const serving = adapter.current;
+    const host = new HostCommandViewerDeploymentAdapter(async (action) => (action === "verify-candidate" ? {
+      ...healthy("http://127.0.0.1/candidate"),
+      runtimeHost: {
+        checkedAt: "2026-10-12T00:01:00.000Z",
+        runtime: "bun 1.4.0",
+        succession: { predecessorReadyMs: 1_480, successorTookOverMs: 2_140, completed: true },
+        listener: { windowMs: 15_000, polls: 30, answered: 30, abandoned: 15 },
+        socket: { polls: 30, answered: 30, abandoned: 15 },
+        ok: true,
+      },
+      performance: parseCandidatePerformanceReport(stdout),
+    } : {}));
+    adapter.verifyCandidate = async (candidate) => {
+      adapter.calls.push(`verify-candidate:${candidate.container}`);
+      return host.verifyCandidate(candidate);
+    };
+    const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+    const receipt = await coordinator.requestViewerDeployment({ idempotencyKey: "deploy-runtime-stall" });
+    if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+    const status = await coordinator.waitForDeployment(receipt.deploymentId);
+    expect(status).toMatchObject({ phase: "failed", terminal: true });
+    expect(status?.error).toStartWith("candidate performance gate refused the release");
+    expect(status?.health.at(-1)?.performance?.breaches).toContain(timeouts);
+    expect(adapter.calls).toContain(`retire:${status?.candidate?.container}`);
+    expect(adapter.calls.filter((call) => call.startsWith("promote:") || call.startsWith("rollback:"))).toEqual([]);
+    expect(adapter.current).toEqual(serving);
+  } finally {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 }, 400_000);

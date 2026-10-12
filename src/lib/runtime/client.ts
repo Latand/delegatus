@@ -60,10 +60,30 @@ export function runtimeHostRequestHealth(): RuntimeHostRequestHealth {
   };
 }
 
+/** Every runtime-host call this process made since it started, `wait`
+    included: the latency window above keeps only the newest calls, and a
+    timeout it let go is still a timeout. */
+export interface RuntimeHostRequestTotals {
+  requests: number;
+  /** Calls that reached their deadline without an answer. */
+  timeouts: number;
+  /** Calls the socket failed otherwise: unavailable, garbled or oversized. */
+  failures: number;
+  /** The slowest answered or timed-out call outside `wait`'s long poll. */
+  maxMs: number;
+}
+
+const runtimeHostRequestTotalsSoFar: RuntimeHostRequestTotals = { requests: 0, timeouts: 0, failures: 0, maxMs: 0 };
+
+export function runtimeHostRequestTotals(): RuntimeHostRequestTotals {
+  return { ...runtimeHostRequestTotalsSoFar };
+}
+
 /** Tests only: isolates route and percentile assertions from earlier calls in
     the same Bun process. */
 export function resetRuntimeHostRequestHealthForTests(): void {
   runtimeHostRequestSamples.length = 0;
+  Object.assign(runtimeHostRequestTotalsSoFar, { requests: 0, timeouts: 0, failures: 0, maxMs: 0 });
 }
 
 export class RuntimeHostUnavailableError extends Error {
@@ -318,17 +338,23 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
         console.error(`[runtime host] request timed out method=${method} elapsedMs=${Math.max(0, Math.round(elapsedMs))}`);
         finish(new RuntimeHostUnavailableError("runtime host request timed out"), undefined, true, elapsedMs);
       }, timeoutMs);
-      const finish = (error?: Error, result?: unknown, timeout = false, elapsedMs = performance.now() - startedAt) => {
+      const finish = (error?: Error, result?: unknown, timeout = false, elapsedMs = performance.now() - startedAt, cancelled = false) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         socket.destroy();
         recordRuntimeHostRequest(method, elapsedMs, timeout);
+        if (!cancelled) {
+          runtimeHostRequestTotalsSoFar.requests += 1;
+          if (timeout) runtimeHostRequestTotalsSoFar.timeouts += 1;
+          else if (isRuntimeHostTransportFailure(error)) runtimeHostRequestTotalsSoFar.failures += 1;
+          if (method !== "wait") runtimeHostRequestTotalsSoFar.maxMs = Math.max(runtimeHostRequestTotalsSoFar.maxMs, Math.round(elapsedMs));
+        }
         if (error) reject(error);
         else resolve(result);
       };
-      const onAbort = () => finish(new RuntimeHostUnavailableError("runtime host request cancelled"));
+      const onAbort = () => finish(new RuntimeHostUnavailableError("runtime host request cancelled"), undefined, false, performance.now() - startedAt, true);
       if (signal?.aborted) return onAbort();
       signal?.addEventListener("abort", onAbort, { once: true });
       socket.once("error", () => finish(new RuntimeHostUnavailableError("runtime host is unavailable")));
