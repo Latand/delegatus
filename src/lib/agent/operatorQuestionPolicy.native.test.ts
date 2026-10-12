@@ -5,14 +5,7 @@ import path from "node:path";
 import { codexProcessCleanupArgs } from "./processCleanupPolicy";
 
 const binary = process.env.LLV_CODEX_BINARY ?? "codex";
-const version = Bun.spawnSync([binary, "--version"], { stdout: "pipe", stderr: "pipe", timeout: 5000 });
-const minor = Number(/^codex-cli 0\.(\d+)\./.exec(version.stdout.toString())?.[1]);
-if (version.exitCode !== 0 || !Number.isFinite(minor)) throw new Error("Native question fixture cannot identify Codex");
-// Earlier supported pins have no async question tool; their launch settings are
-// covered by the shared host tests. The native async control requires 0.162+.
-const asyncQuestionTest = minor >= 162 ? test : test.skip;
-
-asyncQuestionTest("native Codex denies async seat questions and preserves worker questions", async () => {
+test("native Codex denies async seat questions and preserves worker questions", async () => {
   const { codexOperatorQuestionPolicy } = await import("./operatorQuestionPolicy");
   for (const seat of [false, true]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "seat-question-native-"));
