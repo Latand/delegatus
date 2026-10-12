@@ -1,3 +1,4 @@
+import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { createHash, randomUUID } from "node:crypto";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -10,7 +11,7 @@ import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
 import { cleanStrings, withoutCredentials, withoutLocalPaths, withoutSeparators } from "./redaction";
 import { speechParts } from "./reportSpeech";
 import { backendRequest, type BackendItem } from "./sessionConfig";
-import { runCompanionTool } from "./tools";
+import { PRIVATE_RESULT_TOOLS, runCompanionTool } from "./tools";
 import { byteShort } from "./prototypeRead";
 import { backendUsageTokens, backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD } from "./usage";
 
@@ -33,7 +34,7 @@ function triedTool(name: string, args: string, speech: string): string {
   const labels: Record<string, string> = { list_tasks: "searched the tasks", list_pipelines: "searched the pipelines", get_task: "read a task", get_pipeline: "read a pipeline",
     agent_activity: "checked agents", conversation_messages: "read a conversation", orchestrator_messages: "read orchestrator messages", search_transcripts: "searched conversations",
     read_prototype_review: "read prototype reviews", view_prototype_frame: "requested prototype frames", orchestrator_reports: "read reports", reread_orchestrator_report: "reread a report",
-    request_orchestrator_delegation: "asked the orchestrator", resolve_orchestrator_confirmation: "answered confirmation", end_conversation: "requested hang-up" };
+    relay_owner_history: "read a Telegram group", request_orchestrator_delegation: "asked the orchestrator", resolve_orchestrator_confirmation: "answered confirmation", end_conversation: "requested hang-up" };
   let query = ""; try { const parsed = JSON.parse(args); if (typeof parsed.query === "string") query = ` for «${byteShort(parsed.query, 80)}»`; } catch { /* Invalid arguments have no query to report. */ }
   return byteShort(`${labels[name] ?? "called a tool"}${query}: ${speech.split(". ")[0].replace(/\.$/, "")}`, 150);
 }
@@ -70,6 +71,7 @@ interface ActiveSession {
   lastHandoff?: { latest?: number; turn?: number; replied: boolean; attempt: string };
 }
 interface Options {
+  ownerHistory?: OwnerHistoryRead;
   key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean;
   /** The API provider beside a Codex one: new calls when the settings choose
    * the API, and the hangup of API calls already open. */
@@ -522,14 +524,14 @@ export class CompanionLiveSessions {
     this.admission.emit(active.id, { type: "tool.called", callId, name: name.slice(0, 80), summary: name.slice(0, 80).replaceAll("_", " ") });
     try {
       const result = await runCompanionTool({ project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId, ...(attempt ? { attempt } : {}),
-        admission: this.admission, reads: this.reads, read:(name,args)=>this.read(active,project,name,args,delegationId), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
+        admission: this.admission, reads: this.reads, ownerHistory: this.options.ownerHistory, read:(name,args)=>this.read(active,project,name,args,delegationId), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
       const output = jsonObject(result);
       // Codex voices queued speech after the turn's own answer, so a report asked for again is handed at once.
       if (active.codex) this.speakReports(active);
       const status = output?.status === "refused" || output?.status === "failed" ? "failed" : "done";
       this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs,
         data: { ...toolData, status, code: output?.code, reason: output?.reason ?? output?.speech,
-          result: JSON.stringify(cleanStrings(result,text=>withoutLocalPaths(withoutCredentials(text,active.secrets))), null, 2).slice(0, 8_000) } });
+          result: JSON.stringify(cleanStrings(PRIVATE_RESULT_TOOLS.has(name) ? { status: output?.status, speech: output?.speech } : result,text=>withoutLocalPaths(withoutCredentials(text,active.secrets))), null, 2).slice(0, 8_000) } });
       this.admission.emit(active.id, { type: "tool.result", callId, status,
         summary: typeof output?.speech === "string" ? output.speech.slice(0, 240) : "Completed" });
       return result;

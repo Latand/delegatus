@@ -1,3 +1,5 @@
+import { ownerHistoryRead } from "./ownerHistoryRead";
+import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
 import type { CallRequest, CompanionAdmission, OperatorAttempt } from "./admission";
 import { DELEGATION_REASONS, deliveryFailureReason } from "./delegationOutcome";
@@ -17,6 +19,7 @@ export interface CompanionToolContext {
   attempt?: OperatorAttempt;
   admission: CompanionAdmission;
   reads: CompanionBoardReads;
+  ownerHistory?: OwnerHistoryRead;
   read?(name: string, args: Record<string, unknown>): Promise<unknown>;
   endConversation(): void;
 }
@@ -26,7 +29,8 @@ interface ToolEntry {
   name: string;
   description: string;
   capability: string;
-  class: "board-read" | "call-read" | "delegation" | "session-control";
+  privateResult?: true;
+  class: "owner-read" | "board-read" | "call-read" | "delegation" | "session-control";
   parameters: { type: "object"; properties: Record<string, ToolProperty>; required: string[]; additionalProperties: false };
   handler(context: CompanionToolContext, args: Record<string, unknown>): unknown | Promise<unknown>;
 }
@@ -83,6 +87,14 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
     parameters: schema(READ_SCHEMAS[name]),
     handler: (context, args) => context.read ? context.read(name,args) : context.reads.call(context.reads.resolveProject(context.project, typeof args.project === "string" ? args.project : undefined),name,args),
   })),
+  { name: "relay_owner_history", class: "owner-read", privateResult: true,
+    capability: "Telegram groups: the operator's groups where Celestia or a clone is present, and what was written in one of them on a day or over a range.",
+    description: "Read Telegram group history directly for the operator: groups lists eligible chats; messages reads one page oldest first, for today or inclusive dates. Pass nextCursor alone as cursor for the next page; null ends the range. Use messages only in this conversation. Never put message text, names, usernames, titles or chat ids into requests or reports to the orchestrator, other agents, tasks or files. The owner-tools switch defaults OFF.",
+    parameters: schema({ action: { type: "string", enum: ["groups", "messages"] }, chat: { type: ["string", "null"], maxLength: 20 },
+      from: { type: ["string", "null"], maxLength: 10 }, to: { type: ["string", "null"], maxLength: 10 },
+      cursor: { type: ["string", "null"], maxLength: 400 }, limit: { type: ["integer", "null"], minimum: 1, maximum: 100 } }),
+    handler: (context, args) => ownerHistoryRead(args, context.ownerHistory),
+  },
   { name: "orchestrator_reports", capability: "Reports: what the orchestrator reported during this call, and which requests still wait for its answer.", class: "call-read",
     description: "Read this call's requests to the orchestrator, each with its handle, whether its answer arrived and the answering report whole, and the latest other reports, whole. Read it before sending when the operator asks about something already sent. Sends nothing.",
     parameters: schema(),
@@ -161,6 +173,8 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       return { status: "ending", speech: "The conversation is ending." };
     } },
 ];
+
+export const PRIVATE_RESULT_TOOLS = new Set(COMPANION_TOOL_REGISTRY.filter(entry => entry.privateResult).map(entry => entry.name));
 
 export const COMPANION_TOOLS = COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) =>
   ({ type: "function" as const, name, description, strict: true, parameters }));
