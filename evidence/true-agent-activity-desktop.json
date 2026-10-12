@@ -1,5 +1,6 @@
 [
   {
+    "theme": "dark",
     "width": 1440,
     "lang": "uk",
     "state": "working",
@@ -11,7 +12,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1440,
       "scrollHeight": 900,
-      "colour": "rgb(79, 195, 111)"
+      "colour": "rgb(79, 195, 111)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 376.53125,
@@ -26,6 +36,7 @@
     }
   },
   {
+    "theme": "dark",
     "width": 1440,
     "lang": "uk",
     "state": "checking",
@@ -37,7 +48,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1440,
       "scrollHeight": 900,
-      "colour": "rgb(224, 174, 69)"
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(79, 195, 111)",
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 348.96875,
@@ -52,6 +72,7 @@
     }
   },
   {
+    "theme": "dark",
     "width": 1440,
     "lang": "uk",
     "state": "idle",
@@ -63,7 +84,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1440,
       "scrollHeight": 900,
-      "colour": "rgb(240, 113, 113)"
+      "colour": "rgb(240, 113, 113)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 330.1875,
@@ -72,12 +102,13 @@
       "bottom": 693.84375,
       "portalled": true,
       "lines": 2,
-      "text": "стоїть 14 хвостання дія 15:09",
+      "text": "стоїть 14 хвостання дія 19:13",
       "scrollWidth": 1440,
       "scrollHeight": 900
     }
   },
   {
+    "theme": "dark",
     "width": 1440,
     "lang": "en",
     "state": "working",
@@ -89,7 +120,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1440,
       "scrollHeight": 900,
-      "colour": "rgb(79, 195, 111)"
+      "colour": "rgb(79, 195, 111)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 376.734375,
@@ -104,6 +144,7 @@
     }
   },
   {
+    "theme": "dark",
     "width": 1440,
     "lang": "en",
     "state": "checking",
@@ -115,7 +156,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1440,
       "scrollHeight": 900,
-      "colour": "rgb(224, 174, 69)"
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(79, 195, 111)",
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 346.953125,
@@ -130,6 +180,7 @@
     }
   },
   {
+    "theme": "dark",
     "width": 1440,
     "lang": "en",
     "state": "idle",
@@ -141,7 +192,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1440,
       "scrollHeight": 900,
-      "colour": "rgb(240, 113, 113)"
+      "colour": "rgb(240, 113, 113)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 334.328125,
@@ -150,12 +210,13 @@
       "bottom": 693.78125,
       "portalled": true,
       "lines": 2,
-      "text": "idle 14mlast action 15:09",
+      "text": "idle 14mlast action 19:13",
       "scrollWidth": 1440,
       "scrollHeight": 900
     }
   },
   {
+    "theme": "dark",
     "width": 1000,
     "lang": "uk",
     "state": "working",
@@ -167,7 +228,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1000,
       "scrollHeight": 900,
-      "colour": "rgb(79, 195, 111)"
+      "colour": "rgb(79, 195, 111)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 372.53125,
@@ -182,6 +252,7 @@
     }
   },
   {
+    "theme": "dark",
     "width": 1000,
     "lang": "uk",
     "state": "checking",
@@ -193,7 +264,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1000,
       "scrollHeight": 900,
-      "colour": "rgb(224, 174, 69)"
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(79, 195, 111)",
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 344.96875,
@@ -208,6 +288,7 @@
     }
   },
   {
+    "theme": "dark",
     "width": 1000,
     "lang": "uk",
     "state": "idle",
@@ -219,7 +300,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1000,
       "scrollHeight": 900,
-      "colour": "rgb(240, 113, 113)"
+      "colour": "rgb(240, 113, 113)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 326.1875,
@@ -228,12 +318,13 @@
       "bottom": 726.09375,
       "portalled": true,
       "lines": 2,
-      "text": "стоїть 14 хвостання дія 15:09",
+      "text": "стоїть 14 хвостання дія 19:13",
       "scrollWidth": 1000,
       "scrollHeight": 900
     }
   },
   {
+    "theme": "dark",
     "width": 1000,
     "lang": "en",
     "state": "working",
@@ -245,7 +336,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1000,
       "scrollHeight": 900,
-      "colour": "rgb(79, 195, 111)"
+      "colour": "rgb(79, 195, 111)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 372.734375,
@@ -260,6 +360,7 @@
     }
   },
   {
+    "theme": "dark",
     "width": 1000,
     "lang": "en",
     "state": "checking",
@@ -271,7 +372,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1000,
       "scrollHeight": 900,
-      "colour": "rgb(224, 174, 69)"
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(79, 195, 111)",
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 342.953125,
@@ -286,6 +396,7 @@
     }
   },
   {
+    "theme": "dark",
     "width": 1000,
     "lang": "en",
     "state": "idle",
@@ -297,7 +408,16 @@
       "rowHeight": 43.4375,
       "scrollWidth": 1000,
       "scrollHeight": 900,
-      "colour": "rgb(240, 113, 113)"
+      "colour": "rgb(240, 113, 113)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
     },
     "popup": {
       "left": 330.328125,
@@ -306,7 +426,439 @@
       "bottom": 726.09375,
       "portalled": true,
       "lines": 2,
-      "text": "idle 14mlast action 15:09",
+      "text": "idle 14mlast action 19:13",
+      "scrollWidth": 1000,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "lang": "uk",
+    "state": "working",
+    "dot": {
+      "left": 398.96875,
+      "right": 406.96875,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "colour": "rgb(23, 122, 55)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 376.53125,
+      "right": 429.40625,
+      "top": 527.65625,
+      "bottom": 551.40625,
+      "portalled": true,
+      "lines": 1,
+      "text": "працює",
+      "scrollWidth": 1440,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "lang": "uk",
+    "state": "checking",
+    "dot": {
+      "left": 404.484375,
+      "right": 412.484375,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(23, 122, 55)",
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 348.96875,
+      "right": 468,
+      "top": 326.34375,
+      "bottom": 350.09375,
+      "portalled": true,
+      "lines": 1,
+      "text": "чекає перевірку · 5 хв",
+      "scrollWidth": 1440,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "lang": "uk",
+    "state": "idle",
+    "dot": {
+      "left": 375.75,
+      "right": 383.75,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "colour": "rgb(198, 40, 40)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 330.1875,
+      "right": 429.296875,
+      "top": 656.34375,
+      "bottom": 693.84375,
+      "portalled": true,
+      "lines": 2,
+      "text": "стоїть 14 хвостання дія 19:14",
+      "scrollWidth": 1440,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "lang": "en",
+    "state": "working",
+    "dot": {
+      "left": 398.96875,
+      "right": 406.96875,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "colour": "rgb(23, 122, 55)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 376.734375,
+      "right": 429.203125,
+      "top": 498.65625,
+      "bottom": 522.40625,
+      "portalled": true,
+      "lines": 1,
+      "text": "working",
+      "scrollWidth": 1440,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "lang": "en",
+    "state": "checking",
+    "dot": {
+      "left": 404.484375,
+      "right": 412.484375,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(23, 122, 55)",
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 346.953125,
+      "right": 470.015625,
+      "top": 297.34375,
+      "bottom": 321.09375,
+      "portalled": true,
+      "lines": 1,
+      "text": "waiting on a check · 5m",
+      "scrollWidth": 1440,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "lang": "en",
+    "state": "idle",
+    "dot": {
+      "left": 375.75,
+      "right": 383.75,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "colour": "rgb(198, 40, 40)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 334.328125,
+      "right": 425.15625,
+      "top": 656.28125,
+      "bottom": 693.78125,
+      "portalled": true,
+      "lines": 2,
+      "text": "idle 14mlast action 19:14",
+      "scrollWidth": 1440,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "lang": "uk",
+    "state": "working",
+    "dot": {
+      "left": 394.96875,
+      "right": 402.96875,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1000,
+      "scrollHeight": 900,
+      "colour": "rgb(23, 122, 55)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 372.53125,
+      "right": 425.40625,
+      "top": 559.90625,
+      "bottom": 583.65625,
+      "portalled": true,
+      "lines": 1,
+      "text": "працює",
+      "scrollWidth": 1000,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "lang": "uk",
+    "state": "checking",
+    "dot": {
+      "left": 400.484375,
+      "right": 408.484375,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1000,
+      "scrollHeight": 900,
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(23, 122, 55)",
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 344.96875,
+      "right": 464,
+      "top": 387.53125,
+      "bottom": 411.28125,
+      "portalled": true,
+      "lines": 1,
+      "text": "чекає перевірку · 5 хв",
+      "scrollWidth": 1000,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "lang": "uk",
+    "state": "idle",
+    "dot": {
+      "left": 371.75,
+      "right": 379.75,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1000,
+      "scrollHeight": 900,
+      "colour": "rgb(198, 40, 40)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 326.1875,
+      "right": 425.296875,
+      "top": 688.59375,
+      "bottom": 726.09375,
+      "portalled": true,
+      "lines": 2,
+      "text": "стоїть 14 хвостання дія 19:14",
+      "scrollWidth": 1000,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "lang": "en",
+    "state": "working",
+    "dot": {
+      "left": 394.96875,
+      "right": 402.96875,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1000,
+      "scrollHeight": 900,
+      "colour": "rgb(23, 122, 55)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 372.734375,
+      "right": 425.203125,
+      "top": 559.90625,
+      "bottom": 583.65625,
+      "portalled": true,
+      "lines": 1,
+      "text": "working",
+      "scrollWidth": 1000,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "lang": "en",
+    "state": "checking",
+    "dot": {
+      "left": 400.484375,
+      "right": 408.484375,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1000,
+      "scrollHeight": 900,
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(23, 122, 55)",
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 342.953125,
+      "right": 466.015625,
+      "top": 387.53125,
+      "bottom": 411.28125,
+      "portalled": true,
+      "lines": 1,
+      "text": "waiting on a check · 5m",
+      "scrollWidth": 1000,
+      "scrollHeight": 900
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "lang": "en",
+    "state": "idle",
+    "dot": {
+      "left": 371.75,
+      "right": 379.75,
+      "width": 8,
+      "height": 8,
+      "rowHeight": 43.4375,
+      "scrollWidth": 1000,
+      "scrollHeight": 900,
+      "colour": "rgb(198, 40, 40)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 330.328125,
+      "right": 421.15625,
+      "top": 688.59375,
+      "bottom": 726.09375,
+      "portalled": true,
+      "lines": 2,
+      "text": "idle 14mlast action 19:14",
       "scrollWidth": 1000,
       "scrollHeight": 900
     }

@@ -77,7 +77,7 @@ function ActivityDot({ file, status, nowMs }: { file: FileEntry; status: Extract
       ref={anchorRef} role="button" tabIndex={0} aria-label={lines.join(" · ")} aria-expanded={open}
       data-card-status="running" data-agent-activity={state}
       style={{ width: 8, height: 8 }}
-      className={`inline-block shrink-0 self-center relative pointer-events-auto rounded-full cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${state === "working" ? "bg-success" : state === "checking" ? "bg-warning" : "bg-danger"}`}
+      className={`inline-block shrink-0 self-center relative pointer-events-auto rounded-full cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 before:absolute before:-inset-[12px] before:content-[''] ${state === "working" ? "bg-success" : state === "checking" ? "border-2 border-success bg-transparent" : "bg-danger"}`}
       onPointerEnter={event => { if (event.pointerType === "mouse") setHovered(true); }} onPointerLeave={() => setHovered(false)}
       onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
       onPointerDown={event => event.stopPropagation()}
@@ -88,7 +88,7 @@ function ActivityDot({ file, status, nowMs }: { file: FileEntry; status: Extract
         if (event.key === "Escape") { setTapped(false); setFocused(false); setHovered(false); }
       }}
     />
-    {open ? <TooltipBubble anchorRef={anchorRef} className="max-w-[calc(100vw-16px)] rounded-md border border-border bg-panel px-2 py-1 text-caption text-primary shadow-md">
+    {open ? <TooltipBubble anchorRef={anchorRef} className="max-w-[calc(100vw-16px)] rounded-md border border-border bg-raised px-2 py-1 text-caption text-primary shadow-2">
       {lines.map((line, i) => <span key={i} className="block max-w-[220px] truncate leading-snug">{line}</span>)}
     </TooltipBubble> : null}
   </>;

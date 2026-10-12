@@ -8,7 +8,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { SpeakButton } from "@/components/feed/SpeakButton";
 import { BranchPane } from "@/components/BranchPane";
-import { mobileRowState } from "@/components/mobile/mobileBoardModel";
+import { mobileRowState, rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
@@ -247,7 +247,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
   const kill = useProcessKill(file);
   const row = mobileRowState(file, now);
-  const stateWord = t(`kanban.memberState.${row.key}`);
+  const stateWord = rowStateWord(t, row);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";
   const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
@@ -380,7 +380,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
         <div className="ch-row">
           <RoleFrameMark role={frameRole} />
           <RoleAvatar role={frameRole} size={26} />
-          <span className={`ch-dot ${tone}${working ? " live" : ""}`} aria-hidden="true" />
+          <span className={`ch-dot ${tone}${working ? " live" : ""}${row.activity === "checking" ? " hollow" : ""}`} aria-hidden="true" />
           <span className="ch-title" title={titleHint}>
             {labelParts && labelParts.attempt !== null && owner
               ? <>{labelParts.name}<span className="attempt"> · {labelParts.attempt}</span> · {owner.cardTitle}</>
@@ -404,7 +404,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
         <div className="ch-meta">
           <span className={`ch-state ${tone}`}>
             {stateWord}
-            <span className="num"> · {fmtAge(file.mtime)}</span>
+            <span className="num"> · {row.activity === "idle" ? t("cardStatus.idleMinutes", { n: Math.floor((row.seconds ?? 0) / 60) }) : fmtAge(file.mtime)}</span>
           </span>
           {identity}
           {file.worktree ? (

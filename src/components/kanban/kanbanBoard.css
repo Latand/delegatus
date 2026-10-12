@@ -986,6 +986,7 @@
 .kb .or-dot.tone-warning { background: var(--color-warning); }
 .kb .or-dot.tone-danger { background: var(--color-danger); }
 .kb .or-dot.tone-accent { background: var(--color-accent); }
+.kb .or-dot.hollow { background: var(--surface-card); border: 2px solid var(--color-success); box-sizing: border-box; }
 .kb .or-dot.live { box-shadow: 0 0 0 2px var(--surface-card), 0 0 0 4px color-mix(in srgb, var(--color-success) 30%, transparent); }
 .kb .or-names { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; line-height: 1.3; }
 .kb .or-name { font-size: var(--text-label); font-weight: 600; color: var(--color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1270,6 +1271,7 @@
 .kb .reader .ch-dot.tone-warning { background: var(--color-warning); }
 .kb .reader .ch-dot.tone-danger { background: var(--color-danger); }
 .kb .reader .ch-dot.tone-accent { background: var(--color-accent); }
+.kb .reader .ch-dot.hollow { background: transparent; border: 2px solid var(--color-success); box-sizing: border-box; }
 .kb .reader .ch-dot.live { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
 .kb .reader .ch-continues { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent); background: var(--color-accent-soft); color: var(--color-accent); font-size: var(--text-caption); font-weight: 600; white-space: nowrap; }
 .kb .reader .ch-continues:hover { border-color: var(--color-accent); }

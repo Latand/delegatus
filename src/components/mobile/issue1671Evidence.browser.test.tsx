@@ -10110,8 +10110,8 @@ describe("true agent activity", () => {
     const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
     const readings = [];
     try {
-      for (const lang of ["uk", "en"] as const) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?true-activity=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
+      for (const theme of ["dark", "light"] as const) for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?true-activity=1`, { width: 390, height: 844 }, theme, lang, "reduce", true);
         const workingTab = page.locator('[data-phone-kanban-tab="assigned"]'); if (await workingTab.isVisible()) await workingTab.click();
         for (const state of ["working", "checking", "idle"]) {
           const row = page.locator(`[data-phone-card-agent="/repo/activity-${state}.jsonl"]`);
@@ -10122,15 +10122,23 @@ describe("true agent activity", () => {
           expect(await dot.getAttribute("aria-label")).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
           const before = await dot.evaluate(element => {
             const box = element.getBoundingClientRect(); const row = element.closest("[data-phone-card-agent]")!.getBoundingClientRect();
-            return { width: box.width, height: box.height, rowHeight: row.height, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, colour: getComputedStyle(element).backgroundColor };
+            const style = getComputedStyle(element);
+            const probe = (name: string) => { const swatch = document.createElement("i"); swatch.style.color = `var(${name})`; document.body.append(swatch); const colour = getComputedStyle(swatch).color; swatch.remove(); return colour; };
+            const centre = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+            const hit = [[11, 0], [-11, 0], [0, 11], [0, -11]].map(([dx, dy]) => document.elementFromPoint(centre.x + dx!, centre.y + dy!) === element);
+            return { width: box.width, height: box.height, rowHeight: row.height, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, colour: style.backgroundColor, ring: style.borderTopWidth === "0px" ? null : style.borderTopColor, success: probe("--color-success"), warning: probe("--color-warning"), hit };
           });
           expect(before.width).toBe(8); expect(before.height).toBe(8);
+          /* The 8 px dot keeps its look; its hit box reaches 11 px past the dot on every side (24 px or more). */
+          expect(before.hit, `${state} ${theme} ${lang} hit box`).toEqual([true, true, true, true]);
+          if (state === "checking") { expect(before.ring).toBe(before.success); expect(before.ring).not.toBe(before.warning); expect(before.colour).toBe("rgba(0, 0, 0, 0)"); }
           const url = page.url(); await dot.tap();
           const popup = page.getByRole("tooltip"); await popup.waitFor();
           const after = await popup.evaluate(element => {
             const box = element.getBoundingClientRect();
             return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, portalled: element.parentElement === document.body, lines: element.children.length, text: element.textContent, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight };
           });
+          expect(await popup.evaluate(element => getComputedStyle(element).backgroundColor), `${state} ${theme} ${lang} bubble is opaque`).not.toBe("rgba(0, 0, 0, 0)");
           expect(page.url()).toBe(url); expect(await row.isVisible()).toBe(true);
           expect(after.portalled).toBe(true); expect(after.lines).toBeLessThanOrEqual(2); expect(after.text!.length).toBeLessThan(90);
           expect(after.left).toBeGreaterThanOrEqual(8); expect(after.right).toBeLessThanOrEqual(382);
@@ -10138,16 +10146,16 @@ describe("true agent activity", () => {
           expect(after.scrollWidth).toBe(before.scrollWidth); expect(after.scrollHeight).toBe(before.scrollHeight);
           expect((await row.boundingBox())!.height).toBe(before.rowHeight);
           expect(await row.locator('[data-phone-card-state]').count()).toBe(0);
-          readings.push({ lang, state, dot: before, popup: after });
-          await page.screenshot({ path: path.join(out, `dot-${state}-390-${lang}.png`), fullPage: true });
+          readings.push({ theme, lang, state, dot: before, popup: after });
+          await page.screenshot({ path: path.join(out, `dot-${state}-${theme}-390-${lang}.png`), fullPage: true });
           await dot.tap(); await popup.waitFor({ state: "detached" });
         }
         expect(pageErrors).toEqual([]);
-        await page.screenshot({ path: path.join(out, `variant-1-390-${lang}.png`), fullPage: true }); await context.close();
+        await page.screenshot({ path: path.join(out, `variant-1-${theme}-390-${lang}.png`), fullPage: true }); await context.close();
       }
       fs.writeFileSync(path.resolve("evidence/true-agent-activity-phone.json"), JSON.stringify(readings, null, 2)+"\n");
     } finally { await browser.close(); server.stop(); }
-  }, 180_000);
+  }, 300_000);
 });
 
 /*

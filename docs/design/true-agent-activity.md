@@ -290,10 +290,20 @@ an `idle` agent is not working.
 
 The operator's prototype decision on 2026-10-12 replaces the proposed
 text badge with a small dot in the existing row. No new panel or status row.
-`CardStatusBadge` renders running activity as an 8 px dot: green for working,
-amber for a check, red for verified idle after 10 minutes. The dot has no
-visible text, border or pill padding. Existing attention and delivery badges
-keep their own behaviour.
+`CardStatusBadge` renders running activity as an 8 px dot: solid green for
+working, a hollow green ring for a check, red for verified idle after 10
+minutes. Amber belongs to «needs you» alone, so a check never reads as an ask
+for the operator. The dot has no visible text or pill padding. Its hit box
+reaches 12 px past the dot on every side without moving the row, so a finger
+tap opens the popover instead of the card. Existing attention and delivery
+badges keep their own behaviour.
+
+The open conversation speaks the dot's words. The reader header, the open-agents
+rail and the tile label read `rowStateWord` (working / waiting on a check /
+idle, with the idle minutes), and the bar under the transcript
+(`TurnStatusBar`) paints no working animation for an idle agent and says
+«waiting on a check» for one on a check. The popover is opaque (`bg-raised`), so
+card text under it never shows through.
 
 Desktop hover or keyboard focus, and phone tap, open the existing portalled
 `TooltipBubble`, anchored to the dot. It flips or shifts inside the viewport,
