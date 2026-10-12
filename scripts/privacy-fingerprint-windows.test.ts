@@ -51,8 +51,8 @@ test("negative cache eviction retains later fingerprint matches", () => {
   const ending = text.slice(-12);
   expect(matchesFingerprintWindows(text, 12, new Set([referenceDigest(ending)])))
     .toBe(referenceMatch(text, 12, new Set([referenceDigest(ending)])));
-  // Evict the block cache too; a match inside the final repeated view survives.
-  const large = Array.from({ length: 260 }, (_, index) => `${index} ${"x".repeat(16_384)}`).join("");
+  // Evict the block cache too, then retain a final-window match.
+  const large = Array.from({ length: 1040 }, (_, index) => `${index} ${"x".repeat(16_384)}`).join("");
   const tail = "after eviction phrase";
   expect(matchesFingerprintWindows(large + tail, tail.length, new Set([referenceDigest(tail)]))).toBe(true);
-});
+}, 20_000);

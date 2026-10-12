@@ -1235,8 +1235,8 @@ export function matchesFingerprintWindows(text: string, length: number, hashes: 
   const rejected = new Set<string>();
   const blocks = new Set<string>();
   let blockCharacters = 0;
-  const cacheCharacters = 4_000_000;
-  const windowCapacity = Math.min(65_536, Math.floor(cacheCharacters / length));
+  const blockCacheCharacters = 16_000_000;
+  const windowCapacity = Math.min(262_144, Math.floor(4_000_000 / length));
   let separator = text.indexOf("\0");
   for (let start = 0; start <= lastStart;) {
     // Restart block alignment after a view separator so repeated canonical
@@ -1252,7 +1252,7 @@ export function matchesFingerprintWindows(text: string, length: number, hashes: 
         if (rejected.size === windowCapacity) rejected.clear();
         rejected.add(window);
       }
-      if (blockCharacters + block.length > cacheCharacters) {
+      if (blockCharacters + block.length > blockCacheCharacters) {
         blocks.clear();
         blockCharacters = 0;
       }

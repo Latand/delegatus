@@ -37,8 +37,9 @@ test("a synthetic two-megabyte changed file gets the full privacy verdict within
     git("commit", "--quiet", "-m", "Synthetic baseline");
     const base = git("rev-parse", "HEAD");
     // Vary letters, avoiding live values and identifier-shaped fixture data.
-    // Decoding changes offsets throughout a full-size, non-ASCII input.
-    const content = Array.from({ length: 48_000 }, (_, index) => {
+    // A valid package version triggers RAW email ownership preparation, so
+    // decoding must track offsets throughout this full-size, non-ASCII input.
+    const content = "pkg@1.2.3\n" + Array.from({ length: 48_000 }, (_, index) => {
       let number = index;
       let letters = "";
       for (let place = 0; place < 5; place += 1) {
