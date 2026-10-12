@@ -98,7 +98,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 22:12",
+          "text": "Waiting for the account limit · retry at 00:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -130,7 +130,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Stopped · cleared (orchestrator) · 90m ago",
+          "text": "Stopped · cleared (orchestrator) · 2h ago",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -161,7 +161,7 @@
       "meta": [
         {
           "id": "t-calm-commit",
-          "due": "⏰ Oct 13, 23:32",
+          "due": "⏰ Oct 14, 01:32",
           "dueState": "due",
           "dueInk": "rgb(108, 108, 121)",
           "danger": "rgb(198, 40, 40)",
@@ -171,7 +171,7 @@
         },
         {
           "id": "t-calm-cleared",
-          "due": "⏰ Oct 12, 18:32 · overdue",
+          "due": "⏰ Oct 12, 20:32 · overdue",
           "dueState": "overdue",
           "dueInk": "rgb(198, 40, 40)",
           "danger": "rgb(198, 40, 40)",
@@ -181,24 +181,11 @@
         }
       ],
       "popover": {
-        "text": "The orchestrator has been on it for 47m 49s",
+        "text": "The orchestrator has been on it for 48m",
         "covered": false
       },
       "menus": {
-        "t-calm-commit": [
-          {
-            "id": "answer:skip-stage",
-            "label": "Skip Build",
-            "why": "Manual override: the orchestrator does this itself",
-            "height": 35.890625
-          },
-          {
-            "id": "answer:retry-stage",
-            "label": "Retry Build",
-            "why": "Manual override: the orchestrator does this itself",
-            "height": 35.890625
-          }
-        ],
+        "t-calm-commit": [],
         "t-calm-merge": [
           {
             "id": "answer:dismiss",
@@ -227,20 +214,7 @@
             "height": 28
           }
         ],
-        "t-calm-long": [
-          {
-            "id": "answer:skip-stage",
-            "label": "Skip Build",
-            "why": "Manual override: the orchestrator does this itself",
-            "height": 35.890625
-          },
-          {
-            "id": "answer:retry-stage",
-            "label": "Retry Build",
-            "why": "Manual override: the orchestrator does this itself",
-            "height": 35.890625
-          }
-        ]
+        "t-calm-long": []
       },
       "timeline": {
         "entries": 8,
@@ -248,17 +222,17 @@
         "stopShown": true,
         "stopFirst": true,
         "times": [
-          "16:42",
-          "17:37",
-          "17:52",
-          "18:12",
           "18:42",
-          "19:02",
-          "19:32",
-          "21:02"
+          "19:37",
+          "19:52",
+          "20:12",
+          "20:42",
+          "21:02",
+          "21:32",
+          "23:02"
         ],
         "texts": [
-          "Build stopped: no account has capacityDetailsno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown",
+          "Build stopped: no account has capacityDetailsno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknownSkip BuildRetry Build",
           "Lane resumed",
           "Build · 4 passed",
           "Review · 1: 2 findings",
@@ -302,10 +276,38 @@
           "ampm": false
         }
       ],
-      "stopMenu": [
-        "answer:skip-stage",
-        "answer:retry-stage"
-      ],
+      "stopLinks": {
+        "t-calm-commit": {
+          "found": true,
+          "actions": [
+            "skip-stage",
+            "retry-stage"
+          ],
+          "labels": [
+            "Skip Build",
+            "Retry Build"
+          ],
+          "oneRow": true,
+          "inside": true,
+          "minHeight": 22,
+          "menu": false
+        },
+        "t-calm-long": {
+          "found": true,
+          "actions": [
+            "skip-stage",
+            "retry-stage"
+          ],
+          "labels": [
+            "Skip Build",
+            "Retry Build"
+          ],
+          "oneRow": true,
+          "inside": true,
+          "minHeight": 22,
+          "menu": false
+        }
+      },
       "patches": [
         {
           "id": "p-calm-commit",
@@ -415,7 +417,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 22:12",
+          "text": "Waiting for the account limit · retry at 00:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -478,7 +480,7 @@
       "meta": [
         {
           "id": "t-calm-commit",
-          "due": "⏰ Oct 13, 23:32",
+          "due": "⏰ Oct 14, 01:32",
           "dueState": "due",
           "dueInk": "rgb(108, 108, 121)",
           "danger": "rgb(198, 40, 40)",
@@ -488,7 +490,7 @@
         },
         {
           "id": "t-calm-cleared",
-          "due": "⏰ Oct 12, 18:32 · overdue",
+          "due": "⏰ Oct 12, 20:32 · overdue",
           "dueState": "overdue",
           "dueInk": "rgb(198, 40, 40)",
           "danger": "rgb(198, 40, 40)",
@@ -498,24 +500,11 @@
         }
       ],
       "popover": {
-        "text": "The orchestrator has been on it for 47m 56s",
+        "text": "The orchestrator has been on it for 47m 54s",
         "covered": false
       },
       "menus": {
-        "t-calm-commit": [
-          {
-            "id": "answer:skip-stage",
-            "label": "Skip Build",
-            "why": "Manual override: the orchestrator does this itself",
-            "height": 35.890625
-          },
-          {
-            "id": "answer:retry-stage",
-            "label": "Retry Build",
-            "why": "Manual override: the orchestrator does this itself",
-            "height": 35.890625
-          }
-        ],
+        "t-calm-commit": [],
         "t-calm-merge": [
           {
             "id": "answer:dismiss",
@@ -544,20 +533,7 @@
             "height": 28
           }
         ],
-        "t-calm-long": [
-          {
-            "id": "answer:skip-stage",
-            "label": "Skip Build",
-            "why": "Manual override: the orchestrator does this itself",
-            "height": 35.890625
-          },
-          {
-            "id": "answer:retry-stage",
-            "label": "Retry Build",
-            "why": "Manual override: the orchestrator does this itself",
-            "height": 35.890625
-          }
-        ]
+        "t-calm-long": []
       },
       "timeline": {
         "entries": 8,
@@ -565,17 +541,17 @@
         "stopShown": true,
         "stopFirst": true,
         "times": [
-          "16:42",
-          "17:37",
-          "17:52",
-          "18:12",
           "18:42",
-          "19:02",
-          "19:32",
-          "21:02"
+          "19:37",
+          "19:52",
+          "20:12",
+          "20:42",
+          "21:02",
+          "21:32",
+          "23:02"
         ],
         "texts": [
-          "Build stopped: no account has capacityDetailsno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown",
+          "Build stopped: no account has capacityDetailsno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknownSkip BuildRetry Build",
           "Lane resumed",
           "Build · 4 passed",
           "Review · 1: 2 findings",
@@ -619,10 +595,38 @@
           "ampm": false
         }
       ],
-      "stopMenu": [
-        "answer:skip-stage",
-        "answer:retry-stage"
-      ],
+      "stopLinks": {
+        "t-calm-commit": {
+          "found": true,
+          "actions": [
+            "skip-stage",
+            "retry-stage"
+          ],
+          "labels": [
+            "Skip Build",
+            "Retry Build"
+          ],
+          "oneRow": true,
+          "inside": true,
+          "minHeight": 22,
+          "menu": false
+        },
+        "t-calm-long": {
+          "found": true,
+          "actions": [
+            "skip-stage",
+            "retry-stage"
+          ],
+          "labels": [
+            "Skip Build",
+            "Retry Build"
+          ],
+          "oneRow": true,
+          "inside": true,
+          "minHeight": 22,
+          "menu": false
+        }
+      },
       "patches": [
         {
           "id": "p-calm-commit",
@@ -732,7 +736,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 22:12",
+          "text": "Waiting for the account limit · retry at 00:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -795,7 +799,7 @@
       "meta": [
         {
           "id": "t-calm-commit",
-          "due": "⏰ Oct 13, 23:32",
+          "due": "⏰ Oct 14, 01:32",
           "dueState": "due",
           "dueInk": "rgb(139, 139, 152)",
           "danger": "rgb(240, 113, 113)",
@@ -805,7 +809,7 @@
         },
         {
           "id": "t-calm-cleared",
-          "due": "⏰ Oct 12, 18:32 · overdue",
+          "due": "⏰ Oct 12, 20:32 · overdue",
           "dueState": "overdue",
           "dueInk": "rgb(240, 113, 113)",
           "danger": "rgb(240, 113, 113)",
@@ -913,7 +917,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 22:12",
+          "text": "Waiting for the account limit · retry at 00:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -945,7 +949,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Stopped · cleared (orchestrator) · 2h ago",
+          "text": "Stopped · cleared (orchestrator) · 90m ago",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -976,7 +980,7 @@
       "meta": [
         {
           "id": "t-calm-commit",
-          "due": "⏰ Oct 13, 23:32",
+          "due": "⏰ Oct 14, 01:32",
           "dueState": "due",
           "dueInk": "rgb(139, 139, 152)",
           "danger": "rgb(240, 113, 113)",
@@ -986,7 +990,7 @@
         },
         {
           "id": "t-calm-cleared",
-          "due": "⏰ Oct 12, 18:32 · overdue",
+          "due": "⏰ Oct 12, 20:32 · overdue",
           "dueState": "overdue",
           "dueInk": "rgb(240, 113, 113)",
           "danger": "rgb(240, 113, 113)",
@@ -1094,7 +1098,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 22:13",
+          "text": "Чекає ліміту акаунта · повтор о 00:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1157,7 +1161,7 @@
       "meta": [
         {
           "id": "t-calm-commit",
-          "due": "⏰ 13 жовт., 23:33",
+          "due": "⏰ 14 жовт., 01:32",
           "dueState": "due",
           "dueInk": "rgb(108, 108, 121)",
           "danger": "rgb(198, 40, 40)",
@@ -1167,7 +1171,7 @@
         },
         {
           "id": "t-calm-cleared",
-          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "due": "⏰ 12 жовт., 20:32 · прострочено",
           "dueState": "overdue",
           "dueInk": "rgb(198, 40, 40)",
           "danger": "rgb(198, 40, 40)",
@@ -1177,24 +1181,11 @@
         }
       ],
       "popover": {
-        "text": "Оркестратор розбирається вже 47 хв 58 с",
+        "text": "Оркестратор розбирається вже 47 хв 59 с",
         "covered": false
       },
       "menus": {
-        "t-calm-commit": [
-          {
-            "id": "answer:skip-stage",
-            "label": "Пропустити Build",
-            "why": "Вручну: оркестратор робить це сам",
-            "height": 35.890625
-          },
-          {
-            "id": "answer:retry-stage",
-            "label": "Повторити Build",
-            "why": "Вручну: оркестратор робить це сам",
-            "height": 35.890625
-          }
-        ],
+        "t-calm-commit": [],
         "t-calm-merge": [
           {
             "id": "answer:dismiss",
@@ -1223,20 +1214,7 @@
             "height": 28
           }
         ],
-        "t-calm-long": [
-          {
-            "id": "answer:skip-stage",
-            "label": "Пропустити Build",
-            "why": "Вручну: оркестратор робить це сам",
-            "height": 35.890625
-          },
-          {
-            "id": "answer:retry-stage",
-            "label": "Повторити Build",
-            "why": "Вручну: оркестратор робить це сам",
-            "height": 35.890625
-          }
-        ]
+        "t-calm-long": []
       },
       "timeline": {
         "entries": 8,
@@ -1244,17 +1222,17 @@
         "stopShown": true,
         "stopFirst": true,
         "times": [
-          "16:43",
-          "17:38",
-          "17:53",
-          "18:13",
-          "18:43",
-          "19:03",
-          "19:33",
-          "21:03"
+          "18:42",
+          "19:37",
+          "19:52",
+          "20:12",
+          "20:42",
+          "21:02",
+          "21:32",
+          "23:02"
         ],
         "texts": [
-          "Build: зупинилось — немає вільного акаунтаПодробиціno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown",
+          "Build: зупинилось — немає вільного акаунтаПодробиціno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknownПропустити BuildПовторити Build",
           "Лінію продовжено",
           "Build · 4: пройдено",
           "Review · 1: 2 зауваження",
@@ -1298,10 +1276,38 @@
           "ampm": false
         }
       ],
-      "stopMenu": [
-        "answer:skip-stage",
-        "answer:retry-stage"
-      ]
+      "stopLinks": {
+        "t-calm-commit": {
+          "found": true,
+          "actions": [
+            "skip-stage",
+            "retry-stage"
+          ],
+          "labels": [
+            "Пропустити Build",
+            "Повторити Build"
+          ],
+          "oneRow": true,
+          "inside": true,
+          "minHeight": 22,
+          "menu": false
+        },
+        "t-calm-long": {
+          "found": true,
+          "actions": [
+            "skip-stage",
+            "retry-stage"
+          ],
+          "labels": [
+            "Пропустити Build",
+            "Повторити Build"
+          ],
+          "oneRow": true,
+          "inside": true,
+          "minHeight": 22,
+          "menu": false
+        }
+      }
     },
     "1000-uk-light": {
       "closed": [
@@ -1401,7 +1407,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 22:13",
+          "text": "Чекає ліміту акаунта · повтор о 00:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1464,7 +1470,7 @@
       "meta": [
         {
           "id": "t-calm-commit",
-          "due": "⏰ 13 жовт., 23:33",
+          "due": "⏰ 14 жовт., 01:32",
           "dueState": "due",
           "dueInk": "rgb(108, 108, 121)",
           "danger": "rgb(198, 40, 40)",
@@ -1474,7 +1480,7 @@
         },
         {
           "id": "t-calm-cleared",
-          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "due": "⏰ 12 жовт., 20:32 · прострочено",
           "dueState": "overdue",
           "dueInk": "rgb(198, 40, 40)",
           "danger": "rgb(198, 40, 40)",
@@ -1484,24 +1490,11 @@
         }
       ],
       "popover": {
-        "text": "Оркестратор розбирається вже 47 хв 51 с",
+        "text": "Оркестратор розбирається вже 47 хв 55 с",
         "covered": false
       },
       "menus": {
-        "t-calm-commit": [
-          {
-            "id": "answer:skip-stage",
-            "label": "Пропустити Build",
-            "why": "Вручну: оркестратор робить це сам",
-            "height": 35.890625
-          },
-          {
-            "id": "answer:retry-stage",
-            "label": "Повторити Build",
-            "why": "Вручну: оркестратор робить це сам",
-            "height": 35.890625
-          }
-        ],
+        "t-calm-commit": [],
         "t-calm-merge": [
           {
             "id": "answer:dismiss",
@@ -1530,20 +1523,7 @@
             "height": 28
           }
         ],
-        "t-calm-long": [
-          {
-            "id": "answer:skip-stage",
-            "label": "Пропустити Build",
-            "why": "Вручну: оркестратор робить це сам",
-            "height": 35.890625
-          },
-          {
-            "id": "answer:retry-stage",
-            "label": "Повторити Build",
-            "why": "Вручну: оркестратор робить це сам",
-            "height": 35.890625
-          }
-        ]
+        "t-calm-long": []
       },
       "timeline": {
         "entries": 8,
@@ -1551,17 +1531,17 @@
         "stopShown": true,
         "stopFirst": true,
         "times": [
-          "16:43",
-          "17:38",
-          "17:53",
-          "18:13",
-          "18:43",
-          "19:03",
-          "19:33",
-          "21:03"
+          "18:42",
+          "19:37",
+          "19:52",
+          "20:12",
+          "20:42",
+          "21:02",
+          "21:32",
+          "23:02"
         ],
         "texts": [
-          "Build: зупинилось — немає вільного акаунтаПодробиціno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown",
+          "Build: зупинилось — немає вільного акаунтаПодробиціno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknownПропустити BuildПовторити Build",
           "Лінію продовжено",
           "Build · 4: пройдено",
           "Review · 1: 2 зауваження",
@@ -1605,10 +1585,38 @@
           "ampm": false
         }
       ],
-      "stopMenu": [
-        "answer:skip-stage",
-        "answer:retry-stage"
-      ]
+      "stopLinks": {
+        "t-calm-commit": {
+          "found": true,
+          "actions": [
+            "skip-stage",
+            "retry-stage"
+          ],
+          "labels": [
+            "Пропустити Build",
+            "Повторити Build"
+          ],
+          "oneRow": true,
+          "inside": true,
+          "minHeight": 22,
+          "menu": false
+        },
+        "t-calm-long": {
+          "found": true,
+          "actions": [
+            "skip-stage",
+            "retry-stage"
+          ],
+          "labels": [
+            "Пропустити Build",
+            "Повторити Build"
+          ],
+          "oneRow": true,
+          "inside": true,
+          "minHeight": 22,
+          "menu": false
+        }
+      }
     },
     "1440-uk-dark": {
       "closed": [
@@ -1708,7 +1716,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 22:13",
+          "text": "Чекає ліміту акаунта · повтор о 00:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1771,7 +1779,7 @@
       "meta": [
         {
           "id": "t-calm-commit",
-          "due": "⏰ 13 жовт., 23:33",
+          "due": "⏰ 14 жовт., 01:32",
           "dueState": "due",
           "dueInk": "rgb(139, 139, 152)",
           "danger": "rgb(240, 113, 113)",
@@ -1781,7 +1789,7 @@
         },
         {
           "id": "t-calm-cleared",
-          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "due": "⏰ 12 жовт., 20:32 · прострочено",
           "dueState": "overdue",
           "dueInk": "rgb(240, 113, 113)",
           "danger": "rgb(240, 113, 113)",
@@ -1889,7 +1897,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 22:13",
+          "text": "Чекає ліміту акаунта · повтор о 00:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1952,7 +1960,7 @@
       "meta": [
         {
           "id": "t-calm-commit",
-          "due": "⏰ 13 жовт., 23:33",
+          "due": "⏰ 14 жовт., 01:32",
           "dueState": "due",
           "dueInk": "rgb(139, 139, 152)",
           "danger": "rgb(240, 113, 113)",
@@ -1962,7 +1970,7 @@
         },
         {
           "id": "t-calm-cleared",
-          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "due": "⏰ 12 жовт., 20:32 · прострочено",
           "dueState": "overdue",
           "dueInk": "rgb(240, 113, 113)",
           "danger": "rgb(240, 113, 113)",
