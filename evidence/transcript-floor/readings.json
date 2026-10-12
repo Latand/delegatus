@@ -1,0 +1,6675 @@
+{
+  "floor": 0.6,
+  "surfaces": [
+    {
+      "name": "pane-1440",
+      "width": 1440,
+      "height": 900,
+      "phone": false,
+      "pane": 0,
+      "surface": "pane"
+    },
+    {
+      "name": "agent-window-1440",
+      "width": 1440,
+      "height": 900,
+      "phone": false,
+      "pane": 560,
+      "surface": "pane"
+    },
+    {
+      "name": "seat-1440",
+      "width": 1440,
+      "height": 900,
+      "phone": false,
+      "pane": 660,
+      "surface": "seat"
+    },
+    {
+      "name": "pane-1000",
+      "width": 1000,
+      "height": 700,
+      "phone": false,
+      "pane": 0,
+      "surface": "pane"
+    },
+    {
+      "name": "agent-window-1000",
+      "width": 1000,
+      "height": 700,
+      "phone": false,
+      "pane": 440,
+      "surface": "pane"
+    },
+    {
+      "name": "seat-1000",
+      "width": 1000,
+      "height": 700,
+      "phone": false,
+      "pane": 440,
+      "surface": "seat"
+    },
+    {
+      "name": "phone-390",
+      "width": 390,
+      "height": 844,
+      "phone": true,
+      "pane": 0,
+      "surface": "pane"
+    }
+  ],
+  "lowestShare": 0.601,
+  "failures": [],
+  "readings": {
+    "pane-1440-uk": {
+      "rest": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            1111.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 809,
+        "transcript": 528,
+        "share": 0.653,
+        "feedShare": 0.653,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            1111.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            23,
+            615.5,
+            1394,
+            175.5
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            1227.9,
+            618.5,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            1111.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            1324.8,
+            738,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 809,
+        "transcript": 620,
+        "share": 0.766,
+        "feedShare": 0.766,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            1111.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            1324.8,
+            654,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.837,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            1111.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            1304,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            1324.8,
+            711,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 809,
+        "transcript": 514,
+        "share": 0.635,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            1111.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            23,
+            601,
+            1394,
+            106
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            1227.9,
+            604,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            1304,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            1324.8,
+            521,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "pane-1440-en": {
+      "rest": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            1115,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 809,
+        "transcript": 528,
+        "share": 0.653,
+        "feedShare": 0.653,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            1115,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            23,
+            615.5,
+            1394,
+            175.5
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            1268.5,
+            618.5,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            1115,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            1336.4,
+            738,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 809,
+        "transcript": 620,
+        "share": 0.766,
+        "feedShare": 0.766,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            1115,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            1336.4,
+            654,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.837,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            1115,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            1304,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            1336.4,
+            711,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 809,
+        "transcript": 514,
+        "share": 0.635,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            1115,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            23,
+            601,
+            1394,
+            106
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            1268.5,
+            604,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            1389,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            1304,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            1342,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            1336.4,
+            521,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "agent-window-1440-uk": {
+      "rest": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 809,
+        "transcript": 528,
+        "share": 0.653,
+        "feedShare": 0.653,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            451,
+            615.5,
+            538,
+            175.5
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            799.9,
+            618.5,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            896.8,
+            738,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 809,
+        "transcript": 620,
+        "share": 0.766,
+        "feedShare": 0.766,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            896.8,
+            654,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.837,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            876,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            896.8,
+            711,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 809,
+        "transcript": 514,
+        "share": 0.635,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            451,
+            601,
+            538,
+            106
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            799.9,
+            604,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            876,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            896.8,
+            521,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "agent-window-1440-en": {
+      "rest": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 809,
+        "transcript": 528,
+        "share": 0.653,
+        "feedShare": 0.653,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            451,
+            615.5,
+            538,
+            175.5
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            840.5,
+            618.5,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.87,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            908.4,
+            738,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 809,
+        "transcript": 620,
+        "share": 0.766,
+        "feedShare": 0.766,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            908.4,
+            654,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 809,
+        "transcript": 704,
+        "share": 0.87,
+        "feedShare": 0.837,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            876,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            908.4,
+            711,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 809,
+        "transcript": 514,
+        "share": 0.635,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            793,
+            849,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            451,
+            601,
+            538,
+            106
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            840.5,
+            604,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            961,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            876,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            914,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            908.4,
+            521,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "seat-1440-uk": {
+      "rest": {
+        "column": 874,
+        "transcript": 769,
+        "share": 0.88,
+        "feedShare": 0.88,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 874,
+        "transcript": 769,
+        "share": 0.88,
+        "feedShare": 0.88,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            733.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 874,
+        "transcript": 594,
+        "share": 0.679,
+        "feedShare": 0.679,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            733.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            401,
+            615.5,
+            638,
+            175.5
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            849.9,
+            618.5,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 874,
+        "transcript": 769,
+        "share": 0.88,
+        "feedShare": 0.88,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            733.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            946.8,
+            738,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 874,
+        "transcript": 685,
+        "share": 0.784,
+        "feedShare": 0.784,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            733.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            946.8,
+            654,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 874,
+        "transcript": 769,
+        "share": 0.88,
+        "feedShare": 0.849,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            733.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            926,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            946.8,
+            711,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 874,
+        "transcript": 552,
+        "share": 0.632,
+        "feedShare": 0.601,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            733.3,
+            849,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            401,
+            574,
+            638,
+            133
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            849.9,
+            577,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            926,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            946.8,
+            494,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "seat-1440-en": {
+      "rest": {
+        "column": 874,
+        "transcript": 769,
+        "share": 0.88,
+        "feedShare": 0.88,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 874,
+        "transcript": 769,
+        "share": 0.88,
+        "feedShare": 0.88,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            737,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 874,
+        "transcript": 594,
+        "share": 0.679,
+        "feedShare": 0.679,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            737,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            401,
+            615.5,
+            638,
+            175.5
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": false,
+          "scrolls": false,
+          "retryAllBox": [
+            890.5,
+            618.5,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 874,
+        "transcript": 769,
+        "share": 0.88,
+        "feedShare": 0.88,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            737,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            958.4,
+            738,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 874,
+        "transcript": 685,
+        "share": 0.784,
+        "feedShare": 0.784,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            737,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            958.4,
+            654,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 874,
+        "transcript": 769,
+        "share": 0.88,
+        "feedShare": 0.849,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            737,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            926,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            958.4,
+            711,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 874,
+        "transcript": 552,
+        "share": 0.632,
+        "feedShare": 0.601,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            737,
+            849,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            401,
+            574,
+            638,
+            133
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            890.5,
+            577,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            1011,
+            849,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            926,
+            802,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            964,
+            802,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            958.4,
+            494,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "pane-1000-uk": {
+      "rest": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            671.3,
+            649,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 609,
+        "transcript": 367,
+        "share": 0.602,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            671.3,
+            649,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            23,
+            454,
+            954,
+            137
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            787.9,
+            457,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            671.3,
+            649,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            884.8,
+            538,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 609,
+        "transcript": 420,
+        "share": 0.69,
+        "feedShare": 0.69,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            671.3,
+            649,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            884.8,
+            454,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.783,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            671.3,
+            649,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            864,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            884.8,
+            511,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 609,
+        "transcript": 394,
+        "share": 0.647,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            671.3,
+            649,
+            146.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            23,
+            481,
+            954,
+            90
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            787.9,
+            484,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            864,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            884.8,
+            401,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 54,
+          "scrolls": true
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "pane-1000-en": {
+      "rest": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            675,
+            649,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 609,
+        "transcript": 367,
+        "share": 0.602,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            675,
+            649,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            23,
+            454,
+            954,
+            137
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            828.5,
+            457,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            675,
+            649,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            896.4,
+            538,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 609,
+        "transcript": 420,
+        "share": 0.69,
+        "feedShare": 0.69,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            675,
+            649,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            896.4,
+            454,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.783,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            675,
+            649,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            864,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            896.4,
+            511,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 609,
+        "transcript": 394,
+        "share": 0.647,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
+        ],
+        "region": true,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            675,
+            649,
+            134.5,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            23,
+            481,
+            954,
+            90
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            828.5,
+            484,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            949,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            864,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            902,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            896.4,
+            401,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 54,
+          "scrolls": true
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "agent-window-1000-uk": {
+      "rest": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 609,
+        "transcript": 367,
+        "share": 0.602,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            291,
+            454,
+            418,
+            137
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            519.9,
+            457,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            616.8,
+            538,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 609,
+        "transcript": 420,
+        "share": 0.69,
+        "feedShare": 0.69,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            616.8,
+            454,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.783,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            596,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            616.8,
+            511,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 609,
+        "transcript": 394,
+        "share": 0.647,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            291,
+            481,
+            418,
+            90
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            519.9,
+            484,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            596,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            616.8,
+            401,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 54,
+          "scrolls": true
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "agent-window-1000-en": {
+      "rest": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 609,
+        "transcript": 367,
+        "share": 0.602,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            291,
+            454,
+            418,
+            137
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            560.5,
+            457,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.828,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            628.4,
+            538,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 609,
+        "transcript": 420,
+        "share": 0.69,
+        "feedShare": 0.69,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            628.4,
+            454,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 609,
+        "transcript": 504,
+        "share": 0.828,
+        "feedShare": 0.783,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            596,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            628.4,
+            511,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 609,
+        "transcript": 394,
+        "share": 0.647,
+        "feedShare": 0.602,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            291,
+            481,
+            418,
+            90
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            560.5,
+            484,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            596,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            628.4,
+            401,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 54,
+          "scrolls": true
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "seat-1000-uk": {
+      "rest": {
+        "column": 674,
+        "transcript": 569,
+        "share": 0.844,
+        "feedShare": 0.844,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 674,
+        "transcript": 569,
+        "share": 0.844,
+        "feedShare": 0.844,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 674,
+        "transcript": 405,
+        "share": 0.601,
+        "feedShare": 0.601,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            291,
+            427,
+            418,
+            164
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            519.9,
+            430,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 674,
+        "transcript": 569,
+        "share": 0.844,
+        "feedShare": 0.844,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            616.8,
+            538,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 674,
+        "transcript": 485,
+        "share": 0.72,
+        "feedShare": 0.72,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            616.8,
+            454,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 674,
+        "transcript": 569,
+        "share": 0.844,
+        "feedShare": 0.804,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            596,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            616.8,
+            511,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 674,
+        "transcript": 432,
+        "share": 0.641,
+        "feedShare": 0.601,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            291,
+            454,
+            418,
+            90
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            519.9,
+            457,
+            128.1,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            596,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Перервати агента (Escape)"
+        },
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            616.8,
+            374,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 81,
+          "scrolls": true
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "seat-1000-en": {
+      "rest": {
+        "column": 674,
+        "transcript": 569,
+        "share": 0.844,
+        "feedShare": 0.844,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 674,
+        "transcript": 569,
+        "share": 0.844,
+        "feedShare": 0.844,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 674,
+        "transcript": 405,
+        "share": 0.601,
+        "feedShare": 0.601,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            291,
+            427,
+            418,
+            164
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            560.5,
+            430,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "7 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 674,
+        "transcript": 569,
+        "share": 0.844,
+        "feedShare": 0.844,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            628.4,
+            538,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 674,
+        "transcript": 485,
+        "share": 0.72,
+        "feedShare": 0.72,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            628.4,
+            454,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 118,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 674,
+        "transcript": 569,
+        "share": 0.844,
+        "feedShare": 0.804,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": null,
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            596,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            628.4,
+            511,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 28,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 674,
+        "transcript": 432,
+        "share": 0.641,
+        "feedShare": 0.601,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss"
+        ],
+        "region": true,
+        "chip": {
+          "text": "3",
+          "box": [
+            513,
+            649,
+            58.1,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "list": {
+          "box": [
+            291,
+            454,
+            418,
+            90
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            560.5,
+            457,
+            87.5,
+            20
+          ]
+        },
+        "more": {
+          "box": [
+            681,
+            649,
+            28,
+            28
+          ],
+          "place": "bottom-row"
+        },
+        "steps": {
+          "text": "6 / 7+",
+          "place": "bottom-row"
+        },
+        "stop": {
+          "box": [
+            596,
+            602,
+            34,
+            34
+          ],
+          "beside": true,
+          "gap": 4,
+          "label": "Interrupt the agent (Escape)"
+        },
+        "send": {
+          "box": [
+            634,
+            602,
+            34,
+            34
+          ],
+          "slot": null
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            628.4,
+            374,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 81,
+          "scrolls": true
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "phone-390-uk": {
+      "rest": {
+        "column": 786,
+        "transcript": 633,
+        "share": 0.805,
+        "feedShare": 0.805,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 786,
+        "transcript": 633,
+        "share": 0.805,
+        "feedShare": 0.805,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            11,
+            703,
+            146.1,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "мої 7 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 786,
+        "transcript": 472,
+        "share": 0.601,
+        "feedShare": 0.601,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Сховати деталі доставки. Не доставлено — надіслати ще раз — хост агента помер. спроб: 2",
+          "button",
+          "Повторити",
+          "Прибрати",
+          "button",
+          "button",
+          "Прибрати",
+          "button"
+        ],
+        "region": true,
+        "chip": null,
+        "list": {
+          "box": [
+            11,
+            536,
+            368,
+            211
+          ],
+          "retryAll": "Повторити невдалі (2)",
+          "aboveField": true,
+          "header": "Повторити невдалі (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            171.9,
+            543,
+            136.1,
+            32
+          ]
+        },
+        "more": null,
+        "steps": null,
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 786,
+        "transcript": 633,
+        "share": 0.805,
+        "feedShare": 0.805,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            11,
+            703,
+            146.1,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            286.8,
+            646,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 786,
+        "transcript": 523,
+        "share": 0.665,
+        "feedShare": 0.665,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            11,
+            593,
+            146.1,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            286.8,
+            536,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 142,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 786,
+        "transcript": 633,
+        "share": 0.805,
+        "feedShare": 0.805,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            11,
+            703,
+            146.1,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            326,
+            790,
+            44,
+            44
+          ],
+          "slot": "stop"
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            286.8,
+            646,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 786,
+        "transcript": 523,
+        "share": 0.665,
+        "feedShare": 0.665,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Не доставлено: 3",
+          "box": [
+            11,
+            593,
+            146.1,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "мої 6 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": {
+          "text": "9 нових",
+          "box": [
+            286.8,
+            536,
+            94.2,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 142,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    },
+    "phone-390-en": {
+      "rest": {
+        "column": 786,
+        "transcript": 633,
+        "share": 0.805,
+        "feedShare": 0.805,
+        "aboveField": [],
+        "region": false,
+        "chip": null,
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "three-undelivered": {
+        "column": 786,
+        "transcript": 633,
+        "share": 0.805,
+        "feedShare": 0.805,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            11,
+            703,
+            134.5,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "mine 7 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "list-open": {
+        "column": 786,
+        "transcript": 472,
+        "share": 0.601,
+        "feedShare": 0.601,
+        "aboveField": [
+          "composer-receipts",
+          "details",
+          "Hide delivery details. Not delivered — send again — the agent's host has died. attempts: 2",
+          "button",
+          "Retry",
+          "Dismiss",
+          "button",
+          "button",
+          "Dismiss",
+          "button"
+        ],
+        "region": true,
+        "chip": null,
+        "list": {
+          "box": [
+            11,
+            536,
+            368,
+            211
+          ],
+          "retryAll": "Retry failed (2)",
+          "aboveField": true,
+          "header": "Retry failed (2)",
+          "firstFailed": {
+            "whole": true,
+            "retryWhole": true
+          },
+          "sliced": [],
+          "moreBelow": true,
+          "scrolls": true,
+          "retryAllBox": [
+            212.5,
+            543,
+            95.5,
+            32
+          ]
+        },
+        "more": null,
+        "steps": null,
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": null,
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "nine-new": {
+        "column": 786,
+        "transcript": 633,
+        "share": 0.805,
+        "feedShare": 0.805,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            11,
+            703,
+            134.5,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            298.4,
+            646,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "six-line-draft": {
+        "column": 786,
+        "transcript": 523,
+        "share": 0.665,
+        "feedShare": 0.665,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            11,
+            593,
+            134.5,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            298.4,
+            536,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 142,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "working": {
+        "column": 786,
+        "transcript": 633,
+        "share": 0.805,
+        "feedShare": 0.805,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            11,
+            703,
+            134.5,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            326,
+            790,
+            44,
+            44
+          ],
+          "slot": "stop"
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            298.4,
+            646,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 0,
+          "height": 32,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      },
+      "all-at-once": {
+        "column": 786,
+        "transcript": 523,
+        "share": 0.665,
+        "feedShare": 0.665,
+        "aboveField": [],
+        "region": false,
+        "chip": {
+          "text": "Not delivered: 3",
+          "box": [
+            11,
+            593,
+            134.5,
+            44
+          ],
+          "place": "phone-row"
+        },
+        "list": null,
+        "more": null,
+        "steps": {
+          "text": "mine 6 / 7+",
+          "place": "phone-row"
+        },
+        "stop": null,
+        "send": {
+          "box": [
+            282,
+            790,
+            44,
+            44
+          ],
+          "slot": "send"
+        },
+        "pill": {
+          "text": "9 new",
+          "box": [
+            298.4,
+            536,
+            82.6,
+            44
+          ],
+          "readableOverlap": 0,
+          "faded": true
+        },
+        "field": {
+          "lines": 6,
+          "height": 142,
+          "scrolls": false
+        },
+        "eyeChip": false,
+        "strayStrip": false,
+        "collisions": [],
+        "overflowX": 0
+      }
+    }
+  }
+}
