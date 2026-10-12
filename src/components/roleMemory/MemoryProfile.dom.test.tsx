@@ -57,3 +57,36 @@ test("a run with no overall yet shows what is happening, names each pending leve
     globalThis.fetch = originalFetch;
   }
 });
+
+test("level cards follow the All rules order and a topic list says which topic it belongs to", async () => {
+  setLocale("en");
+  const originalFetch = globalThis.fetch;
+  const rules = sampleMemory();
+  /* The store lists the every-project level first; the page must put this project's level ahead of it. */
+  const reordered = { ...rules, scopes: [rules.scopes[1]!, rules.scopes[0]!, ...rules.scopes.slice(2)] };
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const headings: Array<[string, string | undefined]> = [];
+  const base = profileView(reordered, "en", "sample", null);
+  const overall = { scope: "overall", createdAt: "2026-01-01T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false,
+    answer: { headline: "Clearer samples", text: "Agents check sample colors.", topics: [{ title: "Isolated tests", text: "Tests run apart.", ruleIds: ["one", "three"] }] } };
+  globalThis.fetch = (async () => Response.json({ ...base, overall })) as typeof fetch;
+  try {
+    flushSync(() => root.render(<MemoryProfile rules={reordered} renderRules={(scope, ids, heading) => { headings.push([scope.scope, heading?.title]); return <div data-rules-stub="">{ids?.join(",")}</div>; }} />));
+    await tick(); await tick();
+    const names = [...container.querySelectorAll("[data-profile-slice]")].map(slice => slice.querySelector("h4")!.textContent);
+    expect(names).toEqual([
+      `${translate("en", "roleMemory.roleSection")} · ${translate("en", "memoryProfile.thisProject")}`,
+      `${translate("en", "roleMemory.roleSection")} · ${translate("en", "memoryProfile.everyProject")}`,
+      translate("en", "roleMemory.projectSection"), translate("en", "roleMemory.machineSection"),
+    ].map((name, index) => index < 2 ? name.replace(translate("en", "roleMemory.roleSection"), "Builder") : name));
+    expect(container.textContent).not.toMatch(/\b(AM|PM)\b/);
+    const topic = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent!.startsWith("Isolated tests"));
+    expect(topic).toBeDefined();
+    flushSync(() => topic!.click());
+    expect(headings.slice(-2).map(([, title]) => title)).toEqual(["Isolated tests", "Isolated tests"]);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});

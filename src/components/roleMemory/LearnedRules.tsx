@@ -273,7 +273,7 @@ export function RuleSection({ kind, title, subtitle, scope, additionalScope, pic
     <section data-rules-section={kind} data-rules-scope-page={scope?.scope ?? ""} className={`flex min-w-0 flex-col rounded-[10px] border border-border border-t-[3px] bg-card md:min-h-0 ${KIND_TONE[kind].bar}`}>
       <header className="flex flex-col gap-1 px-3 pb-1.5 pt-2">
         <div className="flex items-baseline gap-2">
-          <h3 className={`m-0 text-[13px] font-semibold ${KIND_TONE[kind].text}`}>{title}</h3>
+          <h3 className={`m-0 min-w-0 text-[13px] font-semibold [overflow-wrap:anywhere] ${KIND_TONE[kind].text}`}>{title}</h3>
           {picker || !count ? null : <span data-rules-count="" className="text-[11.5px] tabular-nums text-muted">{count}</span>}
           {chars >= bound * NEAR_BOUND ? <span className="ml-auto text-[10.5px] tabular-nums text-warning" data-rules-size="">{t("roleMemory.size", { chars: number(chars, locale), bound: number(bound, locale) })}</span> : null}
         </div>
@@ -359,13 +359,13 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
       })}
     </div>
   ) : null;
-  /* On the desktop the window's top stays where the tallest window would start, so a chip switch or a removal moves only its bottom edge. */
+  /* On the desktop the window's top stays where the tallest window would start, on both pages, so a tab, a chip or a removal moves only its bottom edge. The rules page cap is the old 640 px plus the tab bar (49 px) that now sits above its columns. */
   return createPortal(
-    <div className={`fixed inset-0 ${Z.overlay} flex items-stretch justify-center bg-black/40 md:items-start md:px-6 md:pb-6 ${page === "profile" ? "md:pt-[max(1.5rem,calc((100dvh_-_min(820px,90dvh))/2))]" : "md:pt-[max(1.5rem,calc((100dvh_-_min(640px,90dvh))/2))]"}`} onClick={onClose}>
+    <div className={`fixed inset-0 ${Z.overlay} flex items-stretch justify-center bg-black/40 md:items-start md:px-6 md:pb-6 md:pt-[max(1.5rem,calc((100dvh_-_min(820px,90dvh))/2))]`} onClick={onClose}>
       <section data-rules-window="" role="dialog" aria-modal="true" aria-labelledby="rules-window-title"
-        className={`flex h-full w-full flex-col overflow-hidden bg-canvas text-primary shadow-xl md:h-auto md:max-w-[1120px] md:rounded-xl md:border md:border-border ${page === "profile" ? "md:max-h-[min(820px,90dvh)]" : "md:max-h-[min(640px,90dvh)]"}`}
+        className={`flex h-full w-full flex-col overflow-hidden bg-canvas text-primary shadow-xl md:h-auto md:max-w-[1120px] md:rounded-xl md:border md:border-border ${page === "profile" ? "md:max-h-[min(820px,90dvh)]" : "md:max-h-[min(689px,90dvh)]"}`}
         onClick={(event) => event.stopPropagation()}>
-        <header className="flex min-h-12 items-center gap-2 border-b border-border px-4 py-2">
+        <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-4 py-2">
           <SparkGlyph />
           <div className="flex min-w-0 flex-1 flex-col">
             <h2 id="rules-window-title" className="m-0 truncate text-[15px] font-semibold">{t(page === "profile" ? "memoryProfile.title" : "roleMemory.window.title", { project: view?.project ?? project })}</h2>
@@ -390,7 +390,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         {drilled && page === "profile" ? null : <nav className="flex shrink-0 gap-2 border-b border-border px-3 py-2" aria-label={t("memoryProfile.navigation")}>
           {(["profile", "rules"] as const).map(id => <button key={id} type="button" aria-pressed={page === id} onClick={() => setPage(id)} className={`min-h-8 rounded-full px-3 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11 ${page === id ? "bg-accent-soft text-accent" : "text-secondary hover:bg-sunken"}`}>{t(id === "profile" ? "memoryProfile.profile" : "memoryProfile.allRules")}</button>)}
         </nav>}
-        {view && page === "profile" ? <MemoryProfile key={`${view.project}/${locale}`} rules={view} onDrill={setDrilled} renderRules={(scope, ids) => <RuleSection kind={scope.kind} title={ids ? t("memoryProfile.topicRules") : scope.kind === "role" ? roleNameById(t, scope.roleId ?? "") : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection")} scope={ids ? { ...scope, active: scope.active.filter(rule => ids.includes(rule.id)), left: [] } : scope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); setPage("rules"); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />} /> : null}
+        {view && page === "profile" ? <MemoryProfile key={`${view.project}/${locale}`} rules={view} onDrill={setDrilled} renderRules={(scope, ids, heading) => <RuleSection kind={scope.kind} title={ids ? heading?.title ?? t("memoryProfile.topicRules") : scope.kind === "role" ? roleNameById(t, scope.roleId ?? "") : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection")} subtitle={ids ? heading?.subtitle : undefined} scope={ids ? { ...scope, active: scope.active.filter(rule => ids.includes(rule.id)), left: [] } : scope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); setPage("rules"); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />} /> : null}
         {view && page === "rules" ? (
           <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:auto-rows-auto md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
             <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : t("roleMemory.roleSubtitle", { role: roleName })} scope={roleScope} additionalScope={everyRoleScope} picker={picker} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />

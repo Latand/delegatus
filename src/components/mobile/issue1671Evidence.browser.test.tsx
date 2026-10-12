@@ -8972,6 +8972,8 @@ describe("role memory curation: reversible window", () => {
         try {
           await page.evaluate(() => globalThis.dispatchEvent(new CustomEvent("delegatus:open-learned-rules", { detail: { project: "atlas" } })));
           const window = page.locator("[data-rules-window]"); await window.waitFor();
+          /* The window opens on the memory profile; the rules this block drives sit one tab away. */
+          await window.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
           await page.locator(`[data-learned-rule="${candidate}"]`).waitFor();
           await page.locator(`[data-learned-rule="${candidate}"] button`).first().click();
           await page.getByText(translate(lang, "roleMemory.unreviewed"), { exact: false }).waitFor();

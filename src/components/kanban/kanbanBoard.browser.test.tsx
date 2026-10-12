@@ -215,6 +215,100 @@ describe("memory profile", () => {
   });
 });
 
+describe("memory profile window: one top, whole rows, level order, named topic", () => {
+  browserTest("the window top and header hold across Profile and All rules, no rule row is cut, levels keep the All rules order, a topic drill names its topic", async () => {
+    const out = path.resolve(".artifacts/memory-profile-window"); fs.mkdirSync(out, { recursive: true });
+    const rules = sampleMemory();
+    /* The store lists every-project first; the page must put this project's level ahead of it. */
+    rules.scopes = [rules.scopes[1]!, rules.scopes[0]!, ...rules.scopes.slice(2)];
+    const texts = ["Inspect stored scope guidance before changing its readers, then record which readers the change reaches.", "Run each touched test file by path under isolated state; a broad sweep reaches the operator's live registry.", "Read the current scope revision before proposing a stored rewrite, since a stale write changes the record underneath the reader.", "Keep the pushed branch free of absolute home paths, account handles and tokens in docs, fixtures and messages."];
+    for (const scope of rules.scopes) scope.active.forEach((rule, index) => {
+      rule.rule = texts[(index + scope.scope.length) % texts.length]!;
+      rule.versions = [{ id: `${rule.id}-v1`, rule: texts[(index + 1) % texts.length]!, why: rule.why, hints: [], createdAt: "2026-01-01" }];
+    });
+    const rows = new Map<string, ProfileRow>();
+    const service = createProfileService({ rules: () => structuredClone(rules), read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: "haiku", prepare: async () => async (_, locale) => {
+      const answer = sampleAnswer(locale === "uk");
+      answer.topics[0]!.title = locale === "uk" ? "Ізольовані тести" : "Isolated tests";
+      return answer;
+    } });
+    type State = "none" | "ready" | "stale" | "error";
+    let state: State = "none";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        const locale = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        if (request.method === "POST") {
+          const body = await request.json(); const run = service.start("garden", body.locale); await run.done; state = "ready";
+          return new Response(JSON.stringify(run.latest) + "\n", { headers: { "Content-Type": "application/x-ndjson" } });
+        }
+        const view: MemoryProfileView = service.read("garden", locale);
+        if (state === "none") { view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null; }
+        if (state === "error") view.run = { state: "failed", startedAt: "2026-01-01", errors: [{ scope: "overall", code: "account" }] };
+        if (state === "stale") { view.stale = true; view.changes = { added: 2, rewritten: 1, removed: 1 }; }
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const readings: unknown[] = [];
+    const measureWindow = (page: Page) => page.evaluate(() => {
+      const box = document.querySelector<HTMLElement>("[data-rules-window]")!;
+      const header = box.querySelector<HTMLElement>("header")!;
+      return { top: Math.round(box.getBoundingClientRect().top), header: Math.round(header.getBoundingClientRect().height), bottom: Math.round(box.getBoundingClientRect().bottom), viewport: innerHeight };
+    });
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const phone = width === 390;
+        const seen: { state: string; top: number; header: number }[] = [];
+        for (const next of ["none", "ready", "stale", "error"] as const) {
+          state = next;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height }, scheme, lang, "reduce", phone);
+          try {
+            await page.locator("[data-memory-profile]").waitFor();
+            if (next === "ready") { await page.locator("[data-profile-summarize]").click(); await page.locator('[data-memory-profile][aria-busy="false"]').waitFor(); }
+            if (next === "stale") await page.locator("[data-profile-stale]").waitFor();
+            if (next === "error") await page.getByRole("alert").waitFor();
+            const profile = await measureWindow(page);
+            seen.push({ state: next, top: profile.top, header: profile.header });
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-${next}.png`) });
+            if (next === "ready") {
+              const names = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-profile-slice") + ":" + node.querySelector("p, h4")!.textContent));
+              expect(names[0]).toContain(translate(lang, "memoryProfile.thisProject")); expect(names[1]).toContain(translate(lang, "memoryProfile.everyProject"));
+              expect(names.slice(2).map(name => name.split(":")[0])).toEqual(["project", "machine"]);
+              await page.locator("[data-profile-pill], [data-memory-profile] section > div button").first().scrollIntoViewIfNeeded();
+              await page.getByText(lang === "uk" ? "Ізольовані тести" : "Isolated tests", { exact: false }).first().click();
+              const heading = await page.locator("[data-rules-section] h3").first().innerText();
+              expect(heading).toBe(lang === "uk" ? "Ізольовані тести" : "Isolated tests");
+              await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-topic.png`) });
+              await page.getByRole("button", { name: new RegExp(translate(lang, "memoryProfile.back")) }).click();
+            }
+            await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+            await page.locator("[data-rules-section]").first().waitFor();
+            const rulesPage = await measureWindow(page);
+            seen.push({ state: `${next}:rules`, top: rulesPage.top, header: rulesPage.header });
+            if (!phone) {
+              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header);
+              await page.locator("[data-learned-rule]").first().locator("button").first().click();
+              await page.locator("[data-rule-versions] summary").first().click();
+              /* With a rule and its earlier text open, each card shows its rows whole from the top: none starts above or ends below the card's edge. */
+              const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rules-section] > div")].flatMap(scroller => {
+                scroller.scrollTop = 0;
+                const band = scroller.getBoundingClientRect();
+                return [...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule"));
+              }));
+              expect(sliced).toEqual([]);
+            }
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules-${next}.png`) });
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        if (!phone) { expect(new Set(seen.map(item => item.top)).size).toBe(1); expect(new Set(seen.map(item => item.header)).size).toBe(1); }
+        readings.push({ width, scheme, lang, seen });
+      }
+      fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
 describe("finding recurrence (#2648)", () => {
   browserTest("quiet and held state lines keep the full recurrence visible at 1440, 1000 and 390 in en and uk", async () => {
     const out = path.resolve(".artifacts/finding-recurrence");
