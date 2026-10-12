@@ -239,6 +239,9 @@ export async function drainFilesResponseWorker(reason = "drained", timeoutMs = 5
   if (timer) clearTimeout(timer);
   retire(worker, reason);
   pool.__llvFilesResponseWorkerTail = undefined;
+  /* A worker stopped at the deadline is gone once its exit is observed. */
+  await Promise.race([exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, 2_000); })]);
+  if (timer) clearTimeout(timer);
 }
 
 /**

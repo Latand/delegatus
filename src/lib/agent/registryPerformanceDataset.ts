@@ -126,6 +126,13 @@ export function buildRegistryPerformanceDataset(
 
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
   const seededAt = Date.now();
+  /* The newest hundred launches spread over the last day, as a busy
+     installation's do, so they still project board cards; the rest are older
+     than a day. No launch sits near the 15-minute or 24-hour projection
+     boundaries, so a gate run cannot watch a card change tier mid-measurement. */
+  const launchAge = (newest: number) => newest < 100
+    ? 20 * 60_000 + newest * 12 * 60_000
+    : 30 * 3_600_000 + (newest - 100) * 600_000;
   const count = shape.conversations;
   const every = shape.grantEvery;
   const rootOf = (index: number) => index - (index % every);
@@ -219,9 +226,7 @@ export function buildRegistryPerformanceDataset(
       },
       launchDisplay: { prompt: "synthetic launch prompt ".repeat(200), echo: "synthetic launch", images: 0 },
       transport: "structured",
-      /* Ten minutes apart: the newest day of launches still projects board
-         cards, as a busy installation's does. */
-      createdAt: new Date(seededAt - (shape.receipts - index) * 600_000).toISOString(),
+      createdAt: new Date(seededAt - launchAge(shape.receipts - 1 - index)).toISOString(),
       artifactLifecycle: outstanding ? "pending" : "materialized",
     };
   }

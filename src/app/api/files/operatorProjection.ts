@@ -296,6 +296,21 @@ export function filesProjectionQueueDiagnostics(): FilesProjectionQueueDiagnosti
   return projectionQueue().diagnostics();
 }
 
+/** Resolves once every build queued so far, and any queued behind it while
+    waiting, has finished, or after `timeoutMs`. */
+export async function filesProjectionsSettled(timeoutMs = 30_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    const tail = projectionCacheStore.__llvFilesProjectionWorkerTail;
+    const remaining = deadline - performance.now();
+    if (!tail || remaining <= 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([tail, new Promise<void>((resolve) => { timer = setTimeout(resolve, remaining); })]);
+    if (timer) clearTimeout(timer);
+    if (projectionCacheStore.__llvFilesProjectionWorkerTail === tail) return;
+  }
+}
+
 function queueProjectionWorker(
   build: () => Promise<ProjectionRepresentation>,
 ): Promise<ProjectionRepresentation> {

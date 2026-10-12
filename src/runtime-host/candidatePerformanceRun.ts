@@ -72,6 +72,9 @@ function sandboxEnvironment(root: string): Record<string, string> {
     HOME: path.join(root, "home"),
     XDG_CONFIG_HOME: path.join(root, "config"),
     TMPDIR: path.join(root, "tmp"),
+    /* Claude Code's task directory follows this before TMPDIR; inherited, the
+       scanner would list another session's task output. */
+    CLAUDE_CODE_TMPDIR: path.join(root, "tmp"),
     LLV_STATE_DIR: path.join(root, "state"),
     LLV_AGENT_REGISTRY_SQLITE: "sqlite",
     /* No control URL is reachable from here: ticks and notifications fail fast. */
@@ -234,6 +237,12 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, env.TMPDIR!, env.LLV_STATE_DIR!]) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     /* This process is the Viewer under test: its own state resolution, worker
        launch and registry backend all come from the sandbox. */
+    /* Nothing of the caller's environment reaches the Viewer under test but
+       its PATH and interpreter options: provider homes, task directories and
+       credentials all come from the sandbox. */
+    for (const name of Object.keys(process.env)) {
+      if (!(name in env) && !["PATH", "BUN_OPTIONS", "LANG", "TZ"].includes(name)) delete process.env[name];
+    }
     for (const [name, value] of Object.entries(env)) if (name !== "PATH") process.env[name] = value;
     delete (process.env as Record<string, string | undefined>).NODE_ENV;
     delete process.env.LLV_FILES_RESPONSE_WORKER;
@@ -256,7 +265,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     const snapshotStarted = performance.now();
     registry.readOnlySnapshot();
     const firstSnapshotMs = performance.now() - snapshotStarted;
-    const { GET, filesProjectionQueueDiagnostics } = await import("@/app/api/files/operatorProjection");
+    const { GET, filesProjectionQueueDiagnostics, filesProjectionsSettled } = await import("@/app/api/files/operatorProjection");
     const { drainFilesResponseWorker, filesResponseWorkerPoolDiagnostics } = await import("@/lib/scanner/filesResponseWorker");
     const { SqliteAgentRegistryStore, registryRowsMatching } = await import("@/lib/agent/sqliteRegistryStore");
     const scopeUrl = (scope: number) => `http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(dataset.conversationPaths[scope * 7 % dataset.conversationPaths.length]!)}`;
@@ -281,7 +290,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     let sqliteBusy = 0;
     let runtimeTimeouts = 0;
     let running = true;
-    const writer = (async () => {
+    const writeLoop = async () => {
       for (let index = 0; running; index++) {
         const subject = ownSubjects[index % ownSubjects.length]!;
         const started = performance.now();
@@ -301,9 +310,9 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
         }
         await Bun.sleep(WRITE_INTERVAL_MS);
       }
-    })();
+    };
     const keyedLatencies: number[] = [];
-    const keyed = (async () => {
+    const keyedLoop = async () => {
       for (let index = 0; running; index++) {
         const operationId = (index % 4 === 3 ? dataset.hotOperationIds : dataset.coldOperationIds)[index % 97 % Math.max(1, dataset.coldOperationIds.length)]
           ?? dataset.coldOperationIds[0]!;
@@ -312,19 +321,18 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
         keyedLatencies.push(performance.now() - started);
         await Bun.sleep(KEYED_READ_INTERVAL_MS);
       }
-    })();
-    const external = child("writer", [
-      "--registry", dataset.filename,
-      "--keys", JSON.stringify(otherSubjects.map(({ key, servers }) => ({ key, servers }))),
-      "--duration-ms", String(WARM_MS + HANDOVER_MS),
-    ], env);
+    };
     const requestLatencies: number[] = [];
     let scopeFailures = 0;
     let timeoutRetirements = 0;
     let lastRetirement = filesResponseWorkerPoolDiagnostics().lastRetirement;
-    const scopePaths = new Map<number, string[]>();
+    /* The rows each scope showed before any write, compared with the rows it
+       shows once writes, the handover and the archive pass are over. Writers
+       only restamp live entries and archiving conserves rows, so any row that
+       appears or disappears is the projection flapping under load. */
+    const baselinePaths = new Map<number, string[]>();
     let stableProjection = true;
-    const round = async (final = false) => {
+    const round = async (phase: "baseline" | "warm" | "final" = "warm") => {
       await Promise.all(Array.from({ length: SCOPES }, async (_, scope) => {
         const started = performance.now();
         try {
@@ -334,9 +342,16 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
           if (response.status !== 200) { scopeFailures += 1; return; }
           const files = (JSON.parse(body) as { files?: Array<{ path?: string }> }).files ?? [];
           const paths = files.map((file) => file.path ?? "").sort();
-          const previous = scopePaths.get(scope);
-          if (final && previous && JSON.stringify(previous) !== JSON.stringify(paths)) stableProjection = false;
-          scopePaths.set(scope, paths);
+          if (phase === "baseline") baselinePaths.set(scope, paths);
+          const previous = baselinePaths.get(scope);
+          if (phase === "final" && (!previous || JSON.stringify(previous) !== JSON.stringify(paths))) {
+            stableProjection = false;
+            const before = new Set(previous ?? []);
+            const after = new Set(paths);
+            const added = paths.filter((row) => !before.has(row));
+            const removed = (previous ?? []).filter((row) => !after.has(row));
+            note(`scope ${scope}: rows changed across the run (+${added.length} ${added.slice(0, 2).join(" ")} -${removed.length} ${removed.slice(0, 2).join(" ")})`);
+          }
         } catch (error) {
           scopeFailures += 1;
           if (/timed out/i.test(String(error))) runtimeTimeouts += 1;
@@ -347,6 +362,14 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       if (retirement !== lastRetirement && retirement?.includes("timed out")) timeoutRetirements += 1;
       lastRetirement = retirement;
     };
+    await round("baseline");
+    const writer = writeLoop();
+    const keyed = keyedLoop();
+    const external = child("writer", [
+      "--registry", dataset.filename,
+      "--keys", JSON.stringify(otherSubjects.map(({ key, servers }) => ({ key, servers }))),
+      "--duration-ms", String(WARM_MS + HANDOVER_MS),
+    ], env);
     const phaseUntil = async (ms: number) => {
       const until = performance.now() + ms;
       while (performance.now() < until) {
@@ -371,9 +394,12 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     running = false;
     await Promise.all([writer, keyed]);
     const externalReport = await external.result;
-    /* Writes stopped: every scope must show the rows it showed a round ago. */
+    /* Writes stopped: once the builds they queued are done, every scope must
+       show the rows it showed before them. */
+    await filesProjectionsSettled(30_000);
     await round();
-    await round(true);
+    await filesProjectionsSettled(30_000);
+    await round("final");
     loop.disable();
     store.close();
 
@@ -429,7 +455,14 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       activeWorkers: { entries: dataset.activeEntryKeys.length, preserved: entriesPreserved },
       stableProjection,
     };
-    await drainFilesResponseWorker("candidate performance gate complete");
+    /* Builds the last rounds queued behind a stale answer finish first;
+       draining before them would make the next one fork a new worker. */
+    await filesProjectionsSettled(30_000);
+    await drainFilesResponseWorker("candidate performance gate complete", 30_000);
+    /* A scan the last rounds started runs under its own lease; let it end
+       before this process does, so nothing the gate started outlives it. */
+    const { fileScanCacheStatus } = await import("@/lib/scanner/scanCache");
+    for (const until = performance.now() + 30_000; fileScanCacheStatus().inFlight && performance.now() < until;) await Bun.sleep(100);
     const breaches = candidatePerformanceBreaches(measurements);
     return {
       checkedAt,

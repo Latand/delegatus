@@ -375,6 +375,9 @@ function buildEnvironment(port: number): NodeJS.ProcessEnv {
     NODE_ENV: "production",
     HOME,
     TMPDIR: path.join(BASE, "tmp"),
+    /* Claude Code's task directory follows this before TMPDIR; the caller's
+       would put its own sessions' task output on the synthetic board. */
+    CLAUDE_CODE_TMPDIR: path.join(BASE, "tmp"),
     TMUX_TMPDIR: path.join(BASE, "tmux"),
     XDG_CONFIG_HOME: config,
     XDG_CACHE_HOME: path.join(BASE, "cache"),

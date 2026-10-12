@@ -89,7 +89,9 @@ operator roots holding the Telegram grant with delegated children claiming
 it, receipts naming conversations that never existed, receipts whose parent
 contradicts their lineage edge, children with no edge at all, live hosts,
 and held and uncertain deliveries. It then returns the registry to the
-schema the previous release left and acts as a Viewer opening it:
+schema the previous release left and acts as a Viewer opening it, with nothing
+of the caller's environment but its `PATH`, so provider homes and Claude Code's
+task directory are the sandbox's own:
 
 - **First boot**: the registry opens and upgrades, the first snapshot is
   taken, and a cold projection worker builds the first board projection.
@@ -117,7 +119,7 @@ verdict).
 | Successor ready | ≤ 15 s | Open, snapshot and one archive pass under a live writer; measured about 6 s. |
 | Failures | no SQLITE_BUSY, no runtime timeout, no failed write | A refused or timed-out write loses the work it carried, which no latency bound measures. |
 | Evidence | pending and uncertain deliveries byte-identical and hot; live entries keep owner, claim and host; every MCP grant decided the same by writers and the successor | Speed bought by dropping evidence or authority is a regression the latency bounds cannot see. |
-| Stability | every scope shows the same rows in its last two projections once writes stop | A projection that flaps under load reads as conversations disappearing from the board. |
+| Stability | once writes, the handover and the archive pass are over and their builds have finished, every scope shows exactly the rows it showed before the first write | Writers only restamp live entries and archiving conserves rows, so any row that appears or disappears is the projection flapping under load, which reads as conversations vanishing from the board. |
 
 The latency numbers are the bounds the post-incident audit proposed. They
 were kept because the fixed code meets them with margin on an idle machine.
