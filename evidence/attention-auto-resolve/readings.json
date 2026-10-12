@@ -187,7 +187,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743826",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771390",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -313,13 +313,13 @@
           "id": "prototype:round-instalments",
           "kind": "prototype",
           "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
-          "question": null,
+          "question": "Провайдер розстрочки: банк-партнер чи швидший сервіс?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 90.75
+          "openerHeight": 130.75
         },
         {
           "id": "lane-digest",
@@ -334,7 +334,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743829",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771393",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -460,13 +460,13 @@
           "id": "prototype:round-instalments",
           "kind": "prototype",
           "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
-          "question": null,
+          "question": "Провайдер розстрочки: банк-партнер чи швидший сервіс?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 90.75
+          "openerHeight": 130.75
         },
         {
           "id": "lane-digest",
@@ -481,7 +481,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743833",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771397",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -607,13 +607,13 @@
           "id": "prototype:round-instalments",
           "kind": "prototype",
           "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
-          "question": null,
+          "question": "Провайдер розстрочки: банк-партнер чи швидший сервіс?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 90.75
+          "openerHeight": 112.75
         },
         {
           "id": "lane-digest",
@@ -628,7 +628,7 @@
           "openerHeight": 109.5
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743836",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771401",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -754,13 +754,13 @@
           "id": "prototype:round-instalments",
           "kind": "prototype",
           "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
-          "question": null,
+          "question": "Провайдер розстрочки: банк-партнер чи швидший сервіс?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 90.75
+          "openerHeight": 112.75
         },
         {
           "id": "lane-digest",
@@ -775,7 +775,7 @@
           "openerHeight": 109.5
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743839",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771404",
           "kind": "conversation",
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -901,13 +901,13 @@
           "id": "prototype:round-instalments",
           "kind": null,
           "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
-          "question": null,
+          "question": "Провайдер розстрочки: банк-партнер чи швидший сервіс?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 101.75
+          "openerHeight": 139.75
         },
         {
           "id": "lane-digest",
@@ -922,7 +922,7 @@
           "openerHeight": 118.25
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743843",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771408",
           "kind": null,
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -1048,13 +1048,13 @@
           "id": "prototype:round-instalments",
           "kind": null,
           "sentence": "Дайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.",
-          "question": null,
+          "question": "Провайдер розстрочки: банк-партнер чи швидший сервіс?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 101.75
+          "openerHeight": 139.75
         },
         {
           "id": "lane-digest",
@@ -1069,7 +1069,7 @@
           "openerHeight": 118.25
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743845",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771411",
           "kind": null,
           "sentence": "Ваше повідомлення понад пів години без підтвердження: відкрийте розмову, щоб повторити або відкинути його; саме воно повторно не надсилається.",
           "question": null,
@@ -1286,7 +1286,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743850",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771416",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1412,13 +1412,13 @@
           "id": "prototype:round-instalments",
           "kind": "prototype",
           "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
-          "question": null,
+          "question": "Instalment provider: the partner bank or the faster service?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 90.75
+          "openerHeight": 130.75
         },
         {
           "id": "lane-digest",
@@ -1433,7 +1433,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743853",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771419",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1559,13 +1559,13 @@
           "id": "prototype:round-instalments",
           "kind": "prototype",
           "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
-          "question": null,
+          "question": "Instalment provider: the partner bank or the faster service?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 90.75
+          "openerHeight": 130.75
         },
         {
           "id": "lane-digest",
@@ -1580,7 +1580,7 @@
           "openerHeight": 126
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743857",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771423",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1706,13 +1706,13 @@
           "id": "prototype:round-instalments",
           "kind": "prototype",
           "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
-          "question": null,
+          "question": "Instalment provider: the partner bank or the faster service?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 90.75
+          "openerHeight": 112.75
         },
         {
           "id": "lane-digest",
@@ -1727,7 +1727,7 @@
           "openerHeight": 109.5
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743860",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771427",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -1853,13 +1853,13 @@
           "id": "prototype:round-instalments",
           "kind": "prototype",
           "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
-          "question": null,
+          "question": "Instalment provider: the partner bank or the faster service?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 90.75
+          "openerHeight": 112.75
         },
         {
           "id": "lane-digest",
@@ -1874,7 +1874,7 @@
           "openerHeight": 109.5
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743864",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771431",
           "kind": "conversation",
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -2000,13 +2000,13 @@
           "id": "prototype:round-instalments",
           "kind": null,
           "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
-          "question": null,
+          "question": "Instalment provider: the partner bank or the faster service?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 118.25
+          "openerHeight": 156.25
         },
         {
           "id": "lane-digest",
@@ -2021,7 +2021,7 @@
           "openerHeight": 118.25
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743867",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771434",
           "kind": null,
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,
@@ -2147,13 +2147,13 @@
           "id": "prototype:round-instalments",
           "kind": null,
           "sentence": "Answer the questions in the form; the project orchestrator receives your answers and carries them on.",
-          "question": null,
+          "question": "Instalment provider: the partner bank or the faster service?",
           "options": [],
           "recommended": -1,
           "cut": false,
           "inside": true,
           "buttonsVisible": true,
-          "openerHeight": 118.25
+          "openerHeight": 156.25
         },
         {
           "id": "lane-digest",
@@ -2168,7 +2168,7 @@
           "openerHeight": 118.25
         },
         {
-          "id": "/repo/tg-bot-16.jsonl:delivery:1791743870",
+          "id": "/repo/tg-bot-16.jsonl:delivery:1791771437",
           "kind": null,
           "sentence": "Your message has had no confirmation for over half an hour: open the conversation to retry or discard it; nothing is resent on its own.",
           "question": null,

@@ -3,6 +3,7 @@ import type { DismissalSubjectRequest, DismissalTarget } from "@/lib/attention/d
 import type { TFunction } from "@/lib/i18n";
 import { drawnLaneMovement } from "@/lib/pipelines/laneMovement";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import { conversationFrameRole, type FrameRole } from "@/lib/roleFrames";
 
 import { attentionEntryProject, type MobileAttentionEntry } from "./attentionQueue";
@@ -154,13 +155,20 @@ export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { pat
   return focus.path !== null && entry.item.file.path === focus.path;
 }
 
+/** A review round that waits for answers (a worker's question the seat
+    escalated through a form) states what is being decided: the waiting
+    round's title is the question, since the form's own questions are
+    answered in the form. */
+export function prototypeNoticeAsk(t: TFunction, notice: PrototypeReviewNotice): OperatorAsk {
+  const questions = notice.asks === "questions";
+  return { question: questions && notice.roundTitle ? notice.roundTitle : null, options: [], recommended: null, sentence: t(questions ? "needs.ask.prototypeQuestions" : "needs.ask.prototype") };
+}
+
 /** What a row asks of the operator (docs/design/attention-auto-resolve.md):
     the question in its author's words, the choices, and one plain sentence
     saying what to choose or do and what happens next. */
 export function needsYouEntryAsk(t: TFunction, entry: MobileAttentionEntry): OperatorAsk {
-  if (entry.kind === "prototype") {
-    return { question: null, options: [], recommended: null, sentence: t(entry.notice.asks === "questions" ? "needs.ask.prototypeQuestions" : "needs.ask.prototype") };
-  }
+  if (entry.kind === "prototype") return prototypeNoticeAsk(t, entry.notice);
   if (entry.kind === "update") return { question: null, options: [], recommended: null, sentence: t("selfUpdate.auto.decision.body") };
   return entry.kind === "conversation"
     ? conversationOperatorAsk(t, entry.item.reason, entry.item.file)

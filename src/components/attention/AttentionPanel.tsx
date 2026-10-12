@@ -338,6 +338,7 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
   const { t } = useLocale();
   const Mark = entry.notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
   const since = needsYouEntrySince(entry);
+  const { question, options, recommended, line } = needsYouRowText(t, entry);
   return (
     <div className="rounded-[8px]" data-needs-you-row={entry.id} data-needs-you-kind={entry.kind} data-needs-you-since={since ?? undefined}>
       <button
@@ -353,7 +354,7 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
           {since !== null ? <span data-attention-age className="shrink-0 font-normal text-muted">· {fmtAge(since)}</span> : null}
         </span>
         <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{entry.notice.title}</span>
-        <span data-attention-decision data-needs-you-sentence="" className="w-full text-[11px] text-muted [overflow-wrap:anywhere]">{needsYouRowText(t, entry).line}</span>
+        <NeedsYouAskText ask={{ question, options, recommended, sentence: line }} />
       </button>
     </div>
   );

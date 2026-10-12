@@ -25,7 +25,7 @@ import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { sendDismissal } from "./dismissalOverlay";
-import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouSections } from "./needsYouPanel";
+import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouSections, prototypeNoticeAsk } from "./needsYouPanel";
 import { NeedsYouAskText } from "./NeedsYouAskText";
 import { conversationOperatorAsk, laneOperatorAsk } from "./operatorAsk";
 import { PermissionActions } from "./PermissionActions";
@@ -401,7 +401,7 @@ function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; 
           <span className="min-w-0 truncate">{t(notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
         </span>
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{notice.title}</span>
-        <span data-needs-you-sentence="" className="block w-full text-label text-muted [overflow-wrap:anywhere]">{t(notice.asks === "questions" ? "needs.ask.prototypeQuestions" : "needs.ask.prototype")}</span>
+        <NeedsYouAskText ask={prototypeNoticeAsk(t, notice)} size="touch" />
         {age === null ? null : (
           <span className={META}>
             <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>

@@ -14517,6 +14517,9 @@ describe("attention auto resolve", () => {
               const form = after.rows.find((row) => row.id === `prototype:${ids.escalationRound}`);
               check(frame, Boolean(form && form.sentence === translate(lang, "needs.ask.prototypeQuestions")),
                 `the escalated wait's form row reads ${JSON.stringify(form)}`);
+              /* What is being decided: the waiting round's title is the row's question, uncut. */
+              const decided = lang === "en" ? "Instalment provider: the partner bank or the faster service?" : "Провайдер розстрочки: банк-партнер чи швидший сервіс?";
+              check(frame, form?.question === decided && !form.cut, `the form row's question reads ${JSON.stringify(form?.question)}, expected the round title`);
               /* The stage's own question, in a project with no seat. */
               const diagnose = after.rows.find((row) => row.id === "lane-diagnose");
               check(frame, Boolean(diagnose && diagnose.question?.includes(lang === "en" ? "only mark them?" : "лише позначати їх?") && diagnose.sentence && !diagnose.sentence.includes("diagnose ·")),
@@ -14533,6 +14536,9 @@ describe("attention auto resolve", () => {
               /* The stage's own question, scrolled into the list's view. */
               await page.locator('[data-needs-you-row="lane-diagnose"]').scrollIntoViewIfNeeded();
               await shot(page, `${frame}-stage-question`);
+              /* The escalated wait's form row, with the round title as its question. */
+              await page.locator(`[data-needs-you-row="prototype:${ids.escalationRound}"]`).scrollIntoViewIfNeeded();
+              await shot(page, `${frame}-form-row`);
             } finally { await opened.context.close(); }
           }
         }

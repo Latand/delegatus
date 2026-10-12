@@ -168,5 +168,10 @@ test("the read and desktop row share their title and localized line in both lang
     expect(needsYouRowText(t, { kind: "prototype", id: "prototype:r", notice: { title: "Layout" } as never })).toEqual({
       title: "Layout", line: t("needs.ask.prototype"), label: t("proto.notice.open"), question: null, options: [], recommended: null,
     });
+    /* A round waiting for answers states what is being decided. */
+    expect(needsYouRowText(t, { kind: "prototype", id: "prototype:r", notice: { title: "Pay in instalments", roundTitle: "Which provider?", asks: "questions" } as never })).toMatchObject({
+      title: "Pay in instalments", question: "Which provider?", line: t("needs.ask.prototypeQuestions"),
+    });
+    expect(needsYouRowText(t, { kind: "prototype", id: "prototype:r", notice: { title: "Layout", roundTitle: "Variants" } as never }).question).toBeNull();
   }
 });
