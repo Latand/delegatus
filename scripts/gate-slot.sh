@@ -82,6 +82,15 @@ admission="$(dirname "${BASH_SOURCE[0]}")/cpu-admission.ts"
 # A nested command continues an already admitted job. The helper validates
 # the parent start identity and its kernel-held slot before reusing it.
 if "${LLV_GATE_BUN:-bun}" "$admission" --reuse-slot; then run "$@"; fi
+# MSYS/Cygwin shell PIDs differ from the Windows PIDs the native Bun helper
+# probes. The shell's virtual proc file supplies its native PID.
+owner_pid=$$
+winpid_file="${LLV_GATE_PROC_ROOT:-/proc}/$$/winpid"
+if [[ -r "$winpid_file" ]]; then owner_pid=$(< "$winpid_file"); fi
+if [[ ! "$owner_pid" =~ ^[1-9][0-9]*$ ]]; then
+  echo "gate-slot: the shell's native owner PID is invalid" >&2
+  exit 2
+fi
 # The shell's pauses after a lost lock race are admission time too. Keep one
 # ledger interval alive until the successful claim, including helper handoffs.
 wait_dir=""
@@ -95,7 +104,7 @@ end_cpu_wait() {
 }
 if [[ -n ${LLV_CPU_WAIT_ROOTS:-} && ${LLV_CPU_WAIT_ROOTS:-} != '[]' ]]; then
   wait_dir=$(mktemp -d "${TMPDIR:-/tmp}/delegatus-cpu-wait.XXXXXXXX")
-  "${LLV_GATE_BUN:-bun}" "$admission" --watch-wait "$wait_dir" "$$" &
+  "${LLV_GATE_BUN:-bun}" "$admission" --watch-wait "$wait_dir" "$owner_pid" &
   wait_pid=$!
   trap end_cpu_wait EXIT
   trap 'end_cpu_wait; exit 130' INT TERM
@@ -106,14 +115,14 @@ if [[ -n ${LLV_CPU_WAIT_ROOTS:-} && ${LLV_CPU_WAIT_ROOTS:-} != '[]' ]]; then
 fi
 queue_key="command:$$:$RANDOM:$RANDOM"
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$$"
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
   if ! command -v flock >/dev/null; then
-    if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$$"; then end_cpu_wait; run "$@"; fi
+    if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid"; then end_cpu_wait; run "$@"; fi
   else
     for ((i=1; i<=slots; i++)); do
       exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
       if flock -n 9; then
-        if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$$"; then end_cpu_wait; run "$@"; fi
+        if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid"; then end_cpu_wait; run "$@"; fi
       fi
       exec 9>&-
     done

@@ -66,6 +66,24 @@ test("a lost slot claim keeps the shell retry pause outside the caller's executi
   } finally { clearTimeout(guard); controller.abort(); await Promise.resolve(pending).catch(() => {}); f.close(); }
 }, 20_000);
 
+test("a shell's native owner mapping binds the queue ticket to the kernel PID", async () => {
+  const f = fixture();
+  let pending: ReturnType<typeof realExec> | undefined;
+  try {
+    // MSYS exposes /proc/<shell PID>/winpid. Emulate that file with a distinct
+    // live kernel owner; the helper must not record the shell's POSIX PID.
+    pending = realExec("bash", ["-c", 'mkdir -p "$LLV_GATE_PROC_ROOT/$$"; printf "%s" "$CPU_NATIVE_OWNER" > "$LLV_GATE_PROC_ROOT/$$/winpid"; exec bash scripts/gate-slot.sh true'], process.cwd(), {
+      ...f.env, LLV_GATE_PROC_ROOT: path.join(f.dir, "proc"), CPU_NATIVE_OWNER: String(process.pid),
+    }, { timeoutMs: 6000 });
+    await until(() => f.count() === 1);
+    const row = f.db.query<{ owner: string }, []>("SELECT owner FROM tickets").get()!;
+    expect(JSON.parse(row.owner).pid).toBe(process.pid);
+    f.age();
+    const result = await pending;
+    expect(result.code, result.stderr).toBe(0);
+  } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await Promise.resolve(pending).catch(() => {}); f.close(); }
+}, 20_000);
+
 test.skipIf(process.platform !== "linux")("an admitted parent can finish nested work while a fresh job waits for its only slot", async () => {
   const f = fixture(), controls = [new AbortController(), new AbortController()];
   const pending: Promise<Awaited<ReturnType<typeof realExec>>>[] = [];
