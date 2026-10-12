@@ -4637,3 +4637,122 @@ describe("prototype decision forms: rejection stays in the seat's conversation",
     } finally { await browser.close(); served.stop(); }
   }, 240_000);
 });
+
+
+describe("automatic long-text attachment", () => {
+  const OPENING = "Привіт, це експорт Telegram.";
+  const LONG = `${OPENING} ${"я".repeat(30_000)}`;
+  browserTest("sent bubble shows the opening words and a file chip at desktop and 390px, light and dark", async () => {
+    const out = path.resolve(".artifacts/long-text-attachment");
+    const evidence = path.resolve("evidence/long-text-attachment");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const cases: { width: number; scheme: "light" | "dark"; lang: "en" | "uk"; files: number; retry: boolean }[] = [];
+    for (const width of [1440, 390]) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+      for (const files of [0, 3]) cases.push({ width, scheme, lang, files, retry: false });
+    }
+    for (const width of [1440, 390]) cases.push({ width, scheme: "dark", lang: "uk", files: 0, retry: true });
+    try {
+      for (const { width, scheme, lang, files, retry } of cases) {
+        const height = width === 390 ? 844 : 900;
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=lifecycle&lang=${lang}&long-text=1${retry ? "&retry-long-text=1" : ""}`,
+          { width, height }, scheme, lang, "no-preference", width === 390);
+        try {
+          await page.waitForSelector("textarea");
+          await page.fill("textarea", LONG);
+          if (files) {
+            await page.setInputFiles('input[type="file"]', [1, 2, 3].map((n) => ({
+              name: `notes-${n}.pdf`, mimeType: "application/pdf", buffer: Buffer.from(`%PDF-1.4 notes ${n}`),
+            })));
+            await page.waitForFunction((n) => document.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length === n, files);
+          }
+          await page.click('button[type="submit"]');
+          if (retry) {
+            await page.waitForSelector("[data-outbox-retry]");
+            await page.click("[data-outbox-retry]");
+          }
+          await page.waitForSelector("[data-text-attachment]");
+          await page.locator("[data-text-attachment]").scrollIntoViewIfNeeded();
+          const read = () => page.evaluate(({ viewportWidth, viewportHeight }) => {
+            const chip = document.querySelector("[data-text-attachment]") as HTMLElement;
+            const bubble = chip.closest("[data-user-bubble]") as HTMLElement;
+            const excerpt = bubble.querySelector("[data-text-excerpt]") as HTMLElement | null;
+            const row = chip.parentElement as HTMLElement;
+            const style = getComputedStyle(chip);
+            const bubbleStyle = getComputedStyle(bubble);
+            const rect = chip.getBoundingClientRect();
+            const bubbleRect = bubble.getBoundingClientRect();
+            const excerptRect = excerpt?.getBoundingClientRect();
+            const lineHeight = excerpt ? parseFloat(getComputedStyle(excerpt).lineHeight) || 0 : 0;
+            const caption = [...row.children].filter((node) => node !== chip).map((node) => node.textContent?.trim()).join(" ");
+            return {
+              chip: chip.textContent?.trim(), href: chip.getAttribute("href"), icon: Boolean(chip.querySelector("svg")),
+              emoji: bubble.textContent?.includes("📎") ?? false,
+              chipBackground: style.backgroundColor, chipBorder: style.borderTopColor, chipBorderWidth: style.borderTopWidth,
+              bubbleBackground: bubbleStyle.backgroundColor,
+              excerpt: excerpt?.textContent ?? null,
+              excerptLines: excerptRect && lineHeight ? Math.round(excerptRect.height / lineHeight) : null,
+              caption,
+              bubbleText: bubble.innerText.replace(/\s+/g, " ").trim(),
+              chip_rect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+              bubble_rect: { left: bubbleRect.left, right: bubbleRect.right },
+              overflow: Math.max(0, document.documentElement.scrollWidth - viewportWidth),
+              inViewport: rect.left >= 0 && rect.right <= viewportWidth && rect.top >= 0 && rect.bottom <= viewportHeight,
+              failed: Boolean(document.querySelector("[data-outbox-retry]")),
+              implementationVisible: document.body.textContent?.includes("Read the file in full") ?? false,
+              longTextVisible: document.body.textContent?.includes("я".repeat(200)) ?? false,
+              chips: document.querySelectorAll("[data-text-attachment]").length,
+            };
+          }, { viewportWidth: width, viewportHeight: height });
+          const reading = await read();
+          expect(pageErrors).toEqual([]);
+          expect(reading.chip).toBe("message.txt");
+          expect(reading.icon).toBe(true);
+          expect(reading.emoji).toBe(false);
+          expect(reading.excerpt).toContain(OPENING);
+          expect(reading.excerptLines).toBeLessThanOrEqual(2);
+          expect(reading.bubbleText.startsWith(OPENING)).toBe(true);
+          expect(reading.caption).toBe(files ? (lang === "uk" ? "3 вкладення" : "3 attachments") : "");
+          expect(reading.caption).not.toContain("4");
+          expect(reading.chipBackground).not.toBe("rgba(0, 0, 0, 0)");
+          expect(reading.chipBackground).not.toBe(reading.bubbleBackground);
+          expect(reading.chipBorderWidth).not.toBe("0px");
+          expect(reading.overflow).toBeLessThanOrEqual(1);
+          expect(reading.inViewport).toBe(true);
+          expect(reading.chip_rect.right).toBeLessThanOrEqual(reading.bubble_rect.right);
+          expect(reading.failed).toBe(false);
+          expect(reading.implementationVisible).toBe(false);
+          expect(reading.longTextVisible).toBe(false);
+          const tag = `${width}-${scheme}-${lang}-${files ? "files" : "plain"}${retry ? "-retry" : "-send"}`;
+          readings[tag] = reading;
+          await page.screenshot({ path: path.join(out, `${tag}.png`) });
+          if (width === 1440 && scheme === "dark" && !retry) {
+            await page.hover("[data-text-attachment]");
+            const hovered = await page.evaluate(() => {
+              const style = getComputedStyle(document.querySelector("[data-text-attachment]")!);
+              return { border: style.borderTopColor, color: style.color };
+            });
+            expect(hovered.border).not.toBe(reading.chipBorder);
+            readings[`${tag}-hover`] = hovered;
+            await page.screenshot({ path: path.join(out, `${tag}-hover.png`) });
+            await page.mouse.move(0, 0);
+          }
+          // Adoption uses the same marker: one chip, the same words and caption.
+          await page.evaluate(() => (window as unknown as { llvHost: { echo(): void } }).llvHost.echo());
+          await page.waitForTimeout(300);
+          expect(await page.locator("[data-outbox-entry]").count()).toBe(0);
+          const adopted = await read();
+          expect(adopted.chips).toBe(1);
+          expect(adopted.excerpt).toBe(reading.excerpt);
+          expect(adopted.caption).toBe(reading.caption);
+          await page.screenshot({ path: path.join(out, `${tag}-adopted.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  }, 900_000);
+});

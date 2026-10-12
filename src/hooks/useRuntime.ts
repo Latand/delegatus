@@ -1,5 +1,7 @@
 "use client";
 
+import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
+
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import {
@@ -255,6 +257,7 @@ export function useRuntimeFlow(flowId: string | null): Flow | null {
 
 export interface CommandResult {
   ok: boolean;
+  textAttachment?: MessageTextAttachment;
   operationId?: string;
   held?: true;
   receipt?: RuntimeReceipt;
@@ -304,6 +307,11 @@ async function postCommand(url: string, body: unknown): Promise<CommandResult> {
       status: res.status,
       operationId,
       receipt,
+      ...(json.textAttachment && typeof json.textAttachment === "object"
+        && "name" in json.textAttachment && typeof json.textAttachment.name === "string"
+        && "path" in json.textAttachment && typeof json.textAttachment.path === "string"
+        && "text" in json.textAttachment && typeof json.textAttachment.text === "string"
+        ? { textAttachment: { name: json.textAttachment.name, path: json.textAttachment.path, text: json.textAttachment.text } } : {}),
       ...(res.ok && json.held === true ? { held: true as const } : {}),
       ...(delivery ? { delivery } : {}),
       ...(!res.ok ? { error: typeof json.error === "string" ? json.error : undefined } : {}),

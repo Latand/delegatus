@@ -218,6 +218,13 @@ export interface CompanionPatch<C> {
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
+  hasUnfinishedPipeline(query: {
+    repository: string;
+    branch: string;
+    pullRequestRepository?: string;
+    prNumber?: number;
+    pullRequestMatches?: (pipeline: T, repository: string, number: number) => boolean;
+  }): boolean;
   put(record: T): void;
   delete(key: string): void;
 }
@@ -1023,6 +1030,29 @@ export class SqliteStateCollection<T> {
             pipelineLookup: (query) => {
               consume();
               return this.lookupPipeline(db, query);
+            },
+            hasUnfinishedPipeline: (query) => {
+              consume();
+              if (this.options.collection !== "pipelines") throw new Error("unfinished pipeline lookup requires the pipeline collection");
+              const scanLimit = remaining;
+              const rows = db.query<{ value_json: string }, [number]>(`
+                SELECT value_json FROM state_rows
+                WHERE collection = 'pipelines' AND json_valid(value_json)
+                  AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed')
+                ORDER BY row_key LIMIT ?
+              `).all(scanLimit + 1);
+              for (const row of rows) {
+                consume();
+                const pipeline = this.decodeRow(row.value_json);
+                if (!pipeline) throw new Error("invalid bounded state row");
+                if ((pipeline as { hiddenAt?: string | null }).hiddenAt) continue;
+                const value = pipeline as { delivery?: { target?: { repository?: string; branch?: string; pr?: number } } };
+                if (value.delivery?.target?.repository === query.repository && value.delivery.target.branch === query.branch) return true;
+                if (query.prNumber && value.delivery?.target?.repository === query.repository && value.delivery.target.pr === query.prNumber) return true;
+                if (query.prNumber && query.pullRequestRepository && query.pullRequestMatches
+                  && query.pullRequestMatches(pipeline, query.pullRequestRepository, query.prNumber)) return true;
+              }
+              return false;
             },
             get: (key) => {
               consume();

@@ -1107,6 +1107,8 @@ export type Pipeline = {
   /** A finished marked pipeline's tasks whose move waits on other open
       pipelines on the same task, with their ids. Cleared by the move. */
   taskFinishWaits?: PipelineTaskFinishWait[];
+  /** The conflict and base movement this successor was created to refresh. */
+  refreshOf?: PipelineRefreshOf;
 };
 
 export type PipelineTaskFinish = {
@@ -1127,14 +1129,32 @@ export type PipelineTaskFinishWait = {
 /** Where an automatic merge stands (#2187 §4.4). `queued`, `checking`,
     `waiting-checks`, `updating` and `merging` belong to the runner; `merged`
     is final; `blocked` waits for `retry-merge`; `cancelled` means the setting
-    was turned off while the merge only waited. */
-export type PipelineMergeState = "queued" | "checking" | "waiting-checks" | "updating" | "merging" | "merged" | "blocked" | "cancelled";
+    was turned off while the merge only waited. `refreshing` belongs to a
+    successor pipeline and stays outside the runner's queue. */
+export type PipelineMergeState = "refreshing" | "queued" | "checking" | "waiting-checks" | "updating" | "merging" | "merged" | "blocked" | "cancelled";
 
 export const PIPELINE_MERGE_LIVE_STATES: ReadonlySet<PipelineMergeState> = new Set(["queued", "checking", "waiting-checks", "updating", "merging"]);
 
 export type PipelineMergeMethod = "squash" | "merge" | "rebase";
 
+export type PipelineRefreshOf = {
+  pipelineId: string;
+  base: string;
+};
+
+export type PipelineRefresh = {
+  attempt: number;
+  base: string;
+  head: string;
+  key: string;
+  digest: string;
+  requestedAt: string;
+  pipelineId: string | null;
+};
+
 export type PipelineMerge = {
+  /** Durable create reservation; a missing id is replayed on the next sweep. */
+  refresh?: PipelineRefresh;
   state: PipelineMergeState;
   /** Who merged it: the runner, or anyone else (the PR was seen merged). */
   by: "auto-merge" | "outside" | null;
