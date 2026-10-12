@@ -188,6 +188,16 @@
  * notice; then the third generation arrives and the reader must follow it
  * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
  *
+ * With BOARD_CAPTURE_CASE=registry-history it opens the board over the
+ * candidate performance gate's synthetic registry, about 30,000 rows of
+ * retained history (#2761), in eight real browser views that each pin their
+ * own conversation, while two writer processes keep writing grant-bearing
+ * rows. From navigation, every view must draw its board within ten seconds,
+ * keep its selected conversation, receive `/api/files` answers for its own
+ * scope inside the gate's request bounds counted from the moment the page
+ * issued them, keep its main thread answering, and answer input while the
+ * writers run.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -370,7 +380,15 @@ function buildEnvironment(port: number): NodeJS.ProcessEnv {
     ...inherited,
     NODE_ENV: "production",
     HOME,
-    TMPDIR: path.join(BASE, "tmp"),
+    /* The capture root itself, so HOME, config and state all sit under the
+       children's temp root. A sibling TMPDIR left them outside it; run from a
+       stage whose temp root lies under the operator's state/scratch, an
+       unowned child (the registry-history writers) read them as the
+       operator's and was refused. */
+    TMPDIR: BASE,
+    /* Claude Code's task directory follows this before TMPDIR; the caller's
+       would put its own sessions' task output on the synthetic board. */
+    CLAUDE_CODE_TMPDIR: path.join(BASE, "tmp"),
     TMUX_TMPDIR: path.join(BASE, "tmux"),
     XDG_CONFIG_HOME: config,
     XDG_CACHE_HOME: path.join(BASE, "cache"),
@@ -389,9 +407,9 @@ function buildEnvironment(port: number): NodeJS.ProcessEnv {
 
 const CAPTURE_BUN = process.env.BOARD_CAPTURE_BUN?.trim() || process.execPath;
 
-function startServer(port: number): ChildProcess {
-  return spawn(CAPTURE_BUN, ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: repoRoot, env: buildEnvironment(port), stdio: ["ignore", "inherit", "inherit"],
+function startServer(port: number, probe?: { preload: string[]; env: Record<string, string> }): ChildProcess {
+  return spawn(CAPTURE_BUN, [...probe?.preload ?? [], "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+    cwd: repoRoot, env: { ...buildEnvironment(port), ...probe?.env }, stdio: ["ignore", "inherit", "inherit"],
   });
 }
 
@@ -7764,7 +7782,81 @@ async function hydrationMain(): Promise<void> {
   console.log(`hydration acceptance: ${Object.keys(report.frames).length} loads, no hydration warnings or page errors`);
 }
 
-if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=registry-history (#2761)                                */
+/* ------------------------------------------------------------------------- */
+
+/* The views, the writers and the bounds are the candidate gate's browser half
+   (src/runtime-host/candidateBrowserRun.ts, docs/design/candidate-performance-gate.md):
+   the gate runs them inside a container from the candidate image before
+   promotion; this case runs the same code against a local build and keeps
+   each view's requests and a frame of it. */
+async function registryHistoryMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  seedState(PROJECT_NAME, tasks, reviewers);
+  process.env.LLV_STATE_DIR = STATE_DIR;
+  const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
+  const { browserViewPins, measureBoardInBrowser, serverLoopProbe } = await import("../src/runtime-host/candidateBrowserRun");
+  const { CANDIDATE_BROWSER_BOUNDS, candidateBrowserBreaches } = await import("../src/runtime-host/candidateBrowser");
+  const { startCandidateRuntimeHost, waitForServerStartup } = await import("../src/runtime-host/candidateRuntimeHost");
+  /* The selected conversations' transcripts live in the sandboxed home, so
+     each view's pin names a conversation the board can open. */
+  const dataset = buildRegistryPerformanceDataset(STATE_DIR, undefined, { sessionsRoot: path.join(HOME, ".codex", "sessions") });
+  SERVER_EXTRA_ENV.LLV_AGENT_REGISTRY_SQLITE = "sqlite";
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const report: Record<string, unknown> & { failures: string[] } = {
+    commit: captureCommit(),
+    dataset: { rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length },
+    bounds: CANDIDATE_BROWSER_BOUNDS, failures: [],
+  };
+  let server: ChildProcess | null = null;
+  let runtimeHost: Awaited<ReturnType<typeof startCandidateRuntimeHost>> | null = null;
+  try {
+    /* The board's runtime surfaces read a runtime host, as an operator's
+       Viewer does; the gate's own host, in this capture's state. */
+    const hostEnv = Object.fromEntries(Object.entries(buildEnvironment(0)).filter((entry): entry is [string, string] => entry[1] !== undefined));
+    runtimeHost = await startCandidateRuntimeHost({ runtimeBin: CAPTURE_BUN, cwd: repoRoot, env: hostEnv, directory: path.join(BASE, "rt") });
+    SERVER_EXTRA_ENV.LLV_RUNTIME_HOST_SOCKET = runtimeHost.socket;
+    /* The server's own event loop is part of the reading, as in the gate. */
+    fs.mkdirSync(path.join(BASE, "server-loop"), { recursive: true });
+    const probe = serverLoopProbe(path.join(BASE, "server-loop", "probe"));
+    server = startServer(port, probe);
+    await waitForServer(baseUrl, server);
+    /* The views open on a server that has started and scanned once, as an
+       operator's do; the gate itself bounds the cold first projection. */
+    await waitForBoard(baseUrl, false);
+    const startup = await waitForServerStartup(baseUrl);
+    if (startup !== "ready") throw new Error(`the server's structured-host startup is ${startup}, never ready`);
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    const keys = dataset.grantSubjects.filter((subject) => subject.collection === "entries"
+      && !dataset.workers.some((worker) => worker.key === subject.key)).map(({ key, servers }) => ({ key, servers }));
+    const result = await measureBoardInBrowser({
+      baseUrl,
+      server: probe,
+      executablePath: process.env.CHROME_BIN ?? null,
+      pins: browserViewPins(dataset.conversations),
+      writers: {
+        runtime: CAPTURE_BUN, entry: "src/runtime-host/candidatePerformanceRun.ts", cwd: repoRoot, env: buildEnvironment(0),
+        registry: dataset.filename, keys, stopFile: path.join(BASE, "history-writers-stop"),
+      },
+      screenshotDir: OUT_DIR,
+    });
+    report.measurements = result.measurements;
+    report.serverStalls = result.serverStalls;
+    report.views = result.views.map((view, index) => ({ ...view, diagnostics: result.diagnostics[index] }));
+    report.failures.push(...candidateBrowserBreaches(result.measurements));
+  } finally {
+    await stop(server);
+    await runtimeHost?.stop();
+  }
+  fs.writeFileSync(path.join(OUT_DIR, "registry-history.json"), JSON.stringify(report, null, 2) + "\n");
+  console.log(`registry history measurements: ${path.join(OUT_DIR, "registry-history.json")}`);
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+}
+
+if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistoryMain();
+else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
