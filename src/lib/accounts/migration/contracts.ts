@@ -320,6 +320,9 @@ export interface DurableQuotaObservation {
       Codex only). Absent on records written before the field existed and null
       when the probe carried no summary; both read as "not checked yet". */
   resetCredits?: { availableCount: number; expiresAt: number | null } | null;
+  /** The provider said the limit is reached whatever the windows show; see
+      `QuotaObservation.limitReached`. Absent when the reading did not say. */
+  limitReached?: boolean;
 }
 
 export interface HeldDeliveryCommand {

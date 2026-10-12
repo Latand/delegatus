@@ -30,7 +30,7 @@ test("settings and the write-only key route enforce operator authority and never
   expect(await (await PUT(request("PUT", { enabled: true, monthlyCapUsd: 0 }))).json()).toMatchObject({ enabled: true, monthlyCapUsd: 0 });
 });
 
-test("no settings request can choose a simulator: a backend, the demo or the real voice by name, is refused and nothing changes", async () => {
+test("no settings request can choose a simulator: the demo or the real voice by an earlier name is refused and nothing changes; the API or Codex V3 can be chosen", async () => {
   await PUT(request("PUT", { enabled: false, monthlyCapUsd: 20 }));
   for (const body of [{ backend: "demo" }, { enabled: true, backend: "demo" }, { backend: "official-realtime" }, { backend: "simulated" }]) {
     const response = await PUT(request("PUT", body));
@@ -38,8 +38,10 @@ test("no settings request can choose a simulator: a backend, the demo or the rea
     expect(await response.json()).toEqual({ code: "INVALID_SETTINGS" });
   }
   const settings = await (await GET(request("GET"))).json() as Record<string, unknown>;
-  expect(settings).toMatchObject({ enabled: false, monthlyCapUsd: 20 });
-  expect(settings).not.toHaveProperty("backend");
+  expect(settings).toMatchObject({ enabled: false, monthlyCapUsd: 20, backend: "api" });
+  expect(await (await PUT(request("PUT", { backend: "codex" }))).json()).toMatchObject({ backend: "codex", enabled: false });
+  expect(await (await GET(request("GET"))).json()).toMatchObject({ backend: "codex" });
+  expect(await (await PUT(request("PUT", { backend: "api" }))).json()).toMatchObject({ backend: "api" });
 });
 
 test("settings in team mode require an active human session", async () => {

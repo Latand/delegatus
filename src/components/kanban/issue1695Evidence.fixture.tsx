@@ -21,7 +21,7 @@ import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/di
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
-import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
+import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
@@ -142,16 +142,27 @@ const FEED_CONTINUITY = SCENARIO === "feed-continuity";
    `&sendlost=1` loses the first Send on its way to the Viewer, as a dropped request does.
    `&mount=product` leaves the companion to the shell's own mount: the fixture answers the settings routes from
    memory (off by default; `&usage=<usd>` and `&keysource=env|file|missing` set what they report) and the
-   driver turns the companion on through the settings dialog. `&transcript=1` (item 6 of
+   driver turns the companion on through the settings dialog. `&backend=codex` starts with Codex V3 chosen: the
+   settings report the last Codex call with its plan window (`&nocall=1` leaves none), the transcript record carries
+   a Codex call's usage, and a start reaches the session route, which refuses it at the plan limit with its reset
+   two hours after the page loaded, so no call starts. `&transcript=1` (item 6 of
    docs/design/voice-delegatus-live-feedback.md) lets the companion read a whole session's transcript record, as the
    live adapter does from the session route, and the conversation view a tap on the character opens. Desktop only. */
 const VOICE = SCENARIO === "voice-companion";
 const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount") === "product";
-const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
+/* The plan window a fixture Codex call ran on: the primary window resets two hours after the page loaded, to the
+   minute, and the weekly one four days on, so the footer and the settings show a time and a date. The driver reads
+   `voiceCompanion.loaded` back rather than its own clock, which may have passed the next minute. */
+const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
+const voice = { loaded: VOICE_LOADED, delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
   /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
-  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], settingsOpened: 0 };
+  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
+const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, observedAt: VOICE_LOADED * 1000,
+  primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
+const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
 const voiceSettings = {
-  enabled: false, monthlyCapUsd: 20,
+  enabled: false, backend: (VOICE_CODEX ? "codex" : "api") as "api" | "codex", monthlyCapUsd: 20,
+  ...(new URLSearchParams(location.search).get("nocall") === "1" ? {} : { lastCodexSession: { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan: voicePlan() } }),
   keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
   lastSession: { usd: 0.4, seconds: 471, endedAt: Date.UTC(2026, 9, 10), incomplete: false },
   month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
@@ -3773,6 +3784,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
   }
+  if (VOICE && url.pathname === "/api/voice-companion/session" && method === "POST" && voiceSettings.backend === "codex") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (body.action !== "start") return json({ ok: true });
+    voice.sessionStarts.push({ project: body.project, locale: body.locale, offer: typeof body.sdp === "string" && body.sdp.startsWith("v=0") });
+    return json({ code: "CODEX_LIMIT_REACHED", resetsAt: VOICE_LOADED + 7_200 }, 409);
+  }
   if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
     if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
     const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
@@ -4008,7 +4025,8 @@ function voiceCompanionScene() {
       const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
       record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
         data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });
-      return { ...record, usage: { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
+      return { ...record, usage: VOICE_CODEX ? { backend: "codex" as const, callSeconds: 252, callFinal: true, plan: voicePlan(), planStartPercent: 21 }
+        : { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
     } } : {}),
   };
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through

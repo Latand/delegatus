@@ -255,6 +255,7 @@ test("cumulative duration is monotonic; transport loss keeps the reservation as 
   f.provider.disconnect(s.providerId);
   await f.service.drain(s.sessionId);
   expect(f.storage.settings()).toMatchObject({ reservedUsd: 0, incomplete: true });
+  expect(f.admission.events(s.sessionId, 0)).toContainEqual(expect.objectContaining({ type: "session.closed", reason: "transport", incomplete: true }));
   expect(f.storage.settings().usageUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD);
   expect(new CompanionStorage().settings().incomplete).toBe(true);
   expect(f.provider.hangups).toEqual([s.providerId]);
