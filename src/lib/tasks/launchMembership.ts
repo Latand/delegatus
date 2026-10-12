@@ -182,6 +182,14 @@ export function admitReservedLaunch(
     const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineContext, ports.projectForCwd, ports.seatIdentity), admit: launchAdmission };
     result = ports.commit(input);
   } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : null;
+    const message = error instanceof Error ? error.message : String(error);
+    if (code === "SQLITE_BUSY" || /\bSQLITE_BUSY\b|database is (?:locked|busy)/i.test(message)) {
+      /* The receipt reservation is durable, while the task-store transaction
+         did not commit. Keep that reservation available to the same request
+         key so the caller's bounded retry can repeat membership admission. */
+      throw new LaunchMembershipError(message, 503, "SQLITE_BUSY");
+    }
     const reason = `task membership could not be recorded: ${error instanceof Error ? error.message : String(error)}`;
     fail(reason);
     throw new LaunchMembershipError(reason, 503);

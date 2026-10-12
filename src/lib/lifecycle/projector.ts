@@ -296,7 +296,7 @@ export function projectLivenessEvents(
 ): LifecycleEventInput[] {
   const events: LifecycleEventInput[] = [];
   for (const record of records) {
-    if (record.evidenceSource !== "transcript") continue;
+    if (record.evidenceSource !== "transcript" || record.verified === false) continue;
     const subject = record.conversationId ?? record.transcriptPath;
     const marker = record.lastRecordAt ?? "unknown";
     const at = record.lastRecordAt ?? new Date().toISOString();

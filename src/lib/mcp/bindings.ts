@@ -146,9 +146,10 @@ import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAut
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
+import { leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
-import { RoleMemoryRefusal, storedLessonTexts } from "@/lib/memory/roleStore";
+import { RoleMemoryRefusal, storedLessonTexts, withoutStoredLessons } from "@/lib/memory/roleStore";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -2464,9 +2465,20 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 }
 
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem });
+    const caller = attributionOf(dependencies);
+    /* Root conversations stay gateway-attributed for ordinary tool behavior,
+       but a freshly authorized designation is enough to establish seat
+       identity for this role-memory write. */
+    const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
+      ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
+      : null;
+    if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
+    if (caller.kind === "gateway" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
+    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem };
+    const result = seat ? leaveLessonForSeat(seat, answer) : leaveLessonForConversation(
+      dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer,
+    );
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
@@ -5048,7 +5060,9 @@ async function sendMessageToOrchestrator(
     if (link) {
       try {
         return await dispatchControl(control)("/api/orchestrator/message", {
-          project, machine: link.install, text: requiredMessageText(args),
+          project, machine: link.install, text: bound?.sendPayload
+            ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
+            : orchestratorRelayEgressText(requiredMessageText(args)),
           clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
         }, callerCapabilityHeaders());
       } catch (error) {
@@ -7078,6 +7092,15 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
+/** Only a send leaving this installation crosses the learned-rule boundary. */
+function orchestratorRelayEgressText(message: string): string {
+  try { return withoutStoredLessons(message); }
+  catch (error) {
+    if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
+    throw error;
+  }
+}
+
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
   const named = required(args, "project");
@@ -7099,11 +7122,12 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
+  const outgoing = link ? orchestratorRelayEgressText(message) : message;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: link ? `machine:${link.install}` : project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
-    sendPayload: seat ? orchestratorRelayPayload(message, seat) : owner ?? {
+    sendPayload: seat ? orchestratorRelayPayload(outgoing, seat) : owner ?? {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
     // Separate from direct send: equal client keys on different tools are

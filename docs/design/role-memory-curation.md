@@ -233,12 +233,15 @@ The boundaries that follow from it:
 - **Shared by every project:** a rule rises from a project to the machine
   only when it holds for every role in every repository; a rule one role
   needs in every repository goes to that role on every project.
-- **Roles that read no rules** (reviewer, verifier and issue reporter, which
-  stay clean by the operator's 2026-10-07 rule; the orchestrator seat and the
-  maintainer, which start outside pipeline stages; the curator) have no
+- **Roles that read no rules** (reviewer, verifier, issue reporter and curator,
+  which stay clean by the operator's 2026-10-07 rule) have no
   level. Their know-how has no home in role memory, and a rule addressed to
   them is refused at write time (clean roles) or archived as `no-reader` by
   the curator.
+- **Orchestrator and maintainer** read their role here, their role on every
+  project, the project and the machine. Their rules are curated like other
+  roles' rules. The designated seat writes its own rules and the maintainer's;
+  see `orchestrator-role-memory.md`.
 - **Current.** A rule that is no longer true against the code, the
   instruction files or the tools as they are now, or that the code or the
   instructions already enforce, leaves the injected list.
