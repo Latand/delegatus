@@ -1430,7 +1430,7 @@ export function defaultPipelinePorts(
       /* The engine's tick is synchronous here: a non-waiting write, and a
          lock held elsewhere answers false, which the next tick asks again
          (docs/design/delivery-progress-and-drain.md, C5). */
-      const failed = registry.failSpawnNow(launchId, reason);
+      const failed = registry.failNeverStartedStageSpawnNow(launchId, conversationId, reason);
       invalidateRegistryProjection();
       return failed;
     },
@@ -4398,6 +4398,10 @@ async function commitPassedStage(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  if (attempt.stageCommitWait) {
+    const remaining = unixMs(attempt.stageCommitWait.retryAt) - unixMs(ports.now());
+    if (remaining > 0) { ports.scheduleTick?.(remaining); return; }
+  }
   if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
   /* Every park after a requested repair keeps the refusal it was about. */
   const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
@@ -4418,6 +4422,20 @@ async function commitPassedStage(
     }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl)
     : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
+    if (result.commitTimeout) {
+      const failures = (attempt.stageCommitWait?.failures ?? 0) + 1;
+      const delay = Math.min(5 * 60_000, 30_000 * 2 ** Math.min(failures - 1, 4));
+      const retryAt = new Date(unixMs(ports.now()) + delay).toISOString();
+      const detail = `${result.error}; controller will retry the passed stage's commit at ${retryAt}`;
+      attempt.stageCommitWait = { retryAt, detail, failures };
+      // A controller expiry did not spend the repaired commit's hook verdict.
+      // The retry revalidates the worktree and its ownership receipt.
+      if (repair) delete repair.recommit;
+      pipeline.stateDetail = detail;
+      await persist();
+      ports.scheduleTick?.(delay);
+      return;
+    }
     if (result.deferred) {
       // Keep the durable committing cursor. The next tick repeats the forge
       // observation outside the mutation lease, then retries this settlement.
@@ -4431,6 +4449,10 @@ async function commitPassedStage(
     }
     parkStage(result.error);
     return;
+  }
+  if (attempt.stageCommitWait) {
+    if (pipeline.stateDetail === attempt.stageCommitWait.detail) pipeline.stateDetail = null;
+    delete attempt.stageCommitWait;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
     parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
@@ -7764,13 +7786,21 @@ function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt
     terminalized, with its recovery record; null when it may not. */
 function neverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted: boolean): { recovery: StagedLaunchRecovery | null } | null {
   if (attempt.report || openRuntimeSwitch(attempt)) return null;
-  if (!attempt.launchId || !attempt.conversationId || attempt.agentPath || attempt.sessionId
+  if (!attempt.launchId || !attempt.conversationId
     || attempt.paneId || attempt.verdict || (attempt.completedAt && pipeline.state !== "closed") || attempt.activation
     || pipelineSurvivorRefusal(pipeline)) return null;
   const receipt = ports.spawnReceipt(attempt.launchId);
-  if (!receipt || receipt.conversationId !== attempt.conversationId || receipt.transcript || receipt.sessionId
+  if (!receipt || receipt.conversationId !== attempt.conversationId
     || (attempt.state === "failed" && receipt.state === "failed")) return null;
   const recovery = stagedLaunchRecovery(receipt);
+  // Older controllers copied the reserved path/id into the attempt before
+  // materialization. Only that same, provably absent artifact is recoverable.
+  if (attempt.agentPath || attempt.sessionId || receipt.transcript || receipt.sessionId) {
+    const reservedPath = receipt.stagedTranscript;
+    if (recovery?.phase !== "unpublished" || !reservedPath || ports.transcriptPresent?.(reservedPath) !== false
+      || (attempt.agentPath && attempt.agentPath !== reservedPath)
+      || (receipt.transcript && receipt.transcript !== reservedPath)) return null;
+  }
   const stoppedByController = attempt.error?.startsWith(SPAWN_RECOVERY_PARK_PREFIX) === true;
   if (pipeline.state !== "closed" && !exhausted && !recovery?.stopped && !stoppedByController) return null;
   return { recovery };
@@ -9347,7 +9377,11 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait) return;
+        if (candidateAttempt.stageCommitWait) {
+          recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait);
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
         if (candidateAttempt.branchAdoption) recorded.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
         if (candidateAttempt.commitRepair) {
           recorded.commitRepair = structuredClone(candidateAttempt.commitRepair);

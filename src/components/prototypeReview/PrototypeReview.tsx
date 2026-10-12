@@ -15,7 +15,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { usePrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { PrototypeAnswer, PrototypeDeliveryState, PrototypeMediaView, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeMediaView, PrototypeRoundView } from "@/lib/prototypeReview/types";
 
 import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
 
@@ -40,6 +40,15 @@ interface Slide {
 
 interface Draft { chosen: number[]; comment: string; answers: PrototypeAnswer[] }
 const initialDraft = (round: PrototypeRoundView | null): Draft => ({ chosen: [], comment: "", answers: recommendedAnswers(round?.questions ?? []) });
+/* A save the server refused after its review was closed or replaced: the
+   choice and the exact words wait here, with the reason, for the task's
+   review to open again. */
+const refusedSaves = new Map<string, { drafts: Record<string, Draft>; error: string }>();
+/* What a close would lose in the waiting rounds: answers changed from the recommended ones, and comments. */
+const unsavedOf = (rounds: readonly PrototypeRoundView[], drafts: Record<string, Draft>) => ({
+  answers: rounds.some((entry) => !entry.decision && Boolean(entry.questions?.length) && drafts[entry.id] !== undefined && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions!))),
+  comment: rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== ""),
+});
 
 /** A moment as the product writes one: day, month and a 24-hour clock, no seconds. */
 const when = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(at));
@@ -195,7 +204,11 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const { data } = review;
   const [picked, setPicked] = useState<string | null>(null);
   const [active, setActive] = useState<Record<string, number>>({});
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [drafts, setDrafts] = useState<Record<string, Draft>>(() => refusedSaves.get(taskId)?.drafts ?? {});
+  const [refused, setRefused] = useState<string | null>(() => refusedSaves.get(taskId)?.error ?? null);
+  useEffect(() => { refusedSaves.delete(taskId); }, [taskId]);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [pairMode, setPairMode] = useState<PairMode | null>(null);
   const [split, setSplit] = useState(50);
   /* The picture opened full screen, the press's own side of a pair, and the variant's pictures the viewer steps through. */
@@ -279,12 +292,23 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
      the tap on the microphone to the last word landing in the field: while it
      is transcribed the field may be empty, and closing then would unmount the
      review before the answer has anywhere to go. */
-  const answersChanged = rounds.some((entry) => !entry.decision && Boolean(entry.questions?.length) && drafts[entry.id] !== undefined && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions!)));
-  const unsaved = answersChanged || rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "") || Boolean(dictation.liveText) || dictation.phase !== "idle";
+  const lost = unsavedOf(rounds, drafts);
+  const answersChanged = lost.answers;
+  const unsaved = answersChanged || lost.comment || speaking;
+  /* A save answers after the render that sent it: a close waiting for it reads the rounds, the drafts and the speech as they are then. */
+  const latest = useRef({ rounds, drafts, speaking });
+  useEffect(() => { latest.current = { rounds, drafts, speaking }; }, [rounds, drafts, speaking]);
   /* The guard names what is lost: changed answers, else the comment. */
   const guardKind = answersChanged ? "answers" : "comment";
+  /* A held key repeats before the first request has redrawn anything. */
+  const saveInFlight = useRef(false);
+  /* A save in flight is no decision yet: the first close waits for the
+     server's word and closes once the decision is written, or stays with the
+     choice, the words and the reason when it is refused. */
+  const closeOnSave = useRef(false);
   const requestClose = useCallback(() => {
     if (guard) setGuard(false);
+    else if (saveInFlight.current && !closeOnSave.current) closeOnSave.current = true;
     else if (unsaved) setGuard(true);
     else onClose();
   }, [guard, unsaved, onClose]);
@@ -371,15 +395,29 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   }
   const canSend = open && !review.saving && dictation.phase === "idle";
   const savable = Boolean(round) && (hasQuestions ? answersValid : draft.chosen.length > 0) && canSend;
-  /* A held key repeats before the first request has redrawn anything. */
-  const saveInFlight = useRef(false);
   const save = async (skip = false) => {
     if (!round || !(skip ? hasQuestions && canSend : savable) || saveInFlight.current) return;
     saveInFlight.current = true;
+    setRefused(null);
+    const sent = draft;
     try {
-      const saved = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment,
+      const result = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment,
         ...(hasQuestions ? skip ? { skip: true as const } : { answers: draft.answers } : {}) });
-      if (saved) setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
+      const closing = closeOnSave.current;
+      closeOnSave.current = false;
+      if (!mounted.current) {
+        if (!result.ok) refusedSaves.set(taskId, { drafts: { ...drafts, [round.id]: sent }, error: result.error });
+      } else if (result.ok) {
+        setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
+        /* The waited-for close leaves only this round's words behind: another
+           round's unsaved words, answers or speech still ask first. */
+        if (closing) {
+          const now = latest.current;
+          const left = unsavedOf(now.rounds, Object.fromEntries(Object.entries(now.drafts).filter(([id]) => id !== round.id)));
+          if (left.answers || left.comment || now.speaking) setGuard(true);
+          else onClose();
+        }
+      }
     } finally {
       saveInFlight.current = false;
     }
@@ -391,9 +429,9 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   const banners = (
     <>
-      {review.error ? (
+      {review.error ?? refused ? (
         <p role="alert" data-prototype-error="" className="m-0 flex items-start gap-2 border-b border-danger/30 bg-danger-soft px-4 py-2 text-label font-semibold text-danger">
-          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden /> {review.error}
+          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden /> {review.error ?? refused}
         </p>
       ) : null}
       {elsewhere ? (
@@ -651,18 +689,25 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     </span>
   ));
 
-  const delivery = (state: PrototypeDeliveryState, retryable: boolean) => {
-    const tone = state === "sent" ? "text-success" : state === "pending" ? "text-muted" : "text-warning";
+  /* A decision this installation drives says quietly how its message goes:
+     saved, on its way, delivered. It raises its voice only once the message
+     has kept failing, and only then offers to send it again. A replicated
+     decision carries no phase and reads as its state. */
+  const delivery = ({ state, retryable, phase }: NonNullable<PrototypeRoundView["decision"]>["delivery"]) => {
+    const tone = phase ? phase === "delivered" ? "text-success" : phase === "attention" ? "text-warning" : "text-muted"
+      : state === "sent" ? "text-success" : state === "pending" ? "text-muted" : "text-warning";
+    const mark = phase ? phase === "delivered" ? <CircleCheck className="h-3.5 w-3.5" /> : phase === "attention" ? <TriangleAlert className="h-3.5 w-3.5" />
+      : phase === "delivering" ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <Check className="h-3.5 w-3.5" />
+      : state === "sent" ? <CircleCheck className="h-3.5 w-3.5" /> : state === "pending" ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <TriangleAlert className="h-3.5 w-3.5" />;
+    const offersRetry = phase ? phase === "attention" : retryable && state !== "pending" && state !== "sent";
     return (
-      <p role="status" data-prototype-delivery={state} className={`m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-label font-semibold ${tone}`}>
+      <p role="status" data-prototype-delivery={state} {...(phase ? { "data-prototype-delivery-phase": phase } : {})} className={`m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-label font-semibold ${tone}`}>
         {/* The mark stays on the first line of its words, which wrap inside themselves; only the retry moves to a line of its own. */}
         <span data-prototype-delivery-said="" className="flex min-w-0 items-start gap-2">
-          <span aria-hidden className="flex h-[1lh] shrink-0 items-center">
-            {state === "sent" ? <CircleCheck className="h-3.5 w-3.5" /> : state === "pending" ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <TriangleAlert className="h-3.5 w-3.5" />}
-          </span>
-          <span className="min-w-0">{t(`proto.delivery.${state}`)}</span>
+          <span aria-hidden className="flex h-[1lh] shrink-0 items-center">{mark}</span>
+          <span className="min-w-0">{t(phase ? `proto.saved.${phase}` : `proto.delivery.${state}`)}</span>
         </span>
-        {retryable && state !== "pending" && state !== "sent" && !elsewhere ? (
+        {offersRetry && !elsewhere ? (
           <button type="button" className={SECONDARY} data-prototype-retry="" disabled={review.saving} onClick={() => void review.retry(round!.id)}>
             {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RotateCw className="h-3.5 w-3.5" aria-hidden />}
             {t(state === "no-orchestrator" ? "proto.delivery.sendNow" : "proto.delivery.retry")}
@@ -724,7 +769,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       ) : hasQuestions ? null : (
         <p className="m-0 text-label text-muted">{t("proto.noComment")}</p>
       )}
-      {delivery(round.decision.delivery.state, round.decision.delivery.retryable)}
+      {delivery(round.decision.delivery)}
     </div>
   ) : round.hidden ? (
     <div data-prototype-hidden={round.id} className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-2">

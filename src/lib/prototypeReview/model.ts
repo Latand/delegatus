@@ -1,6 +1,18 @@
 import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound, PrototypeReviewSummary, PrototypeReviewNotice, PrototypeRoundView, PrototypeMedia, PrototypeReviewReplica } from "./types";
+import type { PrototypeDecision, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeReviewRound, PrototypeReviewSummary, PrototypeReviewNotice, PrototypeRoundView, PrototypeMedia, PrototypeReviewReplica } from "./types";
+
+/** How long a decision's message may keep failing to reach the seat before it
+    asks for the operator's attention. A deploy or a seat's rotation passes
+    inside it unnoticed; the background delivery keeps retrying either way. */
+export const PROTOTYPE_DELIVERY_ATTENTION_MS = 5 * 60_000;
+/** The review's quiet word for a saved decision's message. */
+export function prototypeDeliveryPhase(delivery: PrototypeDecision["delivery"], now: number): PrototypeDeliveryPhase {
+  if (delivery.state === "sent") return "delivered";
+  if (delivery.failingSince && now - Date.parse(delivery.failingSince) >= PROTOTYPE_DELIVERY_ATTENTION_MS) return "attention";
+  if (!delivery.conversationId) return "waiting-seat";
+  return delivery.state === "pending" && !delivery.dispatchedAt && !delivery.operationId ? "saved" : "delivering";
+}
 
 /** Only presentation metadata crosses installation boundaries. */
 export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRoundView {
@@ -58,10 +70,21 @@ export function seatRoundNotice(round: Pick<PrototypeReviewRound, "id" | "projec
 }
 /** Every round waiting on the operator: one per task, then each open seat
     question the page's read carried beside the tasks. */
-export function prototypeReviewNotices(tasks: readonly BoardTask[], seat: readonly PrototypeReviewNotice[] = []): PrototypeReviewNotice[] {
-  return [...tasks.flatMap(task => {
+export function prototypeReviewNotices(tasks: readonly BoardTask[], seatOrNow: readonly PrototypeReviewNotice[] | number = [], now = Date.now()): PrototypeReviewNotice[] {
+  const seat = typeof seatOrNow === "number" ? [] : seatOrNow;
+  if (typeof seatOrNow === "number") now = seatOrNow;
+  return [...tasks.flatMap((task): PrototypeReviewNotice[] => {
     const summary = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary);
     const reviewId = summary?.waitingReviewId;
+    /* A decided latest round whose message keeps failing waits on the operator too: the row opens the review, where the retry is. */
+    if (summary?.decision && !reviewId) {
+      const held = task.prototypeReviews?.at(-1)?.decision;
+      const phase = held ? prototypeDeliveryPhase(held.delivery, now) : summary.decision.phase;
+      if (phase !== "attention") return [];
+      const latest = summary.latestReviewId;
+      return [{ id: `prototype-delivery:${latest}`, project: task.project, taskId: task.id, reviewId: latest, title: firstLineTitle(task.text), roundTitle: summary.title,
+        undelivered: true as const, createdAt: summary.decision.at, target: { kind: "prototype-review" as const, taskId: task.id, reviewId: latest } }];
+    }
     if (!summary || !reviewId || !prototypeWaitsOnOperator(summary)) return [];
     /* The notice names the task the jump lands on; the waiting round's own title, which may be older than the latest, rides second. */
     const waiting = (task.prototypeReviews ?? task.prototypeReviewReplica?.rounds ?? []).find(round => round.id === reviewId);

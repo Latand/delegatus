@@ -10,6 +10,7 @@ import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { boardFor } from "@/lib/board/store";
 import { applyBoardCommand } from "@/lib/board/command";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { repoDirForProject, pipelineSummary, viewerOwnProjectKeys, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { resolveRole } from "@/lib/roles/registry";
@@ -156,8 +157,8 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
     const holding = taskSeatHoldingSnapshot();
     let deployment: ReturnType<SeatTickSources["latestDeployment"]> = { state: "ok", value: null };
     try { deployment = ports.sources.latestDeployment(); } catch { /* installs without a deployment ledger */ }
-    const productionLine = viewerOwnProjectKeys().includes(run.project) ? `Delegatus deployment: ${(deployment.state === "ok" ? deployment.value?.revision : null) ?? "unread"}; confirm it succeeded and git merge-base --is-ancestor <merge sha> <deployed revision>.` : "Delegatus records no deployments for this project. Read its instruction files for how it ships; when they name none, a merged pull request is shipped.";
-    const brief = maintenanceBrief({ run, previous, previousCardText: tasks.find(t => t.id === previous?.taskId)?.text ?? null, seatTaskIds: tasks.filter(t => t.project === run.project && holding(t) === "holds").map(t => t.id), productionLine, evidence, openCount: tasks.filter(t => t.project === run.project && t.status !== "done").length, now: ports.sources.now() });
+    const productionLine = viewerOwnProjectKeys().includes(run.project) ? `Delegatus deployment: ${(deployment.state === "ok" ? deployment.value?.revision : null) ?? "unread"}; for a deployed note, confirm it succeeded and git merge-base --is-ancestor <merge sha> <deployed revision>.` : "Delegatus records no deployments for this project. Read its instruction files for how it ships; when they name none, a merged pull request is shipped.";
+    const brief = maintenanceBrief({ run, previous, previousCardText: tasks.find(t => t.id === previous?.taskId)?.text ?? null, seatTaskIds: tasks.filter(t => t.project === run.project && holding(t) === "holds").map(t => t.id), productionLine, mergeOnReview: mergeOnReviewEnabled(run.project), evidence, openCount: tasks.filter(t => t.project === run.project && t.status !== "done").length, now: ports.sources.now() });
     const body = { role: "maintainer", roleParams: {}, cwd: run.repoDir, project: run.project, "prompt": brief, title: tasks.find(t => t.id === run.taskId)?.text.split("\n")[0], taskId: run.taskId, clientAttemptId: run.runId, mcpServers: ["viewer"], notifyLauncher: false };
     // Persist the exact spawn payload before dispatch; restart replays the same digest.
     run = patchMaintenanceRun(run.runId, { state: "launching", launchBody: body })!;

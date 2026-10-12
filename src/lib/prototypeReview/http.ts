@@ -9,9 +9,10 @@ import { findSeatRound, loadSeatRounds } from "./seatRounds";
 import { loadTasks } from "@/lib/tasks/store";
 import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery } from "./decision";
 import { prototypeWorld, taskForPrototype, type PrototypeCaller, type PrototypeWorld } from "./world";
+import { deliverPrototypeDecision } from "./deliveryWorker";
+import { runsElsewhere } from "@/lib/links/linked";
 import type { DecidePrototypeInput } from "./types";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { runsElsewhere } from "@/lib/links/linked";
 import { canonicalProject } from "@/lib/projects/aliases";
 
 export function prototypeFailure(error: unknown): NextResponse {
@@ -79,7 +80,7 @@ export async function reviewReadPOST(request: NextRequest,world: PrototypeWorld 
       await refreshSeatDeliveries(target.seat!,delivery);
       return NextResponse.json(readSeatRounds(target.seat!),{ headers: { "cache-control": "private, no-store" } });
     }
-    return reviewGET(request,target.taskId,world,delivery);
+    return reviewGET(request,target.taskId,world);
   } catch (error) { return prototypeFailure(error); }
 }
 export async function publishPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
@@ -95,21 +96,15 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });
   } catch (error) { return prototypeFailure(error); }
 }
-export async function reviewGET(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery): Promise<NextResponse> {
+/** A read reports the decision's delivery as the background delivery last left it, and never waits on it. */
+export async function reviewGET(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
-    const caller = world.caller(request);
-    let task = taskForPrototype(taskId,caller);
-    // Remote installations only read the replicated decision; they cannot drive its delivery.
-    if (!runsElsewhere(task)) {
-      for (const round of task.prototypeReviews ?? []) await refreshPrototypeDelivery(taskId,round.id,delivery);
-      task = taskForPrototype(taskId,caller);
-    }
-    return NextResponse.json(readPrototypeReviews(task),{ headers: { "cache-control": "private, no-store" } });
+    return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,world.caller(request))),{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error); }
 }
-export async function reviewPOST(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery): Promise<NextResponse> {
+export async function reviewPOST(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery,now: () => number = Date.now): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
   const operator = directOperatorActivityAuthority(request);
   if (!operator.ok || request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return NextResponse.json({ error: "only the operator may decide prototypes" },{ status: 403 });
@@ -120,7 +115,9 @@ export async function reviewPOST(request: NextRequest,taskId: string,world: Prot
     taskForPrototype(taskId,caller,true);
     const body = await request.json() as DecidePrototypeInput | { reviewId: string; retry: true };
     if (!body || typeof body !== "object" || typeof body.reviewId !== "string" || ("retry" in body && body.retry !== true)) throw new PrototypeError("invalid decision");
-    await decidePrototype(request,taskId,body,world,delivery);
+    /* The decision is durable before the answer, and the answer never waits
+       for the seat: its message goes from the background delivery. */
+    if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now });
     return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,caller)),{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error); }
 }
@@ -173,7 +170,7 @@ export async function decisionsPOST(request: NextRequest,world: PrototypeWorld =
       if (!task) throw new PrototypeError("review not found",404);
       taskId = taskForPrototype(task.id,caller,true).id;
     }
-    await decidePrototype(request,taskId,body,world,delivery);
+    if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now: Date.now });
     return NextResponse.json(operatorDecisions(key),{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error); }
 }

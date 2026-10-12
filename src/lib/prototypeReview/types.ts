@@ -51,12 +51,21 @@ export interface PrototypeVariant {
   videos: Array<{ media: PrototypeMedia; caption: string }>;
 }
 export type PrototypeDeliveryState = "pending" | "sent" | "failed" | "uncertain" | "no-orchestrator";
+/** What the review says of a saved decision's message, derived on a local
+    read: saved and not yet handed to the seat, on its way, delivered, waiting
+    for the project to have an orchestrator, or failing long enough to ask for
+    the operator's attention. Never crosses to another installation. */
+export type PrototypeDeliveryPhase = "saved" | "delivering" | "delivered" | "waiting-seat" | "attention";
 export interface PrototypeDecision {
   answers?: PrototypeAnswer[];
   skipped?: true;
   chosen: number[];
   comment: string;
   at: string;
+  /** The person who decided; the background delivery sends in their name. Local only. */
+  decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string };
+  /** 1 for the first decision of a round; a changed decision raises it and gets a message key of its own. */
+  revision?: number;
   /** Persisted before dispatch; retries always carry this key and recipient. */
   delivery: {
     state: PrototypeDeliveryState;
@@ -64,6 +73,11 @@ export interface PrototypeDecision {
     conversationId: string | null;
     text: string;
     operationId?: string;
+    /** Written before the message is first handed to the send path: from then on a change goes as an amendment. */
+    dispatchedAt?: string;
+    /** Failed or unconfirmed attempts, including admitted ones the journal later showed failed, and when that run began. Cleared when the message lands or the operator retries. */
+    failures?: number;
+    failingSince?: string;
   };
 }
 export interface PrototypeReviewRound {
@@ -89,7 +103,7 @@ export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicat
     frames: Array<Omit<PrototypeFrame, "image" | "original"> & { image: PrototypeMediaView; original?: PrototypeMediaView }>;
     videos: Array<{ media: PrototypeMediaView; caption: string }>;
   }>;
-  decision?: Omit<PrototypeDecision, "delivery"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean } };
+  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase } };
 }
 /** A read's round. Superseded rounds name the later decided round that retired
     them; the mark is derived on read and never crosses to another installation. */
@@ -116,10 +130,12 @@ export interface PrototypeReviewSummary {
   title: string;
   rounds: number;
   createdAt: string;
-  decision?: { answered?: true; chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState };
+  decision?: { answered?: true; chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState; phase?: PrototypeDeliveryPhase };
 }
 export interface PrototypeReviewNotice {
   asks?: "questions";
+  /** The round is decided and its message keeps failing to reach the seat. */
+  undelivered?: true;
   id: string;
   project: string;
   /** Null for a question the orchestrator asked without a task. */

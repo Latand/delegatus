@@ -9,15 +9,18 @@ import { firstLineTitle } from "@/lib/tasks/helpers";
 import { loadTasks } from "@/lib/tasks/store";
 import { loadSeatRounds } from "./seatRounds";
 import type { OperatorDecisionView, OperatorDecisionsRead, PrototypeReviewNotice, PrototypeReviewRead, PrototypeMediaView, PrototypeReviewRound, PrototypeReviewSummary, PrototypeRoundRead, PrototypeRoundView } from "./types";
-import { currentPrototypeSummary, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded, seatRoundNotice } from "./model";
+import { currentPrototypeSummary, prototypeDeliveryPhase, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded, seatRoundNotice } from "./model";
 export { prototypeReviewSummary, prototypeReviewNotices } from "./model";
-export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[], index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals()): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
+export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[], index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals(), now = Date.now()): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
   return tasks.map(({ prototypeReviews, prototypeReviewReplica, ...task }) => {
     const summary = currentPrototypeSummary(prototypeReviewSummary(prototypeReviews ?? []) ?? prototypeReviewReplica?.summary ?? task.prototypeReview);
     const record = summary?.waitingReviewId ? index.get(`prototype:${summary.waitingReviewId}`) : undefined;
     if (!summary) return task;
     const { waitingDismissal: _held, ...current } = summary;
-    return { ...task, prototypeReview: { ...current, ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) } };
+    /* Only this installation drives a decision's delivery, so only its own rounds say how it goes. */
+    const held = prototypeReviews?.at(-1)?.decision;
+    return { ...task, prototypeReview: { ...current, ...(current.decision && held ? { decision: { ...current.decision, phase: prototypeDeliveryPhase(held.delivery, now) } } : {}),
+      ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) } };
   });
 }
 /** What a caller that names itself with a capability gets on a shared board
@@ -75,8 +78,11 @@ export function localRoundViews(stored: readonly PrototypeReviewRound[], taskId:
       return fs.realpathSync(place) === place && fs.lstatSync(place).isFile();
     } catch { return false; /* Copy is absent on linked installations and after retention. */ }
   };
+  const now = Date.now();
   return stored.map(round => {
-    const publicRound = prototypeRoundMetadata(round);
+    const metadata = prototypeRoundMetadata(round);
+    const publicRound = metadata.decision && round.decision
+      ? { ...metadata, decision: { ...metadata.decision, delivery: { ...metadata.decision.delivery, phase: prototypeDeliveryPhase(round.decision.delivery, now) } } } : metadata;
     const mediaView = (media: PrototypeMediaView) => {
       const image = media.mime.startsWith("image/");
       const available = !round.mediaRemovedAt && (image || taskId !== null) && held(round.id,media);

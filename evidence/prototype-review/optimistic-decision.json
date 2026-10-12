@@ -1,0 +1,164 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": {
+    "desktop-1440-uk-light-before": {
+      "phase": null,
+      "words": null,
+      "retry": false,
+      "field": true,
+      "save": true,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": null
+    },
+    "desktop-1440-uk-light-saving": {
+      "phase": null,
+      "words": null,
+      "retry": false,
+      "field": true,
+      "save": true,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": null,
+      "held": true,
+      "value": "Шапка з двох колонок, рядки з таблиці."
+    },
+    "desktop-1440-uk-light-after-submit": {
+      "phase": "saved",
+      "words": "Рішення збережено",
+      "retry": false,
+      "field": false,
+      "save": false,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": "Шапка з двох колонок, рядки з таблиці.",
+      "collapsedMs": 62
+    },
+    "desktop-1440-uk-light-delivering": {
+      "phase": "delivering",
+      "words": "Рішення збережено · доставляється оркестратору",
+      "retry": false,
+      "field": false,
+      "save": false,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": "Шапка з двох колонок, рядки з таблиці."
+    },
+    "desktop-1440-uk-light-delivered": {
+      "phase": "delivered",
+      "words": "Рішення збережено · доставлено оркестратору",
+      "retry": false,
+      "field": false,
+      "save": false,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": "Шапка з двох колонок, рядки з таблиці."
+    },
+    "desktop-1440-uk-light-closed": {
+      "review": false,
+      "guard": false
+    },
+    "desktop-1440-uk-light-attention-row": "Рішення не доставлено· 4 год томуDisk space: find what Docker, worktrees and temp storage holdДо прототипу",
+    "desktop-1440-uk-light-attention": {
+      "phase": "attention",
+      "words": "Рішення збережено, але оркестратор його досі не отримав. Спроби тривають.",
+      "retry": true,
+      "field": false,
+      "save": false,
+      "chosen": [
+        "2"
+      ],
+      "comment": "Смуги. Додайте колонку «можна звільнити»."
+    },
+    "phone-390-uk-light-before": {
+      "phase": null,
+      "words": null,
+      "retry": false,
+      "field": true,
+      "save": true,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": null
+    },
+    "phone-390-uk-light-saving": {
+      "phase": null,
+      "words": null,
+      "retry": false,
+      "field": true,
+      "save": true,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": null,
+      "held": true,
+      "value": "Шапка з двох колонок, рядки з таблиці."
+    },
+    "phone-390-uk-light-after-submit": {
+      "phase": "saved",
+      "words": "Рішення збережено",
+      "retry": false,
+      "field": false,
+      "save": false,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": "Шапка з двох колонок, рядки з таблиці.",
+      "collapsedMs": 61
+    },
+    "phone-390-uk-light-delivering": {
+      "phase": "delivering",
+      "words": "Рішення збережено · доставляється оркестратору",
+      "retry": false,
+      "field": false,
+      "save": false,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": "Шапка з двох колонок, рядки з таблиці."
+    },
+    "phone-390-uk-light-delivered": {
+      "phase": "delivered",
+      "words": "Рішення збережено · доставлено оркестратору",
+      "retry": false,
+      "field": false,
+      "save": false,
+      "chosen": [
+        "2",
+        "3"
+      ],
+      "comment": "Шапка з двох колонок, рядки з таблиці."
+    },
+    "phone-390-uk-light-closed": {
+      "review": false,
+      "guard": false
+    },
+    "phone-390-uk-light-attention-row": "Рішення не доставленоDisk space: find what Docker, worktrees and temp storage hold4 год тому",
+    "phone-390-uk-light-attention": {
+      "phase": "attention",
+      "words": "Рішення збережено, але оркестратор його досі не отримав. Спроби тривають.",
+      "retry": true,
+      "field": false,
+      "save": false,
+      "chosen": [
+        "2"
+      ],
+      "comment": "Смуги. Додайте колонку «можна звільнити»."
+    }
+  },
+  "failures": []
+}
