@@ -175,8 +175,11 @@ export async function waitForServerStartup(baseUrl: string, timeoutMs = 120_000)
 }
 
 if (import.meta.main) {
+  /* PID 1 is a real owner: a gate run as a container's entrypoint is PID 1 of
+     its namespace, and refusing it failed every in-container gate before it
+     measured anything. */
   const owner = Number(process.argv[process.argv.indexOf("--owner") + 1]);
-  if (!Number.isSafeInteger(owner) || owner <= 1) throw new Error("the candidate runtime host needs --owner <pid>");
+  if (!Number.isSafeInteger(owner) || owner < 1) throw new Error("the candidate runtime host needs --owner <pid>");
   setInterval(() => {
     try { process.kill(owner, 0); } catch { process.exit(86); }
   }, 500).unref();

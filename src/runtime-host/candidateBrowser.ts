@@ -6,7 +6,11 @@
    gate therefore opens eight real browser views over the synthetic retained
    history while two writers run, and bounds what a person waits through: the
    board drawn, each request from issue to last byte, the page's main thread
-   and its answer to input. `candidateBrowserRun.ts` drives the views; this
+   and its answer to input. The server those views are opened on is watched
+   from inside (`candidateServerLoopProbe.ts`): its event loop is bounded while
+   the views open and while they operate, because a server held for most of a
+   second by one route or one background tick passed every bound read in the
+   page. `candidateBrowserRun.ts` drives the views; this
    module holds the bounds and the verdict, so the runner, the board driver and
    the deployment adapter judge the same numbers. */
 
@@ -26,14 +30,30 @@ export interface CandidateBrowserBounds {
   lagMaxMs: number;
   /** A wheel turn to the next frame. */
   inputMs: number;
+  /** The serving process's own event loop: while the views open, and while they operate. */
+  serverBootLoopMaxMs: number;
+  serverLoopP95Ms: number;
+  serverLoopMaxMs: number;
 }
 
 export const CANDIDATE_BROWSER_BOUNDS: CandidateBrowserBounds = Object.freeze({
   readyMs: 10_000, filesP95Ms: 5_000, filesMaxMs: 10_000, apiMaxMs: 10_000,
   bootLagMaxMs: 1_000, lagP95Ms: 50, lagMaxMs: 500, inputMs: 500,
+  serverBootLoopMaxMs: 1_000, serverLoopP95Ms: 50, serverLoopMaxMs: 500,
 });
 
-export const CANDIDATE_BROWSER_MINIMUMS = Object.freeze({ views: 8, inputsPerView: 2, writes: 50 });
+/* `serverLoopSamples`: a 10 ms timer over the shortest window the helper is run with. */
+export const CANDIDATE_BROWSER_MINIMUMS = Object.freeze({ views: 8, inputsPerView: 2, writes: 50, serverLoopSamples: 300 });
+
+/** The serving process's event loop, as its own probe measured it. */
+export interface CandidateBrowserServerLoop {
+  /** Samples while the views operated. */
+  samples: number;
+  /** The longest delay from the first navigation to the last board drawn. */
+  bootMaxMs: number;
+  p95Ms: number;
+  maxMs: number;
+}
 
 /** The page's server-sent event streams: held open by design, so neither
     their age nor their end is a request's answer. Every other `/api/` route
@@ -82,11 +102,14 @@ export interface CandidateBrowserMeasurements {
   inputsMin: number;
   selectionsLost: number;
   staleNotices: number;
+  /** Null when the server carried no probe or the probe did not answer: a refusal. */
+  server: CandidateBrowserServerLoop | null;
 }
 
 export function summarizeBrowserViews(
   views: readonly CandidateBrowserView[],
   writes: CandidateBrowserMeasurements["writes"],
+  server: CandidateBrowserServerLoop | null,
 ): CandidateBrowserMeasurements {
   const max = (values: number[]) => Math.round(Math.max(0, ...values.map((value) => Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER)));
   const slowest = [...views].sort((left, right) => right.api.maxMs - left.api.maxMs)[0];
@@ -110,6 +133,7 @@ export function summarizeBrowserViews(
     inputsMin: views.length ? Math.min(...views.map((view) => view.inputMs.length)) : 0,
     selectionsLost: views.filter((view) => !view.selection.stillSelected || view.selection.checksLost > 0).length,
     staleNotices: views.reduce((sum, view) => sum + view.selection.staleNoticeSeen, 0),
+    server,
   };
 }
 
@@ -142,5 +166,14 @@ export function candidateBrowserBreaches(
   if (measured.viewsWithoutAnswerDuringWrites) breaches.push(`${measured.viewsWithoutAnswerDuringWrites} browser view(s) received no board answer while the writers ran`);
   if (measured.selectionsLost) breaches.push(`${measured.selectionsLost} browser view(s) lost their selected conversation`);
   if (measured.staleNotices) breaches.push(`browser views showed the missing-conversation notice ${measured.staleNotices} time(s)`);
+  if (!measured.server) breaches.push("the server's event loop was not measured while the browser views ran");
+  else {
+    if (measured.server.samples < minimum.serverLoopSamples) {
+      breaches.push(`server event loop under the browser views: measured ${measured.server.samples} samples, at least ${minimum.serverLoopSamples} required`);
+    }
+    over("server event-loop delay while the browser views opened", measured.server.bootMaxMs, bounds.serverBootLoopMaxMs);
+    over("server event-loop delay p95 under the browser views", measured.server.p95Ms, bounds.serverLoopP95Ms);
+    over("server event-loop delay max under the browser views", measured.server.maxMs, bounds.serverLoopMaxMs);
+  }
   return breaches;
 }

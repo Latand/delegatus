@@ -332,11 +332,13 @@ export function candidatePerformanceBreaches(
  * Rehearse the candidate's registry and projection performance inside a
  * container from its image. `--rm` and no mounts: the synthetic registry lives
  * and dies inside a container that can reach neither the live state directory
- * nor the network.
+ * nor the network. `--init` puts Docker's init at PID 1: the gate starts a
+ * runtime host, releases, workers and a browser, and what they orphan is
+ * reaped there instead of piling up under an interpreter that reaps nothing.
  */
 export function candidatePerformanceDockerArgs(image: string): string[] {
   return [
-    "docker", "run", "--rm",
+    "docker", "run", "--rm", "--init",
     "--network", "none",
     "--label", "dev.live-log-viewer.candidate-performance=1",
     "-e", `LLV_CANDIDATE_PERFORMANCE_BIN=${CANDIDATE_PERFORMANCE_IMAGE_BIN}`,
@@ -412,6 +414,7 @@ const BROWSER_SHAPE: Shape = {
   readyMaxMs: "n", filesP95Ms: "n", filesMaxMs: "n", filesErrors: "n", viewsWithoutAnswerDuringWrites: "n",
   apiMaxMs: "n", apiMaxRoute: "s?", apiErrors: "n", apiFirstError: "s?", apiUnfinished: "n", bootLagMaxMs: "n", lagP95Ms: "n", lagMaxMs: "n", inputMaxMs: "n", inputsMin: "n",
   selectionsLost: "n", staleNotices: "n",
+  server: { samples: "n", bootMaxMs: "n", p95Ms: "n", maxMs: "n" },
 };
 
 function shapeErrors(value: unknown, shape: Shape, at: string): string[] {

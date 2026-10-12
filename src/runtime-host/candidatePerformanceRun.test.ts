@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { candidateBrowserExecutable } from "./candidateBrowserRun";
 import { CANDIDATE_PERFORMANCE_REPORT_PREFIX, parseCandidatePerformanceReport, type CandidatePerformanceEvidence } from "./candidatePerformance";
 import { ViewerDeploymentCoordinator } from "./deployment";
 import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
@@ -195,3 +196,25 @@ test("a runtime host that stops answering is refused through the adapter and the
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 400_000);
+
+/* The production server itself, held: `next start` over the gate's history
+   with the event-loop probe preloaded, eight Chromium views and two writers,
+   and its loop held once for 800 ms while the views operate. Nothing the page
+   reads shows it; the server's own reading refuses the candidate. Needs the
+   production build and a Chromium, as the full run does. */
+const served = fs.existsSync(path.resolve(import.meta.dir, "../../.next/BUILD_ID")) && candidateBrowserExecutable() !== null;
+test.skipIf(!served)("a production server held under the browser views is refused by its own event loop", async () => {
+  const { code, report } = await runGate(["--scale", "0.1", "--induce", "server-stall"]);
+  expect(code).toBe(1);
+  expect(report.ok).toBe(false);
+  expect(report.induced).toEqual(["server-stall"]);
+  const browser = report.measurements!.browser!;
+  expect(browser.views).toBe(8);
+  expect(browser.server!.samples).toBeGreaterThan(1_000);
+  expect(browser.server!.maxMs).toBeGreaterThanOrEqual(780);
+  expect(report.breaches).toEqual(expect.arrayContaining([
+    expect.stringMatching(/^server event-loop delay max under the browser views \d+(\.\d+)?ms exceeds 500ms$/),
+  ]));
+  expect(report.log?.some((line) => line.startsWith("induced: held the production server's event loop for 800ms"))).toBe(true);
+  expectEvidenceIntact(report);
+}, 600_000);

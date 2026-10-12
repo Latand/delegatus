@@ -403,9 +403,9 @@ function buildEnvironment(port: number): NodeJS.ProcessEnv {
 
 const CAPTURE_BUN = process.env.BOARD_CAPTURE_BUN?.trim() || process.execPath;
 
-function startServer(port: number): ChildProcess {
-  return spawn(CAPTURE_BUN, ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: repoRoot, env: buildEnvironment(port), stdio: ["ignore", "inherit", "inherit"],
+function startServer(port: number, probe?: { preload: string[]; env: Record<string, string> }): ChildProcess {
+  return spawn(CAPTURE_BUN, [...probe?.preload ?? [], "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+    cwd: repoRoot, env: { ...buildEnvironment(port), ...probe?.env }, stdio: ["ignore", "inherit", "inherit"],
   });
 }
 
@@ -7533,7 +7533,7 @@ async function registryHistoryMain(): Promise<void> {
   seedState(PROJECT_NAME, tasks, reviewers);
   process.env.LLV_STATE_DIR = STATE_DIR;
   const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
-  const { browserViewPins, measureBoardInBrowser } = await import("../src/runtime-host/candidateBrowserRun");
+  const { browserViewPins, measureBoardInBrowser, serverLoopProbe } = await import("../src/runtime-host/candidateBrowserRun");
   const { CANDIDATE_BROWSER_BOUNDS, candidateBrowserBreaches } = await import("../src/runtime-host/candidateBrowser");
   const { startCandidateRuntimeHost, waitForServerStartup } = await import("../src/runtime-host/candidateRuntimeHost");
   /* The selected conversations' transcripts live in the sandboxed home, so
@@ -7555,7 +7555,10 @@ async function registryHistoryMain(): Promise<void> {
     const hostEnv = Object.fromEntries(Object.entries(buildEnvironment(0)).filter((entry): entry is [string, string] => entry[1] !== undefined));
     runtimeHost = await startCandidateRuntimeHost({ runtimeBin: CAPTURE_BUN, cwd: repoRoot, env: hostEnv, directory: path.join(BASE, "rt") });
     SERVER_EXTRA_ENV.LLV_RUNTIME_HOST_SOCKET = runtimeHost.socket;
-    server = startServer(port);
+    /* The server's own event loop is part of the reading, as in the gate. */
+    fs.mkdirSync(path.join(BASE, "server-loop"), { recursive: true });
+    const probe = serverLoopProbe(path.join(BASE, "server-loop", "probe"));
+    server = startServer(port, probe);
     await waitForServer(baseUrl, server);
     /* The views open on a server that has started and scanned once, as an
        operator's do; the gate itself bounds the cold first projection. */
@@ -7567,6 +7570,7 @@ async function registryHistoryMain(): Promise<void> {
       && !dataset.workers.some((worker) => worker.key === subject.key)).map(({ key, servers }) => ({ key, servers }));
     const result = await measureBoardInBrowser({
       baseUrl,
+      server: probe,
       executablePath: process.env.CHROME_BIN ?? null,
       pins: browserViewPins(dataset.conversations),
       writers: {
@@ -7576,6 +7580,7 @@ async function registryHistoryMain(): Promise<void> {
       screenshotDir: OUT_DIR,
     });
     report.measurements = result.measurements;
+    report.serverStalls = result.serverStalls;
     report.views = result.views.map((view, index) => ({ ...view, diagnostics: result.diagnostics[index] }));
     report.failures.push(...candidateBrowserBreaches(result.measurements));
   } finally {

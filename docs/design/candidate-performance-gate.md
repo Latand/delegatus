@@ -66,6 +66,45 @@ more than nine in ten were cold, the release was unusable:
   decision finds a subject's attesting conversations through it.
 - The cold key set is refreshed from the change journal, and a new row's
   position comes from the two order indexes; neither scans the history.
+- A read-only view refreshed after another writer's commit costs what the
+  commit changed. Each hot row's grant decision records what it read (the
+  attesting rows, absent ones included, and the identity lookups it made),
+  and a refresh decides again only the rows a journalled change reaches
+  through that record; it used to decide every grant-bearing hot row after
+  any conversation, receipt or lineage write. A collection's key order is
+  kept while every journalled row holds its position, the archive's mapping
+  is confirmed from the journalled rows instead of counted, and a collection
+  whose archived versions and pinned decisions stand keeps their accessors
+  and is merged with its hot rows when a reader first asks for it. Over the
+  gate's history a refresh after a receipt or conversation write went from
+  37–57 ms to 7–10 ms in isolation, on a machine under load.
+- A file's indexed readers are shared by every copy of the store's module.
+  Next standalone evaluates the instrumentation and the route handlers in
+  separate bundle realms, each with its own copy of the module, over the one
+  store the process holds. The readers were kept in module-level maps, so a
+  route in another bundle found none and fell back to enumerating the
+  collection, every archived row included, on each lookup: under eight
+  browser views `/api/log/provenance`, `/api/accounts` and the board routes
+  held the production server's event loop for 1.7–3.3 s at a time, with the
+  index code already in place and every gate run from source passing. They
+  now live on the process object those realms share, as the registry does.
+  The server's loop under the same views then measured 106 ms at most.
+- The settlement sweep finds the endings since its last checkpoint among
+  archived operation owners from the instant each stores (its delivery's
+  when it stores none), where it enumerated the collection and read every
+  archived owner each time: 0.3 s of the serving release's thread every
+  fifteen seconds. The synthetic history's settled owners carry that instant,
+  as settlement writes it.
+- An archive pass finds its candidates before it takes the write lock and
+  confirms each under it by key. The search is nearly all of a pass (0.1 s
+  over the gate's history, several times that on a loaded machine) and every
+  writer waited behind it synchronously; a pass with nothing to move takes
+  no lock at all.
+- A view held across another writer's commit answers path and generation
+  lookups as it holds them. The path and generation indexes are the
+  database's current ones, so the conversations journalled since the view
+  was taken are answered from the view's own rows and the rest from the
+  index; a journal that no longer reaches back to the view enumerates it.
 - The archive pass selects candidates one collection at a time. The single
   disjunction it replaced parsed every payload under the write lock, 0.7 s
   per reaper cycle whether or not anything moved.
@@ -128,8 +167,12 @@ more than nine in ten were cold, the release was unusable:
 
 `verify-candidate` now runs two rehearsals inside throwaway containers from
 the candidate image, without network or mounts: the runtime-host rehearsal
-(#1254) and this gate (`src/runtime-host/candidatePerformanceRun.ts`). A
-candidate passes only when both pass. A refused candidate is retired before
+(#1254) and this gate (`src/runtime-host/candidatePerformanceRun.ts`). The
+gate's container runs under Docker's init (`--init`): as the entrypoint
+itself the gate was PID 1, its runtime host refused that owner, and every
+candidate was refused before anything was measured; an init also reaps what
+the gate's releases, workers and browser orphan. PID 1 is accepted as an
+owner all the same. A candidate passes only when both pass. A refused candidate is retired before
 anything is switched, and the release that was serving keeps serving
 (`ViewerDeploymentCoordinator`, phase `candidate-health`). The adapter
 computes the verdict again from the measurements against the bounds the
@@ -197,7 +240,14 @@ process, with nothing of the caller's environment but its `PATH`:
   the same runtime host, so the board's runtime surfaces answer as they do
   in production; the views open once its structured-host startup reports
   ready on `/api/runtime/snapshot`, since that startup is a release's
-  activation, bounded above. Every `/api/` request is an ordinary request except the
+  activation, bounded above. That server carries a probe preloaded into it
+  (`src/runtime-host/candidateServerLoopProbe.ts`, `bun --preload`), which
+  samples how late a 10 ms timer fires inside the serving process itself: the
+  releases whose event loop the gate bounds have stopped by then, and nothing
+  the page measures shows a server held by one route or one background tick.
+  The gate checks that the probe's process is the one it started, and reads
+  the samples for two spans, the views opening and the views operating.
+  Every `/api/` request is an ordinary request except the
   page's declared event streams (`/api/streams`, `/api/runtime/stream`,
   `/api/logs/stream`): a failed one counts the time until it failed, one
   still open when the window closes counts its age so far, and a 5xx or a
@@ -248,7 +298,7 @@ verdict; it skips the browser, as does a run under an induced fault.
 | Failures | no SQLITE_BUSY, no runtime timeout, no failed write; the successor reports and exits 0; the incumbent's demotion exits 0 | A refused or timed-out write loses the work it carried, which no latency bound measures. |
 | Evidence | pending and uncertain deliveries byte-identical and hot; every MCP grant decided the same by writers and the successor | Speed bought by dropping evidence or authority is a regression the latency bounds cannot see. |
 | Stability | every measured answer of every scope carries the rows, conversations and projects of its settled answer from before the first write, and its pinned conversation; no answer is empty | Rows that appear, vanish or change project read as conversations jumping on the board. The history spans eight projects, so the board's ten-project window holds all of it whichever project a write makes the newest. |
-| Browser views | each of eight views: board drawn ≤ 10 s from navigation; `/api/files` p95 ≤ 5 s, max ≤ 10 s; any other ordinary API request ≤ 10 s whether answered, failed or still open, and none answered 5xx or failed; main thread ≤ 1 s before the board drew, p95 ≤ 50 ms and max ≤ 500 ms after; a wheel answered ≤ 500 ms; selection held, no missing-conversation notice, a board answer while the writers ran; ≥ 50 writes, none failed | What the operator sees is the page, not the handler. The HTTP bounds above held while the page took 15-19 s to draw: `/api/accounts` enumerated every conversation of the history once per completed account migration, through a lazy reader that stats the database twice per row, and held the server's thread for two thirds of a minute-long run ("What changed" lists the page's other whole-history reads). |
+| Browser views | each of eight views: board drawn ≤ 10 s from navigation; `/api/files` p95 ≤ 5 s, max ≤ 10 s; any other ordinary API request ≤ 10 s whether answered, failed or still open, and none answered 5xx or failed; main thread ≤ 1 s before the board drew, p95 ≤ 50 ms and max ≤ 500 ms after; a wheel answered ≤ 500 ms; selection held, no missing-conversation notice, a board answer while the writers ran; ≥ 50 writes, none failed; the serving process's own event loop ≤ 1 s while the views opened, p95 ≤ 50 ms and max ≤ 500 ms while they operated, with ≥ 300 samples, and a run that did not read it is refused | What the operator sees is the page, not the handler. The HTTP bounds above held while the page took 15-19 s to draw: `/api/accounts` enumerated every conversation of the history once per completed account migration, through a lazy reader that stats the database twice per row, and held the server's thread for two thirds of a minute-long run ("What changed" lists the page's other whole-history reads). |
 | Sufficiency | full dataset (≥ 29,000 rows, ≥ 90 % cold); ≥ 50 writes per writer, ≥ 20 keyed reads, ≥ 8 warm builds, ≥ 64 board requests, ≥ 8 compared rounds, ≥ 2 workers, pending and uncertain deliveries present | A run that measured nothing passes nothing. |
 
 The latency numbers are the bounds the post-incident audit proposed, with the
@@ -272,7 +322,10 @@ adapter and acted on by the coordinator retires the candidate without a
 promote. `candidateBrowserRun.test.ts` drives the browser helper against a
 board fast in every way but one: it passes clean, and a
 `/api/tmux/targets` that never answers or a `/api/runtime/snapshot` that
-answers 503 refuses it through the same adapter and coordinator. `deployment.test.ts` requires a refused
+answers 503 refuses it through the same adapter and coordinator, and so
+does a board whose server is held once for 800 ms while every request stays
+fast, or whose server carries no probe. `--induce server-stall` does the same
+to the real production server under the gate's own views. `deployment.test.ts` requires a refused
 candidate to be retired with the previous release still current, and an
 adapter answer without a performance report, read through the real
 host-command adapter, to be retired the same way. The full pass runs with

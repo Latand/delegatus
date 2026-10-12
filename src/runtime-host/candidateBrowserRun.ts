@@ -11,14 +11,16 @@
    when the window closes counts its age so far; only the declared event
    streams (`CANDIDATE_BROWSER_STREAM_ROUTES`) stay open by design.
    Main-thread delay is bounded apart for the boot (navigation to a drawn
-   board) and for operation after it. */
+   board) and for operation after it. The server's own event loop is read
+   from the probe preloaded into it, over the same two spans. */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { CandidateBrowserMeasurements, CandidateBrowserView } from "./candidateBrowser";
+import type { CandidateBrowserMeasurements, CandidateBrowserServerLoop, CandidateBrowserView } from "./candidateBrowser";
 import { CANDIDATE_BROWSER_STREAM_ROUTES, summarizeBrowserViews } from "./candidateBrowser";
+import type { ServerLoopWindow } from "./candidateServerLoopProbe";
 
 export const CANDIDATE_BROWSER_VIEWS = 8;
 export const CANDIDATE_BROWSER_WINDOW_MS = 30_000;
@@ -31,6 +33,54 @@ export function candidateBrowserExecutable(env: NodeJS.ProcessEnv = process.env)
     if (fs.existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+/** The probe of one server: how to start the server with it, and how to read it. */
+export interface ServerLoopProbe {
+  /** Interpreter arguments that load the probe, before the server's own. */
+  preload: string[];
+  env: Record<string, string>;
+  /** The process the probe is watching, once it has started. */
+  pid(): number | null;
+  /** The server's event loop between two wall-clock instants; null when it did not answer. */
+  read(from: number, to: number): Promise<ServerLoopWindow | null>;
+  /** Hold the server's event loop once, for the gate's own refusal tests. */
+  stall(ms: number): void;
+}
+
+/**
+ * A probe for a server about to be started: `bun ...preload <server>` with
+ * `env` loads `candidateServerLoopProbe.ts` into it. `prefix` names files in a
+ * directory only the caller and that server use.
+ */
+export function serverLoopProbe(prefix: string): ServerLoopProbe {
+  let asked = 0;
+  return {
+    preload: ["--preload", path.join(import.meta.dir, "candidateServerLoopProbe.ts")],
+    env: { LLV_CANDIDATE_SERVER_LOOP: prefix },
+    pid() {
+      try { return Number(fs.readFileSync(`${prefix}.pid`, "utf8")) || null; } catch { return null; }
+    },
+    async read(from, to) {
+      const id = `window-${asked += 1}`;
+      fs.writeFileSync(`${prefix}.ask.tmp`, JSON.stringify({ id, from, to }));
+      fs.renameSync(`${prefix}.ask.tmp`, `${prefix}.ask`);
+      /* The probe looks every 100 ms of its own loop; a server held longer answers late. */
+      for (const until = performance.now() + 15_000; performance.now() < until; await Bun.sleep(50)) {
+        try {
+          const answer = JSON.parse(fs.readFileSync(`${prefix}.${id}.json`, "utf8")) as ServerLoopWindow;
+          fs.rmSync(`${prefix}.${id}.json`, { force: true });
+          return answer;
+        } catch { /* not answered yet */ }
+      }
+      fs.rmSync(`${prefix}.ask`, { force: true });
+      return null;
+    },
+    stall(ms) {
+      fs.writeFileSync(`${prefix}.stall.tmp`, String(ms));
+      fs.renameSync(`${prefix}.stall.tmp`, `${prefix}.stall`);
+    },
+  };
 }
 
 export interface BrowserViewPin { path: string; conversationId: string; title: string }
@@ -82,6 +132,8 @@ export interface BrowserViewDiagnostics {
 export interface BrowserRunResult {
   views: CandidateBrowserView[];
   diagnostics: BrowserViewDiagnostics[];
+  /** The server's event-loop delays of 100 ms or more, with the wall clock each ended at. */
+  serverStalls: Array<{ at: number; ms: number }>;
   measurements: CandidateBrowserMeasurements;
 }
 
@@ -137,6 +189,10 @@ export async function measureBoardInBrowser(options: {
   executablePath: string | null;
   pins: readonly BrowserViewPin[];
   writers: BrowserWriters;
+  /** The probe of the server at `baseUrl`. Without its reading the run is refused. */
+  server: Pick<ServerLoopProbe, "read"> | null;
+  /** Called once every view has drawn and the writers have started. */
+  onOperating?: () => void;
   windowMs?: number;
   screenshotDir?: string;
 }): Promise<BrowserRunResult> {
@@ -148,6 +204,7 @@ export async function measureBoardInBrowser(options: {
   });
   let writers: ReturnType<typeof startWriters> | null = null;
   try {
+    const openedAt = Date.now();
     const views = await Promise.all(options.pins.map(async (pin, index) => {
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
       /* An operator's browser streams, so EventSource stays as it is. */
@@ -215,6 +272,8 @@ export async function measureBoardInBrowser(options: {
       return { index, context, page, pin, requests, failed, open, readyMs, drawnAt, staleSeen: 0, lostSeen: 0, inputs: [] as number[] };
     }));
     writers = startWriters(options.writers, process.pid);
+    const operatingAt = Date.now();
+    options.onOperating?.();
     const input = async (view: (typeof views)[number]) => {
       const inputStarted = performance.now();
       await view.page.mouse.wheel(0, 240);
@@ -241,6 +300,12 @@ export async function measureBoardInBrowser(options: {
     }
     const written = await writers.stop();
     writers = null;
+    /* The server's own account of the two spans, asked once the load is over. */
+    const closedLoopAt = Date.now();
+    const booting = await options.server?.read(openedAt, operatingAt) ?? null;
+    const operating = await options.server?.read(operatingAt, closedLoopAt) ?? null;
+    const server: CandidateBrowserServerLoop | null = booting && operating
+      ? { samples: operating.samples, bootMaxMs: booting.maxMs, p95Ms: operating.p95Ms, maxMs: operating.maxMs } : null;
     const readings: CandidateBrowserView[] = [];
     const diagnostics: BrowserViewDiagnostics[] = [];
     for (const view of views) {
@@ -338,7 +403,7 @@ export async function measureBoardInBrowser(options: {
       maxMs: Math.round(Math.max(0, ...written.latencies)),
       failures: written.failures,
     };
-    return { views: readings, diagnostics, measurements: summarizeBrowserViews(readings, writes) };
+    return { views: readings, diagnostics, serverStalls: [...booting?.stalls ?? [], ...operating?.stalls ?? []], measurements: summarizeBrowserViews(readings, writes, server) };
   } finally {
     if (writers) await writers.stop().catch(() => undefined);
     await browser.close().catch(() => undefined);

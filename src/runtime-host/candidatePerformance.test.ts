@@ -56,6 +56,7 @@ function healthyBrowser(): CandidateBrowserMeasurements {
     readyMaxMs: 4_800, filesP95Ms: 1_900, filesMaxMs: 2_600, filesErrors: 0, viewsWithoutAnswerDuringWrites: 0,
     apiMaxMs: 3_100, apiMaxRoute: "/api/accounts", apiErrors: 0, apiFirstError: null, apiUnfinished: 0, bootLagMaxMs: 450, lagP95Ms: 1, lagMaxMs: 140, inputMaxMs: 160, inputsMin: 2,
     selectionsLost: 0, staleNotices: 0,
+    server: { samples: 2_900, bootMaxMs: 380, p95Ms: 12, maxMs: 210 },
   };
 }
 
@@ -277,9 +278,11 @@ test("the refusal names the breaches for the deployment record", () => {
     .toBe("candidate performance gate refused the release: the candidate performance gate could not run: boom");
 });
 
-test("the gate runs inside the candidate image under its own Bun, with no network and no mounts", () => {
+/* Run as the entrypoint itself, the gate was PID 1 and its runtime host
+   refused that owner before anything was measured; Docker's init takes PID 1. */
+test("the gate runs inside the candidate image under its own Bun and an init, with no network and no mounts", () => {
   expect(candidatePerformanceDockerArgs("agent-log-viewer:candidate")).toEqual([
-    "docker", "run", "--rm",
+    "docker", "run", "--rm", "--init",
     "--network", "none",
     "--label", "dev.live-log-viewer.candidate-performance=1",
     "-e", "LLV_CANDIDATE_PERFORMANCE_BIN=/usr/local/bin/bun-container",
@@ -358,4 +361,40 @@ test("a browser request left unanswered or answered 5xx refuses the candidate", 
     "browser /api/tmux/targets (unanswered) 30412ms exceeds 10000ms",
     "8 other browser API request(s) failed, first /api/runtime/snapshot HTTP 503",
   ]);
+});
+
+/* #2761: the reviewer held the event loop of the server under the views for
+   801 ms and every bound read in the page passed (request max 232 ms, page
+   delay 13 ms, input 20 ms). The server's own loop is part of the verdict,
+   and a run that did not read it is refused. */
+test("a server held under the browser views, or not measured there, refuses the candidate", () => {
+  const held = healthy();
+  held.browser = {
+    ...healthyBrowser(),
+    apiMaxMs: 232, apiMaxRoute: "/api/files", lagP95Ms: 1, lagMaxMs: 13, inputMaxMs: 20,
+    server: { samples: 2_840, bootMaxMs: 120, p95Ms: 4, maxMs: 801 },
+  };
+  expect(candidatePerformanceBreaches(held)).toEqual(["server event-loop delay max under the browser views 801ms exceeds 500ms"]);
+  expect(candidatePerformanceEvidence(report(held, { ok: true, breaches: [] }))).toMatchObject({
+    ok: false, detail: "server event-loop delay max under the browser views 801ms exceeds 500ms",
+  });
+
+  const slow = healthy();
+  slow.browser = { ...healthyBrowser(), server: { samples: 120, bootMaxMs: 1_400, p95Ms: 75, maxMs: 300 } };
+  expect(candidatePerformanceBreaches(slow)).toEqual([
+    "server event loop under the browser views: measured 120 samples, at least 300 required",
+    "server event-loop delay while the browser views opened 1400ms exceeds 1000ms",
+    "server event-loop delay p95 under the browser views 75ms exceeds 50ms",
+  ]);
+
+  const unmeasured = healthy();
+  unmeasured.browser = { ...healthyBrowser(), server: null };
+  expect(candidatePerformanceBreaches(unmeasured)).toEqual(["the server's event loop was not measured while the browser views ran"]);
+  expect(candidatePerformanceEvidence(report(unmeasured, { ok: true, breaches: [] }))).toMatchObject({
+    ok: false, detail: "the candidate performance report lacks or garbles browser.server",
+  });
+  /* A report from before the probe carries no reading at all. */
+  const older = report(healthy(), { ok: true, breaches: [] });
+  delete (older.measurements!.browser as unknown as Record<string, unknown>).server;
+  expect(candidatePerformanceEvidence(older)).toMatchObject({ ok: false });
 });

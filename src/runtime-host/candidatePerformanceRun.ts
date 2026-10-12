@@ -40,10 +40,11 @@
    operator's state.
 
    `--induce-slow-ms <n>` holds every write of release A for n ms,
-   `--induce worker-kill|worker-stall` kills or stops one re-hosted worker, and
+   `--induce worker-kill|worker-stall` kills or stops one re-hosted worker,
    `--induce runtime-stall` leaves every runtime-host call unanswered through
-   warm operation. They exist so the gate's own tests can prove such
-   candidates are refused. */
+   warm operation, and `--induce server-stall` holds the event loop of the
+   production server once while the browser views operate. They exist so the
+   gate's own tests can prove such candidates are refused. */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -61,7 +62,7 @@ import {
   type CandidatePerformanceMeasurements,
   type ProjectionBuildSample,
 } from "./candidatePerformance";
-import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser } from "./candidateBrowserRun";
+import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser, serverLoopProbe } from "./candidateBrowserRun";
 import { startCandidateRuntimeHost, waitForServerStartup, type CandidateRuntimeHost } from "./candidateRuntimeHost";
 import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
@@ -90,8 +91,10 @@ const BUSY = /SQLITE_BUSY|database is locked/i;
 const ENTRY = path.join(import.meta.dir, "candidatePerformanceRun.ts");
 
 type Mode = "gate" | "viewer" | "writer" | "worker";
-type Induced = "worker-kill" | "worker-stall" | "runtime-stall";
-const INDUCED: readonly Induced[] = ["worker-kill", "worker-stall", "runtime-stall"];
+type Induced = "worker-kill" | "worker-stall" | "runtime-stall" | "server-stall";
+const INDUCED: readonly Induced[] = ["worker-kill", "worker-stall", "runtime-stall", "server-stall"];
+/** How long `--induce server-stall` holds the production server's event loop. */
+const INDUCED_SERVER_STALL_MS = 800;
 
 interface WorkerSpec { key: string; sessionId: string; transcript: string; socket: string }
 interface AdoptionRecord { appointedAt: number; adoptedAt: number; pids: Record<string, number> }
@@ -154,10 +157,11 @@ function busyWait(ms: number): void {
   while (performance.now() < until) { /* a deliberately slow candidate */ }
 }
 
-/** Leave when the gate does, however it went: nothing it started outlives it. */
+/** Leave when the gate does, however it went: nothing it started outlives it.
+    A gate that is its container's entrypoint is PID 1, and is followed too. */
 function followOwner(): void {
   const owner = Number(option("--owner"));
-  if (!Number.isSafeInteger(owner) || owner <= 1) return;
+  if (!Number.isSafeInteger(owner) || owner < 1) return;
   setInterval(() => {
     try { process.kill(owner, 0); } catch { process.exit(86); }
   }, 500).unref();
@@ -835,6 +839,8 @@ async function browserPhase(input: {
   keys: ReadonlyArray<{ key: string; servers: string[] }>;
   children: ChildProcess[];
   note: (line: string) => void;
+  /** Hold the server's event loop this long once the views operate. */
+  inducedStallMs?: number;
 }): Promise<CandidateBrowserMeasurements | null> {
   const executablePath = candidateBrowserExecutable();
   if (!executablePath) { input.note("browser: no Chromium in this image or CHROME_BIN"); return null; }
@@ -852,8 +858,11 @@ async function browserPhase(input: {
     LLV_REAPER_ENABLED: "0",
   };
   delete env.LLV_FILES_RESPONSE_WORKER_LAUNCH;
-  const server = spawn(runtimeBin(), ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: process.cwd(), env: env as NodeJS.ProcessEnv, stdio: ["ignore", "ignore", debugging() ? "inherit" : "ignore"],
+  /* The server's event loop is read from inside it, over the views' whole load. */
+  fs.mkdirSync(path.join(input.root, "server-loop"), { recursive: true });
+  const probe = serverLoopProbe(path.join(input.root, "server-loop", "probe"));
+  const server = spawn(runtimeBin(), [...probe.preload, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+    cwd: process.cwd(), env: { ...env, ...probe.env } as NodeJS.ProcessEnv, stdio: ["ignore", "ignore", debugging() ? "inherit" : "ignore"],
   });
   input.children.push(server);
   try {
@@ -870,9 +879,16 @@ async function browserPhase(input: {
     input.note(`browser: the server's structured-host startup is ${startup}`);
     if (startup !== "ready") throw new Error(`the production server's structured-host startup is ${startup}, never ready`);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    /* The probe must be watching the process that serves, or its reading says nothing. */
+    if (probe.pid() !== server.pid) throw new Error("the production server carries no event-loop probe");
     const result = await measureBoardInBrowser({
       baseUrl,
       executablePath,
+      server: probe,
+      onOperating: () => {
+        if (!input.inducedStallMs) return;
+        setTimeout(() => { probe.stall(input.inducedStallMs!); input.note(`induced: held the production server's event loop for ${input.inducedStallMs}ms`); }, 3_000);
+      },
       pins: browserViewPins(input.conversations),
       writers: {
         runtime: runtimeBin(), entry: ENTRY, cwd: process.cwd(), env: input.env as NodeJS.ProcessEnv,
@@ -883,6 +899,8 @@ async function browserPhase(input: {
       input.note(`browser view ${view.view}: slowest ${JSON.stringify(view.slowest.slice(0, 2))}`
         + (view.failures.length ? `; failed ${JSON.stringify(view.failures)}` : ""));
     }
+    input.note(`browser: the server's event loop ${JSON.stringify(result.measurements.server)}`
+      + (result.serverStalls.length ? `; delays of ${SLOW_STEP_MS}ms or more: ${result.serverStalls.map((stall) => `${stall.ms}ms at ${stall.at}`).join(", ")}` : ""));
     return result.measurements;
   } finally {
     server.kill("SIGTERM");
@@ -1239,12 +1257,15 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
        one under an induced fault, is a refusal already and skips it. */
     for (const pid of workerPids) { try { process.kill(pid, "SIGCONT"); process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
     let browser: CandidateBrowserMeasurements | null = null;
-    if (scale < 1 || inducedDelayMs || induced.length) note("browser: skipped, this run is a refusal already");
+    /* A run that holds the server is refused by what the browser half measures, so it runs it. */
+    const serverStall = induced.includes("server-stall");
+    if (!serverStall && (scale < 1 || inducedDelayMs || induced.length)) note("browser: skipped, this run is a refusal already");
     else {
       try {
         browser = await browserPhase({
           root, env, registry: dataset.filename, conversations: dataset.conversations,
           keys: entrySubjects.map(({ key, servers }) => ({ key, servers })), children, note,
+          ...(serverStall ? { inducedStallMs: INDUCED_SERVER_STALL_MS } : {}),
         });
       } catch (error) {
         note(`browser: ${error instanceof Error ? error.message : String(error)}`);

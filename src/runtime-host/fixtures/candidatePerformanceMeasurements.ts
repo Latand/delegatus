@@ -40,5 +40,6 @@ const PASSING: CandidatePerformanceMeasurements = {
     readyMaxMs: 4_800, filesP95Ms: 1_900, filesMaxMs: 2_600, filesErrors: 0, viewsWithoutAnswerDuringWrites: 0,
     apiMaxMs: 3_100, apiMaxRoute: "/api/accounts", apiErrors: 0, apiFirstError: null, apiUnfinished: 0, bootLagMaxMs: 450, lagP95Ms: 1, lagMaxMs: 140, inputMaxMs: 160, inputsMin: 2,
     selectionsLost: 0, staleNotices: 0,
+    server: { samples: 2_900, bootMaxMs: 380, p95Ms: 12, maxMs: 210 },
   },
 };
