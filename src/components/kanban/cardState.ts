@@ -5,6 +5,7 @@ import { laneNeed, type ClearedNeed, type NeedReason } from "@/components/attent
 import { laneMergeWord, mergeReasonText, pipelineMovedAtMs } from "@/components/pipelines/pipelineBlockModel";
 import { laneRouteNow, type AttentionRouteMark } from "@/lib/attention/routeTypes";
 import type { TFunction } from "@/lib/i18n";
+import type { PrototypeReviewTarget } from "@/hooks/usePrototypeReview";
 import { laneStopKind, type LaneStop } from "@/lib/pipelines/laneStop";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
@@ -84,8 +85,8 @@ export function laneState(pipeline: Pipeline): LaneState {
 }
 
 export type CardSubject =
-  /** A decision form waits: the task's own round, or the round a lane's wait was escalated to. */
-  | { kind: "form"; taskId: string; reviewId: string; title: string | null }
+  /** A decision form waits: the task's own round, or the round a lane's wait was escalated to. A null task is the seat's own decision form. */
+  | { kind: "form"; taskId: string | null; reviewId: string; title: string | null }
   /** The operator's own reason on a member conversation. */
   | { kind: "conversation"; need: Extract<NeedReason, { subject: "conversation" }> }
   | { kind: "lane"; lane: LaneState }
@@ -121,11 +122,10 @@ export function cardState(card: CardInput, nowSeconds: number): CardState | null
       const lane = lanes.find((entry) => entry.pipeline.id === first.pipeline.id) ?? laneState(first.pipeline);
       return { owner: "you", subject: { kind: "lane", lane: { ...lane, owner: "you" } }, lanes, sinceMs: first.since * 1000 };
     }
-    /* The seat's own decision form carries no task: on a task card it opens as that card's. */
-    const formTaskId = formLane?.route?.form ? formLane.route.form.taskId ?? card.task?.id ?? null : null;
-    if (formLane?.route?.form && formTaskId) {
+    if (formLane?.route?.form) {
+      /* The seat's own decision form carries no task: it stays the operator's and opens in the seat's decisions. */
       const own = waitingRound && waitingRound.waitingReviewId === formLane.route.form.reviewId ? waitingRound.title : null;
-      return { owner: "you", subject: { kind: "form", taskId: formTaskId, reviewId: formLane.route.form.reviewId, title: own }, lanes, sinceMs: formLane.sinceMs };
+      return { owner: "you", subject: { kind: "form", ...formLane.route.form, title: own }, lanes, sinceMs: formLane.sinceMs };
     }
     if (waitingRound && card.task) {
       return { owner: "you", subject: { kind: "form", taskId: card.task.id, reviewId: waitingRound.waitingReviewId!, title: waitingRound.title }, lanes, sinceMs: parseMs(waitingRound.createdAt) };
@@ -156,6 +156,13 @@ export function cardState(card: CardInput, nowSeconds: number): CardState | null
       if (lead && lead.owner !== "done") return { owner: lead.owner, subject: { kind: "lane", lane: lead }, lanes, sinceMs: lead.sinceMs };
       return lead ? { owner: "done", subject: { kind: "lane", lane: lead }, lanes, sinceMs: lead.sinceMs } : null;
   }
+}
+
+/** Where «Answer» on a form subject goes: the task's round, or the seat's decision when the form has no task. */
+export function formAnswerTarget(subject: Extract<CardSubject, { kind: "form" }>, project: string): PrototypeReviewTarget {
+  return subject.taskId
+    ? { kind: "prototype-review", taskId: subject.taskId, reviewId: subject.reviewId, from: "card" }
+    : { kind: "seat-decision", project, reviewId: subject.reviewId, from: "card" };
 }
 
 /* ── Words (§5.3) ─────────────────────────────────────────────────────── */

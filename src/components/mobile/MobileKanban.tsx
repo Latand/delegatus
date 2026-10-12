@@ -20,7 +20,7 @@ import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/component
 import { subjectOf } from "@/components/kanban/cardDismissal";
 import { SeatActionWires } from "@/components/kanban/SeatActionWires";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
-import { cardAnswers, cardState, type CardState } from "@/components/kanban/cardState";
+import { cardAnswers, cardState, formAnswerTarget, type CardState } from "@/components/kanban/cardState";
 import { CardStateLine } from "@/components/kanban/CardStateLine";
 import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
@@ -1197,7 +1197,7 @@ export function MobileKanban(props: MobileKanbanProps) {
   const answerCard = (item: PhoneCard, state: CardState) => {
     const subject = state.subject;
     const task = item.card.task;
-    if (subject.kind === "form") openPrototypeReview({ kind: "prototype-review", taskId: subject.taskId, reviewId: subject.reviewId, from: "card" });
+    if (subject.kind === "form") openPrototypeReview(formAnswerTarget(subject, item.card.project));
     else if (subject.kind === "conversation") props.onOpenConversation(subject.need.file);
     else if (subject.kind === "lane" && task) {
       requestTaskLane(task.id, subject.lane.pipeline.id);

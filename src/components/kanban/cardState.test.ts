@@ -7,7 +7,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { TaskMotion } from "@/lib/tasks/motion";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { cardAnswers, cardState, cardStateText, laneState } from "./cardState";
+import { cardAnswers, cardState, cardStateText, formAnswerTarget, laneState } from "./cardState";
 import type { KanbanCard } from "./kanbanModel";
 
 /*
@@ -72,6 +72,17 @@ test("a wait the seat escalated to a decision form is the operator's, and names 
   expect(state.subject).toEqual({ kind: "form", taskId: "t1", reviewId: "r1", title: "Keep the panel or drop it?" });
   expect(cardStateText(uk, state, clock)).toBe("Потрібна ваша відповідь: Keep the panel or drop it?");
   expect(cardAnswers(state)).toBe(true);
+});
+
+test("a wait escalated to the seat's own taskless decision form stays the operator's and opens the seat decision", () => {
+  const pipeline = routed(lane("form", "needs_decision"), "form", { form: { taskId: null, reviewId: "seat-r1" } });
+  const state = cardState(card([pipeline], { needsYou: true, reasons: [] }), NOW / 1000)!;
+  expect(state.owner).toBe("you");
+  expect(state.subject).toEqual({ kind: "form", taskId: null, reviewId: "seat-r1", title: null });
+  expect(cardAnswers(state)).toBe(true);
+  const subject = state.subject as Extract<typeof state.subject, { kind: "form" }>;
+  expect(formAnswerTarget(subject, "project-a")).toEqual({ kind: "seat-decision", project: "project-a", reviewId: "seat-r1", from: "card" });
+  expect(formAnswerTarget({ ...subject, taskId: "t1", reviewId: "r1" }, "project-a")).toEqual({ kind: "prototype-review", taskId: "t1", reviewId: "r1", from: "card" });
 });
 
 test("an automatic retry waits with its time; a cleared stop says who cleared it", () => {

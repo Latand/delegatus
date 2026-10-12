@@ -62,7 +62,7 @@ import { closeReader, followPaths, openReader, ReaderMemory, type OpenReader } f
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
 import { kanbanCardsOpenByDefault } from "./cardOpenDefault";
-import { laneState, type CardState } from "./cardState";
+import { formAnswerTarget, laneState, type CardState } from "./cardState";
 import { heldAnswer, laneAnswerItems, menuAnswers, type LaneAnswerItem } from "./laneAnswerMenu";
 import { isLaunchedConversation, LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
 import { cycleOpenAgent, openAgents } from "./openAgents";
@@ -2168,7 +2168,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
      decision form, the asking conversation, or the lane's menu. */
   const answerCard = useCallback((card: KanbanCardModel, state: CardState, anchor: HTMLElement) => {
     const subject = state.subject;
-    if (subject.kind === "form") openPrototypeReview({ kind: "prototype-review", taskId: subject.taskId, reviewId: subject.reviewId, from: "card" });
+    if (subject.kind === "form") openPrototypeReview(formAnswerTarget(subject, card.project));
     else if (subject.kind === "conversation") openReaderFor(subject.need.file);
     else if (subject.kind === "lane") menu.setOpen({ anchor, value: { kind: "pipeline", cardId: card.id, pipelineId: subject.lane.pipeline.id } });
   }, [menu, openReaderFor]);
