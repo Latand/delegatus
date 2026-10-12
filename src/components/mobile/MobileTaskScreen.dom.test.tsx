@@ -19,7 +19,7 @@ import type { FileEntry } from "@/lib/types";
  *
  *   - a task with seven pipelines: what needs the operator first, then
  *     running, provisioning and paused, the three completed behind one row;
- *   - the parked lane answers in place with the phone's 44 px buttons;
+ *   - the parked lane's answers are rows of its sheet (docs/design/calm-task-cards-build.md §4.2);
  *   - the status is a sheet, and a choice moves the task through the guarded
  *     mutation with a receipt whose Undo moves it back;
  *   - the title is edited in place and written as the task's text;
@@ -208,14 +208,15 @@ test("seven pipelines: the parked one first, then running, provisioning and paus
   expect(q(host, "[data-phone-task-description]")!.textContent).toContain("The phone names each lane of a task by its first prompt line.");
 });
 
-test("the parked lane answers in place with the phone's Skip stage and Retry stage", () => {
-  const { host } = mount(taskPorts([]), noPipelinePorts);
-  const answers = qa(host, '[data-phone-task-lane="parked"] [data-answer-action]');
-  expect(answers.map((button) => button.getAttribute("data-answer-action"))).toEqual(["skip-stage", "retry-stage"]);
-  expect(answers.map((button) => button.textContent)).toEqual([en("mobile2.pipeline.skip"), en("mobile2.pipeline.retry")]);
-  expect(q(host, '[data-phone-task-lane="parked"] .pb-actions.large')).not.toBeNull();
-  /* Only the parked lane answers. */
-  expect(qa(host, "[data-answer-action]")).toHaveLength(2);
+test("the parked lane's Skip and Retry are rows of its sheet, never buttons on the screen (docs/design/calm-task-cards-build.md §4.2)", () => {
+  const { host, nav } = mount(taskPorts([]), noPipelinePorts);
+  expect(qa(host, "[data-answer-action]")).toHaveLength(0);
+  click(q(host, '[data-phone-task-lane="parked"] [data-pipeline-menu]'));
+  expect(nav.getState().sheet).toBe("lane");
+  const sheet = q(dom.document.body as unknown as HTMLElement, '[data-phone-task-lane-sheet="parked"]')!;
+  expect(qa(sheet, "[data-phone-lane-answer]").map((row) => row.getAttribute("data-phone-lane-answer"))).toEqual(["skip-stage", "retry-stage"]);
+  /* The operator's own lane: no manual-override caption. */
+  expect(q(sheet, "[data-phone-lane-answers-caption]")).toBeNull();
 });
 
 test("the status is a sheet: a choice moves the task with a guarded write and a receipt whose Undo moves it back", async () => {
@@ -333,16 +334,16 @@ test("the phone folds many conversations off the board into one line inside the 
   const own = [lane("done-a", "completed", "passed", 3_600), lane("done-b", "completed", "passed", 5_400)].map((one) => ({ ...one, taskIds: ["t-wall"] }) as unknown as Pipeline);
   try {
     const { host } = mount(taskPorts([]), noPipelinePorts, subject, { pipelines: own });
+    /* The finished attempts are the timeline's (docs/design/calm-task-cards-build.md §3). */
+    expect(qa(host, '[data-chronology-kind="attempt-passed"]').length).toBe(2);
     /* Folded: the header alone, no line, no rows. */
     const section = q(host, "[data-phone-task-past]")!;
-    expect(section.textContent).toBe(en("kanban.past.head", { count: 2 }));
+    expect(section.textContent).toBe(en("kanban.past.elsewhereHead", { count: 24 }));
     expect(qa(host, "[data-phone-task-elsewhere-toggle]").length).toBe(0);
     expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
-    /* Open: the attempts, each once and as many as the header says, and one line. */
+    /* Open: no attempt rows, and one line. */
     click(q(host, "[data-phone-task-past-toggle]"));
-    const rows = qa(host, "[data-phone-task-past-row]").map((row) => row.getAttribute("data-phone-task-past-row"));
-    expect(rows.length).toBe(2);
-    expect(new Set(rows).size).toBe(2);
+    expect(qa(host, "[data-phone-task-past-row]").length).toBe(0);
     const lines = qa(host, "[data-phone-task-elsewhere-toggle]");
     expect(lines.length).toBe(1);
     expect(lines[0]!.textContent).toBe(`${en("kanban.past.elsewhere", { count: 24 })} · ${en("kanban.past.elsewhereShow")}`);

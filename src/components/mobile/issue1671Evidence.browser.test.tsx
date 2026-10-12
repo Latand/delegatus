@@ -4923,10 +4923,18 @@ browserTest("#2187: each row of §3.4's table draws its reason and plain answers
               const [lead, trail] = t(lane.reason, { stage: "\u0000" }).split("\u0000");
               if (!drawn.reason?.startsWith(lead!) || !drawn.reason.endsWith(trail!)) fail(`reason ${JSON.stringify(drawn.reason)}`);
             } else if (drawn.reason !== t(lane.reason, lane.kind === "park" ? { count: 3 } : undefined)) fail(`reason ${JSON.stringify(drawn.reason)}`);
-            const want = lane.answers.map(([action, name]) => [action, t(name)]);
-            if (JSON.stringify(drawn.answers) !== JSON.stringify(want)) fail(`answers ${JSON.stringify(drawn.answers)}, expected ${JSON.stringify(want)}`);
-            if (drawn.heights.some((height) => height < 44)) fail(`answers shorter than 44 px: ${drawn.heights.join(", ")}`);
-            if (drawn.cut.length) fail(`labels cut by their button: ${drawn.cut.join(" | ")}`);
+            /* The answers left the screen for the lane's sheet (docs/design/calm-task-cards-build.md §4.2).
+               One more review round is no longer offered (the fixed budget rule), so it is not looked for. */
+            if (drawn.answers.length) fail(`answers on the screen: ${JSON.stringify(drawn.answers)}`);
+            await page.locator("[data-phone-task-lane] [data-pipeline-menu]").first().click();
+            await page.waitForSelector("[data-phone-task-lane-sheet]", { timeout: 10_000 });
+            const sheet = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-phone-task-lane-sheet] [data-phone-lane-answer]")].map((row) => ({
+              action: row.getAttribute("data-phone-lane-answer") ?? "", label: (row.textContent ?? "").trim(), height: Math.round(row.getBoundingClientRect().height),
+            })));
+            await page.locator("[data-mobile2-close]").first().click();
+            const want = lane.answers.filter(([action]) => action !== "continue-review").map(([action, name]) => [action, t(name)]);
+            if (JSON.stringify(sheet.map((row) => [row.action, row.label])) !== JSON.stringify(want)) fail(`sheet answers ${JSON.stringify(sheet)}, expected ${JSON.stringify(want)}`);
+            if (sheet.some((row) => row.height < 44)) fail(`sheet answers shorter than 44 px: ${JSON.stringify(sheet)}`);
             if (lane.kind === "legacy" && drawn.findings.some((text) => /round limit reached/.test(text))) fail("the flow's own detail is still listed as a finding");
             if (screen.overflowX > 0.5 || screen.bodyOverflowX > 0.5) fail(`overflows sideways by ${Math.max(screen.overflowX, screen.bodyOverflowX)} px`);
             if (screen.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(screen.smallControls)}`);
@@ -5038,10 +5046,18 @@ browserTest("#2187: a completed lane says where its merge stands on the phone at
             if (lane.word === "stopped") {
               const want = t("pipelineBlock.merge.reason", { reason: t("pipelineBlock.mergeReason.check", { name: "privacy-publication" }) });
               if (drawn.reason !== want) fail(`reason ${JSON.stringify(drawn.reason)}, expected ${JSON.stringify(want)}`);
+              /* The answers are the lane's sheet (docs/design/calm-task-cards-build.md §4.2). */
+              await page.locator("[data-phone-task-lane] [data-pipeline-menu]").first().click();
+              await page.waitForSelector("[data-phone-task-lane-sheet]", { timeout: 10_000 });
+              const sheet = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-phone-task-lane-sheet] [data-phone-lane-answer]")].map((row) => ({
+                action: row.getAttribute("data-phone-lane-answer") ?? "", label: (row.textContent ?? "").trim(), height: Math.round(row.getBoundingClientRect().height),
+              })));
+              await page.locator("[data-mobile2-close]").first().click();
               const answers = [["dismiss", t("pipelineBlock.answer.leaveOpen")], ["retry-merge", t("pipelineBlock.answer.retryMerge")]];
-              if (JSON.stringify(drawn.answers) !== JSON.stringify(answers)) fail(`answers ${JSON.stringify(drawn.answers)}`);
-              if (drawn.heights.some((height) => height < 44)) fail(`answers shorter than 44 px: ${drawn.heights.join(", ")}`);
-            } else if (drawn.answers.length) fail(`answers on a merge that asks nothing: ${JSON.stringify(drawn.answers)}`);
+              if (JSON.stringify(sheet.map((row) => [row.action, row.label])) !== JSON.stringify(answers)) fail(`sheet answers ${JSON.stringify(sheet)}`);
+              if (sheet.some((row) => row.height < 44)) fail(`sheet answers shorter than 44 px: ${JSON.stringify(sheet)}`);
+            }
+            if (drawn.answers.length) fail(`answers on the screen: ${JSON.stringify(drawn.answers)}`);
             if (drawn.cut.length) fail(`labels cut by their button: ${drawn.cut.join(" | ")}`);
             if (screen.overflowX > 0.5 || screen.bodyOverflowX > 0.5) fail(`overflows sideways by ${Math.max(screen.overflowX, screen.bodyOverflowX)} px`);
             if (screen.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(screen.smallControls)}`);

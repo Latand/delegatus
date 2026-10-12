@@ -183,8 +183,22 @@ function phone(state: Pipeline["state"]) {
     host,
     acts,
     store,
-    /** An answer inside the stage. */
-    answer: (action: string) => click(q(host, `[data-answer-action="${action}"]`)),
+    /** An answer: a row of the bar's ⋯ sheet, where the answers left the stage for
+        (docs/design/calm-task-cards-build.md §4.2). */
+    answer: async (action: string) => {
+      click(q(host, '[data-mobile2-open="menu"]'));
+      await settle();
+      click(q(body(), `[data-mobile2-pipeline-menu] [data-phone-lane-answer="${action}"]`));
+    },
+    /** Whether each answer row of the ⋯ sheet takes a tap; the sheet closes again. */
+    answersDisabled: async () => {
+      click(q(host, '[data-mobile2-open="menu"]'));
+      await settle();
+      const rows = Array.from(body().querySelectorAll("[data-mobile2-pipeline-menu] [data-phone-lane-answer]")).map((button) => (button as unknown as HTMLButtonElement).disabled);
+      click(q(body(), "[data-mobile2-close]"));
+      await settle();
+      return rows;
+    },
     /** A row of the bar's ⋯ sheet. */
     menu: async (key: string) => {
       click(q(host, '[data-mobile2-open="menu"]'));
@@ -225,9 +239,9 @@ const request = (index: number) => {
   const { clientRequestId: _key, ...rest } = patches[index]!.body as Record<string, unknown>;
   return { url: patches[index]!.url, body: rest };
 };
-test("Retry stage, answered inside the stage, acts on the tap and sends the desktop menu's guarded retry", async () => {
+test("Retry stage, answered from the ⋯ sheet, acts on the tap and sends the desktop menu's guarded retry", async () => {
   const screen = phone("needs_decision");
-  screen.answer("retry-stage");
+  await screen.answer("retry-stage");
   await settle();
   expect(patches.length).toBe(1);
   expect(request(0).body).toEqual({ action: "retry-stage", expectedStageId: "review", expectedAttempt: 3 });
@@ -244,7 +258,7 @@ test("Retry stage, answered inside the stage, acts on the tap and sends the desk
 
 test("One more round reads the revision the operator saw and grants exactly one round, as the desktop menu does", async () => {
   const screen = phone("needs_review");
-  screen.answer("continue-review");
+  await screen.answer("continue-review");
   await settle();
   expect(reads).toEqual(["/api/pipelines/p2"]);
   expect(patches.length).toBe(1);
@@ -260,7 +274,7 @@ test("One more round reads the revision the operator saw and grants exactly one 
 
 test("Accept as is reads the revision the operator saw and sends accept-head once, as the desktop does (#2187)", async () => {
   const screen = phone("needs_review");
-  screen.answer("accept-head");
+  await screen.answer("accept-head");
   await settle();
   expect(reads).toEqual(["/api/pipelines/p2"]);
   expect(patches.length).toBe(1);
@@ -292,7 +306,7 @@ test("Pause and Resume from the bar's ⋯ send the desktop menu's request", asyn
 
 test("Skip stage is held for the receipt's window: Retry stage cancels it, and the window closing sends the desktop menu's guarded skip", async () => {
   const screen = phone("needs_decision");
-  screen.answer("skip-stage");
+  await screen.answer("skip-stage");
   await settle();
 
   /* Nothing has gone out yet: the receipt is the window. */
@@ -303,17 +317,17 @@ test("Skip stage is held for the receipt's window: Retry stage cancels it, and t
   expect(inverse.getAttribute("data-mobile2-receipt-undo")).toBe("retryStage");
   expect(inverse.textContent).toBe(translate("en", "mobile2.receipt.retryStage"));
   /* While it is held, neither answer takes another tap. */
-  expect(Array.from(screen.host.querySelectorAll("[data-answer-action]")).every((button) => (button as unknown as HTMLButtonElement).disabled)).toBe(true);
+  expect(await screen.answersDisabled()).toEqual([true, true]);
 
   /* Taking the inverse cancels the act outright — the engine never sees it. */
-  click(inverse);
+  click(q(q(body(), "[data-mobile2-receipt]")!, "[data-mobile2-receipt-undo]"));
   await settle();
   expect(patches).toEqual([]);
   expect(screen.windowOpen()).toBe(false);
-  expect(Array.from(screen.host.querySelectorAll("[data-answer-action]")).some((button) => (button as unknown as HTMLButtonElement).disabled)).toBe(false);
+  expect(await screen.answersDisabled()).toEqual([false, false]);
 
   /* Skipping again and letting the window close sends the desktop's own request. */
-  screen.answer("skip-stage");
+  await screen.answer("skip-stage");
   screen.closeWindow();
   await settle();
   expect(patches.length).toBe(1);
@@ -372,7 +386,7 @@ test("a refusal the route explained comes back on the receipt in the danger tone
   G.fetch = refusing;
   try {
     const screen = phone("needs_decision");
-    screen.answer("retry-stage");
+    await screen.answer("retry-stage");
     await settle();
     const receipt = q(body(), "[data-mobile2-receipt]")!;
     expect(receipt.getAttribute("data-mobile2-receipt-error")).toBe("true");

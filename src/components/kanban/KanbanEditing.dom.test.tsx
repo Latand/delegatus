@@ -8,6 +8,11 @@ import type { FileEntry } from "@/lib/types";
 
 import type { AssignmentPorts } from "./kanbanAssignments";
 import type { PatchBody, PatchResult, TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* Task editing on the kanban board (#1695 K4b), rendered by React against
    invented tasks and scripted task ports: inline title and description,

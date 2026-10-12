@@ -1,4 +1,4 @@
-import { drawnLaneMovement } from "@/lib/pipelines/laneMovement";
+import { drawnLaneMovement, laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import type { LaneReasonKind } from "./dismissalTypes";
@@ -87,6 +87,17 @@ export function laneNeedKind(pipeline: Pick<Pipeline, "state" | "merge">): LaneR
   if (pipeline.state === "needs_review") return "lane-review";
   if (pipeline.state === "needs_decision") return "lane-decision";
   return null;
+}
+
+/** A dismissal still covers what the lane waits on: it moved nowhere since,
+    and a stopped merge was cleared after it stopped. Whoever cleared it (the
+    operator, the seat, an earlier agent), the wait is answered: the dismissal
+    write refuses it as already clear, and routing sends it to nobody. */
+export function laneWaitCleared(pipeline: Pick<Pipeline, "state" | "merge" | "dismissedAt" | "runs">): boolean {
+  if (!pipeline.dismissedAt) return false;
+  const dismissed = Date.parse(pipeline.dismissedAt);
+  if (pipeline.state === "completed" && pipeline.merge?.state === "blocked") return dismissed >= Date.parse(pipeline.merge.blockedAt ?? pipeline.merge.updatedAt);
+  return laneMovedAt(pipeline as Pipeline) <= dismissed;
 }
 
 /** The exact wait a lane's route names: its kind and the movement it parked

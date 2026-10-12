@@ -11,6 +11,11 @@ import type { FileEntry } from "@/lib/types";
 import { KanbanBoard } from "./kanban/KanbanBoard";
 import { resetOrchestratorSeatCacheForTests } from "./orchestrator/useOrchestratorSeat";
 import { OverviewBoard } from "./OverviewBoard";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /*
  * Issue #1820 — the Overview is the kanban board a project renders, over every

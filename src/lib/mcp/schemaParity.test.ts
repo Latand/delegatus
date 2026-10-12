@@ -105,6 +105,7 @@ function boundedArgs(
     });
   }
   if (toolName === "search_transcripts") args.query = "fixture";
+  if (toolName === "relay_owner_history") args.action = "groups";
   if (toolName === "telegram_bot_messages") args.chat = "team-reports";
   return args;
 }
@@ -1219,7 +1220,7 @@ test("search order is optional and advertised with relevance and newest choices"
 
 test("voice task, pipeline and conversation filters keep the MCP read schema names", async () => {
   const { COMPANION_TOOLS } = await import("@/lib/voiceCompanion/tools");
-  for (const name of ["list_tasks","get_task","list_pipelines","get_pipeline","agent_activity","conversation_messages","search_transcripts"] as const) {
+  for (const name of ["list_tasks","get_task","list_pipelines","get_pipeline","agent_fleet","agent_activity","conversation_messages","search_transcripts","relay_owner_history"] as const) {
     const voice = COMPANION_TOOLS.find(tool=>tool.name===name)!;
     const input = TOOL_INPUT_SCHEMAS[name].shape;
     // Project selection and refresh are the voice wrapper's context/cache controls.

@@ -8,6 +8,11 @@ import type { FileEntry } from "@/lib/types";
 
 import { setDraftCwd } from "../DraftAgentPane";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* + Task, + Agent and agent drafts on the kanban board (#1695 K9a), rendered by
    React against invented tasks. The task route is a scripted fetch; no store or

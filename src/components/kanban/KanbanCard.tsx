@@ -3,7 +3,7 @@
 import { CardStatusBadge } from "@/components/CardStatusBadge";
 import { rowStateWord } from "@/components/mobile/mobileBoardModel";
 
-import { ArrowDown, ArrowUp, Bot, Flag } from "lucide-react";
+import { Bot, Flag } from "lucide-react";
 import { memo, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -19,8 +19,8 @@ import { cleanTitle, fmtAge } from "@/components/utils";
 import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
-import { laneMergeUnsettled, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
-import { clearedLine, needLabel } from "@/components/attention/decision";
+import { laneMergeUnsettled } from "@/components/pipelines/pipelineBlockModel";
+import { needLabel } from "@/components/attention/decision";
 import type { NeedReason } from "@/components/attention/needReason";
 
 import { CardAlbumButton } from "@/components/taskAlbum/AlbumButton";
@@ -41,7 +41,13 @@ import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
-import { CheckGlyph, ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
+import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
+import { cardAnswers, cardState, laneState, type CardState } from "./cardState";
+import { laneAnswerItems, stopLinkAnswers, type LaneAnswerItem } from "./laneAnswerMenu";
+import { CardStateLine, PriorityMark } from "./CardStateLine";
+import { TaskChronology } from "./TaskChronology";
+import { hasTaskMeta, TaskMeta } from "./TaskMeta";
+import { taskChronology } from "./taskChronologyModel";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, KanbanUnstartedLaunch } from "./kanbanModel";
 import { cardWaitsForCpu, PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
@@ -72,10 +78,11 @@ import type { PipelineActionKind } from "./stagesModel";
    and the lane's own state word, the working and conversation counts to the
    footer, and the stages still waiting to their dashed pills.
 
-   Why the card needs the operator is named at its foot (docs/design/
-   needs-attention.md §4): the oldest reason, "+N" for the rest, and a Dismiss
-   control that clears them all until something new asks. A cleared card says
-   who cleared it, and that line is its Undo. */
+   A card is closed by default (docs/design/calm-task-cards-build.md §6.1):
+   its head, one state line saying who has it and what stopped, «Answer» only
+   where the operator owes one, and its top lane's chain with the PR. Opened,
+   it keeps everything it shows today without a single answer button, plus
+   the task's timeline. The answers, Dismiss and its Undo are the card's ⋯. */
 
 /** Pipelines that have ended: the rows a card folds away once it holds many. */
 const ENDED_PIPELINE_STATES: ReadonlySet<string> = new Set(["completed", "closed"]);
@@ -234,6 +241,8 @@ export interface KanbanCardProps {
   pipelinePorts: PipelinePorts;
   onOpenSheet: (cardId: string, pipeline: Pipeline) => void;
   onPipelineMenu: (cardId: string, pipeline: Pipeline, anchor: HTMLElement) => void;
+  /** A manual answer pressed as a link on a lane's stop entry. */
+  onLaneAnswer: (cardId: string, pipeline: Pipeline, answer: LaneAnswerItem) => void;
   onStagePanelFold: (panelKey: string, folded: boolean) => void;
   onStagePanelClose: (panelKey: string) => void;
   onStagePanelMenu: (panelKey: string, anchor: HTMLElement) => void;
@@ -251,18 +260,14 @@ export interface KanbanCardProps {
   /** Every PR and issue link of the task or one of its pipelines, with the
       attach form (#2059). */
   onWorkLinks?: (target: WorkLinkTarget, anchor: HTMLElement) => void;
-  /** A lane row's answer in place: skip or retry the stage it stopped on,
-      close it, or give its review one more round (#2072). */
-  onAnswer?: (cardId: string, title: string, pipeline: Pipeline, answer: PipelineAnswer) => void;
-  /** Dismiss: stop flagging every reason the card draws until something new
-      asks (docs/design/needs-attention.md §5). Absent, the foot only names
-      the reasons. */
-  onDismiss?: (card: KanbanCardModel) => void;
-  /** Bring back what was dismissed on this card. */
-  onUndoDismiss?: (card: KanbanCardModel) => void;
+  /** «Answer» on a closed card the operator owes an answer: the form, the
+      conversation or the lane's menu, by what the state line names. */
+  onAnswerCard?: (card: KanbanCardModel, state: CardState, anchor: HTMLElement) => void;
+  /** The project's seat conversations: the timeline names their answers the orchestrator's. */
+  seatConversationIds?: readonly string[];
 }
 
-/** The foot's reason: the oldest one's label, and how many more there are. */
+/** The card's reason, for its label: the oldest one's, and how many more there are. */
 function reasonsText(t: TFunction, reasons: readonly NeedReason[]): string {
   const first = needLabel(t, reasons[0]!);
   return reasons.length > 1 ? `${first} ${t("needs.more", { count: reasons.length - 1 })}` : first;
@@ -418,7 +423,6 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      review: its review button says so in words, and the card's label names
      it for assistive tech. The choice clears it, so there is no dismissal. */
   const reasons = !card.needsYou ? "" : card.reasons.length ? reasonsText(t, card.reasons) : t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready");
-  const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
   const remote = card.task ? props.remote ?? null : null;
   const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : "", remote ? t("kanban.remote.hint", { host: remote.host }) : ""]
     .filter(Boolean)
@@ -427,38 +431,17 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      operator an answer, which the foot names. A stalled member keeps its red
      state word on its tile and no longer colours the card. */
   const attention = card.motion.key === "needs-you" ? "needs" : undefined;
-  const onDismiss = props.onDismiss;
-  const onUndoDismiss = props.onUndoDismiss;
-  /* What is happening now, never a status, at the foot of the card: why it
-     needs the operator (or who cleared it), who is working, and how many
-     conversations it holds or that nothing is on it. */
+  /* The flag's Dismiss and its Undo live in the card's ⋯ (§2.2). */
+  const dismissable = (card.needsYou && card.reasons.length > 0) || (!card.needsYou && card.cleared.length > 0);
+  /* Who has the card now (§5): the state line, the dot and «Answer» read it. */
+  const state = cardState(card, nowMs / 1000);
+  const answers = collapsed && cardAnswers(state) && props.onAnswerCard ? props.onAnswerCard : null;
+  /* What is happening now, never a status, at the foot of the open card: who
+     is working, and how many conversations it holds or that nothing is on it.
+     Why it needs the operator, and who cleared it, the state line and the
+     timeline say (§2.2). */
   const footMeta = (
     <>
-      {card.needsYou && card.reasons.length ? (
-        <span className="foot-meta needs" data-foot-needs={card.reasons.length} title={card.reasons.map((need) => needLabel(t, need)).join("\n")}>
-          <span className="clamp">{reasons}</span>
-        </span>
-      ) : null}
-      {card.needsYou && card.reasons.length && onDismiss ? (
-        <button
-          type="button"
-          className="icon-btn dismiss"
-          data-dismiss={card.id}
-          aria-label={t("needs.dismissAria", { title })}
-          title={t("needs.dismissHint")}
-          onClick={() => onDismiss(card)}
-        >
-          <CheckGlyph />
-        </button>
-      ) : null}
-      {cleared ? (
-        <span className="foot-meta cleared" data-foot-cleared={cleared.by.kind}>{clearedLine(t, cleared, nowMs / 1000)}</span>
-      ) : null}
-      {cleared && onUndoDismiss ? (
-        <button type="button" className="undo" data-undo-dismiss={card.id} aria-label={t("needs.undoAria", { title })} onClick={() => onUndoDismiss(card)}>
-          {t("needs.undo")}
-        </button>
-      ) : null}
       {card.working && !(card.motion.key === "working" && card.working > 0) ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
       {card.conversations
         ? <span className="foot-meta num" data-foot-conversations={card.conversations}>{t("kanban.activityConversations", { count: card.conversations })}</span>
@@ -497,7 +480,6 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const footAge = footWorked
     ? rowDatesWork ? "" : ageLabel(t, card.lastAgentWorkAtMs, nowMs)
     : card.updatedAtMs ? t("kanban.editedAge", { age: ageLabel(t, card.updatedAtMs, nowMs) }) : "";
-  const onAnswer = props.onAnswer;
   const pipelineRow = (summary: KanbanPipeline) => (
     <PipelineBlock
       key={summary.pipeline.id}
@@ -516,9 +498,34 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
          pipeline on no task has no card menu, so its lane keeps its own. */
       onMenu={card.task ? undefined : (pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
       onWorkLinks={onWorkLinks}
-      onAnswer={onAnswer ? (pipeline, answer) => onAnswer(card.id, title, pipeline, answer) : undefined}
     />
   );
+  /* The closed card's one chain row (§6.1): the lane on top, the PR at its
+     end, and how many other lanes are still open. */
+  const topLane = livePipelines[0] ?? endedPipelines[0] ?? null;
+  const otherOpen = Math.max(0, livePipelines.length - (topLane && livePipelines[0] === topLane ? 1 : 0));
+  const chronology = collapsed ? [] : taskChronology({
+    taskCreatedAt: card.task?.createdAt ?? null,
+    pipelines: card.pipelines.map((summary) => summary.pipeline),
+    past: card.past,
+    cleared: card.cleared,
+    seatConversationIds: props.seatConversationIds ?? [],
+  });
+  const motionReference = card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind)
+    ? taskLinks?.links.find(link => String(link.number) === card.task!.hold!.ref && link.kind === card.task!.hold!.kind)?.url
+      ?? (taskLinks?.repository && /^\d+$/.test(card.task.hold.ref ?? "") ? workLinkUrl(taskLinks.repository, Number(card.task.hold.ref), card.task.hold.kind as "pr" | "issue") : null)
+    : null;
+  const openHoldTask = card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined;
+  /* Under a state line the motion line is its sentence, so a lane row never quiets it. */
+  const motionLine = (plain: boolean) => (
+    <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain={plain} laneShown={!state && !collapsed && card.pipelines.length > 0} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
+      taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
+      onOpenTask={openHoldTask}
+      referenceUrl={motionReference}
+    />
+  );
+  /* A motion line that links somewhere stays a link: the state line around it is then no toggle. */
+  const motionLinks = state?.subject.kind === "motion" && Boolean(openHoldTask || motionReference);
   const projectName = props.projectNames?.[card.project] ?? null;
   const hex = card.color ? TASK_COLOR_HEX[card.color] : null;
   const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
@@ -629,7 +636,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               <CloseGlyph />
             </button>
           ) : null}
-          {card.task ? (
+          {/* A task's card always has its ⋯; a card with no task has one only while it holds a flag to clear or restore. */}
+          {card.task || dismissable ? (
             <button
               type="button"
               className="icon-btn"
@@ -643,22 +651,56 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           ) : null}
         </div>
       </div>
-      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} laneShown={!collapsed && card.pipelines.length > 0} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
-        taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
-        onOpenTask={card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined}
-        referenceUrl={card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind)
-          ? taskLinks?.links.find(link => String(link.number) === card.task!.hold!.ref && link.kind === card.task!.hold!.kind)?.url
-            ?? (taskLinks?.repository && /^\d+$/.test(card.task.hold.ref ?? "") ? workLinkUrl(taskLinks.repository, Number(card.task.hold.ref), card.task.hold.kind as "pr" | "issue") : null)
-          : null}
-      />
-      <TaskStepsLine summary={card.stepSummary} />
+      {state ? (
+        <CardStateLine
+          state={state}
+          nowMs={nowMs}
+          title={title}
+          motion={motionLine(!motionLinks)}
+          priority={card.task ? card.priority : undefined}
+          onToggle={motionLinks ? undefined : () => props.onToggleCollapsed(card.id)}
+          expanded={!collapsed}
+        />
+      ) : collapsed && card.task && card.priority !== "normal" ? (
+        /* A closed card that has not started keeps its priority mark, which is how the Inbox reads at a glance. */
+        <div className="card-state prio-only">{motionLine(false)}<PriorityMark priority={card.priority} /></div>
+      ) : motionLine(false)}
+      {/* The task's deadline and images, closed and open alike: the old Tasks panel's two facts. */}
+      {card.task && hasTaskMeta(card.task) ? <div className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></div> : null}
+      {answers && state ? (
+        <div className="card-answer-row">
+          <button
+            type="button"
+            className="btn card-answer"
+            data-card-answer={state.subject.kind}
+            aria-haspopup={state.subject.kind === "lane" ? "menu" : undefined}
+            aria-label={t("cardState.answerAria", { title })}
+            onClick={(event) => answers(card, state, event.currentTarget)}
+          >
+            {t("cardState.answer")}
+          </button>
+        </div>
+      ) : null}
+      {collapsed && topLane ? (
+        <div className="card-chain" data-card-chain={topLane.pipeline.id}>
+          <PipelineBlock
+            summary={topLane}
+            density="card"
+            nowMs={nowMs}
+            taskTitle={card.titlePending ? null : card.title}
+            reasonLine={false}
+            aside={otherOpen ? t("cardState.moreLanes", { count: otherOpen }) : undefined}
+          />
+        </div>
+      ) : null}
+      {collapsed ? null : <TaskStepsLine summary={card.stepSummary} />}
       {props.holdEditing && props.onSaveHold && props.onCancelHold ? <TaskHoldEditor hold={card.task?.hold} onSave={hold => props.onSaveHold?.(card, hold)} onCancel={props.onCancelHold} /> : null}
       {/* Slot reserved for the needs-you question from the sibling card lane. */}
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
-      <TaskStatusNote note={card.task?.note} nowMs={nowMs} />
-      {/* #2059: the task's own links and every pipeline's, deduplicated, and
-          still there when the card is collapsed and its pipelines are not. */}
-      {card.task ? (
+      {collapsed ? null : <TaskStatusNote note={card.task?.note} nowMs={nowMs} />}
+      {/* #2059: the task's own links and every pipeline's, deduplicated. The
+          closed card draws only its top lane's PR, on its chain row. */}
+      {card.task && !collapsed ? (
         <WorkLinkRow
           resolved={taskLinks}
           showNoPr={false}
@@ -767,6 +809,30 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </div>
       ) : null}
 
+      {chronology.length ? (
+        <TaskChronology
+          entries={chronology}
+          pipelines={card.pipelines.map((summary) => summary.pipeline)}
+          nowMs={nowMs}
+          onOpen={props.onOpenAttempt}
+          stopLinks={(pipelineId) => {
+            const summary = card.pipelines.find((entry) => entry.pipeline.id === pipelineId);
+            if (!summary) return [];
+            const names = stageNames(t, summary.pipeline);
+            return stopLinkAnswers(laneAnswerItems(t, summary.pipeline, laneState(summary.pipeline).owner, (stage) => names.get(stage.id) ?? stage.id), laneState(summary.pipeline).owner);
+          }}
+          onStopLink={(pipelineId, answer) => {
+            const summary = card.pipelines.find((entry) => entry.pipeline.id === pipelineId);
+            if (summary) props.onLaneAnswer(card.id, summary.pipeline, answer);
+          }}
+          linksBusy={(pipelineId) => acting.has(pipelineId)}
+          onStopMenu={(pipelineId, anchor) => {
+            const summary = card.pipelines.find((entry) => entry.pipeline.id === pipelineId);
+            if (summary) props.onPipelineMenu(card.id, summary.pipeline, anchor);
+          }}
+        />
+      ) : null}
+
       {!collapsed ? (
         <>
           {shownPipelines.map(pipelineRow)}
@@ -831,9 +897,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
 
       {!collapsed ? <CardDrafts ids={card.drafts} /> : null}
 
-      {!collapsed && (card.past.length || card.notLoadedRefs.length) ? (
+      {/* Attempts and review rounds are the timeline's; the section keeps the
+          helper conversations and those this board did not load (§2.3). */}
+      {!collapsed && (card.past.some((row) => row.kind === "helper") || card.notLoadedRefs.length) ? (
         <PastAttempts
-          rows={card.past}
+          rows={card.past.filter((row) => row.kind === "helper")}
           elsewhere={card.notLoadedRefs}
           names={new Map(card.pipelines.map((summary) => [summary.pipeline.id, stageNames(t, summary.pipeline)] as const))}
           nowMs={nowMs}
@@ -860,16 +928,13 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </div>
       ) : null}
 
-      {card.task ? (
+      {collapsed ? null : card.task ? (
         <div className="foot">
           {/* High and low only, a status mark with no action, leading the
               foot so the title keeps its width in the narrow Inbox: normal
-              draws nothing, and the ⋯ menu is where priority changes. */}
-          {card.priority !== "normal" ? (
-            <span className="prio-mark" role="img" data-priority={card.priority} aria-label={t(`kanban.priorityMark.${card.priority}`)} title={t(`kanban.priorityMark.${card.priority}`)}>
-              {card.priority === "high" ? <ArrowUp aria-hidden /> : <ArrowDown aria-hidden />}
-            </span>
-          ) : null}
+              draws nothing, and the ⋯ menu is where priority changes. With a
+              state line, the mark ends that line instead. */}
+          {state ? null : <PriorityMark priority={card.priority} />}
           {footAge ? <span className="age num" title={t(footWorked ? "kanban.worked" : "kanban.updated", { age: footWorked ? footAge : ageLabel(t, card.updatedAtMs, nowMs) })}>{footAge}</span> : null}
           {footMeta}
           <span className="spacer" />

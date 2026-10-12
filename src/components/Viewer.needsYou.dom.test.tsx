@@ -12,6 +12,11 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /*
  * The header's «Needs you» counts the lanes parked on the operator (#2129).
@@ -467,12 +472,18 @@ test("desktop: the Overview offers the filter for any project's lane", async () 
   expect(filterOn(host as unknown as HTMLElement)).toBe(true);
 });
 
+/* Dismiss is a row of the card's ⋯ (docs/design/calm-task-cards-build.md §2.2). */
+async function dismissOnCard(host: HTMLElement): Promise<void> {
+  await click(host.querySelector(`[data-menu="${LEDGER_CARD}"]`));
+  await click(dom.document.querySelector('.menu [data-cm-item="dismissFlag"]') as unknown as HTMLElement | null);
+}
+
 test("desktop: once the last waiting item is dismissed the filter turns itself off", async () => {
   const host = await mountOn(LEDGER);
   await press("f");
   expect(filterOn(host)).toBe(true);
 
-  await click(host.querySelector(`[data-dismiss="${LEDGER_CARD}"]`));
+  await dismissOnCard(host);
   await until(() => islandCount(host) === 0);
   expect((await needsRow(host)).disabled).toBe(true);
   expect(filterOn(host)).toBe(false);
@@ -482,7 +493,7 @@ test("desktop: a lane dismissed on its card leaves the island's count with the c
   const host = await mountOn(LEDGER);
   expect(islandCount(host)).toBe(1);
 
-  await click(host.querySelector(`[data-dismiss="${LEDGER_CARD}"]`));
+  await dismissOnCard(host);
   await until(() => islandCount(host) === 0);
   expect(posted).toHaveLength(1);
   expect(dom.document.title).toBe(PRODUCT_NAME);
