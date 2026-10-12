@@ -50,7 +50,7 @@ export async function historyDouble() {
     if (!match[1]) {
       if (url.search) return error(400, "malformed");
       const limited = admit(); if (limited) return limited;
-      const response = { status: 200, body: { groups: syntheticGroups } };
+      const response: { status: number; headers: Record<string, string>; body: unknown } = { status: 200, headers: {}, body: { groups: syntheticGroups } };
       state.afterHistoryResponse?.(); return response;
     }
     const q = url.searchParams;
@@ -84,7 +84,7 @@ export async function historyDouble() {
       while (Buffer.byteLength(JSON.stringify(page)) > 12000) { m.text = [...m.text].slice(0, -200).join("") + "…"; m.truncated = true; }
     }
     page.next_cursor = messages.length < eligible.length ? String(messages.at(-1)!.message_id) : null;
-    const response = { status: 200, body: page };
+    const response: { status: number; headers: Record<string, string>; body: unknown } = { status: 200, headers: {}, body: page };
     state.afterHistoryResponse?.(); return response;
   }
   const server = await startTestRelay(req => {

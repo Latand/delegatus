@@ -31,7 +31,7 @@ for (const backend of ["api", "codex"] as const) test(`${backend} backend can an
     storage.updateSettings({ enabled: true, backend: "codex" });
   }
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false,
-    ownerHistory: async args => ({ available: true, chat, title, timeZone: "Europe/Kyiv", start: "2026-10-12T00:00:00+03:00", end: "2026-10-13T00:00:00+03:00", oldestStoredAt: null,
+    ownerHistory: async (args: Record<string, unknown>) => ({ available: true, chat, title, timeZone: "Europe/Kyiv", start: "2026-10-12T00:00:00+03:00", end: "2026-10-13T00:00:00+03:00", oldestStoredAt: null,
       messages: [{ messageId: args.cursor ? 2 : 1, sentAt: "2026-10-12T09:00:00Z", author: { name: member, username: null }, fromAssistant: false, topicId: null, replyToMessageId: null, text: args.cursor ? secondPageText : text, media: null, truncated: false }],
       nextCursor: args.cursor ? null : "synthetic-cursor", privacy: OWNER_HISTORY_PRIVACY }) });
   if (backend === "api") provider.responder = (request, index) => {
