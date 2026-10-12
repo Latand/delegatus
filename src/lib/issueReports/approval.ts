@@ -52,9 +52,13 @@ export function approvesIssueReport(message: string, digest: string): boolean {
   /* A negated quotation and a separate refusal both veto this digest, even
      when the same message contains an affirmative reply as well. */
   const negations = ["не", "ні", "no", "not", "don't", "do not", "never"];
+  const refusalPhrases = [
+    ...["dont publish", "do not publish", "never publish"].flatMap((prefix) =>
+      ["report", "the report", "this report", "that report"].map((subject) => `${prefix} ${subject} ${digest}`)),
+    ...["звіт", "цей звіт", "той звіт"].map((subject) => `не публікуй ${subject} ${digest}`),
+  ];
   const refused = replies.some((reply) => negations.some((no) => contains(`${no} ${reply}`)))
-    || ["не публікуй звіт", "don't publish report", "do not publish report", "never publish report"]
-      .some((no) => contains(`${no} ${digest}`));
+    || refusalPhrases.some(contains);
   return !refused;
 }
 

@@ -293,6 +293,38 @@ test.each(["не", "don't", "do not"])("a negated approving reply (%s) refuses p
   expect(h.published).toEqual([]);
 });
 
+test.each([
+  ["do not publish the report", (digest: string) => `do not publish the report ${digest}`],
+  ["don't publish the report", (digest: string) => `don't publish the report ${digest}`],
+  ["не публікуй цей звіт", (digest: string) => `не публікуй цей звіт ${digest}`],
+])("an explicit refusal of this report overrides its reply: %s", async (_name, refusal) => {
+  const h = harness();
+  const digest = await previewed(h);
+  const replies = await shown(h, digest);
+  for (const reply of Object.values(replies)) {
+    h.operatorSays(`${reply}; ${refusal(digest)}`);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+      .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+  }
+  expect(h.published).toEqual([]);
+});
+
+test("a refusal of another digest does not cancel this report's approval", async () => {
+  const h = harness();
+  const firstReport = { ...REPORT };
+  const secondReport = { ...REPORT, title: "Delegatus refuses a requested launch" };
+  const first = await previewed(h, firstReport);
+  const second = await previewed(h, secondReport);
+  const firstReply = (await shown(h, first)).uk;
+  const secondReply = (await shown(h, second)).en;
+  h.operatorSays(`${firstReply}; ${secondReply}; do not publish the report ${first}`);
+
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: first }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toEqual([{ ...secondReport, repository: REPOSITORY }]);
+});
+
 test.each(["en", "uk"] as const)("a free-form yes is refused with guidance in %s that permits a longer message", async (locale) => {
   const h = harness({ locale });
   const digest = await previewed(h);

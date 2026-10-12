@@ -103,6 +103,21 @@ test("an explicit refusal applies to its own digest", () => {
   for (const text of [`${yes}f`, `prefix${yes}`]) expect(approvesIssueReport(text, DIGEST)).toBe(false);
 });
 
+test.each([
+  `do not publish the report ${DIGEST}`,
+  `don't publish the report ${DIGEST}`,
+  `не публікуй цей звіт ${DIGEST}`,
+])("ordinary explicit refusal wording overrides approval: %s", (refusal) => {
+  expect(approvesIssueReport(`${issueReportApprovalReplies(DIGEST).uk}; ${refusal}`, DIGEST)).toBe(false);
+  expect(approvesIssueReport(`${issueReportApprovalReplies(DIGEST).en}; ${refusal}`, DIGEST)).toBe(false);
+});
+
+test("a refusal naming another digest does not override this approval", () => {
+  const text = `${issueReportApprovalReplies(DIGEST).uk}; do not publish the report ${OTHER}`;
+  expect(approvesIssueReport(text, DIGEST)).toBe(true);
+  expect(approvesIssueReport(text, OTHER)).toBe(false);
+});
+
 test.each(["одобряю", "так, публікуй", "yes", "Yes, publish"])("a free-form yes without the digest remains refused: %s", (text) => {
   expect(issueReportApproval([{ at: 101, text }], DIGEST, 100)).toEqual({ approved: false, reason: "not_an_approval" });
 });
