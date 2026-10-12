@@ -47,6 +47,7 @@ export function UserMessageRow({
   copyText,
   selectedContext,
   bubbleFooter,
+  attachmentCount,
   action,
   below,
   rowAttributes,
@@ -59,6 +60,8 @@ export function UserMessageRow({
   selectedContext?: SelectedContextPreview | null;
   /** Inside the bubble, under the body: the submission's attachment count. */
   bubbleFooter?: ReactNode;
+  /** Total including the generated text file, when the local submission knows it. */
+  attachmentCount?: number;
   /** The action gutter. Defaults to the copy control every message has. */
   action?: ReactNode;
   /** Under the bubble: the failure line, the transport disclosure. */
@@ -76,7 +79,7 @@ export function UserMessageRow({
   const tasks = selectedContext?.tasks ?? taskReferencesFromText(rawText);
   const body = tasks?.length ? stripTaskReferencePrelude(rawText, tasks).replace(/^\n+/, "") : rawText;
   const attachment = messageTextAttachmentFromText(body);
-  const text = attachment ? tr("composer.attachmentsCount", { count: body.split("\n").length - 1 }) : body;
+  const text = attachment ? tr("composer.attachmentsCount", { count: attachmentCount ?? (body.split("\n").length - 1) }) : body;
   const long = text.length > LONG_MESSAGE;
   const gutter = action ?? <CopyButton text={copyText ?? body} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
   return (

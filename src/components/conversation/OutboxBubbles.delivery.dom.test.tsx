@@ -360,6 +360,21 @@ test("a converted message shows its chip for Windows drive and UNC inbox paths",
   }
 });
 
+test("a converted message shows one count including the generated file and operator attachments", async () => {
+  for (const counts of [{ files: 3, images: 0 }, { files: 0, images: 3 }]) {
+    const paths = [
+      ...Array.from({ length: counts.files }, (_, n) => `/inbox/files/fixture/notes-${n}.log`),
+      "/inbox/files/fixture/message.txt",
+    ];
+    const text = ["The full message is attached as message.txt. Read the file in full before responding.", ...paths].join("\n");
+    const host = await bubble({ text: "я".repeat(30_000), state: "delivered", ...counts,
+      textAttachment: { name: "message.txt", path: paths.at(-1)!, text } }, SUBMITTED_AT + 1_000);
+    expect(host.textContent).toContain(translate("en", "composer.attachmentsCount", { count: 4 }));
+    expect(host.textContent).not.toContain(translate("en", "composer.attachmentsCount", { count: 3 }));
+    expect(host.textContent).not.toContain(translate("en", "composer.imagesCount", { count: 3 }));
+  }
+});
+
 /**
  * Sending into a host that is gone.
  *

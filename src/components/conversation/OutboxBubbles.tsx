@@ -1,5 +1,7 @@
 "use client";
 
+import { messageTextAttachmentFromText } from "@/lib/messageTextAttachment";
+
 import { TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -162,6 +164,7 @@ export function ConversationMessageRow({
     : entry?.text.trim() ? entry.text : canonical?.text ?? entry?.text ?? "";
   const selectedContext = canonical?.selectedContext ?? entry?.selectedContext ?? null;
   const attachments = entry ? entry.images + (entry.files ?? 0) : 0;
+  const textFile = entry?.textAttachment ?? messageTextAttachmentFromText(text);
   const disclosureLabel = t(open ? "outbox.hideDelivery" : "outbox.showDelivery");
   const operationId = entry ? messageRowOperationId(entry) : null;
   const action = row?.phase === "pending" ? (
@@ -354,10 +357,11 @@ export function ConversationMessageRow({
     <UserMessageRow
       text={text}
       copyText={entry?.textAttachment ? entry.text : undefined}
+      attachmentCount={entry?.textAttachment ? attachments + 1 : undefined}
       sender={sender}
       tone={entry?.intent === "context" ? "context" : undefined}
       selectedContext={selectedContext}
-      bubbleFooter={attachments ? (
+      bubbleFooter={attachments && !textFile ? (
         /* What the submission actually carried, in ONE presentation from the
            moment it was staged to long after its record arrived. A file-only
            bubble used to render blank here, because the count came from the
