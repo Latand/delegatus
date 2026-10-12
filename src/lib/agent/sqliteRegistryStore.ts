@@ -697,6 +697,79 @@ export class SqliteAgentRegistryStore {
         && !["conversationId", "artifactPath", "command.operationId", "alias"].includes(field)) continue;
       this.db.exec(`CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === 'alias' ? " WHERE collection = 'conversationAliases'" : ''}`);
     }
+    const livenessProjectionReady = this.meta("liveness_projection_version") === "1";
+    this.runAtomically([
+      `CREATE TABLE IF NOT EXISTS registry_liveness_entries (
+        row_key TEXT PRIMARY KEY, row_order INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS registry_liveness_receipts (
+        row_key TEXT PRIMARY KEY, row_order INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS registry_liveness_receipts_order ON registry_liveness_receipts(row_order)`,
+      `CREATE INDEX IF NOT EXISTS registry_liveness_receipt_session ON registry_rows(
+        (json_extract(value_json,'$.key.engine')||':'||json_extract(value_json,'$.key.sessionId'))
+      ) WHERE collection='receipts'`,
+      `CREATE TRIGGER IF NOT EXISTS registry_liveness_insert AFTER INSERT ON registry_rows
+      WHEN NEW.collection IN ('entries','receipts') BEGIN
+        DELETE FROM registry_liveness_entries WHERE NEW.collection='entries' AND row_key=NEW.row_key;
+        DELETE FROM registry_liveness_receipts WHERE NEW.collection='receipts' AND row_key=NEW.row_key;
+        INSERT INTO registry_liveness_entries(row_key,row_order)
+          SELECT NEW.row_key,NEW.row_order WHERE NEW.collection='entries' AND (
+            json_extract(NEW.value_json,'$.status')!='dead'
+            OR json_extract(NEW.value_json,'$.host') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.structuredHost.process') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.claimOwner') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.pendingAction') IS NOT NULL
+            OR COALESCE(json_array_length(NEW.value_json,'$.structuredTerminationSurvivors'),0)>0
+          );
+        INSERT INTO registry_liveness_receipts(row_key,row_order)
+          SELECT NEW.row_key,NEW.row_order WHERE NEW.collection='receipts' AND (
+            json_extract(NEW.value_json,'$.state') NOT IN ('completed','failed','conflicted')
+            OR json_extract(NEW.value_json,'$.admissionOwner') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.queuedPinnedSpawn') IS NOT NULL
+          );
+      END`,
+      `CREATE TRIGGER IF NOT EXISTS registry_liveness_update AFTER UPDATE ON registry_rows
+      WHEN NEW.collection IN ('entries','receipts') BEGIN
+        DELETE FROM registry_liveness_entries WHERE NEW.collection='entries' AND row_key=NEW.row_key;
+        DELETE FROM registry_liveness_receipts WHERE NEW.collection='receipts' AND row_key=NEW.row_key;
+        INSERT INTO registry_liveness_entries(row_key,row_order)
+          SELECT NEW.row_key,NEW.row_order WHERE NEW.collection='entries' AND (
+            json_extract(NEW.value_json,'$.status')!='dead'
+            OR json_extract(NEW.value_json,'$.host') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.structuredHost.process') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.claimOwner') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.pendingAction') IS NOT NULL
+            OR COALESCE(json_array_length(NEW.value_json,'$.structuredTerminationSurvivors'),0)>0
+          );
+        INSERT INTO registry_liveness_receipts(row_key,row_order)
+          SELECT NEW.row_key,NEW.row_order WHERE NEW.collection='receipts' AND (
+            json_extract(NEW.value_json,'$.state') NOT IN ('completed','failed','conflicted')
+            OR json_extract(NEW.value_json,'$.admissionOwner') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.queuedPinnedSpawn') IS NOT NULL
+          );
+      END`,
+      `CREATE TRIGGER IF NOT EXISTS registry_liveness_delete AFTER DELETE ON registry_rows BEGIN
+        DELETE FROM registry_liveness_entries WHERE OLD.collection='entries' AND row_key=OLD.row_key;
+        DELETE FROM registry_liveness_receipts WHERE OLD.collection='receipts' AND row_key=OLD.row_key;
+      END`,
+    ]);
+    if (!livenessProjectionReady) this.runAtomically([
+      `INSERT INTO registry_liveness_entries(row_key,row_order)
+        SELECT row_key,row_order FROM registry_rows WHERE collection='entries' AND (
+          json_extract(value_json,'$.status')!='dead' OR json_extract(value_json,'$.host') IS NOT NULL
+          OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL OR json_extract(value_json,'$.claimOwner') IS NOT NULL
+          OR json_extract(value_json,'$.pendingAction') IS NOT NULL
+          OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
+        ) ON CONFLICT(row_key) DO UPDATE SET row_order=excluded.row_order`,
+      `INSERT INTO registry_liveness_receipts(row_key,row_order)
+        SELECT row_key,row_order FROM registry_rows WHERE collection='receipts' AND (
+          json_extract(value_json,'$.state') NOT IN ('completed','failed','conflicted')
+          OR json_extract(value_json,'$.admissionOwner') IS NOT NULL OR json_extract(value_json,'$.queuedPinnedSpawn') IS NOT NULL
+        ) ON CONFLICT(row_key) DO UPDATE SET row_order=excluded.row_order`,
+      `INSERT INTO registry_meta(key,value) VALUES ('liveness_projection_version','1')
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    ]);
     // Array paths need a relational index. Triggers cover every writer,
     // including older releases sharing this journal during handover.
     this.db.exec(`
@@ -1295,22 +1368,42 @@ export class SqliteAgentRegistryStore {
         .all(collection,...values).map(row => row.row_key);
     });
     livenessReaders.set(file,() => {
-      const entryKeys = this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='entries' AND (
-        json_extract(value_json,'$.status')!='dead'
-        OR json_extract(value_json,'$.host') IS NOT NULL
-        OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL
-        OR json_extract(value_json,'$.claimOwner') IS NOT NULL
-        OR json_extract(value_json,'$.pendingAction') IS NOT NULL
-        OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
-      ) ORDER BY row_order`).all().map(row => file.entries[row.row_key]).filter((row): row is AgentRegistryEntry => !!row);
-      const receiptKeys = this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='receipts' AND (
-        json_extract(value_json,'$.state') NOT IN ('completed','failed','conflicted')
-        OR json_extract(value_json,'$.admissionOwner') IS NOT NULL
-        OR json_extract(value_json,'$.verifiedHost.agent') IS NOT NULL
-        OR json_extract(value_json,'$.pane.panePid') IS NOT NULL
-        OR json_extract(value_json,'$.queuedPinnedSpawn') IS NOT NULL
-      ) ORDER BY row_order`).all().map(row => file.receipts[row.row_key]).filter((row): row is RegistryFile["receipts"][string] => !!row);
-      return { entries: entryKeys, receipts: receiptKeys };
+      const projection = this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_liveness_entries'").get();
+      const entryRows = projection
+        ? this.db.query<{ row_key: string }, []>("SELECT row_key FROM registry_liveness_entries ORDER BY row_order").all()
+        : this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='entries' AND (
+          json_extract(value_json,'$.status')!='dead' OR json_extract(value_json,'$.host') IS NOT NULL
+          OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL OR json_extract(value_json,'$.claimOwner') IS NOT NULL
+          OR json_extract(value_json,'$.pendingAction') IS NOT NULL
+          OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
+        ) ORDER BY row_order`).all();
+      const entries = entryRows.map(row => file.entries[row.row_key]).filter((row): row is AgentRegistryEntry => !!row);
+      const entryKeys = entries.map(row => `${row.key.engine}:${row.key.sessionId}`);
+      const receiptKeys = new Set((projection
+        ? this.db.query<{ row_key: string }, []>("SELECT row_key FROM registry_liveness_receipts ORDER BY row_order").all()
+        : this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='receipts' AND (
+          json_extract(value_json,'$.state') NOT IN ('completed','failed','conflicted')
+          OR json_extract(value_json,'$.admissionOwner') IS NOT NULL OR json_extract(value_json,'$.queuedPinnedSpawn') IS NOT NULL
+        ) ORDER BY row_order`).all()).map(row => row.row_key));
+      if (entryKeys.length) {
+        const placeholders = entryKeys.map(() => "?").join(",");
+        for (const row of this.db.query<{ row_key: string }, string[]>(`SELECT r.row_key FROM registry_rows r INDEXED BY registry_liveness_receipt_session
+          JOIN registry_liveness_entries e ON e.row_key IN (${placeholders})
+          WHERE r.collection='receipts'
+            AND (json_extract(r.value_json,'$.key.engine')||':'||json_extract(r.value_json,'$.key.sessionId'))=e.row_key
+            AND (json_extract(r.value_json,'$.verifiedHost.agent') IS NOT NULL OR json_extract(r.value_json,'$.pane.panePid') IS NOT NULL)
+            AND NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='receipts' AND c.row_key=r.row_key)`)
+          .all(...entryKeys)) receiptKeys.add(row.row_key);
+        const operationIds = entries.flatMap(row => row.structuredHostOperationId ? [row.structuredHostOperationId] : []);
+        for (const operationId of operationIds) {
+          const row = this.db.query<{ row_key: string }, [string]>(`SELECT row_key FROM registry_rows WHERE collection='receipts' AND row_key=?
+            AND (json_extract(value_json,'$.verifiedHost.agent') IS NOT NULL OR json_extract(value_json,'$.pane.panePid') IS NOT NULL)
+            AND NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='receipts' AND c.row_key=registry_rows.row_key)`).get(operationId);
+          if (row) receiptKeys.add(row.row_key);
+        }
+      }
+      const receipts = [...receiptKeys].map(key => file.receipts[key]).filter((row): row is RegistryFile["receipts"][string] => !!row);
+      return { entries, receipts };
     });
     if (this.changesReady) pathReaders.set(file,path => this.db.query<{ conversation_id: string }, [string]>(
       `SELECT p.conversation_id FROM registry_conversation_paths p JOIN ${this.recordsSource} r ON r.collection='conversations' AND r.row_key=p.conversation_id WHERE p.path=? ORDER BY r.row_order`)
