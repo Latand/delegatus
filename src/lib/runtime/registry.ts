@@ -75,6 +75,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
     ...(state.pendingPermissions?.length ? { pendingPermissions: state.pendingPermissions } : {}),
+    ...(state.pendingToolUses?.length ? { pendingToolUses: state.pendingToolUses } : {}),
     ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     ...(state.memory ? { memory: state.memory } : {}),
     activeFlags: state.activeFlags,

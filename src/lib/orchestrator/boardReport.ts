@@ -543,7 +543,8 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
     }
     const count = shown[key]!;
     const more = (key === "waiting" ? counts.waiting : section.rows.length) - count;
-    const label = key === "waiting" ? `9. Waiting for you (${counts.waiting}; ${counts.waitingStale} with evidence they no longer ask) — the operator's «Чекають на вас» for this project. Read again with dismiss_attention (no target) before clearing; each row carries its target.` : key === "close"
+    const routed = facts.needsYou?.routedToSeat ?? 0;
+    const label = key === "waiting" ? `9. Waiting for you (${counts.waiting}; ${counts.waitingStale} with hints they may no longer ask) — the operator's «Чекають на вас» for this project, after Delegatus cleared what its evidence proves settled. Read again with dismiss_attention (no target) before clearing; each row carries its target.${routed ? ` ${routed} more wait on you first and are not on the operator's list: your wakes name them; answer each where it asked, or escalate it with dismiss_attention escalate.` : ""}` : key === "close"
       ? `${section.heading} (${section.rows.length}), each with the rule that matched`
       : `${section.heading} (${section.rows.length})${note}`;
     return [label, ...section.rows.slice(0, count), ...(more > 0 ? [`(${more} more)`] : []), ...(section.footer ? [section.footer] : [])];

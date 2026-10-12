@@ -31,7 +31,11 @@ function designate(project: string, conversationId: string) {
   expect(completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null, now: AT }).kind).toBe("activated");
 }
 
-const cases: { name: string; creator: string | null; actor: PauseResumeActor | null; allowed: boolean }[] = [
+/* `allowed` is the answer for every action unless `review` says otherwise for
+   continue-review and accept-head: the seat answers what its project's lanes
+   wait on (docs/design/attention-auto-resolve.md), and the operator keeps the
+   unreviewed head of a lane they created by hand. */
+const cases: { name: string; creator: string | null; actor: PauseResumeActor | null; allowed: boolean; review?: boolean }[] = [
   { name: "rotation successor answers predecessor", creator: "conversation_old", actor: agent("conversation_current"), allowed: true },
   { name: "current seat answers its own lane", creator: "conversation_current", actor: agent("conversation_current"), allowed: true },
   { name: "revoked creator is refused", creator: "conversation_old", actor: agent("conversation_old"), allowed: false },
@@ -40,15 +44,17 @@ const cases: { name: string; creator: string | null; actor: PauseResumeActor | n
   { name: "unidentified caller is refused", creator: "conversation_old", actor: null, allowed: false },
   { name: "unidentified agent is refused", creator: "conversation_old", actor: agent(null), allowed: false },
   { name: "claimed role grants nothing", creator: "conversation_old", actor: agent("conversation_worker", "orchestrator"), allowed: false },
-  { name: "current seat cannot take a worker's lane", creator: "conversation_worker", actor: agent("conversation_current"), allowed: false },
-  { name: "current seat cannot take another project's creator", creator: "conversation_other", actor: agent("conversation_current"), allowed: false },
-  { name: "missing creator grants nothing", creator: null, actor: agent("conversation_current"), allowed: false },
+  { name: "current seat answers a worker's lane routed to it", creator: "conversation_worker", actor: agent("conversation_current"), allowed: true },
+  { name: "current seat answers a lane another project's seat created here", creator: "conversation_other", actor: agent("conversation_current"), allowed: true },
+  { name: "current seat answers an operator lane's decision, never its unreviewed head", creator: null, actor: agent("conversation_current"), allowed: true, review: false },
+  { name: "a worker never answers an operator lane", creator: null, actor: agent("conversation_worker"), allowed: false },
   { name: "ordinary creator retains authority", creator: "conversation_worker", actor: agent("conversation_worker"), allowed: true },
   { name: "direct operator retains authority", creator: "conversation_old", actor: { kind: "operator" }, allowed: true },
 ];
 
 for (const action of ["resolve-decision", "continue-review", "accept-head"] as const) {
-  test.each(cases)(`${action}: $name (aliased project)`, async ({ creator, actor, allowed }) => {
+  test.each(cases)(`${action}: $name (aliased project)`, async ({ creator, actor, allowed: decision, review }) => {
+    const allowed = action === "resolve-decision" ? decision : review ?? decision;
     designate("project-legacy", "conversation_old");
     // Alias after the old seat was recorded, as when a repository gains an origin.
     persistProjectAliases([{ source: "project-legacy", target: "project-current", displayName: "Project" }]);
