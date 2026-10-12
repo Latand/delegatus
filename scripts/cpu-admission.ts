@@ -19,6 +19,23 @@ const pressure = new CpuPressureGate({ ...(policy ?? DEFAULT_CPU_PRESSURE_POLICY
 });
 const [mode, key, pid] = process.argv.slice(2);
 if (mode === "--reuse-slot") process.exit(inheritedCpuSlot() ? 0 : 75);
+// The shell owns this monitor across readiness, lock races and retry pauses.
+// A completed claim ends it before the command's execution clock starts.
+if (mode === "--watch-wait") {
+  if (!key || !pid) throw new Error("CPU wait monitor needs a private directory and owner PID");
+  const owner = captureProcessIdentity(Number(pid));
+  const endWait = reportCpuWait();
+  const cancel = () => { endWait(); process.exit(130); };
+  process.on("SIGTERM", cancel); process.on("SIGINT", cancel);
+  try {
+    fs.writeFileSync(path.join(key, "ready"), "ready", { mode: 0o600 });
+    while (!fs.existsSync(path.join(key, "done"))) {
+      if (processIdentityStatus(owner) === "dead" || procBackend.processExited(owner.pid)) break;
+      await Bun.sleep(100);
+    }
+  } finally { endWait(); }
+  process.exit(0);
+}
 const queue = machineCpuAdmissionQueue();
 if (!key || !pid || !["--wait", "--claim"].includes(mode!)) throw new Error("cpu admission needs a mode, ticket and owner PID");
 const owner = captureProcessIdentity(Number(pid));

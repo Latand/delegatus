@@ -44,6 +44,28 @@ test("gate-slot uses the ten-minute queue and preserves FIFO through slot acquis
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await Promise.allSettled(pending); f.close(); }
 }, 20_000);
 
+test("a lost slot claim keeps the shell retry pause outside the caller's execution budget", async () => {
+  const f = fixture(), controller = new AbortController();
+  const bin = path.join(f.dir, "bin"), ready = path.join(f.dir, "claim-ready"), lost = path.join(f.dir, "claim-lost");
+  fs.mkdirSync(bin);
+  // Readiness observes a free slot; the shell loses its first lock race.
+  fs.writeFileSync(path.join(bin, "flock"), '#!/bin/bash\nif [[ "$#" -eq 2 && "$1" == -n && "$2" == 9 && ! -f "$CPU_CLAIM_READY" ]]; then echo lost > "$CPU_CLAIM_LOST"; exit 1; fi\nexit 0\n', { mode: 0o755 });
+  const guard = setTimeout(() => controller.abort(), 7000);
+  let pending: ReturnType<typeof realExec> | undefined;
+  try {
+    pending = realExec("bash", f.command("claimed").slice(1), process.cwd(), {
+      ...f.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, CPU_CLAIM_READY: ready, CPU_CLAIM_LOST: lost,
+      DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "2",
+    }, { timeoutMs: 1000, signal: controller.signal });
+    await until(() => fs.existsSync(lost));
+    await Bun.sleep(1300);
+    fs.writeFileSync(ready, "ready");
+    const result = await pending;
+    expect(result.code, result.stderr).toBe(0);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("claimed\n");
+  } finally { clearTimeout(guard); controller.abort(); await Promise.resolve(pending).catch(() => {}); f.close(); }
+}, 20_000);
+
 test.skipIf(process.platform !== "linux")("an admitted parent can finish nested work while a fresh job waits for its only slot", async () => {
   const f = fixture(), controls = [new AbortController(), new AbortController()];
   const pending: Promise<Awaited<ReturnType<typeof realExec>>>[] = [];

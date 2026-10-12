@@ -27,7 +27,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture(systemd: boolean) {
   const root = mkdtempSync(join(tmpdir(), "slot-test-")); roots.push(root);
-  for (const name of ["mkdir", "flock", "sleep", "dirname"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  for (const name of ["mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   if (systemd) {
     writeFileSync(join(root, "systemctl"), "#!/bin/bash\nexit 0\n"); chmodSync(join(root, "systemctl"), 0o755);
     writeFileSync(join(root, "systemd-run"), '#!/bin/bash\nprintf "%s\\n" "$@" > "$SLOT_LOG"\nwhile [[ "$1" != -- ]]; do shift; done\nshift\nexec "$SLOT_BUN" "$SLOT_SERVICE_STUB" "$4"\n'); chmodSync(join(root, "systemd-run"), 0o755);
@@ -70,7 +70,7 @@ function fakeCgroup(root: string, group: string, controls: { scope?: string; sli
 /** A Linux fixture whose systemd records what the gate asked for. */
 function cpuFixture(options: { manager: boolean; refuseQuota?: boolean; kernel?: { scope?: string; slice?: string } }) {
   const root = mkdtempSync(join(tmpdir(), "slot-cpu-test-")); roots.push(root);
-  for (const name of ["mkdir", "flock", "sleep", "awk", "uname", "cat", "dirname"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  for (const name of ["mkdir", "flock", "sleep", "awk", "uname", "cat", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   writeFileSync(join(root, "getconf"), "#!/bin/bash\necho 24\n"); chmodSync(join(root, "getconf"), 0o755);
   if (options.manager) {
     writeFileSync(join(root, "systemctl"), `#!/bin/bash\nprintf "%s\\n" "$*" >> "$SYSTEMCTL_LOG"\n${options.refuseQuota ? '[[ "$2" == set-property ]] && exit 1\n' : ""}exit 0\n`);

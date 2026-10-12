@@ -82,16 +82,38 @@ admission="$(dirname "${BASH_SOURCE[0]}")/cpu-admission.ts"
 # A nested command continues an already admitted job. The helper validates
 # the parent start identity and its kernel-held slot before reusing it.
 if "${LLV_GATE_BUN:-bun}" "$admission" --reuse-slot; then run "$@"; fi
+# The shell's pauses after a lost lock race are admission time too. Keep one
+# ledger interval alive until the successful claim, including helper handoffs.
+wait_dir=""
+end_cpu_wait() {
+  if [[ -n "$wait_dir" ]]; then
+    touch "$wait_dir/done"
+    wait "$wait_pid" || true
+    rm -rf -- "$wait_dir"
+    wait_dir=""
+  fi
+}
+if [[ -n ${LLV_CPU_WAIT_ROOTS:-} && ${LLV_CPU_WAIT_ROOTS:-} != '[]' ]]; then
+  wait_dir=$(mktemp -d "${TMPDIR:-/tmp}/delegatus-cpu-wait.XXXXXXXX")
+  "${LLV_GATE_BUN:-bun}" "$admission" --watch-wait "$wait_dir" "$$" &
+  wait_pid=$!
+  trap end_cpu_wait EXIT
+  trap 'end_cpu_wait; exit 130' INT TERM
+  while [[ ! -f "$wait_dir/ready" ]]; do
+    kill -0 "$wait_pid" 2>/dev/null || { echo "gate-slot: CPU wait monitor did not start" >&2; exit 70; }
+    sleep 0.02
+  done
+fi
 queue_key="command:$$:$RANDOM:$RANDOM"
 while :; do
   "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$$"
   if ! command -v flock >/dev/null; then
-    if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$$"; then run "$@"; fi
+    if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$$"; then end_cpu_wait; run "$@"; fi
   else
     for ((i=1; i<=slots; i++)); do
       exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
       if flock -n 9; then
-        if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$$"; then run "$@"; fi
+        if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$$"; then end_cpu_wait; run "$@"; fi
       fi
       exec 9>&-
     done
