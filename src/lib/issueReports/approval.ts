@@ -49,16 +49,23 @@ export function approvesIssueReport(message: string, digest: string): boolean {
   const contains = (phrase: string) => said.includes(` ${normalized(phrase)} `);
   const replies = Object.values(issueReportApprovalReplies(digest));
   if (!replies.some(contains)) return false;
+  const refusalClauses = message.split(/[.!?;\n\r]+/).map((clause) => ` ${normalized(clause)} `);
   /* A negated quotation and a separate refusal both veto this digest, even
      when the same message contains an affirmative reply as well. */
   const negations = ["не", "ні", "no", "not", "don't", "do not", "never"];
-  const refusalPhrases = [
-    ...["dont publish", "do not publish", "never publish"].flatMap((prefix) =>
-      ["report", "the report", "this report", "that report"].map((subject) => `${prefix} ${subject} ${digest}`)),
-    ...["звіт", "цей звіт", "той звіт"].map((subject) => `не публікуй ${subject} ${digest}`),
+  const escapedDigest = digest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const refusalPatterns = [
+    /* English modifiers and articles may vary, while the full digest binds
+       the refusal to one preview. */
+    new RegExp(`(?:dont|do not|never)(?: [a-z]+){0,2} publish(?: (?:a|the|this|that))? report ${escapedDigest}`),
+    new RegExp(`(?:(?:a|the|this|that) )?report ${escapedDigest} (?:dont|do not|never)(?: [a-z]+){0,2} publish`),
+    /* Ukrainian report cases and both verb/object orders. */
+    new RegExp(`(?:ніколи )?не(?: [\\p{L}]+){0,2} публікуй (?:цей |цього |той |того )?звіт(?:у|а)? ${escapedDigest}`, "u"),
+    new RegExp(`(?:цей |цього |той |того )?звіт(?:у|а)? ${escapedDigest} (?:ніколи )?не(?: [\\p{L}]+){0,2} публікуй`, "u"),
   ];
-  const refused = replies.some((reply) => negations.some((no) => contains(`${no} ${reply}`)))
-    || refusalPhrases.some(contains);
+  const refused = refusalClauses.some((clause) =>
+    replies.some((reply) => negations.some((no) => clause.includes(` ${normalized(`${no} ${reply}`)} `)))
+      || refusalPatterns.some((pattern) => pattern.test(clause)));
   return !refused;
 }
 

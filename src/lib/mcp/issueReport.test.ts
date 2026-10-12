@@ -297,6 +297,10 @@ test.each([
   ["do not publish the report", (digest: string) => `do not publish the report ${digest}`],
   ["don't publish the report", (digest: string) => `don't publish the report ${digest}`],
   ["не публікуй цей звіт", (digest: string) => `не публікуй цей звіт ${digest}`],
+  ["don't ever publish report", (digest: string) => `don't ever publish report ${digest}`],
+  ["do not publish a report", (digest: string) => `do not publish a report ${digest}`],
+  ["не публікуй цього звіту", (digest: string) => `не публікуй цього звіту ${digest}`],
+  ["звіт digest не публікуй", (digest: string) => `звіт ${digest} не публікуй`],
 ])("an explicit refusal of this report overrides its reply: %s", async (_name, refusal) => {
   const h = harness();
   const digest = await previewed(h);
@@ -317,7 +321,7 @@ test("a refusal of another digest does not cancel this report's approval", async
   const second = await previewed(h, secondReport);
   const firstReply = (await shown(h, first)).uk;
   const secondReply = (await shown(h, second)).en;
-  h.operatorSays(`${firstReply}; ${secondReply}; do not publish the report ${first}`);
+  h.operatorSays(`${firstReply}; ${secondReply}; don't ever publish report ${first}`);
 
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: first }))
     .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });

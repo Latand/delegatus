@@ -112,6 +112,17 @@ test.each([
   expect(approvesIssueReport(`${issueReportApprovalReplies(DIGEST).en}; ${refusal}`, DIGEST)).toBe(false);
 });
 
+test.each([
+  `don't ever publish report ${DIGEST}`,
+  `do not publish a report ${DIGEST}`,
+  `не публікуй цього звіту ${DIGEST}`,
+  `звіт ${DIGEST} не публікуй`,
+])("a modified or reordered explicit refusal overrides approval: %s", (refusal) => {
+  expect(approvesIssueReport(`${issueReportApprovalReplies(DIGEST).uk}; ${refusal}`, DIGEST)).toBe(false);
+  expect(approvesIssueReport(`${issueReportApprovalReplies(DIGEST).en}; ${refusal}`, DIGEST)).toBe(false);
+  expect(approvesIssueReport(`${issueReportApprovalReplies(OTHER).en}; ${refusal}`, OTHER)).toBe(true);
+});
+
 test("a refusal naming another digest does not override this approval", () => {
   const text = `${issueReportApprovalReplies(DIGEST).uk}; do not publish the report ${OTHER}`;
   expect(approvesIssueReport(text, DIGEST)).toBe(true);
