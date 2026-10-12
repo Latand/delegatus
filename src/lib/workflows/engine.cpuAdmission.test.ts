@@ -215,7 +215,7 @@ test.each(["setup", "stage"] as const)("a mid-tick update suspends %s before lat
   expect(h.starts).toEqual([]);
 });
 
-test("polls reconcile held tickets while another workflow's finish operation is in flight", async () => {
+test.each(["poll", "timer", "retry"] as const)("%s reconciles held tickets while another workflow's finish operation is in flight", async action => {
   const h = harness();
   saveWorkflows([workflow("one", "setup")]);
   await tickWorkflows([], h.ports);
@@ -230,13 +230,28 @@ test("polls reconcile held tickets while another workflow's finish operation is 
     await held;
     return { code: 1, stdout: "", stderr: "finish probe completed" };
   };
+  const reconcile = h.ports.cpuAdmissionReconcile!;
+  let refuseNextRead = false;
+  const errors = action === "retry" ? spyOn(console, "error").mockImplementation(() => {}) : null;
+  h.ports.cpuAdmissionReconcile = () => {
+    if (refuseNextRead) { refuseNextRead = false; throw new Error("temporary queue read failure"); }
+    reconcile();
+  };
+  if (action !== "poll") setMachineCpuPressureForTests(undefined, 10);
   const pending = tickWorkflows([], h.ports);
   try {
     await began;
     writeDrain(drainFile(), { id: "update", target: "candidate", since: new Date(now).toISOString(), until: 0, persistent: true });
-    const poll = await tickWorkflows([], h.ports);
-    expect(poll.changed).toBe(false);
+    if (action === "poll") {
+      const poll = await tickWorkflows([], h.ports);
+      expect(poll.changed).toBe(false);
+    } else {
+      refuseNextRead = action === "retry";
+      const until = performance.now() + 2_000;
+      while (machineCpuAdmissionQueue().check("command:finish-check", true, undefined, false) && performance.now() < until) await Bun.sleep(10);
+    }
     expect(machineCpuAdmissionQueue().check("command:finish-check", true)).toBeNull();
-  } finally { release(); await pending; }
+    if (errors) expect(errors.mock.calls).toHaveLength(1);
+  } finally { errors?.mockRestore(); release(); await pending; }
   expect(h.starts).toEqual([]);
 });

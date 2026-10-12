@@ -23,7 +23,7 @@ import { paneInfo, spawnAgentWithPrompt } from "@/lib/tmux";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { cpuPressureHoldDetail, isCpuPressureDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { cpuPressureHoldDetail, isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
 import { machineCpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
 import { stateDir } from "@/lib/configDir";
 import { realExec, provisionWorktree, runFinish, setupStatus, startSetup, type ExecPort, type SetupStatus } from "./provision";
@@ -593,6 +593,13 @@ export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts =
     return { workflows: loadWorkflows(), changed: false };
   }
   store.__llvWorkflowTick = true;
+  // The controller serializes passes. Keep update holds observable while a
+  // finish command waits behind another workflow's ticket in the CPU queue.
+  const admissionWatch = ports.cpuAdmissionReconcile ? setInterval(() => {
+    try { ports.cpuAdmissionReconcile?.(); }
+    catch (error) { console.error("[workflows] CPU admission reconciliation failed", error); }
+  }, machineCpuPressurePollMs()) : null;
+  admissionWatch?.unref();
   try {
     ports.cpuAdmissionReconcile?.();
     const workflows = loadWorkflows();
@@ -606,6 +613,7 @@ export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts =
     if (changed) saveWorkflows(workflows);
     return { workflows, changed };
   } finally {
+    if (admissionWatch) clearInterval(admissionWatch);
     store.__llvWorkflowTick = false;
     ports.cpuAdmissionReconcile?.();
   }
