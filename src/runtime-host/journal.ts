@@ -373,6 +373,20 @@ export interface RuntimeJournalOptions {
   structuredHosts?: boolean;
 }
 
+/** How long an open or a write waits for another connection's lock. */
+export const RUNTIME_JOURNAL_BUSY_TIMEOUT_MS = 5000;
+
+/* A lock that outlasts the busy wait is named as one; any other open failure
+   passes through unchanged. */
+function runtimeJournalOpenRefusal(error: unknown): unknown {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code !== "string" || !code.startsWith("SQLITE_BUSY")) return error;
+  return Object.assign(
+    new Error(`runtime journal is still locked by another process after waiting ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS} ms (${code})`, { cause: error }),
+    { code },
+  );
+}
+
 export class RuntimeJournal {
   private readonly db: Database;
   private readonly nativeQueue: NativeQueueJournal;
@@ -418,7 +432,17 @@ export class RuntimeJournal {
     this.now = options.now ?? (() => Date.now());
     this.structuredHosts = options.structuredHosts ?? structuredHostsEnabled();
     this.secretKey = loadSecretKey(filename);
-    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA auto_vacuum = INCREMENTAL;");
+    /* The busy wait is set before anything that reads the file. Switching to
+       WAL reads the wal-index, and a peer that is the file's only connection
+       (a read-only reader included) rebuilds that index under the recovery
+       lock as it opens. Without a wait, a generation that opens in that
+       window dies with SQLITE_BUSY_RECOVERY. */
+    try {
+      this.db.exec(`PRAGMA busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;`);
+    } catch (error) {
+      this.db.close();
+      throw runtimeJournalOpenRefusal(error);
+    }
     this.nativeQueue = new NativeQueueJournal(this.db);
     if (filename !== ":memory:") {
       for (const candidate of [filename, `${filename}-wal`, `${filename}-shm`]) {
