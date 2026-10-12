@@ -24,7 +24,7 @@ Prior work: `search_transcripts` ("board header toolbar top bar redesign", "kanb
 | 3 | find | task search field, 240 px, grows to 420 px max; min 160 px | |
 | 4 | view | `Hidden N` (hidden at 0, as today) · board / conversations switch | `Hidden` is icon + count below 1700 px, the shape `Tasks` has |
 | 5 | create | `+ Task`, `+ Agent` | one `+` button with a two-row menu below 1700 px; on Conversations the same group is drawn invisible and inert, so groups 4–7 keep their x when the view changes |
-| 6 | panels | `Orchestrator` toggle | icon only below 1700 px. The `Tasks N` toggle and its panel left the bar on 2026-10-12 (last section) |
+| 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1700 px; the Tasks panel opens under the bar, which spans it |
 | 7 | more | `⋯` menu | §4 |
 | 8 | what needs me | attention island, in the 236 px reserve | far right, where it already lives |
 
@@ -133,12 +133,54 @@ The fourth critique read 1280 px with the long project name. On Conversations th
 
 The attention toast, the island's own dismissable card, still floats over the Tasks panel's header while it shows. It lives in the fenced attention code and is left as a follow-up.
 
+## The one-row header (operator's choice, 2026-10-12)
+
+Two prototype rounds ended on «Тихі іконки» with the operator's three answers.
+The row above is replaced by this one; the sections before this one are the
+record of how it got here.
+
+Row: name · accounts · «● N» ‖ [find | filter] · + · [Orchestrator │ Tasks N │ recent agents] · ⋯ · ● Needs you N
+
+| Control | Now |
+|---|---|
+| Project name | stays; it never truncates while the bar has a step left |
+| Account switches | in the row while it has room, then the Accounts section of ⋯ |
+| «N working» | a dot and the number; the sentence is the tooltip and the accessible name |
+| Open-agents pill | unchanged; its slot takes room only while it holds the pill |
+| Find | gives way first, down to the 144 px that keep the placeholder whole |
+| Reason chips, the island's funnel | one filter joined to the search: «Needs you» (the funnel, key F), every task, each other reason with its count |
+| «Hidden N» | a row of ⋯, drawn while something is hidden; it opens the same tray under ⋯ |
+| Board \| Conversations | removed: the Board is the one desktop view, whatever view was saved (the phone keeps its two) |
+| «+ Task», «+ Agent» | one `+` with the two-row menu |
+| Orchestrator, Tasks | one segmented group; words while the row has room, then icons |
+| Recent agents | the group's last segment: an icon, and under it the list Conversations showed |
+| ⋯ | unchanged, plus Hidden |
+| «● Needs you N» | the row's last item, in the flow; filled while something waits; gone while the needs-you panel is docked |
+
+The attention island used to be drawn `fixed` over a 236 px reserve at the
+bar's right end, and at 1960 px in uk it covered ⋯. It is now a flex item of
+the bar, portaled into the bar's last slot, so nothing is drawn over the row.
+Its toast hangs 8 px under the row.
+
+What gives way is one rule. The bar measures itself (`useBarFit` in
+`ProjectBar.tsx`) and takes the fewest steps, in this order, at which the row
+fits and the name is whole: the accounts move into ⋯, Orchestrator and Tasks
+keep their icons, the chip keeps its dot and count, the groups stand 8 px
+apart, and last the search may go under its placeholder. Nothing wraps at any
+width, and no row of chips stands under the bar.
+
+`BOARD_CAPTURE_CASE=header` of `scripts/capture-board-geometry.ts` measures it
+at 2254, 1960, 1440 and 1000 px, en and uk, light and dark, with the needs-you
+panel closed and docked.
+
+Not done here: the Overview's bar keeps its own layout and its fixed island.
+
 ## The Tasks control and its panel left the bar (2026-10-12)
 
-The operator rejected every redesign of the old Tasks panel and asked for it to go: the kanban is where tasks live. Group 6 now holds the `Orchestrator` toggle alone; nothing replaces the `Tasks N` toggle, the panel it opened, or the Board's `aside` slot that drew the panel under the bar. What the panel alone reached has a place on the existing surfaces:
+The operator rejected every redesign of the old Tasks panel and asked for it to go: the kanban is where tasks live. The panel group now holds `Orchestrator` and the recent agents; nothing replaces the `Tasks N` segment, the panel it opened, or the Board's `aside` slot that drew the panel under the bar. Row: name · accounts · «● N» ‖ [find | filter] · + · [Orchestrator │ recent agents] · ⋯ · ● Needs you N. What the panel alone reached has a place on the existing surfaces:
 
-- tasks the board does not draw (empty bands taken off the board, done tasks past their retention) are rows of the `Hidden` tray, each with «Show on board»;
-- creating a task is `+ Task` in group 5; search is group 3;
+- tasks the board does not draw (empty bands taken off the board, done tasks past their retention) are rows of the Hidden tray, the Hidden row of ⋯, each with «Show on board»;
+- creating a task is the `Task` row of `+`; search is the find field;
 - tasks of every project are the Overview's board;
 - crowned conversations are pinned atop the needs-you panel, with their crowns;
 - a task link from another project still switches the dashboard and frames the card.

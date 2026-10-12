@@ -1,7 +1,7 @@
 "use client";
 
-import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, MoreHorizontal, Plus } from "lucide-react";
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Filter, History, MoreHorizontal, Plus, X } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { Z } from "@/components/layers";
@@ -12,38 +12,39 @@ import { handleOverlayEscape } from "@/lib/overlay";
 /*
  * The project board's one header bar (#1801, docs/design/board-header.md).
  *
- * One 48 px row, eight groups in reading order: where am I, what is happening,
- * one spacer, find, view, create, panels, more, and the Viewer's attention
- * island in the right reserve. Every control is 32 px in one of three variants:
- * outlined, pressed (`aria-pressed="true"`), and the quiet icon of the ⋯
- * trigger. Hover only strengthens the border, so pressed stays the one
- * accent-coloured state. The kanban board draws the bar with its own groups in
- * the middle; the leaves without a board draw the same bar here, with the same
- * two ends.
+ * One 48 px row, seven groups in reading order: where am I, what is happening,
+ * one spacer, find (the search and its one filter), create, panels, more, and
+ * the Viewer's attention island as the row's last item. Every control is 32 px
+ * in one of three variants: outlined, pressed (`aria-pressed="true"`), and the
+ * quiet icon of the ⋯ trigger. Hover only strengthens the border, so pressed
+ * stays the one accent-coloured state. The kanban board draws the bar with its
+ * own groups in the middle; the leaves without a board draw the same bar here,
+ * with the same two ends. The board is the one desktop view, so the bar holds
+ * no view switch; the list of every agent opens under its own icon.
  */
 
 const BarIslandSlotContext = createContext<((slot: HTMLElement | null) => void) | null>(null);
 
 /**
- * Where the Viewer's attention island sits in the document. It is drawn fixed
- * over the bar's right reserve, after ⋯, so on a project leaf it is also placed
- * in the DOM after ⋯: the bar's last child is a slot, and the island is portaled
- * into it, which keeps keyboard focus in the order the bar is read. With no
- * slot mounted (the Overview, the phone) the island stays ahead of `children`,
- * where it always was.
+ * Where the Viewer's attention island sits in the document. On a project leaf
+ * it is the bar's last item, in the row's own flow after ⋯: the bar's last
+ * child is a slot and the island is portaled into it, so nothing is drawn over
+ * the row and keyboard focus follows the order the bar is read. `island` is
+ * told which of the two it is drawing. With no slot mounted (the Overview) the
+ * island stays ahead of `children`, fixed to the corner as it always was.
  */
-export function BarIslandProvider({ island, children }: { island: ReactNode; children: ReactNode }) {
+export function BarIslandProvider({ island, children }: { island: ((inRow: boolean) => ReactNode) | null; children: ReactNode }) {
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   return (
     <BarIslandSlotContext.Provider value={setSlot}>
-      {slot ? null : island}
+      {slot ? null : island?.(false)}
       {children}
-      {slot ? createPortal(island, slot) : null}
+      {slot && island ? createPortal(island(true), slot) : null}
     </BarIslandSlotContext.Provider>
   );
 }
 
-/** The bar's last child: the island's place in the tab order. It draws no box, so the row does not move. */
+/** The bar's last child: the island's place in the row. The slot draws no box of its own, so the island is the row's item. */
 export function BarIslandSlot() {
   const setSlot = useContext(BarIslandSlotContext);
   return setSlot ? <div ref={setSlot} className="bar-slot" data-bar-island-slot="" style={{ display: "contents" }} /> : null;
@@ -65,11 +66,78 @@ export function useBoardPaneRef(): ((pane: HTMLElement | null) => void) | undefi
   return useContext(BoardPaneContext) ?? undefined;
 }
 
-/** At or above this bar width the controls carry their labels and the account switches sit in
-    the bar; below it they are icons and the accounts move into ⋯. Measured on a seeded home, the
-    uk labels with two account switches and a short project name need about 1 640 px of bar
-    (the island's 252 px of padding and reserve included); 1 700 leaves room for a longer name. */
+/** The Viewer's "only who waits for me" board filter (F), for the bar's one filter menu. */
+export interface BarNeedsFilter {
+  /** False while nothing on the board waits: the filter would only dim the board. */
+  available: boolean;
+  active: boolean;
+  toggle: () => void;
+}
+
+const BarNeedsFilterContext = createContext<BarNeedsFilter | null>(null);
+
+export function BarNeedsFilterProvider({ value, children }: { value: BarNeedsFilter | null; children: ReactNode }) {
+  return <BarNeedsFilterContext.Provider value={value}>{children}</BarNeedsFilterContext.Provider>;
+}
+
+/** At or above this width a bar that holds no board (the skeleton, the empty project) carries its
+    labels and the account switches; below it they are icons and the accounts move into ⋯. */
 export const BAR_WIDE_MIN = 1700;
+
+/**
+ * What the board's bar gives up, in order, when the row is short. Each step is
+ * a token the bar carries in `data-fit` once it is reached, and the bar's CSS
+ * reads the tokens. The search field shrinks before any step, down to the
+ * width that keeps its placeholder whole, and the project name never truncates
+ * while a step is left: the account switches move into ⋯, Orchestrator
+ * keeps its icon, the needs-you chip keeps its dot and count, the
+ * groups stand 8 px apart, and last the search may go under its placeholder.
+ */
+export const BAR_FIT_STEPS = ["accounts", "labels", "chip", "tight", "find"] as const;
+export type BarFitStep = (typeof BAR_FIT_STEPS)[number];
+
+function barFits(bar: HTMLElement): boolean {
+  if (bar.scrollWidth > bar.clientWidth + 0.5) return false;
+  const name = bar.querySelector<HTMLElement>("h1");
+  /* The name has no cap of its own: it is whole while the row has room, and it is cut only once
+     every step is taken and the search sits at its floor. */
+  return !name || name.scrollWidth <= name.clientWidth + 0.5;
+}
+
+/**
+ * Measures the bar and sets the fewest steps at which the row fits and the
+ * name is whole. The attribute is set here, never by React, so a render never
+ * resets it between two measurements; the returned steps let React move what
+ * lives outside the row (the accounts' rows in ⋯). `deps` name what changes the
+ * row's width without changing its content or its box.
+ */
+export function useBarFit(ref: RefObject<HTMLElement | null>, deps: readonly unknown[]): readonly BarFitStep[] {
+  const [reached, setReached] = useState<readonly BarFitStep[]>([]);
+  useLayoutEffect(() => {
+    const bar = ref.current;
+    if (!bar) return;
+    let frame = 0;
+    const fit = () => {
+      let count = 0;
+      for (; count <= BAR_FIT_STEPS.length; count += 1) {
+        bar.setAttribute("data-fit", BAR_FIT_STEPS.slice(0, count).join(" "));
+        if (barFits(bar)) break;
+      }
+      const taken = BAR_FIT_STEPS.slice(0, Math.min(count, BAR_FIT_STEPS.length));
+      setReached((was) => (was.join(" ") === taken.join(" ") ? was : taken));
+    };
+    fit();
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; fit(); }); };
+    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    resize?.observe(bar);
+    /* The steps are the bar's own attribute, so attributes are not watched: only what the row holds. */
+    const mutation = typeof MutationObserver === "function" ? new MutationObserver(schedule) : null;
+    mutation?.observe(bar, { childList: true, subtree: true, characterData: true });
+    return () => { resize?.disconnect(); mutation?.disconnect(); if (frame) cancelAnimationFrame(frame); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the caller names what moves the row
+  }, [ref, ...deps]);
+  return reached;
+}
 
 export const BAR_CONTROL =
   "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control border px-3 text-[12px] font-semibold shadow-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
@@ -101,65 +169,180 @@ export function useBarWide(ref: RefObject<HTMLElement | null>): boolean {
 }
 
 /**
- * The create group: `+ Task` and `+ Agent`, or one `+` opening a two-row menu
- * when the bar is narrow. `reserve` draws the same group invisible and inert on
- * the leaves that create nothing (Conversations), so the view switch and
- * everything right of it keep their x when the operator changes view.
+ * The create group: one `+` opening a two-row menu (a task, an agent). The
+ * orchestrator creates most tasks, so creation is one control in the row.
  */
-export function BarCreateGroup({ wide, task, agent, onMenu, menuOpen = false, reserve = false }: {
-  wide: boolean;
-  task?: { onClick: () => void; expanded: boolean } | null;
-  agent?: { onClick: () => void; disabled: boolean } | null;
-  /** Narrow: opens the create menu under the `+`. */
-  onMenu?: (anchor: HTMLElement) => void;
+export function BarCreateGroup({ onMenu, menuOpen = false }: {
+  /** Opens the create menu under the `+`. */
+  onMenu: (anchor: HTMLElement) => void;
   menuOpen?: boolean;
-  reserve?: boolean;
 }) {
   const { t } = useLocale();
-  const control = `${BAR_CONTROL} ${BAR_OUTLINED} disabled:cursor-not-allowed disabled:opacity-50`;
-  if (reserve) {
-    return (
-      <div className="invisible flex shrink-0 items-center gap-2" data-bar-group="create" data-bar-create-reserve="" aria-hidden inert>
-        {wide ? (
-          <>
-            <span className={control}><Plus className={BAR_ICON} aria-hidden />{t("dash.task")}</span>
-            <span className={control}><Plus className={BAR_ICON} aria-hidden />{t("dash.agent")}</span>
-          </>
-        ) : <span className={`${control} w-8 px-0`}><Plus className={BAR_ICON} aria-hidden /></span>}
-      </div>
-    );
-  }
   return (
     <div className="flex shrink-0 items-center gap-2" data-bar-group="create">
-      {wide || !onMenu ? (
-        <>
-          {task ? (
-            <button type="button" className={control} data-new-task="" data-bar-control="" aria-label={t("dash.newTask")} aria-expanded={task.expanded} onClick={task.onClick}>
-              <Plus className={BAR_ICON} aria-hidden />{t("dash.task")}
-            </button>
-          ) : null}
-          {agent ? (
-            <button type="button" className={control} data-new-agent="" data-bar-control="" aria-label={t("dash.newConvo")} disabled={agent.disabled} onClick={agent.onClick}>
-              <Plus className={BAR_ICON} aria-hidden />{t("dash.agent")}
-            </button>
-          ) : null}
-        </>
-      ) : (
-        <button
-          type="button"
-          className={`${control} w-8 px-0`}
-          data-bar-create=""
-          data-bar-control=""
-          aria-label={t("dash.create")}
-          title={t("dash.create")}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={(event) => onMenu(event.currentTarget)}
-        >
-          <Plus className={BAR_ICON} aria-hidden />
-        </button>
-      )}
+      <button
+        type="button"
+        className={`${BAR_CONTROL} ${menuOpen ? BAR_PRESSED : BAR_OUTLINED} w-8 px-0`}
+        data-bar-create=""
+        data-bar-control=""
+        aria-label={t("dash.create")}
+        title={t("dash.create")}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        onClick={(event) => onMenu(event.currentTarget)}
+      >
+        <Plus className={BAR_ICON} aria-hidden />
+      </button>
     </div>
+  );
+}
+
+/** Closes an open popover on a press outside its container. */
+function useOutsidePress(open: boolean, container: RefObject<HTMLElement | null>, close: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => { if (container.current && !container.current.contains(event.target as Node)) close(); };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [open, container, close]);
+}
+
+/**
+ * The bar's one filter, an icon joined to the search field's right end. It
+ * holds what the reason chips and the island's funnel held: «Needs you» first,
+ * which is the funnel and keeps its key F, then every other reason the board
+ * shows with its count. The icon carries a dot while any of them narrows the
+ * board.
+ */
+export function BarFilterMenu({ reasons, active, onPick, needs: needsRow }: {
+  /** The reasons the board shows beside «Needs you», each with how many cards carry it. */
+  reasons: readonly { id: string; label: string; count: number }[];
+  active: string | undefined;
+  onPick: (id: string | undefined) => void;
+  /**
+   * The «Needs you» row: its name and how many cards on the board wait. While
+   * the Viewer's funnel has nothing to narrow (a card held on the operator is
+   * in no queue), the row narrows the board by its own «needs-you» reason, so
+   * it works whenever its count is above zero.
+   */
+  needs: { label: string; count: number; boardActive?: boolean; onBoardToggle?: () => void };
+}) {
+  const { t } = useLocale();
+  const needs = useContext(BarNeedsFilterContext);
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useOutsidePress(open, container, close);
+  const funnel = Boolean(needs?.available);
+  const needsActive = funnel ? Boolean(needs?.active) : Boolean(needsRow.boardActive);
+  const needsUsable = funnel || (needsRow.count > 0 && Boolean(needsRow.onBoardToggle)) || needsActive;
+  const narrowed = Boolean(active) || Boolean(needs?.active) || Boolean(needsRow.boardActive);
+  return (
+    <span ref={container} className="bar-slot relative inline-flex shrink-0" data-bar-filter="" onKeyDown={open ? (event) => { handleOverlayEscape(event, () => { close(); trigger.current?.focus(); }); } : undefined}>
+      <button
+        ref={trigger}
+        type="button"
+        data-bar-control=""
+        data-bar-filter-toggle=""
+        data-bar-filter-active={narrowed ? "" : undefined}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={narrowed ? t("dash.filterOn") : t("dash.filter")}
+        title={narrowed ? t("dash.filterOn") : t("dash.filter")}
+        onClick={() => setOpen((was) => !was)}
+        className={`${BAR_CONTROL} ${narrowed || open ? BAR_PRESSED : BAR_OUTLINED} relative w-8 px-0`}
+      >
+        <Filter className={BAR_ICON} aria-hidden />
+        {narrowed ? <span className="absolute right-[5px] top-[5px] h-1.5 w-1.5 rounded-full bg-accent" data-bar-filter-dot="" aria-hidden /> : null}
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label={t("dash.filter")}
+          data-bar-filter-menu=""
+          className={`absolute right-0 top-full ${Z.popover} mt-1 flex w-64 flex-col gap-0.5 rounded-control border border-border bg-card p-1 shadow-2`}
+        >
+          <button type="button" role="menuitemcheckbox" aria-checked={needsActive} aria-keyshortcuts="F" disabled={!needsUsable} className={BAR_MENU_ROW} data-bar-filter-needs="" onClick={() => { if (funnel) needs?.toggle(); else needsRow.onBoardToggle?.(); }}>
+            <span className="inline-block h-[7px] w-[7px] shrink-0 rounded-full bg-warning" aria-hidden />
+            <span className="min-w-0 flex-1">{needsRow.label}</span>
+            <span className="font-normal tabular-nums text-muted">{needsRow.count}</span>
+            <kbd className="text-[11px] font-normal text-muted">F</kbd>
+            {needsActive ? <Check className={`${BAR_ICON} text-accent`} aria-hidden /> : null}
+          </button>
+          <div className="my-0.5 border-t border-border" />
+          <div className="px-2 pb-0.5 pt-1 text-[11px] font-semibold text-muted">{t("dash.filterByReason")}</div>
+          <button type="button" role="menuitemradio" aria-checked={!active} className={BAR_MENU_ROW} data-bar-filter-reason="" onClick={() => { onPick(undefined); close(); }}>
+            <span className="min-w-0 flex-1">{t("dash.filterAll")}</span>
+            {!active ? <Check className={`${BAR_ICON} text-accent`} aria-hidden /> : null}
+          </button>
+          {reasons.map((reason) => (
+            <button key={reason.id} type="button" role="menuitemradio" aria-checked={active === reason.id} data-bar-filter-reason={reason.id} className={BAR_MENU_ROW} onClick={() => { onPick(active === reason.id ? undefined : reason.id); close(); }}>
+              <span className="min-w-0 flex-1">{reason.label}</span>
+              <span className="font-normal tabular-nums text-muted">{reason.count}</span>
+              {active === reason.id ? <Check className={`${BAR_ICON} text-accent`} aria-hidden /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * The recent agents: the last segment of the panel group, an icon with the
+ * list under it. The list is every agent of the project, the newest first, so
+ * the operator reaches it without leaving the board. `open` is the board's, so
+ * a card's link to more conversations opens the same list.
+ */
+export function BarRecentAgents({ open, onOpenChange, list }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** `countSlot` is the place in the list's head for how many agents there are. */
+  list: (close: () => void, countSlot: HTMLElement | null) => ReactNode;
+}) {
+  const { t } = useLocale();
+  const container = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [countSlot, setCountSlot] = useState<HTMLElement | null>(null);
+  const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+  useOutsidePress(open, container, close);
+  return (
+    <span ref={container} className="bar-slot relative inline-flex shrink-0" data-bar-recent="" onKeyDown={open ? (event) => { handleOverlayEscape(event, () => { close(); trigger.current?.focus(); }); } : undefined}>
+      <button
+        ref={trigger}
+        type="button"
+        data-bar-control=""
+        data-bar-recent-toggle=""
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={t("dash.recentAgents")}
+        title={t("dash.recentAgents")}
+        onClick={() => onOpenChange(!open)}
+        className={`${BAR_CONTROL} ${open ? BAR_PRESSED : BAR_OUTLINED} w-8 px-0`}
+      >
+        <History className={BAR_ICON} aria-hidden />
+      </button>
+      {open ? (
+        <div
+          role="dialog"
+          aria-label={t("dash.recentAgents")}
+          data-bar-recent-list=""
+          className={`absolute right-0 top-full ${Z.popover} mt-1 flex max-h-[min(560px,calc(100dvh-64px))] w-[440px] max-w-[calc(100vw-32px)] flex-col rounded-control border border-border bg-card shadow-2`}
+        >
+          <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-2.5">
+            <History className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+            <span className="min-w-0 truncate text-[12px] font-bold">{t("dash.recentAgents")}</span>
+            <span ref={setCountSlot} className="inline-flex shrink-0" />
+            <span aria-hidden className="min-w-0 flex-1" />
+            <button type="button" className="inline-flex shrink-0 items-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label={t("common.close")} title={t("common.close")} onClick={close}>
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col">{list(close, countSlot)}</div>
+        </div>
+      ) : null}
+    </span>
   );
 }
 
@@ -173,40 +356,50 @@ const SEAT_DOT_TONE: Record<string, string> = {
   quiet: "bg-muted",
 };
 
-/** The panel switch: the orchestrator dock. Icon only when narrow. Tasks live on the kanban board itself. */
-export function BarPanelToggles({ wide, orchestrator }: {
-  wide: boolean;
+/**
+ * The panel group, one segmented control: the orchestrator dock and, on the
+ * board, the recent agents (`tail`). Orchestrator carries its word while the
+ * row has room; the bar's `labels` step leaves its icon, and the word stays in
+ * the tooltip. Tasks live on the kanban board itself; the old Tasks panel and
+ * its segment left the bar on 2026-10-12.
+ */
+export function BarPanelToggles({ orchestrator, tail }: {
+  /** The group's last segment: the recent agents' control. */
+  tail?: ReactNode;
   /** `dot`: the collapsed seat's state (#1841), drawn on the icon so it stays
       readable with the seat out of view. */
   orchestrator: { open: boolean; onToggle: () => void; dot?: { tone: string; label: string } | null } | null;
 }) {
   const { t } = useLocale();
-  if (!orchestrator) return null;
+  if (!orchestrator && !tail) return null;
   return (
-    <div className="flex shrink-0 items-center gap-2" data-bar-group="panels">
-      <button
-        type="button"
-        onClick={orchestrator.onToggle}
-        aria-pressed={orchestrator.open}
-        aria-label={t("orchPanel.toggleAria")}
-        title={t("orchPanel.toggleAria")}
-        data-orchestrator-toggle
-        data-bar-control=""
-        className={`${BAR_CONTROL} ${orchestrator.open ? BAR_PRESSED : BAR_OUTLINED} ${wide ? "" : "px-2"}`}
-      >
-        <span className="relative inline-flex">
-          <Bot className={BAR_ICON} aria-hidden />
-          {orchestrator.dot ? (
-            <i
-              className={`absolute -bottom-px -right-px h-1.5 w-1.5 rounded-full ring-1 ring-card ${SEAT_DOT_TONE[orchestrator.dot.tone] ?? "bg-muted"}`}
-              data-orchestrator-toggle-dot={orchestrator.dot.tone}
-              title={orchestrator.dot.label}
-              aria-hidden
-            />
-          ) : null}
-        </span>
-        {wide ? t("orchPanel.title") : null}
-      </button>
+    <div className="flex shrink-0 items-center" data-bar-group="panels">
+      {orchestrator ? (
+        <button
+          type="button"
+          onClick={orchestrator.onToggle}
+          aria-pressed={orchestrator.open}
+          aria-label={t("orchPanel.toggleAria")}
+          title={t("orchPanel.toggleAria")}
+          data-orchestrator-toggle
+          data-bar-control=""
+          className={`${BAR_CONTROL} ${orchestrator.open ? BAR_PRESSED : BAR_OUTLINED}`}
+        >
+          <span className="relative inline-flex">
+            <Bot className={BAR_ICON} aria-hidden />
+            {orchestrator.dot ? (
+              <i
+                className={`absolute -bottom-px -right-px h-1.5 w-1.5 rounded-full ring-1 ring-card ${SEAT_DOT_TONE[orchestrator.dot.tone] ?? "bg-muted"}`}
+                data-orchestrator-toggle-dot={orchestrator.dot.tone}
+                title={orchestrator.dot.label}
+                aria-hidden
+              />
+            ) : null}
+          </span>
+          <span data-fit-label="">{t("orchPanel.title")}</span>
+        </button>
+      ) : null}
+      {tail}
     </div>
   );
 }
@@ -345,18 +538,16 @@ export function BarMenuSection({ id, title, icon, page = false, children }: { id
 }
 
 /**
- * The same bar on the leaves the kanban board does not draw (Conversations, the
- * empty project, the loading skeleton): the project's two ends around this
- * leaf's status line, its one search, the view switch and the create group's
- * reserve.
+ * The same bar on the leaves the kanban board does not draw (the empty project,
+ * the loading skeleton): the project's two ends around this leaf's status line
+ * and its one search. Its steps follow its width: under `BAR_WIDE_MIN` the
+ * accounts are in ⋯ and the panel toggles are icons.
  */
-export function DashboardBar({ lead, status, find, view, create, trail }: {
-  lead: (wide: boolean) => ReactNode;
+export function DashboardBar({ lead, status, find, trail }: {
+  lead: () => ReactNode;
   status: (wide: boolean) => ReactNode;
   find: (wide: boolean) => ReactNode;
-  view: (wide: boolean) => ReactNode;
-  create: (wide: boolean) => ReactNode;
-  trail: (wide: boolean) => ReactNode;
+  trail: (accountsInMenu: boolean) => ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const wide = useBarWide(ref);
@@ -364,16 +555,14 @@ export function DashboardBar({ lead, status, find, view, create, trail }: {
     <div
       ref={ref}
       data-project-bar=""
-      data-bar-tier={wide ? "wide" : "narrow"}
-      className="flex h-12 shrink-0 items-center gap-4 border-b border-border bg-card pl-4 pr-[236px]"
+      data-fit={wide ? "" : "accounts labels"}
+      className="flex h-12 shrink-0 items-center gap-4 border-b border-border bg-card px-4"
     >
-      <div className={`flex shrink items-center gap-2 ${wide ? "" : "min-w-12"}`} data-bar-group="where">{lead(wide)}</div>
+      <div className={`flex shrink items-center gap-2 ${wide ? "" : "min-w-12"}`} data-bar-group="where">{lead()}</div>
       {status(wide)}
       <span aria-hidden className="min-w-0 flex-1" />
       {find(wide)}
-      <div className="flex shrink-0 items-center gap-2 empty:hidden" data-bar-group="view">{view(wide)}</div>
-      {create(wide)}
-      <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(wide)}</div>
+      <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(!wide)}</div>
       <BarIslandSlot />
     </div>
   );

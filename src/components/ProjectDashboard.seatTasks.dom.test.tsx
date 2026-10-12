@@ -1,13 +1,12 @@
 /**
- * The seat's own tasks draw nothing on the desktop, and the desktop reads the
- * seat once on EITHER face (#1841).
+ * The seat's own tasks draw nothing on the desktop board, and the desktop
+ * reads the seat once (#1841).
  *
  * A seat launch mints a task to keep the seat's notes in, and section 2 of the
  * design says that task draws nothing: no card on the board. The old Tasks
- * panel, which listed them above both faces, left the desktop on 2026-10-12;
- * a board stored with it open draws no panel on either face. The seat read
- * still lives above the two faces, because on the Conversations face the
- * board is not mounted at all.
+ * panel, which listed tasks above the board, left the desktop on 2026-10-12; a
+ * board stored with it open draws no panel. The dashboard reads the seat above
+ * the board and hands the board the answer.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -253,50 +252,44 @@ function mount(withDock = false): HTMLElement {
 const taskCards = (host: HTMLElement) =>
   [...host.querySelectorAll('.card[data-id^="task:"]')].map((node) => node.getAttribute("data-id"));
 
-test("the Board draws the product task and not the seat's, and neither face draws a task panel (#1841)", async () => {
+test("the Board draws the product task and not the seat's, and no task panel (#1841)", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   expect(await waitFor(() => taskCards(host).length > 0)).toBe(true);
   await settle();
 
-  /* The Board face: the product task's card, no card for either seat task, and no panel
-     although the stored board says it was open. */
+  /* The Board is the one desktop face: the product task's card, no card for either seat task, and
+     no panel although the stored board says it was open. */
+  expect(host.querySelector('button[data-view-tab]')).toBeNull();
   expect(taskCards(host)).toEqual(["task:task-product"]);
-  expect(host.querySelector("[data-task-panel], [data-task-panel-toggle]")).toBeNull();
-
-  /* Conversations: the board unmounts, and no panel comes back in its place. */
-  const listTab = host.querySelector('button[data-view-tab="list"]') as HTMLButtonElement;
-  flushSync(() => listTab.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") === null)).toBe(true);
-  await settle();
   expect(host.querySelector("[data-task-panel], [data-task-panel-toggle]")).toBeNull();
 });
 
-test("a dashboard that opens on Conversations reads the seat itself, once (#1841)", async () => {
-  /* The operator left this project on the Conversations face, so the board —
-     which used to be the page's only seat reader — never mounts at all. */
+test("a dashboard saved on Conversations opens on the Board, and the seat is read once (#1841)", async () => {
+  /* The operator left this project on the Conversations face while the desktop had two. The
+     Board is the one face now; the dashboard reads the seat above it and hands the board the
+     answer, so the two are still one reader. */
   boards = { [PROJECT]: { ...emptyBoard(), prefs: { ...emptyBoard().prefs, viewMode: "list" } } };
   const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
-  expect(await waitFor(() => seatReads > 0)).toBe(true);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  expect(await waitFor(() => taskCards(host).length > 0)).toBe(true);
   await settle();
-  expect(host.querySelector("[data-kanban-board]")).toBeNull();
+  expect(host.querySelector("[data-desktop-conversations-scroll]")).toBeNull();
+  expect(taskCards(host)).toEqual(["task:task-product"]);
   /* One reader, so one request: on the Board face the board is handed this
      same answer instead of polling the route for the same project and cwd. */
   expect(seatReads).toBe(1);
 });
 
-/* The dock is open on the Conversations face — the shape the operator actually
-   leaves the desktop in — and its panel reads the same project's seat as the
-   dashboard above the faces. Two readers of one document are still one request:
+/* A dock open beside the dashboard reads the same project's seat as the
+   dashboard above the board. Two readers of one document are still one request:
    the poll belongs to the project and cwd, not to the mount. */
-test("the dock open beside the Conversations face adds no second seat request (#1841)", async () => {
+test("a dock open beside the dashboard adds no second seat request (#1841)", async () => {
   boards = { [PROJECT]: { ...emptyBoard(), prefs: { ...emptyBoard().prefs, viewMode: "list" } } };
   const host = mount(true);
-  expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
-  expect(await waitFor(() => seatReads > 0)).toBe(true);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  expect(await waitFor(() => taskCards(host).length > 0)).toBe(true);
   await settle();
-  expect(host.querySelector("[data-kanban-board]")).toBeNull();
 
   /* The dock paints the live seat, from the answer the dashboard's read
      published to it rather than from one of its own. */
