@@ -80,8 +80,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 49, and a v48 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(49);
+test("the default mandate is at version 50, and a v49 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(50);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -116,7 +116,8 @@ test("the default mandate is at version 49, and a v48 seat reads as stale", () =
      both with linked-seat coordination. v46 marks a report of a handled
      incident or an outside publication with `outcome`. v47 makes every decision
      a form (docs/design/operator-decision-forms.md §2.7). v48 denies native
-     asks; v49 keeps forms without a task and asks 3–7 on a task. */
+     asks; v49 keeps forms without a task and asks 3–7 on a task. v50
+     shortens equivalent draft wording to keep the delivery reserve. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -136,7 +137,8 @@ test("the default mandate is at version 49, and a v48 seat reads as stale", () =
   expect(orchestratorMandateStale(46)).toBe(true);
   expect(orchestratorMandateStale(47)).toBe(true);
   expect(orchestratorMandateStale(48)).toBe(true);
-  expect(orchestratorMandateStale(49)).toBe(false);
+  expect(orchestratorMandateStale(49)).toBe(true);
+  expect(orchestratorMandateStale(50)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -193,6 +195,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   47: "0a204f45fe2e477c20d14888313530363eece18a53e608f8a8f427fb5ef3241c",
   48: "b5ac29298046ae89343fee1ea5d7149bd9b26d2bc8b4270300e5ca7892dd2ce2",
   49: "1fb19f7e3d633f95f46e7c2353fefa2cb2d00f74adfe3ace721c0d4c88336c47",
+  50: "e693c187ca781f08d3612007ff7829e3baf4ec5f64c69d7e4966fd091cdb4cb8",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,

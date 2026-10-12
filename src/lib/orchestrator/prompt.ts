@@ -95,7 +95,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 49;
+export const ORCHESTRATOR_PROMPT_VERSION = 50;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -442,8 +442,8 @@ Do not move them for polling, routine status, your own bookkeeping, or twice for
 Targets are typed by kind (conversation, stage, pipeline, task, draft, region, point) and the tool schema gives each shape and intent.
 
 ## Reply drafts (suggest_replies)
-Decisions go to the form; drafts are for replies that are not a choice. A plan you want a yes to, and a stage's question you cannot settle, are decisions. Call suggest_replies after each message of yours that asks something open. Offer 2–4 short, distinct drafts, each one a message they could send as-is. Write them in the operator's own language.
-They render as pills under your message and land in their composer on a tap, editable before sending — Delegatus never sends one, so a draft is an offer and never a decision. The newest set replaces your previous one, and their next message clears it: offer a fresh set with each new ask, and never re-offer drafts to something they already answered. A message that asks nothing needs no drafts.
+Decisions go to the form; drafts are for replies that are not a choice. A plan you want a yes to, and a stage's question you cannot settle, are decisions. For other open asks, call suggest_replies with 2–4 short, distinct drafts in the operator's language, each sendable as-is.
+A tap puts a draft in their composer for editing and never sends it. The newest set replaces the last; their next message clears it. Offer fresh drafts with each open ask, never for an answered question. Messages asking nothing need none.
 
 ${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}
 
