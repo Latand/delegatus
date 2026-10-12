@@ -42,10 +42,10 @@ export type PipelineRoleId =
   | "visual-critic";
 
 /**
- * Roles a pipeline stage may not use. Deployer demands an explicit
- * `confirm: "deploy"` gate (resolveSpawnRole) that a pipeline —
- * which spawns its stages automatically, without a per-stage confirmation — has
- * no way to honor, so it is excluded from the builder and rejected by the API.
+ * Production deployment stages need the interactive `confirm: "deploy"`
+ * launch gate. The resolver admits Deployer only with mode=release in a run
+ * stage: it validates and waits for the publication decision, or the recorded
+ * operator switch, before a tag push. Ordinary deployment remains refused.
  */
 export const PIPELINE_DISALLOWED_ROLE_IDS: readonly PipelineRoleId[] = ["deployer"];
 

@@ -1,4 +1,5 @@
 name: Publish to npm
+run-name: Publish ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 on:
   push:
@@ -428,3 +429,15 @@ jobs:
           cat "$error_file" >&2
           echo "Timed out waiting for ${PACKAGE_NAME}@${PACKAGE_VERSION} to become visible" >&2
           exit 1
+
+      - name: Record immutable release for the macOS check
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-receipt"
+          printf '%s\n' "$RELEASE_TAG" > "$RUNNER_TEMP/release-receipt/tag"
+          git rev-parse HEAD > "$RUNNER_TEMP/release-receipt/revision"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-receipt
+          path: ${{ runner.temp }}/release-receipt
+          retention-days: 14

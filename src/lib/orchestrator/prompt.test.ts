@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 45, and a v44 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(45);
+test("the default mandate is at version 46, and a v44 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(46);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -128,7 +128,8 @@ test("the default mandate is at version 45, and a v44 seat reads as stale", () =
   expect(orchestratorMandateStale(42)).toBe(true);
   expect(orchestratorMandateStale(43)).toBe(true);
   expect(orchestratorMandateStale(44)).toBe(true);
-  expect(orchestratorMandateStale(45)).toBe(false);
+  expect(orchestratorMandateStale(45)).toBe(true);
+  expect(orchestratorMandateStale(46)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -180,6 +181,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
   44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
   45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
+  46: "40f3184f08a89f8124c84c28cd7b41d5ab74fbf1f2261d95a8cb911d4c214923",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -211,7 +213,7 @@ test("the mandate opens without issue numbers, greets in plain words and runs re
   expect(opening).not.toMatch(/#\d/);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain(`Ready in {project}.\n${CURRENT_GREETING_OFFER}`);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("lanes");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("- The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("- Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("release step, where it has one");
 });
 

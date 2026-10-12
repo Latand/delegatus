@@ -9695,7 +9695,7 @@ function stageViolations(violations: PipelineValidationViolation[]): { error: st
   return { error: pipelineValidationError(violations), violations };
 }
 
-function normalizeStages(
+export function normalizeStages(
   value: unknown,
   lookup?: PipelineRoleLookup | null,
   preservedStages?: ReadonlyMap<string, PipelineStage>,

@@ -1,3 +1,4 @@
+import { readReleaseProject } from "@/lib/release/store";
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
@@ -2406,6 +2407,13 @@ export async function gatherSeatTickInput(
   try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
   catch { /* The maintenance controller journals its own store failure; unrelated seat work still wakes. */ }
   const settledMaintenance = endedMaintenance.filter(run => !maintenanceRunIsLive(run) && run.endedAt && now - Date.parse(run.endedAt) <= policy.backlogAfterMs && !(state.announcedMaintenance ?? []).includes(run.runId)).slice(-3);
+  const releaseAlerts: NonNullable<SeatTickCheckInput["releaseAlerts"]> = [];
+  try {
+    const release = readReleaseProject(canonical);
+    for (const run of release.history) if (now - run.at <= policy.backlogAfterMs) releaseAlerts.push({ kind: "release-settled", id: `release-settled:${run.key}:${run.at}`, label: `Release ${run.outcome}; task ${run.taskId}, lane ${run.pipelineId}. Read its stage summaries for any product defect seen in the README pictures.` });
+    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
+  } catch { /* The release controller journals store failures; other seat work still wakes. */ }
+
 
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as
@@ -2460,6 +2468,7 @@ export async function gatherSeatTickInput(
     ownLanes,
     settledDeploys,
     settledMaintenance,
+    releaseAlerts,
     children,
     childrenUnavailable,
     changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance),

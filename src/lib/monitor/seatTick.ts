@@ -1238,7 +1238,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      deploy into thirty minutes of paused lanes. */
   const settledDeploys = seatSettledDeploys(input);
   const settledMaintenance = seatSettledMaintenance(input);
-  const childrenSettled = settledMaintenance.length > 0 || harvest.length > 0 || persistedChildStalls.length > 0 || settledDeploys.length > 0;
+  const childrenSettled = (input.releaseAlerts?.length ?? 0) > 0 || settledMaintenance.length > 0 || harvest.length > 0 || persistedChildStalls.length > 0 || settledDeploys.length > 0;
   const liveChildren = runningChildren.filter((child) => !isStalledActivity(child.activity));
   const childInterval = childrenSettled
     ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
@@ -1294,6 +1294,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        (#1749): a lane it launched that settled and is standing there is the
        obligation the tick was blind to for the whole of the evidence in that
        issue, while five slots went to children of seats two weeks retired. */
+    for (const alert of input.releaseAlerts ?? []) candidates.push({ kind: alert.kind, detail: alert.label });
     if (settledMaintenance.length > 0) {
       const newest = settledMaintenance.at(-1)!;
       candidates.push({ kind: "maintenance-settled", detail: newest.state === "failed" ? `board maintenance failed: ${newest.failure?.kind}` : `board maintenance finished: ${newest.counts.tasks} task(s) changed, ${newest.log.attention.length} item(s) for the operator` });
@@ -1393,6 +1394,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       case "unmerged-pr": return item.kind === "pull-request";
       case "unstarted-task": return item.kind === "task";
       case "permission-request": return item.kind === "permission";
+      case "release-settled": return item.kind === "signal" && item.id.startsWith("release-settled:");
+      case "release-blocked": return item.kind === "signal" && item.id.startsWith("release-blocked:");
       case "disk-pressure": return item.kind === "signal" && item.id === "disk-space";
       case "lane-event": return item.mergeEventSeq !== undefined;
       case "own-lane-settled": return !!item.laneAnnouncement;
@@ -1401,7 +1404,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       default: return false;
     }
   });
-  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request", "disk-pressure"]);
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request", "disk-pressure", "release-settled", "release-blocked"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;
@@ -1845,6 +1848,7 @@ function wakeItems(context: {
       deploy: { deploymentId: deploy.deploymentId, phase: deploy.phase, sha: deploy.sha, error: deploy.error },
     });
   }
+  for (const alert of input.releaseAlerts ?? []) items.push({ kind: "signal", id: alert.id, label: alert.label });
   for (const run of seatSettledMaintenance(input)) {
     items.push({ kind: "maintenance", id: run.taskId ?? run.runId, label: maintenanceItemLabel(run), maintenance: { runId: run.runId } });
   }
