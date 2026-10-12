@@ -1,12 +1,12 @@
 {
-  "commit": "0e5f2a0ba1902264924e405ccecf8f5bbd20b4b2",
+  "commit": "bce36a2e08665dbc67e1fe4a358a331e21903bb2",
   "dataset": {
     "rows": 30036,
     "coldRows": 27836,
     "payloadBytes": 94615069
   },
   "bounds": {
-    "readyMs": 30000,
+    "readyMs": 60000,
     "filesP95Ms": 5000,
     "filesMaxMs": 10000,
     "lagP95Ms": 50,
@@ -14,104 +14,51 @@
     "inputMs": 500
   },
   "writes": {
-    "count": 908,
-    "p95Ms": 14,
-    "maxMs": 56
+    "count": 921,
+    "p95Ms": 11,
+    "maxMs": 42
   },
   "views": [
     {
       "view": 0,
-      "readyMs": 15172,
+      "readyMs": 41249,
       "cards": 13,
       "files": {
-        "answered": 21,
+        "answered": 22,
         "errors": 0,
-        "abandoned": 19,
-        "p95Ms": 200,
-        "maxMs": 2730,
+        "heldByBrowserMaxMs": 195,
+        "abandoned": 21,
+        "p95Ms": 128,
+        "maxMs": 2080,
         "slowest": [
           {
             "query": "?view=summary&path=pinned",
             "status": 200,
-            "ms": 2730,
-            "timing": "files-clone;dur=0.7, files-scan;dur=5600.6;desc=\"cold generation 1\", files-worker-queue;dur=1278.7, files-worker-build;dur=389.2, files-source;dur=0.1, files-registry;dur=305.6, files-session-titles;dur=30.4, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=17.0, files-role-titles;dur=0.8, files-flows;dur=48.7, files-stores;dur=0.0, files-project-rate-limits;dur=10.2, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.9, files-projects;dur=13.2, files-json;dur=10.5, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 2080,
+            "sentMs": 195,
+            "firstByteMs": 2265,
+            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=911.5, files-worker-build;dur=196.3, files-source;dur=0.0, files-registry;dur=160.9, files-session-titles;dur=9.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=6.2, files-role-titles;dur=1.2, files-flows;dur=17.4, files-stores;dur=0.0, files-project-rate-limits;dur=7.6, files-project-catalog;dur=0.5, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=9.5, files-json;dur=3.0, files-projection-cache;dur=0.0;desc=\"miss\""
           },
           {
             "query": "?view=summary",
             "status": 200,
-            "ms": 200,
-            "timing": "files-clone;dur=1.1, files-scan;dur=3292.1;desc=\"pinned generation 3\", files-worker-queue;dur=1873.4, files-worker-build;dur=251.4, files-source;dur=0.0, files-registry;dur=176.6, files-session-titles;dur=20.6, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.8, files-role-titles;dur=0.6, files-flows;dur=37.5, files-stores;dur=0.0, files-project-rate-limits;dur=8.5, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.6, files-projects;dur=11.1, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 128,
+            "sentMs": 0,
+            "firstByteMs": 123,
+            "timing": "files-clone;dur=0.8, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.1, files-worker-build;dur=351.9, files-source;dur=0.0, files-registry;dur=114.5, files-session-titles;dur=83.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.4, files-flow-restore;dur=0.1, files-task-store;dur=0.3, files-authorship;dur=14.7, files-role-titles;dur=1.4, files-flows;dur=100.9, files-stores;dur=0.0, files-project-rate-limits;dur=18.2, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.4, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=21.3, files-json;dur=11.8, files-projection-cache;dur=0.0;desc=\"stale\""
           },
           {
             "query": "?view=summary",
             "status": 200,
-            "ms": 170,
-            "timing": "files-clone;dur=1.1, files-scan;dur=3583.1;desc=\"pinned generation 8\", files-worker-queue;dur=2.3, files-worker-build;dur=337.9, files-source;dur=0.0, files-registry;dur=203.9, files-session-titles;dur=10.8, files-project-affinity;dur=0.2, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=12.8, files-role-titles;dur=0.5, files-flows;dur=24.3, files-stores;dur=0.0, files-project-rate-limits;dur=15.3, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.8, files-projects;dur=18.1, files-json;dur=4.0, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 44,
+            "sentMs": 0,
+            "firstByteMs": 40,
+            "timing": "files-clone;dur=0.3, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.5, files-worker-build;dur=248.9, files-source;dur=0.0, files-registry;dur=161.5, files-session-titles;dur=21.0, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.5, files-authorship;dur=8.8, files-role-titles;dur=0.7, files-flows;dur=31.2, files-stores;dur=0.0, files-project-rate-limits;dur=9.1, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.5, files-projects;dur=11.7, files-json;dur=4.4, files-projection-cache;dur=0.0;desc=\"stale\""
           }
         ],
         "failures": [
           {
             "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?project=__overview__",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          }
-        ]
-      },
-      "lag": {
-        "samples": 596,
-        "p95Ms": 5,
-        "maxMs": 16
-      },
-      "inputMs": 8
-    },
-    {
-      "view": 1,
-      "readyMs": 15049,
-      "cards": 13,
-      "files": {
-        "answered": 20,
-        "errors": 0,
-        "abandoned": 18,
-        "p95Ms": 363,
-        "maxMs": 3547,
-        "slowest": [
-          {
-            "query": "?view=summary&path=pinned",
-            "status": 200,
-            "ms": 3547,
-            "timing": "files-clone;dur=0.7, files-scan;dur=5600.6;desc=\"cold generation 1\", files-worker-queue;dur=2054.2, files-worker-build;dur=463.9, files-source;dur=0.0, files-registry;dur=344.1, files-session-titles;dur=13.0, files-project-affinity;dur=0.3, files-flow-store;dur=0.1, files-flow-restore;dur=0.1, files-task-store;dur=0.2, files-authorship;dur=24.0, files-role-titles;dur=1.0, files-flows;dur=38.7, files-stores;dur=0.0, files-project-rate-limits;dur=18.0, files-project-catalog;dur=0.9, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.5, files-operator-asks;dur=0.1, files-project-cwds;dur=11.0, files-projects;dur=30.7, files-json;dur=3.9, files-projection-cache;dur=0.0;desc=\"miss\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 363,
-            "timing": "files-clone;dur=0.8, files-scan;dur=3833.6;desc=\"pinned generation 5\", files-worker-queue;dur=0.3, files-worker-build;dur=322.8, files-source;dur=0.0, files-registry;dur=136.3, files-session-titles;dur=24.8, files-project-affinity;dur=7.5, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.9, files-role-titles;dur=0.7, files-flows;dur=40.9, files-stores;dur=0.0, files-project-rate-limits;dur=16.3, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.5, files-projects;dur=18.8, files-json;dur=12.3, files-projection-cache;dur=0.0;desc=\"stale\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 238,
-            "timing": "files-clone;dur=0.8, files-scan;dur=3292.1;desc=\"pinned generation 3\", files-worker-queue;dur=1873.4, files-worker-build;dur=251.4, files-source;dur=0.0, files-registry;dur=176.6, files-session-titles;dur=20.6, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.8, files-role-titles;dur=0.6, files-flows;dur=37.5, files-stores;dur=0.0, files-project-rate-limits;dur=8.5, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.6, files-projects;dur=11.1, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
-          }
-        ],
-        "failures": [
-          {
-            "query": "?project=__overview__",
             "error": "net::ERR_ABORTED"
           },
           {
@@ -134,99 +81,88 @@
       },
       "lag": {
         "samples": 598,
-        "p95Ms": 6,
-        "maxMs": 35
+        "p95Ms": 3,
+        "maxMs": 132
       },
-      "inputMs": 13
+      "inputMs": 20,
+      "held": [
+        {
+          "path": "/api/telemetry",
+          "ms": 34069
+        },
+        {
+          "path": "/api/staging",
+          "ms": 34091
+        },
+        {
+          "path": "/api/operator/settings",
+          "ms": 34118
+        },
+        {
+          "path": "/api/external-relay/conversations",
+          "ms": 34178
+        },
+        {
+          "path": "/api/attention",
+          "ms": 34141
+        },
+        {
+          "path": "/api/voice-companion/settings",
+          "ms": 34353
+        },
+        {
+          "path": "/api/attention",
+          "ms": 31223
+        },
+        {
+          "path": "/api/view/presence",
+          "ms": 35245
+        },
+        {
+          "path": "/api/attention",
+          "ms": 27320
+        },
+        {
+          "path": "/api/attention",
+          "ms": 23481
+        }
+      ]
     },
     {
-      "view": 2,
-      "readyMs": 15037,
-      "cards": 13,
-      "files": {
-        "answered": 20,
-        "errors": 0,
-        "abandoned": 19,
-        "p95Ms": 156,
-        "maxMs": 3057,
-        "slowest": [
-          {
-            "query": "?view=summary&path=pinned",
-            "status": 200,
-            "ms": 3057,
-            "timing": "files-clone;dur=0.7, files-scan;dur=5600.6;desc=\"cold generation 1\", files-worker-queue;dur=1672.8, files-worker-build;dur=380.6, files-source;dur=0.1, files-registry;dur=316.7, files-session-titles;dur=25.1, files-project-affinity;dur=0.3, files-flow-store;dur=0.2, files-flow-restore;dur=0.1, files-task-store;dur=0.3, files-authorship;dur=9.2, files-role-titles;dur=1.4, files-flows;dur=36.5, files-stores;dur=0.0, files-project-rate-limits;dur=10.9, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.2, files-operator-asks;dur=0.1, files-project-cwds;dur=1.4, files-projects;dur=13.8, files-json;dur=3.2, files-projection-cache;dur=0.0;desc=\"miss\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 156,
-            "timing": "files-clone;dur=1.2, files-scan;dur=4214.2;desc=\"pinned generation 4\", files-worker-queue;dur=0.3, files-worker-build;dur=297.2, files-source;dur=0.0, files-registry;dur=228.7, files-session-titles;dur=15.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.5, files-authorship;dur=5.3, files-role-titles;dur=0.6, files-flows;dur=22.5, files-stores;dur=0.0, files-project-rate-limits;dur=11.2, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=13.9, files-json;dur=4.0, files-projection-cache;dur=0.0;desc=\"stale\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 128,
-            "timing": "files-clone;dur=1.0, files-scan;dur=3833.6;desc=\"pinned generation 5\", files-worker-queue;dur=0.3, files-worker-build;dur=322.8, files-source;dur=0.0, files-registry;dur=136.3, files-session-titles;dur=24.8, files-project-affinity;dur=7.5, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.9, files-role-titles;dur=0.7, files-flows;dur=40.9, files-stores;dur=0.0, files-project-rate-limits;dur=16.3, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.5, files-projects;dur=18.8, files-json;dur=12.3, files-projection-cache;dur=0.0;desc=\"stale\""
-          }
-        ],
-        "failures": [
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?project=__overview__",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          }
-        ]
-      },
-      "lag": {
-        "samples": 602,
-        "p95Ms": 6,
-        "maxMs": 18
-      },
-      "inputMs": 21
-    },
-    {
-      "view": 3,
-      "readyMs": 15031,
+      "view": 1,
+      "readyMs": 41329,
       "cards": 13,
       "files": {
         "answered": 22,
         "errors": 0,
+        "heldByBrowserMaxMs": 251,
         "abandoned": 19,
-        "p95Ms": 202,
-        "maxMs": 2389,
+        "p95Ms": 28,
+        "maxMs": 3450,
         "slowest": [
           {
             "query": "?view=summary&path=pinned",
             "status": 200,
-            "ms": 2389,
-            "timing": "files-clone;dur=0.7, files-scan;dur=5600.6;desc=\"cold generation 1\", files-worker-queue;dur=965.9, files-worker-build;dur=310.1, files-source;dur=0.1, files-registry;dur=252.3, files-session-titles;dur=17.3, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.6, files-role-titles;dur=0.7, files-flows;dur=26.0, files-stores;dur=0.0, files-project-rate-limits;dur=15.7, files-project-catalog;dur=1.2, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.2, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=19.2, files-json;dur=5.9, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 3450,
+            "sentMs": 251,
+            "firstByteMs": 3671,
+            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=2284.5, files-worker-build;dur=299.8, files-source;dur=0.0, files-registry;dur=244.1, files-session-titles;dur=17.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.4, files-role-titles;dur=0.7, files-flows;dur=26.3, files-stores;dur=0.0, files-project-rate-limits;dur=8.5, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.3, files-projects;dur=11.1, files-json;dur=3.3, files-projection-cache;dur=0.0;desc=\"miss\""
           },
           {
             "query": "?view=summary",
             "status": 200,
-            "ms": 202,
-            "timing": "files-clone;dur=0.8, files-scan;dur=3292.1;desc=\"pinned generation 3\", files-worker-queue;dur=1873.4, files-worker-build;dur=251.4, files-source;dur=0.0, files-registry;dur=176.6, files-session-titles;dur=20.6, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.8, files-role-titles;dur=0.6, files-flows;dur=37.5, files-stores;dur=0.0, files-project-rate-limits;dur=8.5, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.6, files-projects;dur=11.1, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 28,
+            "sentMs": 0,
+            "firstByteMs": 26,
+            "timing": "files-clone;dur=0.4, files-scan;dur=2797.0;desc=\"pinned generation 10\", files-worker-queue;dur=0.3, files-worker-build;dur=150.9, files-source;dur=0.0, files-registry;dur=91.5, files-session-titles;dur=19.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.3, files-authorship;dur=9.2, files-role-titles;dur=1.3, files-flows;dur=30.6, files-stores;dur=0.0, files-project-rate-limits;dur=12.0, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=14.0, files-json;dur=3.0, files-projection-cache;dur=0.0;desc=\"stale\""
           },
           {
             "query": "?view=summary",
             "status": 200,
-            "ms": 188,
-            "timing": "files-clone;dur=1.1, files-scan;dur=3583.1;desc=\"pinned generation 8\", files-worker-queue;dur=3.1, files-worker-build;dur=250.7, files-source;dur=0.0, files-registry;dur=130.6, files-session-titles;dur=39.5, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=11.3, files-role-titles;dur=0.5, files-flows;dur=51.6, files-stores;dur=0.0, files-project-rate-limits;dur=12.8, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=10.7, files-projects;dur=24.5, files-json;dur=4.5, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 24,
+            "sentMs": 0,
+            "firstByteMs": 15,
+            "timing": "files-clone;dur=1.3, files-scan;dur=3019.0;desc=\"pinned generation 9\", files-worker-queue;dur=0.4, files-worker-build;dur=168.2, files-source;dur=0.0, files-registry;dur=109.2, files-session-titles;dur=15.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=8.5, files-role-titles;dur=0.6, files-flows;dur=25.1, files-stores;dur=0.0, files-project-rate-limits;dur=8.7, files-project-catalog;dur=1.3, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.2, files-operator-asks;dur=0.0, files-project-cwds;dur=2.5, files-projects;dur=12.9, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
           }
         ],
         "failures": [
@@ -247,231 +183,427 @@
             "error": "net::ERR_ABORTED"
           },
           {
-            "query": "?project=__overview__",
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          }
+        ]
+      },
+      "lag": {
+        "samples": 601,
+        "p95Ms": 3,
+        "maxMs": 22
+      },
+      "inputMs": 21,
+      "held": [
+        {
+          "path": "/api/telemetry",
+          "ms": 34155
+        },
+        {
+          "path": "/api/staging",
+          "ms": 34180
+        },
+        {
+          "path": "/api/operator/settings",
+          "ms": 34233
+        },
+        {
+          "path": "/api/external-relay/conversations",
+          "ms": 34231
+        },
+        {
+          "path": "/api/attention",
+          "ms": 34160
+        },
+        {
+          "path": "/api/voice-companion/settings",
+          "ms": 34344
+        },
+        {
+          "path": "/api/attention",
+          "ms": 31214
+        },
+        {
+          "path": "/api/attention",
+          "ms": 27299
+        },
+        {
+          "path": "/api/view/presence",
+          "ms": 35183
+        },
+        {
+          "path": "/api/attention",
+          "ms": 23572
+        }
+      ]
+    },
+    {
+      "view": 2,
+      "readyMs": 41306,
+      "cards": 13,
+      "files": {
+        "answered": 22,
+        "errors": 0,
+        "heldByBrowserMaxMs": 141,
+        "abandoned": 19,
+        "p95Ms": 34,
+        "maxMs": 3302,
+        "slowest": [
+          {
+            "query": "?view=summary&path=pinned",
+            "status": 200,
+            "ms": 3302,
+            "sentMs": 141,
+            "firstByteMs": 3439,
+            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=2026.3, files-worker-build;dur=256.6, files-source;dur=0.0, files-registry;dur=205.1, files-session-titles;dur=13.0, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=6.2, files-role-titles;dur=0.6, files-flows;dur=20.3, files-stores;dur=0.0, files-project-rate-limits;dur=8.4, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=3.2, files-projects;dur=12.8, files-json;dur=3.1, files-projection-cache;dur=0.0;desc=\"miss\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 34,
+            "sentMs": 0,
+            "firstByteMs": 27,
+            "timing": "files-clone;dur=0.4, files-scan;dur=3476.0;desc=\"pinned generation 6\", files-worker-queue;dur=0.4, files-worker-build;dur=162.7, files-source;dur=0.0, files-registry;dur=104.9, files-session-titles;dur=16.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=8.7, files-role-titles;dur=0.6, files-flows;dur=26.3, files-stores;dur=0.0, files-project-rate-limits;dur=9.9, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=12.7, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 24,
+            "sentMs": 0,
+            "firstByteMs": 22,
+            "timing": "files-clone;dur=0.4, files-scan;dur=2869.7;desc=\"pinned generation 7\", files-worker-queue;dur=0.5, files-worker-build;dur=173.1, files-source;dur=0.0, files-registry;dur=108.1, files-session-titles;dur=16.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.7, files-authorship;dur=10.8, files-role-titles;dur=0.6, files-flows;dur=28.9, files-stores;dur=0.0, files-project-rate-limits;dur=15.8, files-project-catalog;dur=1.2, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.4, files-projects;dur=18.7, files-json;dur=4.1, files-projection-cache;dur=0.0;desc=\"stale\""
+          }
+        ],
+        "failures": [
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
             "error": "net::ERR_ABORTED"
           }
         ]
       },
       "lag": {
         "samples": 606,
-        "p95Ms": 5,
-        "maxMs": 20
+        "p95Ms": 3,
+        "maxMs": 40
       },
-      "inputMs": 20
+      "inputMs": 19,
+      "held": [
+        {
+          "path": "/api/telemetry",
+          "ms": 34147
+        },
+        {
+          "path": "/api/staging",
+          "ms": 34150
+        },
+        {
+          "path": "/api/operator/settings",
+          "ms": 34182
+        },
+        {
+          "path": "/api/external-relay/conversations",
+          "ms": 34198
+        },
+        {
+          "path": "/api/attention",
+          "ms": 34160
+        },
+        {
+          "path": "/api/voice-companion/settings",
+          "ms": 34349
+        },
+        {
+          "path": "/api/attention",
+          "ms": 31216
+        },
+        {
+          "path": "/api/attention",
+          "ms": 27272
+        },
+        {
+          "path": "/api/view/presence",
+          "ms": 35162
+        },
+        {
+          "path": "/api/attention",
+          "ms": 23547
+        }
+      ]
     },
     {
-      "view": 4,
-      "readyMs": 15210,
+      "view": 3,
+      "readyMs": 40934,
       "cards": 13,
       "files": {
-        "answered": 18,
+        "answered": 28,
         "errors": 0,
-        "abandoned": 19,
-        "p95Ms": 4802,
-        "maxMs": 4802,
-        "slowest": [
-          {
-            "query": "?view=summary&path=pinned",
-            "status": 200,
-            "ms": 4802,
-            "timing": "files-clone;dur=0.7, files-scan;dur=5600.6;desc=\"cold generation 1\", files-worker-queue;dur=3359.8, files-worker-build;dur=528.0, files-source;dur=0.0, files-registry;dur=468.0, files-session-titles;dur=23.8, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=13.6, files-role-titles;dur=0.9, files-flows;dur=38.8, files-stores;dur=0.0, files-project-rate-limits;dur=8.1, files-project-catalog;dur=0.9, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.4, files-projects;dur=10.7, files-json;dur=3.9, files-projection-cache;dur=0.0;desc=\"miss\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 362,
-            "timing": "files-clone;dur=5.1, files-scan;dur=3833.6;desc=\"pinned generation 5\", files-worker-queue;dur=0.3, files-worker-build;dur=322.8, files-source;dur=0.0, files-registry;dur=136.3, files-session-titles;dur=24.8, files-project-affinity;dur=7.5, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.9, files-role-titles;dur=0.7, files-flows;dur=40.9, files-stores;dur=0.0, files-project-rate-limits;dur=16.3, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.5, files-projects;dur=18.8, files-json;dur=12.3, files-projection-cache;dur=0.0;desc=\"stale\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 170,
-            "timing": "files-clone;dur=0.8, files-scan;dur=3583.1;desc=\"pinned generation 8\", files-worker-queue;dur=1.2, files-worker-build;dur=229.0, files-source;dur=0.0, files-registry;dur=166.2, files-session-titles;dur=18.7, files-project-affinity;dur=0.2, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.7, files-authorship;dur=8.2, files-role-titles;dur=0.6, files-flows;dur=28.6, files-stores;dur=0.0, files-project-rate-limits;dur=11.8, files-project-catalog;dur=1.2, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.5, files-projects;dur=14.7, files-json;dur=3.9, files-projection-cache;dur=0.0;desc=\"stale\""
-          }
-        ],
-        "failures": [
-          {
-            "query": "?project=__overview__",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          }
-        ]
-      },
-      "lag": {
-        "samples": 606,
-        "p95Ms": 5,
-        "maxMs": 54
-      },
-      "inputMs": 37
-    },
-    {
-      "view": 5,
-      "readyMs": 15068,
-      "cards": 13,
-      "files": {
-        "answered": 20,
-        "errors": 0,
-        "abandoned": 18,
-        "p95Ms": 363,
-        "maxMs": 3920,
-        "slowest": [
-          {
-            "query": "?view=summary&path=pinned",
-            "status": 200,
-            "ms": 3920,
-            "timing": "files-clone;dur=0.7, files-scan;dur=5600.6;desc=\"cold generation 1\", files-worker-queue;dur=2527.1, files-worker-build;dur=441.6, files-source;dur=11.1, files-registry;dur=359.8, files-session-titles;dur=26.1, files-project-affinity;dur=0.2, files-flow-store;dur=0.3, files-flow-restore;dur=0.1, files-task-store;dur=0.2, files-authorship;dur=8.4, files-role-titles;dur=0.8, files-flows;dur=35.9, files-stores;dur=0.0, files-project-rate-limits;dur=13.2, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=2.0, files-projects;dur=16.4, files-json;dur=4.9, files-projection-cache;dur=0.0;desc=\"miss\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 363,
-            "timing": "files-clone;dur=1.1, files-scan;dur=3292.1;desc=\"pinned generation 3\", files-worker-queue;dur=1873.4, files-worker-build;dur=251.4, files-source;dur=0.0, files-registry;dur=176.6, files-session-titles;dur=20.6, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.8, files-role-titles;dur=0.6, files-flows;dur=37.5, files-stores;dur=0.0, files-project-rate-limits;dur=8.5, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.6, files-projects;dur=11.1, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 193,
-            "timing": "files-clone;dur=1.3, files-scan;dur=4214.2;desc=\"pinned generation 4\", files-worker-queue;dur=1.9, files-worker-build;dur=195.2, files-source;dur=0.0, files-registry;dur=120.6, files-session-titles;dur=10.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=18.7, files-role-titles;dur=6.1, files-flows;dur=36.1, files-stores;dur=0.0, files-project-rate-limits;dur=10.5, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.2, files-operator-asks;dur=0.0, files-project-cwds;dur=2.4, files-projects;dur=14.3, files-json;dur=5.4, files-projection-cache;dur=0.0;desc=\"stale\""
-          }
-        ],
-        "failures": [
-          {
-            "query": "?project=__overview__",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          }
-        ]
-      },
-      "lag": {
-        "samples": 609,
-        "p95Ms": 6,
-        "maxMs": 29
-      },
-      "inputMs": 8
-    },
-    {
-      "view": 6,
-      "readyMs": 15140,
-      "cards": 13,
-      "files": {
-        "answered": 25,
-        "errors": 0,
+        "heldByBrowserMaxMs": 79,
         "abandoned": 16,
-        "p95Ms": 159,
-        "maxMs": 2096,
-        "slowest": [
-          {
-            "query": "?view=summary&path=pinned",
-            "status": 200,
-            "ms": 2096,
-            "timing": "files-clone;dur=0.8, files-scan;dur=5600.6;desc=\"cold generation 1\", files-worker-queue;dur=335.0, files-worker-build;dur=628.9, files-source;dur=0.0, files-registry;dur=559.9, files-session-titles;dur=25.9, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=12.5, files-role-titles;dur=0.8, files-flows;dur=39.8, files-stores;dur=0.0, files-project-rate-limits;dur=9.7, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.1, files-project-cwds;dur=1.5, files-projects;dur=12.3, files-json;dur=6.9, files-projection-cache;dur=0.0;desc=\"miss\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 159,
-            "timing": "files-clone;dur=0.9, files-scan;dur=3200.4;desc=\"pinned generation 7\", files-worker-queue;dur=0.4, files-worker-build;dur=182.4, files-source;dur=0.1, files-registry;dur=130.4, files-session-titles;dur=14.1, files-project-affinity;dur=0.2, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=7.4, files-role-titles;dur=0.6, files-flows;dur=22.6, files-stores;dur=0.0, files-project-rate-limits;dur=9.0, files-project-catalog;dur=0.5, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.3, files-projects;dur=11.2, files-json;dur=5.0, files-projection-cache;dur=0.0;desc=\"stale\""
-          },
-          {
-            "query": "?view=summary",
-            "status": 200,
-            "ms": 134,
-            "timing": "files-clone;dur=1.0, files-scan;dur=4214.2;desc=\"pinned generation 4\", files-worker-queue;dur=1.9, files-worker-build;dur=195.2, files-source;dur=0.0, files-registry;dur=120.6, files-session-titles;dur=10.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=18.7, files-role-titles;dur=6.1, files-flows;dur=36.1, files-stores;dur=0.0, files-project-rate-limits;dur=10.5, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.2, files-operator-asks;dur=0.0, files-project-cwds;dur=2.4, files-projects;dur=14.3, files-json;dur=5.4, files-projection-cache;dur=0.0;desc=\"stale\""
-          }
-        ],
-        "failures": [
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?view=summary&path=pinned",
-            "error": "net::ERR_ABORTED"
-          },
-          {
-            "query": "?project=__overview__",
-            "error": "net::ERR_ABORTED"
-          }
-        ]
-      },
-      "lag": {
-        "samples": 609,
-        "p95Ms": 7,
-        "maxMs": 29
-      },
-      "inputMs": 20
-    },
-    {
-      "view": 7,
-      "readyMs": 15124,
-      "cards": 13,
-      "files": {
-        "answered": 20,
-        "errors": 0,
-        "abandoned": 18,
         "p95Ms": 187,
-        "maxMs": 4352,
+        "maxMs": 1949,
         "slowest": [
           {
             "query": "?view=summary&path=pinned",
             "status": 200,
-            "ms": 4352,
-            "timing": "files-clone;dur=0.8, files-scan;dur=5600.6;desc=\"cold generation 1\", files-worker-queue;dur=2971.2, files-worker-build;dur=383.3, files-source;dur=0.1, files-registry;dur=292.8, files-session-titles;dur=17.6, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=8.5, files-role-titles;dur=0.7, files-flows;dur=27.2, files-stores;dur=0.0, files-project-rate-limits;dur=9.3, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=13.3, files-projects;dur=23.6, files-json;dur=8.9, files-projection-cache;dur=0.0;desc=\"miss\""
+            "ms": 1949,
+            "sentMs": 79,
+            "firstByteMs": 2016,
+            "timing": "files-clone;dur=0.2, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=246.5, files-worker-build;dur=417.9, files-source;dur=0.1, files-registry;dur=351.2, files-session-titles;dur=16.4, files-project-affinity;dur=0.8, files-flow-store;dur=0.3, files-flow-restore;dur=0.0, files-task-store;dur=0.1, files-authorship;dur=7.4, files-role-titles;dur=0.7, files-flows;dur=25.8, files-stores;dur=0.0, files-project-rate-limits;dur=28.1, files-project-catalog;dur=1.0, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.2, files-operator-asks;dur=0.0, files-project-cwds;dur=3.0, files-projects;dur=32.6, files-json;dur=4.6, files-projection-cache;dur=0.0;desc=\"miss\""
           },
           {
             "query": "?view=summary",
             "status": 200,
             "ms": 187,
-            "timing": "files-clone;dur=0.8, files-scan;dur=3583.1;desc=\"pinned generation 8\", files-worker-queue;dur=3.1, files-worker-build;dur=250.7, files-source;dur=0.0, files-registry;dur=130.6, files-session-titles;dur=39.5, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=11.3, files-role-titles;dur=0.5, files-flows;dur=51.6, files-stores;dur=0.0, files-project-rate-limits;dur=12.8, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=10.7, files-projects;dur=24.5, files-json;dur=4.5, files-projection-cache;dur=0.0;desc=\"stale\""
+            "sentMs": 0,
+            "firstByteMs": 183,
+            "timing": "files-clone;dur=0.5, files-scan;dur=2797.0;desc=\"pinned generation 10\", files-worker-queue;dur=0.3, files-worker-build;dur=150.9, files-source;dur=0.0, files-registry;dur=91.5, files-session-titles;dur=19.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.3, files-authorship;dur=9.2, files-role-titles;dur=1.3, files-flows;dur=30.6, files-stores;dur=0.0, files-project-rate-limits;dur=12.0, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=14.0, files-json;dur=3.0, files-projection-cache;dur=0.0;desc=\"stale\""
           },
           {
             "query": "?view=summary",
             "status": 200,
-            "ms": 174,
-            "timing": "files-clone;dur=0.7, files-scan;dur=3292.1;desc=\"pinned generation 3\", files-worker-queue;dur=1873.4, files-worker-build;dur=251.4, files-source;dur=0.0, files-registry;dur=176.6, files-session-titles;dur=20.6, files-project-affinity;dur=0.2, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.8, files-role-titles;dur=0.6, files-flows;dur=37.5, files-stores;dur=0.0, files-project-rate-limits;dur=8.5, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.6, files-projects;dur=11.1, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"stale\""
+            "ms": 161,
+            "sentMs": 1,
+            "firstByteMs": 160,
+            "timing": "files-clone;dur=23.4, files-scan;dur=2797.0;desc=\"pinned generation 10\", files-worker-queue;dur=0.4, files-worker-build;dur=128.6, files-source;dur=0.0, files-registry;dur=86.9, files-session-titles;dur=9.3, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=5.7, files-role-titles;dur=0.4, files-flows;dur=15.8, files-stores;dur=0.0, files-project-rate-limits;dur=7.5, files-project-catalog;dur=0.5, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.3, files-projects;dur=9.5, files-json;dur=2.5, files-projection-cache;dur=0.0;desc=\"stale\""
           }
         ],
         "failures": [
           {
-            "query": "?project=__overview__",
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          }
+        ]
+      },
+      "lag": {
+        "samples": 612,
+        "p95Ms": 3,
+        "maxMs": 22
+      },
+      "inputMs": 10,
+      "held": [
+        {
+          "path": "/api/accounts/copilot",
+          "ms": 33789
+        },
+        {
+          "path": "/api/telegram",
+          "ms": 33800
+        },
+        {
+          "path": "/api/runtime/snapshot",
+          "ms": 33904
+        },
+        {
+          "path": "/api/onboarding",
+          "ms": 33916
+        },
+        {
+          "path": "/api/staging",
+          "ms": 34135
+        },
+        {
+          "path": "/api/operator/settings",
+          "ms": 34143
+        },
+        {
+          "path": "/api/external-relay/conversations",
+          "ms": 34191
+        },
+        {
+          "path": "/api/telemetry",
+          "ms": 34281
+        },
+        {
+          "path": "/api/attention",
+          "ms": 34454
+        },
+        {
+          "path": "/api/voice-companion/settings",
+          "ms": 34464
+        }
+      ]
+    },
+    {
+      "view": 4,
+      "readyMs": 41207,
+      "cards": 13,
+      "files": {
+        "answered": 26,
+        "errors": 0,
+        "heldByBrowserMaxMs": 5,
+        "abandoned": 18,
+        "p95Ms": 103,
+        "maxMs": 2039,
+        "slowest": [
+          {
+            "query": "?view=summary&path=pinned",
+            "status": 200,
+            "ms": 2039,
+            "sentMs": 1,
+            "firstByteMs": 2038,
+            "timing": "files-clone;dur=0.2, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=668.6, files-worker-build;dur=240.7, files-source;dur=0.1, files-registry;dur=202.1, files-session-titles;dur=9.5, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=5.8, files-role-titles;dur=0.6, files-flows;dur=16.2, files-stores;dur=0.0, files-project-rate-limits;dur=6.5, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.3, files-projects;dur=8.7, files-json;dur=2.7, files-projection-cache;dur=0.0;desc=\"miss\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 103,
+            "sentMs": 0,
+            "firstByteMs": 102,
+            "timing": "files-clone;dur=0.4, files-scan;dur=2997.3;desc=\"pinned generation 8\", files-worker-queue;dur=0.4, files-worker-build;dur=272.1, files-source;dur=0.0, files-registry;dur=133.2, files-session-titles;dur=41.0, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=1.9, files-authorship;dur=35.0, files-role-titles;dur=0.8, files-flows;dur=78.9, files-stores;dur=0.0, files-project-rate-limits;dur=9.2, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.9, files-projects;dur=12.2, files-json;dur=3.9, files-projection-cache;dur=0.0;desc=\"stale\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 39,
+            "sentMs": 1,
+            "firstByteMs": 39,
+            "timing": "files-clone;dur=0.5, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.2, files-worker-build;dur=170.7, files-source;dur=0.0, files-registry;dur=115.1, files-session-titles;dur=15.7, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.5, files-role-titles;dur=0.5, files-flows;dur=24.1, files-stores;dur=0.0, files-project-rate-limits;dur=8.9, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.8, files-projects;dur=11.9, files-json;dur=3.4, files-projection-cache;dur=0.0;desc=\"stale\""
+          }
+        ],
+        "failures": [
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          }
+        ]
+      },
+      "lag": {
+        "samples": 608,
+        "p95Ms": 4,
+        "maxMs": 77
+      },
+      "inputMs": 21,
+      "held": [
+        {
+          "path": "/api/team",
+          "ms": 33909
+        },
+        {
+          "path": "/api/telemetry",
+          "ms": 33931
+        },
+        {
+          "path": "/api/onboarding",
+          "ms": 34078
+        },
+        {
+          "path": "/api/staging",
+          "ms": 34095
+        },
+        {
+          "path": "/api/operator/settings",
+          "ms": 34120
+        },
+        {
+          "path": "/api/external-relay/conversations",
+          "ms": 34164
+        },
+        {
+          "path": "/api/attention",
+          "ms": 34238
+        },
+        {
+          "path": "/api/voice-companion/settings",
+          "ms": 34359
+        },
+        {
+          "path": "/api/attention",
+          "ms": 31240
+        },
+        {
+          "path": "/api/view/presence",
+          "ms": 35238
+        }
+      ]
+    },
+    {
+      "view": 5,
+      "readyMs": 41225,
+      "cards": 13,
+      "files": {
+        "answered": 23,
+        "errors": 0,
+        "heldByBrowserMaxMs": 67,
+        "abandoned": 20,
+        "p95Ms": 83,
+        "maxMs": 3107,
+        "slowest": [
+          {
+            "query": "?view=summary&path=pinned",
+            "status": 200,
+            "ms": 3107,
+            "sentMs": 67,
+            "firstByteMs": 3161,
+            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=1635.2, files-worker-build;dur=388.9, files-source;dur=0.0, files-registry;dur=311.0, files-session-titles;dur=18.8, files-project-affinity;dur=6.2, files-flow-store;dur=0.3, files-flow-restore;dur=0.0, files-task-store;dur=0.9, files-authorship;dur=7.5, files-role-titles;dur=0.8, files-flows;dur=34.5, files-stores;dur=0.0, files-project-rate-limits;dur=8.6, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.9, files-projects;dur=11.8, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"miss\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 83,
+            "sentMs": 0,
+            "firstByteMs": 82,
+            "timing": "files-clone;dur=0.4, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.1, files-worker-build;dur=351.9, files-source;dur=0.0, files-registry;dur=114.5, files-session-titles;dur=83.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.4, files-flow-restore;dur=0.1, files-task-store;dur=0.3, files-authorship;dur=14.7, files-role-titles;dur=1.4, files-flows;dur=100.9, files-stores;dur=0.0, files-project-rate-limits;dur=18.2, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.4, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=21.3, files-json;dur=11.8, files-projection-cache;dur=0.0;desc=\"stale\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 80,
+            "sentMs": 0,
+            "firstByteMs": 65,
+            "timing": "files-clone;dur=0.4, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.3, files-worker-build;dur=254.4, files-source;dur=0.0, files-registry;dur=146.8, files-session-titles;dur=32.1, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=7.8, files-role-titles;dur=0.6, files-flows;dur=40.8, files-stores;dur=0.0, files-project-rate-limits;dur=29.2, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.7, files-projects;dur=32.0, files-json;dur=4.0, files-projection-cache;dur=0.0;desc=\"stale\""
+          }
+        ],
+        "failures": [
+          {
+            "query": "?view=summary&path=pinned",
             "error": "net::ERR_ABORTED"
           },
           {
@@ -494,10 +626,270 @@
       },
       "lag": {
         "samples": 611,
-        "p95Ms": 6,
-        "maxMs": 54
+        "p95Ms": 3,
+        "maxMs": 56
       },
-      "inputMs": 21
+      "inputMs": 17,
+      "held": [
+        {
+          "path": "/api/accounts/copilot",
+          "ms": 33873
+        },
+        {
+          "path": "/api/telegram",
+          "ms": 33867
+        },
+        {
+          "path": "/api/runtime/snapshot",
+          "ms": 33878
+        },
+        {
+          "path": "/api/onboarding",
+          "ms": 33914
+        },
+        {
+          "path": "/api/staging",
+          "ms": 34172
+        },
+        {
+          "path": "/api/operator/settings",
+          "ms": 34168
+        },
+        {
+          "path": "/api/external-relay/conversations",
+          "ms": 34158
+        },
+        {
+          "path": "/api/telemetry",
+          "ms": 34242
+        },
+        {
+          "path": "/api/attention",
+          "ms": 34413
+        },
+        {
+          "path": "/api/voice-companion/settings",
+          "ms": 34415
+        }
+      ]
+    },
+    {
+      "view": 6,
+      "readyMs": 41248,
+      "cards": 13,
+      "files": {
+        "answered": 22,
+        "errors": 0,
+        "heldByBrowserMaxMs": 160,
+        "abandoned": 21,
+        "p95Ms": 161,
+        "maxMs": 2725,
+        "slowest": [
+          {
+            "query": "?view=summary&path=pinned",
+            "status": 200,
+            "ms": 2725,
+            "sentMs": 160,
+            "firstByteMs": 2884,
+            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=1359.0, files-worker-build;dur=273.9, files-source;dur=0.0, files-registry;dur=212.8, files-session-titles;dur=15.9, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=12.4, files-role-titles;dur=0.7, files-flows;dur=29.5, files-stores;dur=0.0, files-project-rate-limits;dur=9.7, files-project-catalog;dur=0.8, files-bridge-asks;dur=0.4, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=2.1, files-projects;dur=13.2, files-json;dur=3.8, files-projection-cache;dur=0.0;desc=\"miss\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 161,
+            "sentMs": 0,
+            "firstByteMs": 160,
+            "timing": "files-clone;dur=0.5, files-scan;dur=2797.0;desc=\"pinned generation 10\", files-worker-queue;dur=0.3, files-worker-build;dur=150.9, files-source;dur=0.0, files-registry;dur=91.5, files-session-titles;dur=19.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.3, files-authorship;dur=9.2, files-role-titles;dur=1.3, files-flows;dur=30.6, files-stores;dur=0.0, files-project-rate-limits;dur=12.0, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=14.0, files-json;dur=3.0, files-projection-cache;dur=0.0;desc=\"stale\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 25,
+            "sentMs": 0,
+            "firstByteMs": 23,
+            "timing": "files-clone;dur=0.4, files-scan;dur=2869.7;desc=\"pinned generation 7\", files-worker-queue;dur=0.5, files-worker-build;dur=203.2, files-source;dur=0.1, files-registry;dur=124.6, files-session-titles;dur=18.3, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.0, files-role-titles;dur=0.6, files-flows;dur=34.2, files-stores;dur=0.0, files-project-rate-limits;dur=19.4, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.8, files-projects;dur=22.2, files-json;dur=3.7, files-projection-cache;dur=0.0;desc=\"stale\""
+          }
+        ],
+        "failures": [
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          }
+        ]
+      },
+      "lag": {
+        "samples": 614,
+        "p95Ms": 3,
+        "maxMs": 23
+      },
+      "inputMs": 19,
+      "held": [
+        {
+          "path": "/api/team",
+          "ms": 33807
+        },
+        {
+          "path": "/api/telemetry",
+          "ms": 33752
+        },
+        {
+          "path": "/api/onboarding",
+          "ms": 33924
+        },
+        {
+          "path": "/api/staging",
+          "ms": 33937
+        },
+        {
+          "path": "/api/operator/settings",
+          "ms": 33956
+        },
+        {
+          "path": "/api/external-relay/conversations",
+          "ms": 33980
+        },
+        {
+          "path": "/api/attention",
+          "ms": 34078
+        },
+        {
+          "path": "/api/voice-companion/settings",
+          "ms": 34224
+        },
+        {
+          "path": "/api/attention",
+          "ms": 31109
+        },
+        {
+          "path": "/api/view/presence",
+          "ms": 35119
+        }
+      ]
+    },
+    {
+      "view": 7,
+      "readyMs": 41129,
+      "cards": 13,
+      "files": {
+        "answered": 24,
+        "errors": 0,
+        "heldByBrowserMaxMs": 89,
+        "abandoned": 20,
+        "p95Ms": 35,
+        "maxMs": 2567,
+        "slowest": [
+          {
+            "query": "?view=summary&path=pinned",
+            "status": 200,
+            "ms": 2567,
+            "sentMs": 89,
+            "firstByteMs": 2638,
+            "timing": "files-clone;dur=0.1, files-scan;dur=4465.0;desc=\"cold generation 1\", files-worker-queue;dur=1105.6, files-worker-build;dur=250.9, files-source;dur=0.1, files-registry;dur=210.1, files-session-titles;dur=14.0, files-project-affinity;dur=0.1, files-flow-store;dur=0.1, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=6.6, files-role-titles;dur=0.5, files-flows;dur=21.5, files-stores;dur=0.0, files-project-rate-limits;dur=6.0, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.1, files-projects;dur=8.4, files-json;dur=2.9, files-projection-cache;dur=0.0;desc=\"miss\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 35,
+            "sentMs": 0,
+            "firstByteMs": 28,
+            "timing": "files-clone;dur=0.3, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.4, files-worker-build;dur=209.0, files-source;dur=0.1, files-registry;dur=146.0, files-session-titles;dur=15.3, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=8.6, files-role-titles;dur=0.6, files-flows;dur=24.7, files-stores;dur=0.0, files-project-rate-limits;dur=19.9, files-project-catalog;dur=0.7, files-bridge-asks;dur=0.2, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.4, files-projects;dur=22.3, files-json;dur=3.6, files-projection-cache;dur=0.0;desc=\"stale\""
+          },
+          {
+            "query": "?view=summary",
+            "status": 200,
+            "ms": 31,
+            "sentMs": 0,
+            "firstByteMs": 30,
+            "timing": "files-clone;dur=0.3, files-scan;dur=3024.7;desc=\"pinned generation 5\", files-worker-queue;dur=0.7, files-worker-build;dur=342.3, files-source;dur=0.2, files-registry;dur=256.6, files-session-titles;dur=19.6, files-project-affinity;dur=0.1, files-flow-store;dur=0.2, files-flow-restore;dur=0.0, files-task-store;dur=0.2, files-authorship;dur=15.4, files-role-titles;dur=0.9, files-flows;dur=36.4, files-stores;dur=0.0, files-project-rate-limits;dur=9.4, files-project-catalog;dur=0.6, files-bridge-asks;dur=0.3, files-attention-dismissals;dur=0.1, files-operator-asks;dur=0.0, files-project-cwds;dur=1.6, files-projects;dur=12.0, files-json;dur=8.0, files-projection-cache;dur=0.0;desc=\"stale\""
+          }
+        ],
+        "failures": [
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "query": "?view=summary&path=pinned",
+            "error": "net::ERR_ABORTED"
+          }
+        ]
+      },
+      "lag": {
+        "samples": 616,
+        "p95Ms": 4,
+        "maxMs": 18
+      },
+      "inputMs": 20,
+      "held": [
+        {
+          "path": "/api/accounts/copilot",
+          "ms": 33890
+        },
+        {
+          "path": "/api/telegram",
+          "ms": 33889
+        },
+        {
+          "path": "/api/runtime/snapshot",
+          "ms": 33896
+        },
+        {
+          "path": "/api/onboarding",
+          "ms": 33902
+        },
+        {
+          "path": "/api/staging",
+          "ms": 34145
+        },
+        {
+          "path": "/api/operator/settings",
+          "ms": 34148
+        },
+        {
+          "path": "/api/external-relay/conversations",
+          "ms": 34158
+        },
+        {
+          "path": "/api/telemetry",
+          "ms": 34206
+        },
+        {
+          "path": "/api/attention",
+          "ms": 34434
+        },
+        {
+          "path": "/api/voice-companion/settings",
+          "ms": 34438
+        }
+      ]
     }
   ],
   "failures": []
