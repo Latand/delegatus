@@ -23,6 +23,34 @@ test("refresh creation refuses an active delivery owner atomically, then claims 
   expect(next.delivery).toMatchObject({ disposition: "owner", active: true, epoch: 2 });
 });
 
+test("refresh admission refuses unfinished comparison work on the target even without an active claim", async () => {
+  const comparison = await createPipelineWithDelivery(fixture("comparison"), target, true);
+  comparison.state = "running";
+  savePipelines([comparison]);
+
+  await expect(createPipelineWithDelivery(fixture("refresh"), target, false, { requireOwner: true }))
+    .rejects.toThrow("unfinished PR work");
+  expect(loadPipelines().some((lane) => lane.id === "refresh")).toBe(false);
+
+  comparison.state = "completed";
+  comparison.cursor = null;
+  comparison.closedAt = "2026-10-12T01:00:00.000Z";
+  savePipelines([comparison]);
+  const admitted = await createPipelineWithDelivery(fixture("refresh-after-completion"), target, false, { requireOwner: true });
+  expect(admitted.delivery).toMatchObject({ disposition: "owner", active: true });
+});
+
+test("refresh admission refuses unfinished work linked to the same PR on another branch", async () => {
+  const otherBranch = { ...target, branch: "refs/heads/other" };
+  const linked = await createPipelineWithDelivery(fixture("linked-work"), otherBranch, true);
+  linked.state = "needs_decision";
+  savePipelines([linked]);
+
+  await expect(createPipelineWithDelivery(fixture("refresh"), target, false, { requireOwner: true }))
+    .rejects.toThrow("unfinished PR work");
+  expect(loadPipelines().some((lane) => lane.id === "refresh")).toBe(false);
+});
+
 test("concurrent and restarted creation replays one owner even while its claim is active", async () => {
   const make = (id: string) => {
     const value = fixture(id);
@@ -37,6 +65,23 @@ test("concurrent and restarted creation replays one owner even while its claim i
   expect(replay.id).toBe(result[0]!.id);
   expect(pipelineDeliveryLookup({ requestKey: "auto-refresh:finished:zero" })?.refreshOf).toEqual({ pipelineId: "finished", base: "a".repeat(40) });
   expect(loadPipelines().filter((lane) => lane.creationRequest?.key === "auto-refresh:finished:zero")).toHaveLength(1);
+});
+
+test("an idempotent refresh replay attaches before checking newly appeared unfinished work", async () => {
+  const make = (id: string) => {
+    const value = fixture(id);
+    value.creationRequest = { key: "auto-refresh:finished:replay", digest: "same-facts" };
+    value.refreshOf = { pipelineId: "finished", base: "a".repeat(40) };
+    return value;
+  };
+  const created = await createPipelineWithDelivery(make("refresh"), target, false, { requireOwner: true });
+  const rival = await createPipelineWithDelivery(fixture("comparison-after-create"), target, true);
+  rival.state = "running";
+  savePipelines([created, rival]);
+
+  const replay = await createPipelineWithDelivery(make("retry"), target, false, { requireOwner: true });
+  expect(replay.id).toBe(created.id);
+  expect(loadPipelines().filter((lane) => lane.creationRequest?.key === "auto-refresh:finished:replay")).toHaveLength(1);
 });
 
 

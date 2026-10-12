@@ -1532,8 +1532,9 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
         return replay;
       }
     }
-    if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true }))) {
-      throw new Error("target already owned; Delegatus could not claim the refresh delivery branch");
+    if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
+      || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch, prNumber: target.pr }))) {
+      throw new Error("target already owned or has unfinished PR work; Delegatus could not claim the refresh delivery branch");
     }
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
     tx.put(pipeline);

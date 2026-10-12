@@ -218,6 +218,7 @@ export interface CompanionPatch<C> {
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
+  hasUnfinishedPipeline(query: { repository: string; branch: string; prNumber?: number }): boolean;
   put(record: T): void;
   delete(key: string): void;
 }
@@ -1023,6 +1024,23 @@ export class SqliteStateCollection<T> {
             pipelineLookup: (query) => {
               consume();
               return this.lookupPipeline(db, query);
+            },
+            hasUnfinishedPipeline: (query) => {
+              consume();
+              if (this.options.collection !== "pipelines") throw new Error("unfinished pipeline lookup requires the pipeline collection");
+              return !!db.query<{ found: number }, [string, string, number | null, string, number | null]>(`
+                SELECT 1 AS found FROM state_rows
+                WHERE collection = 'pipelines' AND json_valid(value_json)
+                  AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed')
+                  AND (
+                    (json_extract(value_json, '$.delivery.target.repository') = ?
+                      AND json_extract(value_json, '$.delivery.target.branch') = ?)
+                    OR (? IS NOT NULL
+                      AND json_extract(value_json, '$.delivery.target.repository') = ?
+                      AND json_extract(value_json, '$.delivery.target.pr') = ?)
+                  )
+                LIMIT 1
+              `).get(query.repository, query.branch, query.prNumber ?? null, query.repository, query.prNumber ?? null);
             },
             get: (key) => {
               consume();
