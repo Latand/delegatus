@@ -89,6 +89,106 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
   }
 });
 
+test.each(["codex", "claude"] as const)("legacy %s seat profiles receive the current orchestrator rules on boot", async (engine) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-startup-seat-memory-${engine}-`));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const project = `seat-startup-${engine}`;
+  const rule = "Read the latest transcript tail before calling a conversation stalled.";
+  const { leaveSeatLessons } = await import("@/lib/memory/roleStore");
+  leaveSeatLessons({
+    source: { origin: "seat", project, roleId: "orchestrator", fixRound: false, conversationId: "conversation_legacy_seat" },
+    lessons: [{ scope: "role", rule, why: "A status read reported a false stall." }],
+  });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const artifactPath = path.join(directory, `${engine}-legacy-seat.jsonl`);
+  const sessionId = `${engine}-legacy-seat`;
+  const conversation = registry.ensureConversation(engine, artifactPath, "managed");
+  registry.upsert({
+    key: { engine, sessionId }, artifactPath, cwd: directory, accountId: "managed",
+    launchProfile: emptyLaunchProfile({ cwd: directory }),
+    status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+  registry.stampOrchestratorSeatIdentity({
+    project, seatEpoch: 1, conversationId: conversation.id, predecessorConversationId: null,
+    designatedAt: "2026-10-12T09:00:00.000Z", activatedAt: "2026-10-12T09:00:01.000Z",
+  });
+  let instructions: string | undefined;
+  try {
+    await adoptStructuredHostsAtStartup({
+      registry,
+      resolveCodexOwner: () => ({ home: directory, kind: "managed" }),
+      resolveClaudeOwner: () => ({ home: directory, kind: "managed", transcriptRoot: directory, env: { NODE_ENV: "test", HOME: directory } }),
+      adopt: async (_store, optionsFor) => {
+        if (engine === "codex") {
+          const options = optionsFor(registry.snapshot().entries[`${engine}:${sessionId}`]!);
+          instructions = (options as { developerInstructions?: string }).developerInstructions;
+        }
+        return [];
+      },
+      adoptClaude: async (_store, optionsFor) => {
+        if (engine === "claude") {
+          const options = optionsFor(registry.snapshot().entries[`${engine}:${sessionId}`]!);
+          instructions = (options as { appendSystemPrompt?: string }).appendSystemPrompt;
+        }
+        return [];
+      },
+    });
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  expect(instructions).toContain(rule);
+});
+
+test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline orchestrator clean on %s", async (engine) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-startup-pipeline-orchestrator-${engine}-`));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const selector = { project: "pipeline-project", roleId: "builder" };
+  const begun = beginLegacySpawnFixture(registry, {
+    engine, cwd: directory, role: "orchestrator", explicitProject: "pipeline-project",
+    launchProfile: emptyLaunchProfile({ cwd: directory, cleanMemory: true, learnedRules: selector }),
+    memberships: [{ kind: "pipeline", containerId: "pipeline-run", role: "orchestrator", slot: "review:1",
+      stageId: "review", stageOrder: 1, round: 1, parentConversationId: null }],
+  });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const transcript = path.join(directory, `${engine}-pipeline-orchestrator.jsonl`);
+  fs.writeFileSync(transcript, JSON.stringify(engine === "codex"
+    ? { type: "session_meta", payload: { id: `${engine}-pipeline-orchestrator` } }
+    : { sessionId: `${engine}-pipeline-orchestrator` }) + "\n");
+  registry.completeSpawn(begun.receipt.launchId, {
+    key: { engine, sessionId: `${engine}-pipeline-orchestrator` }, artifactPath: transcript,
+    cwd: directory, accountId: "account", status: "dead", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+  let options: { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
+  try {
+    await adoptStructuredHostsAtStartup({
+      registry, client: null, refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
+      resolveCodexOwner: () => null, resolveClaudeOwner: () => null,
+      adopt: async (store, optionsFor) => {
+        if (engine === "codex") options = optionsFor(store.readOnlySnapshot().entries[`codex:${engine}-pipeline-orchestrator`]!) as { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string };
+        return [];
+      },
+      adoptClaude: async (store, optionsFor) => {
+        if (engine === "claude") options = optionsFor(store.readOnlySnapshot().entries[`claude:${engine}-pipeline-orchestrator`]!) as { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string };
+        return [];
+      },
+    });
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  expect(options?.cleanMemory).toBe(true);
+  expect(options?.developerInstructions ?? options?.appendSystemPrompt ?? "").not.toContain("Read the latest transcript tail");
+});
+
 test("startup publishes the structured controller before transcript refresh settles", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-early-controller-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));

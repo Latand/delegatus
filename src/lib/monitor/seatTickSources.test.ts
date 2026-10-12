@@ -323,12 +323,15 @@ afterAll(() => {
 });
 
 test("a lane carries the registry's own verdict for the turn its stage is holding", async () => {
-  const input = await gather({ laneRows: [livenessRow()] });
-  expect(input.pipelines[0]!.stageActivity).toEqual({ lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "busy" });
+  for (const verified of [true, false]) {
+    const observed = livenessRow({ verified, lastRecordAt: new Date(NOW - 660_000).toISOString(), activity: { state: "idle", check: null, idleForMs: 660_000 } });
+    const input = await gather({ laneRows: [observed] });
+    expect(input.pipelines[0]!.stageActivity).toEqual({ verified, conversationId: observed.conversationId, lastRecordAt: observed.lastRecordAt, activity: observed.activity, lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "busy" });
+  }
 });
 
 /* The tick asks `agent_activity` at its own threshold rather than re-deriving
-   one: the 40-minute silence the accepted defaults name travels into the read. */
+   one: the ten-minute silence the accepted defaults name travels into the read. */
 test("the tick's stall threshold is what the liveness read is asked for", async () => {
   const calls: { project?: string; conversationId?: string; stallAfterMs: number }[] = [];
   await gather({ seatTurn: "busy", laneRows: [livenessRow()], livenessCalls: calls });
@@ -397,7 +400,7 @@ test("a seat that finished its turn and went quiet is not a stalled seat", async
     })],
   });
   expect(settled.signals).toEqual([]);
-  expect(settled.seat!.activity).toEqual({ lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "idle" });
+  expect(settled.seat!.activity).toEqual({ verified: undefined, conversationId: CONVERSATION, lastRecordAt: null, activity: undefined, lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "idle" });
 
   /* The stall that is real — an open turn nothing has advanced for forty
      minutes — still says so, because that is the seat the wake exists to

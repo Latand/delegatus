@@ -5,7 +5,7 @@ import path from "node:path";
 import { leaveLessons, projectView, recordLessonRequest, roleScope, roleMemoryCollection, learnedRulesBlock, lessonKnownValuesFile } from "./roleStore";
 import { codePoints, ruleLine } from "./roleConsolidate";
 import { CURATION_INTERVAL_MS, ROLE_MEMORY_BOUND } from "./roleTypes";
-import type { RuleSource } from "./roleTypes";
+import type { StageRuleSource as RuleSource } from "./roleTypes";
 import { applyCuration, revertCuratorPass } from "./curation/apply";
 import { claimPass, patchPass } from "./curation/store";
 

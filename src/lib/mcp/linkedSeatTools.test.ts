@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-linked-seat-tools-"));
 const previous = { ...process.env };
@@ -57,6 +57,35 @@ test("remote orchestrator recovery reads the queued outbound row after a lost re
   expect(posts[0]!.machine).toBe(install);
   expect(recovered).toMatchObject({ outcome: "accepted", state: "queued" });
   expect((await create().callTool("send_message_to_orchestrator", { ...args, text: "Different words" })).code).toBe("idempotency_conflict");
+});
+
+test("remote relay binds and dispatches withheld lesson text; local binding stays verbatim", async () => {
+  const { leaveLessons, recordLessonRequest, roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const rule = "Inspect the current durable owner before replaying a saved acknowledgement.";
+  const source = { project: project.project, pipelineId: "relay-fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: caller };
+  recordLessonRequest({ ...source, at: new Date().toISOString() });
+  leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: "A saved acknowledgement had changed owners." }], none: null });
+  const recoverable = viewerMcpRecoverableTools(domain).send_message_to_orchestrator!;
+  const args = { project: project.project, machine: "Other", text: rule, clientRequestId: "linked-private-rule" };
+  const bound = await recoverable.bind(args);
+  expect(bound.sendPayload!.text).toContain("[learned rule]");
+  expect(bound.sendPayload!.text).not.toContain(rule);
+  for (const machine of [undefined, "Here", "this machine", selfId]) {
+    const local = await recoverable.bind({ ...args, machine });
+    expect(local.sendPayload!.text).toContain(rule);
+  }
+  const posts: Record<string, unknown>[] = [];
+  const api = createMcpToolService(viewerMcpBindings(undefined, { post: async (_path, body) => { posts.push(body); const link = resolveSeatMessageMachine(String(body.machine), String(body.project))!; return queueSeatMessage(link, String(body.project), String(body.text), caller, String(body.clientMessageId)); } }, domain), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  expect(await api.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true });
+  expect(posts[0]!.text).toContain("[learned rule]");
+  expect(posts[0]!.text).not.toContain(rule);
+  expect(await api.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, replayed: true });
+  expect(posts).toHaveLength(1);
+  const read = spyOn(roleMemoryCollection()!, "snapshot").mockImplementation(() => { throw new Error("unreadable rule store"); });
+  try {
+    expect(await api.callTool("send_message_to_orchestrator", { ...args, clientRequestId: "unreadable-rule" })).toMatchObject({ ok: false, code: "LESSON_PRIVACY_UNAVAILABLE" });
+    expect(posts).toHaveLength(1);
+  } finally { read.mockRestore(); }
 });
 
 test("get_orchestrator names a linked seat, an absent seat on a capable peer, and unknown on an older peer", async () => {

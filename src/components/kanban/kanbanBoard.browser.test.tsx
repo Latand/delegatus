@@ -29921,6 +29921,106 @@ describe("automatic conflict refresh", () => {
   }, 60_000);
 });
 
+describe("true agent activity", () => {
+  browserTest("true activity dots open short unclipped popovers without changing the row", async () => {
+    const out = path.resolve(".artifacts/true-activity/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings = [];
+    try {
+      for (const theme of ["dark", "light"] as const) for (const width of [1440, 1000]) for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=true-activity`, { width, height: 900 }, theme, lang, "reduce");
+        await page.locator('[data-member="/repo/activity-working.jsonl"]').waitFor({ state: "attached" });
+        const inboxTab = page.locator('[data-tab="inbox"], [data-phone-kanban-tab="inbox"]');
+        if (await inboxTab.isVisible()) await inboxTab.click();
+        for (const state of ["working", "checking", "idle"]) {
+          const tile = page.locator(`[data-member="/repo/activity-${state}.jsonl"]`);
+          if (!await tile.isVisible()) {
+            const card = page.locator(`.card`).filter({ hasText: `Activity ${state}` }).first();
+            const expand = card.locator("button.fold");
+            if (await expand.count()) await expand.click();
+          }
+          const dot = tile.locator("[data-agent-activity]");
+          await dot.waitFor(); await dot.scrollIntoViewIfNeeded();
+          /* A card scrolled into view paints a frame or two later (content-visibility); hit tests read what is painted. */
+          await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+          expect(await dot.textContent()).toBe("");
+          expect(await dot.getAttribute("data-agent-activity")).toBe(state);
+          expect(await dot.getAttribute("aria-label")).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
+          const before = await dot.evaluate(element => {
+            const box = element.getBoundingClientRect(); const parent = element.closest(".tile")!.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const probe = (name: string) => { const swatch = document.createElement("i"); swatch.style.color = `var(${name})`; document.body.append(swatch); const colour = getComputedStyle(swatch).color; swatch.remove(); return colour; };
+            /* A hit box counts only if a pointer 11 px off the 8 px dot still lands on it. */
+            const centre = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+            const hit = [[11, 0], [-11, 0], [0, 11], [0, -11]].map(([dx, dy]) => document.elementFromPoint(centre.x + dx!, centre.y + dy!) === element);
+            return { left: box.left, right: box.right, width: box.width, height: box.height, rowHeight: parent.height, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, colour: style.backgroundColor, ring: style.borderTopWidth === "0px" ? null : style.borderTopColor, success: probe("--color-success"), warning: probe("--color-warning"), hit };
+          });
+          /* The waiting-on-a-check dot is a hollow green ring: never the amber of «needs you». */
+          if (state === "checking") { expect(before.ring).toBe(before.success); expect(before.ring).not.toBe(before.warning); expect(before.colour).toBe("rgba(0, 0, 0, 0)"); }
+          expect(before.hit, `${state} ${theme} ${width} ${lang} hit box`).toEqual([true, true, true, true]);
+          expect(before.width).toBeGreaterThanOrEqual(6); expect(before.width).toBeLessThanOrEqual(8);
+          expect(before.height).toBe(before.width);
+          await dot.hover();
+          const popup = page.getByRole("tooltip"); await popup.waitFor();
+          const after = await popup.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, portalled: element.parentElement === document.body, lines: element.children.length, text: element.textContent, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight };
+          });
+          /* Opaque, and above every card line: with pointer events on, each line's text centre resolves inside the bubble. */
+          const paint = await popup.evaluate(element => {
+            element.style.pointerEvents = "auto";
+            const covered = [...element.children].map(line => {
+              const range = document.createRange(); range.selectNodeContents(line);
+              const box = range.getBoundingClientRect();
+              const top = document.elementFromPoint(box.left + Math.min(box.width, 24) / 2, box.top + box.height / 2);
+              return top !== null && element.contains(top);
+            });
+            element.style.pointerEvents = "";
+            return { covered, background: getComputedStyle(element).backgroundColor };
+          });
+          expect(paint.background, `${state} ${theme} ${width} ${lang} bubble is opaque`).not.toBe("rgba(0, 0, 0, 0)");
+          expect(paint.covered.every(Boolean), `${state} ${theme} ${width} ${lang} no card text crosses the bubble`).toBe(true);
+          expect(after.portalled).toBe(true); expect(after.lines).toBeLessThanOrEqual(2);
+          expect(after.text!.length).toBeLessThan(90);
+          expect(after.left).toBeGreaterThanOrEqual(8); expect(after.right).toBeLessThanOrEqual(width - 8);
+          expect(after.top).toBeGreaterThanOrEqual(8); expect(after.bottom).toBeLessThanOrEqual(892);
+          expect(after.scrollWidth).toBe(before.scrollWidth); expect(after.scrollHeight).toBe(before.scrollHeight);
+          expect((await tile.boundingBox())!.height).toBe(before.rowHeight);
+          expect(await tile.textContent()).not.toContain(translate(lang, "cardStatus.checking"));
+          readings.push({ theme, width, lang, state, dot: before, popup: after });
+          await page.screenshot({ path: path.join(out, `dot-${state}-${theme}-${width}-${lang}.png`), fullPage: true });
+          await page.mouse.move(0, 0); await popup.waitFor({ state: "detached" });
+          await dot.focus(); await popup.waitFor(); await dot.press("Escape"); await popup.waitFor({ state: "detached" });
+          await dot.evaluate(element => (element as HTMLElement).blur());
+        }
+        /* The same agent opened: header word and bar speak the dot's words, never «working» for an idle agent. */
+        for (const state of ["working", "checking", "idle"] as const) {
+          /* Off the state dot, whose own tap opens the popover and never the conversation. */
+          await page.locator(`[data-member="/repo/activity-${state}.jsonl"]`).click({ position: { x: 190, y: 6 } });
+          const reader = page.locator(`[data-kanban-reader][data-reader-path="/repo/activity-${state}.jsonl"]`);
+          await reader.waitFor();
+          const head = await reader.locator(".ch-state").textContent();
+          const word = translate(lang, state === "working" ? "kanban.memberState.working" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle");
+          expect(head, `${state} ${theme} ${width} ${lang} header`).toStartWith(word);
+          if (state === "idle") expect(head).toContain(translate(lang, "cardStatus.idleMinutes", { n: 14 }));
+          const bars = await reader.locator("[data-turn-status]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-turn-status"), text: node.textContent })));
+          expect(bars.some(bar => bar.kind === "running"), `${state} ${theme} ${width} ${lang} working bar`).toBe(state === "working");
+          if (state === "idle") expect(bars.map(bar => bar.kind)).toEqual(["idle"]);
+          if (state === "checking") expect(bars.map(bar => bar.text).join(" ")).not.toContain(translate(lang, "cardStatus.running"));
+          await page.screenshot({ path: path.join(out, `reader-${state}-${theme}-${width}-${lang}.png`), fullPage: true });
+          await page.locator("[data-open-rail-close-all]").click();
+          await page.locator("[data-agent-window]").waitFor({ state: "detached" });
+        }
+        expect(pageErrors).toEqual([]);
+        await page.screenshot({ path: path.join(out, `variant-1-${theme}-${width}-${lang}.png`), fullPage: true });
+        await context.close();
+      }
+      fs.writeFileSync(path.resolve("evidence/true-agent-activity-desktop.json"), JSON.stringify(readings, null, 2)+"\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});
+
 describe("the seat column and the agent window keep 60% of the conversation", () => {
   /*
    * The board's half of the operator's decision of 2026-10-11 (the transcript

@@ -1,3 +1,5 @@
+import { fileAgentActivity } from "@/lib/lifecycle/agentActivity";
+import { turnLeftOpen } from "./turnDuration";
 import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
 import { permissionHeadline } from "@/lib/runtime/permissionRequests";
 import type { AttentionDismissalMark, ConversationReasonKind } from "@/lib/attention/dismissalTypes";
@@ -104,9 +106,8 @@ export function heldStuckDelivery(file: FileEntry, now: number): number | null {
     it, and young enough to still matter. The row says «Stalled»; it no longer
     raises needs-you (docs/design/needs-attention.md §3, reason 7). */
 export function stalledAttention(file: FileEntry, now: number): boolean {
-  return file.activity === "stalled"
-    && file.proc === "running"
-    && now - file.mtime <= STALLED_ATTENTION_TTL;
+  if (!file.agentActivity) return file.activity === "stalled" && file.proc === "running" && now - file.mtime <= STALLED_ATTENTION_TTL;
+  return !file.rateLimit && file.proc === "running" && turnLeftOpen(file) && fileAgentActivity(file, now * 1000).state === "idle";
 }
 
 /**
