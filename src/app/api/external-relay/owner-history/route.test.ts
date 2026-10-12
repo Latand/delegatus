@@ -45,6 +45,20 @@ test("stored operator IANA zone drives the actual route's today window", async (
   expect(await response.json()).toMatchObject({ available: true, timeZone: "Europe/Kyiv", start: "2026-10-12T00:00:00+03:00" });
   expect(double.state.exchanges.at(-1)!.request.query).toEqual([["tz", "Europe/Kyiv"], ["limit", "1"]]);
 });
+test("owner-tools OFF during the real route request returns no groups or messages", async () => {
+  setCallerConversationResolverForTests(() => null);
+  try {
+    for (const body of [{ op: "groups" }, { op: "messages", chat: "-101" }]) {
+      pair();
+      double.state.afterHistoryResponse = () => setRelaySwitch("relay:owner_tools:enabled", false);
+      const before = double.state.requests;
+      const response = await POST(request(body));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ available: false, reason: "switch_off" });
+      expect(double.state.requests).toBe(before + 1);
+    }
+  } finally { double.state.afterHistoryResponse = null; setRelaySwitch("relay:owner_tools:enabled", true); }
+});
 test("Telegram reply refuses at route before network and admits the same conversation after completion", async () => {
   const end = historyOwnerRun("conversation_reply"); pair();
   setCallerConversationResolverForTests(() => "conversation_reply");

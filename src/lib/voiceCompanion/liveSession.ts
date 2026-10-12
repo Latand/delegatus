@@ -40,7 +40,7 @@ function triedTool(name: string, args: string, speech: string): string {
 }
 /** A backing turn's project, send source turn and waiting confirmation stay frozen; the operator's latest
  * attempt steered into it moves on, and it alone binds hang-up intent and an explicit ask again. */
-interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt }
+interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt; privateHistory?: boolean }
 interface ActiveSession {
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
   /** The provider this call runs on, chosen at its start; a Codex call has no key, cap or charge. */
@@ -237,7 +237,7 @@ export class CompanionLiveSessions {
         if (active.ended || active.closePromise || active.limitReached) throw new Error("SESSION_CLOSED");
         const context = active.codexTurns.get(turnId) ?? active.codexTurn;
         if (context && !active.codexTurns.has(turnId)) this.codexTurn(active, turnId, context);
-        const result = await this.tool(active, { name, call_id: callId, arguments: JSON.stringify(args) }, turnId, name === "end_conversation" ? context?.endSourceTurn ?? context?.sourceTurn : context?.sourceTurn, context?.confirmationProposalId, context?.project, context?.attempt);
+        const result = await this.tool(active, { name, call_id: callId, arguments: JSON.stringify(args) }, turnId, name === "end_conversation" ? context?.endSourceTurn ?? context?.sourceTurn : context?.sourceTurn, context?.confirmationProposalId, context?.project, context?.attempt, context?.privateHistory === true);
         // Let the RPC owner's microtask write the tool result before hanging up.
         if (active.endRequested) active.timers.push(setTimeout(() => { void this.close(id, "tool"); }, 0));
         return result;
@@ -424,6 +424,7 @@ export class CompanionLiveSessions {
       const refusalReasons: string[] = [];
       const tried: string[] = [];
       let viewed = false;
+      let ownerHistoryInContext = false;
       const stored = this.admission.session(active.id);
       // Freeze default context for this backend turn: a browser switch while a
       // read is awaiting must not change the target of its following send.
@@ -476,18 +477,21 @@ export class CompanionLiveSessions {
         }
         for (const item of asked) {
           calls.add(item.call_id as string);
+          const privateHistoryBlocked = ownerHistoryInContext && item.name !== "relay_owner_history";
           // Execute the original selector, but replay only scrubbed text to the
           // backend. Opaque call references must still pair with their output.
           const scrub = (text: string) => withoutLocalPaths(withoutCredentials(text,active.secrets));
-          const replayId = scrub(item.call_id as string) === item.call_id ? item.call_id
+          const replayId = privateHistoryBlocked ? `private_history_${createHash("sha256").update(item.call_id as string).digest("hex").slice(0,32)}`
+            : scrub(item.call_id as string) === item.call_id ? item.call_id
             : `voice_call_${createHash("sha256").update(item.call_id as string).digest("hex").slice(0,32)}`;
           let replayArguments: string;
-          try { replayArguments = JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),scrub,true)); }
+          try { replayArguments = privateHistoryBlocked ? "{}" : JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),scrub,true)); }
           catch { replayArguments = scrub(item.arguments as string); }
           input.push({ type: "function_call", call_id: replayId,
-            name: scrub(item.name as string) === item.name ? item.name : "redacted_tool", arguments: replayArguments });
-          const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null, project, attempt);
+            name: privateHistoryBlocked ? "private_history_blocked" : scrub(item.name as string) === item.name ? item.name : "redacted_tool", arguments: replayArguments });
+          const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null, project, attempt, privateHistoryBlocked);
           const resultObject = jsonObject(toolResult);
+          if (item.name === "relay_owner_history" && resultObject?.status === "done") ownerHistoryInContext = true;
           tried.push(triedTool(String(item.name), replayArguments, String(resultObject?.speech ?? "no answer")));
           if (["request_orchestrator_delegation", "resolve_orchestrator_confirmation"].includes(String(item.name))
             && resultObject?.status === "sent"
@@ -513,26 +517,42 @@ export class CompanionLiveSessions {
     });
   }
   private async tool(active: ActiveSession, item: Record<string, unknown>, delegationId: string, sourceTurn: number | undefined,
-    confirmationProposalId?: string | null, project: string | null = this.admission.session(active.id).project, attempt?: OperatorAttempt): Promise<unknown> {
+    confirmationProposalId?: string | null, project: string | null = this.admission.session(active.id).project, attempt?: OperatorAttempt,
+    privateHistoryContext = false): Promise<unknown> {
     const callId = item.call_id as string; const name = item.name as string;
+    const privateHistoryBlocked = privateHistoryContext && name !== "relay_owner_history";
+    const recordedCallId = privateHistoryBlocked || PRIVATE_RESULT_TOOLS.has(name)
+      ? `private_${createHash("sha256").update(callId).digest("hex").slice(0,32)}` : callId;
     const atMs = this.now() - active.createdAt;
     let argumentsText: string;
-    try { argumentsText = JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),
+    try { argumentsText = privateHistoryBlocked || PRIVATE_RESULT_TOOLS.has(name) ? "[private owner history arguments omitted]" : JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),
       text=>withoutLocalPaths(withoutCredentials(text,active.secrets)),true), null, 2); } catch { argumentsText = String(item.arguments); }
-    const toolData = { name, callId, delegationId, arguments: withoutLocalPaths(withoutCredentials(argumentsText, active.secrets)).slice(0, 4_000) };
-    this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
-    this.admission.emit(active.id, { type: "tool.called", callId, name: name.slice(0, 80), summary: name.slice(0, 80).replaceAll("_", " ") });
+    const toolData = { name: privateHistoryBlocked ? "private_history_blocked" : name, callId: recordedCallId, delegationId, arguments: argumentsText.slice(0, 4_000) };
+    this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
+    this.admission.emit(active.id, { type: "tool.called", callId: recordedCallId, name: toolData.name.slice(0, 80), summary: toolData.name.replaceAll("_", " ") });
+    if (privateHistoryBlocked) {
+      const result = { status: "refused", code: "private_history_boundary", reason: "private history is limited to this conversation",
+        speech: "I can only use that history to answer you here." };
+      this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
+        data: { ...toolData, status: "failed", code: result.code, reason: result.reason, result: JSON.stringify(result, null, 2) } });
+      this.admission.emit(active.id, { type: "tool.result", callId: recordedCallId, status: "failed", summary: result.speech });
+      return result;
+    }
     try {
       const result = await runCompanionTool({ project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId, ...(attempt ? { attempt } : {}),
         admission: this.admission, reads: this.reads, ownerHistory: this.options.ownerHistory, read:(name,args)=>this.read(active,project,name,args,delegationId), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
       const output = jsonObject(result);
+      if (active.codex && name === "relay_owner_history" && output?.status === "done") {
+        const context = active.codexTurns.get(delegationId) ?? active.codexTurn;
+        if (context) context.privateHistory = true;
+      }
       // Codex voices queued speech after the turn's own answer, so a report asked for again is handed at once.
       if (active.codex) this.speakReports(active);
       const status = output?.status === "refused" || output?.status === "failed" ? "failed" : "done";
-      this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs,
+      this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
         data: { ...toolData, status, code: output?.code, reason: output?.reason ?? output?.speech,
           result: JSON.stringify(cleanStrings(PRIVATE_RESULT_TOOLS.has(name) ? { status: output?.status, speech: output?.speech } : result,text=>withoutLocalPaths(withoutCredentials(text,active.secrets))), null, 2).slice(0, 8_000) } });
-      this.admission.emit(active.id, { type: "tool.result", callId, status,
+      this.admission.emit(active.id, { type: "tool.result", callId: recordedCallId, status,
         summary: typeof output?.speech === "string" ? output.speech.slice(0, 240) : "Completed" });
       return result;
     } catch (error) {
@@ -542,9 +562,9 @@ export class CompanionLiveSessions {
       const result = { status: "refused", code, reason, speech: boardRead
         ? `The read failed: ${reason}. Nothing was read by this call. Say that you could not read it and what you tried.`
         : `The tool failed: ${reason}.` };
-      this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs,
+      this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
         data: { ...toolData, status: "failed", code, reason, result: JSON.stringify(result, null, 2) } });
-      this.admission.emit(active.id, { type: "tool.result", callId, status: "failed", summary: result.speech });
+      this.admission.emit(active.id, { type: "tool.result", callId: recordedCallId, status: "failed", summary: result.speech });
       return result;
     }
   }

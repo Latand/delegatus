@@ -13,7 +13,7 @@ let zone: string | null = "Europe/Kyiv";
 let enabled = true;
 let resetCount = 0;
 const ports = { switches: () => ({ owner_tools: enabled }), relays: () => [double.relay], timeZone: () => zone, now: () => now };
-const reset = () => { double.relay.id = `paired-${++resetCount}`; double.state.forced = null; double.state.admissions = 0; now = Date.parse("2026-10-12T09:00:00Z"); double.state.now = now; zone = "Europe/Kyiv"; enabled = true; };
+const reset = () => { double.relay.id = `paired-${++resetCount}`; double.state.forced = null; double.state.afterHistoryResponse = null; double.state.admissions = 0; now = Date.parse("2026-10-12T09:00:00Z"); double.state.now = now; zone = "Europe/Kyiv"; enabled = true; };
 
 test("OFF and missing time zone make no request", async () => {
   reset(); const before = double.state.requests; enabled = false;
@@ -22,6 +22,18 @@ test("OFF and missing time zone make no request", async () => {
   enabled = true; zone = null;
   expect(await readOwnerHistory({ action: "messages", chat: "-101" }, ports)).toMatchObject({ reason: "time_zone_unknown" });
   expect(double.state.requests).toBe(before);
+});
+test("owner-tools OFF before response delivery discards groups and messages", async () => {
+  for (const input of [{ action: "groups" }, { action: "messages", chat: "-101" }]) {
+    reset();
+    const before = double.state.requests;
+    double.state.afterHistoryResponse = () => { enabled = false; };
+    const answer = await readOwnerHistory(input, ports);
+    expect(answer).toMatchObject({ available: false, reason: "switch_off" });
+    expect(JSON.stringify(answer)).not.toContain("Example group");
+    expect(JSON.stringify(answer)).not.toContain("Synthetic message");
+    expect(double.state.requests).toBe(before + 1);
+  }
 });
 test("list and today have exact wire, shape, stripped author ids and stable later continuation", async () => {
   reset();

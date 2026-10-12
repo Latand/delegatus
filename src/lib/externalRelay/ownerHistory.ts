@@ -108,6 +108,7 @@ export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts 
   try {
     if (args.data.action === "groups") {
       const page = await readOwnerGroups(relay, targetId, { now: ports.now });
+      if (!ports.switches().owner_tools) return unavailable("switch_off");
       return { available: true as const, groups: page.groups.map(g => ({ chat: String(g.chat_id), title: g.title })), privacy: OWNER_HISTORY_PRIVACY };
     }
     let chat = args.data.chat, tz = ports.timeZone(), from = args.data.from, to = args.data.to, cursor: string | undefined;
@@ -121,6 +122,7 @@ export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts 
     if (!chat || !chatPattern.test(chat)) return unavailable("invalid_arguments");
     if (!tz) return unavailable("time_zone_unknown");
     const page = await readOwnerGroupMessages(relay, targetId, chat, { tz, from, to, cursor, limit: args.data.limit }, { now: ports.now });
+    if (!ports.switches().owner_tools) return unavailable("switch_off");
     const lastDay = new Date(Date.parse(`${page.end.slice(0, 10)}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
     const nextCursor = page.next_cursor === null ? null : Buffer.from(JSON.stringify({ v: 1, chat, tz,
       from: page.start.slice(0, 10), to: lastDay, after: page.next_cursor })).toString("base64url");
@@ -129,6 +131,7 @@ export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts 
         fromAssistant: m.from_assistant, topicId: m.thread_id, replyToMessageId: m.reply_to_message_id, text: m.text, media: m.media, truncated: m.truncated })),
       nextCursor, privacy: OWNER_HISTORY_PRIVACY };
   } catch (error) {
+    if (!ports.switches().owner_tools) return unavailable("switch_off");
     return unavailable(reason(error), error instanceof ExternalRelayError && error.status === 429 ? error.retryAfterSeconds : null);
   }
 }

@@ -30,7 +30,8 @@ export type HistoryExchange = { request: { method: string; path: string; query: 
 export async function historyDouble() {
   const credential = "h".repeat(43);
   const state = { now: Date.parse("2026-10-12T09:00:00Z"), enabled: true, requests: 0, admissions: 0, minute: 0,
-    forced: null as null | { status?: number; body?: unknown; headers?: Record<string,string>; drop?: boolean }, exchanges: [] as HistoryExchange[] };
+    forced: null as null | { status?: number; body?: unknown; headers?: Record<string,string>; drop?: boolean },
+    afterHistoryResponse: null as (() => void) | null, exchanges: [] as HistoryExchange[] };
   function handle(req: http.IncomingMessage) {
     state.requests++;
     const url = new URL(req.url!, "http://double.example");
@@ -46,7 +47,12 @@ export async function historyDouble() {
     };
     const match = /^\/v1\/targets\/first\/owner\/groups(?:\/(-[0-9]+)\/messages)?$/.exec(url.pathname);
     if (!match) return error(404, "not_found");
-    if (!match[1]) return url.search ? error(400, "malformed") : admit() ?? { status: 200, body: { groups: syntheticGroups } };
+    if (!match[1]) {
+      if (url.search) return error(400, "malformed");
+      const limited = admit(); if (limited) return limited;
+      const response = { status: 200, body: { groups: syntheticGroups } };
+      state.afterHistoryResponse?.(); return response;
+    }
     const q = url.searchParams;
     const keys = [...q.keys()];
     if (keys.some(k => !["tz", "from", "to", "cursor", "limit"].includes(k)) || new Set(keys).size !== keys.length) return error(400, "malformed");
@@ -78,7 +84,8 @@ export async function historyDouble() {
       while (Buffer.byteLength(JSON.stringify(page)) > 12000) { m.text = [...m.text].slice(0, -200).join("") + "…"; m.truncated = true; }
     }
     page.next_cursor = messages.length < eligible.length ? String(messages.at(-1)!.message_id) : null;
-    return { status: 200, body: page };
+    const response = { status: 200, body: page };
+    state.afterHistoryResponse?.(); return response;
   }
   const server = await startTestRelay(req => {
     const answer = handle(req);

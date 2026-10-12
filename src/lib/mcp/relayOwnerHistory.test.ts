@@ -23,7 +23,8 @@ test("binding posts only fixed arguments and caller capability; live Telegram re
     const seen: unknown[] = [];
     const control = { get: async () => ({}), post: async (route: string, body: unknown, headers?: Record<string,string>) => { seen.push({ route, body, capability: headers?.[VIEWER_SPAWN_CAPABILITY_HEADER] }); return { available: false, reason: "switch_off" }; } };
     const bindings = viewerMcpBindings(undefined, control);
-    await bindings.relay_owner_history({ action: "messages", chat: "-101", limit: 20, caller: "ignored" });
+    expect(await bindings.relay_owner_history({ action: "messages", chat: "-101", limit: 20, caller: "ignored" }))
+      .toMatchObject({ available: false, reason: "switch_off" });
     expect(seen).toEqual([{ route: "/api/external-relay/owner-history", body: { op: "messages", chat: "-101", limit: 20 }, capability: "b".repeat(43) }]);
     const end = historyOwnerRun("conversation_reply");
     const live = viewerMcpBindings(undefined, control, { ...productionDomainDependencies, callerAttribution: () => ({ kind: "agent", conversationId: "conversation_reply", role: null }) });
