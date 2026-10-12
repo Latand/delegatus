@@ -26,7 +26,8 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   if (!message.method) return;
   let result = {};
   if (message.method === "account/read") result = { account: { type: mode === "auth" ? "apiKey" : "chatgpt", planType: "pro", email: "withheld" }, requiresOpenaiAuth: true };
-  if (message.method === "account/rateLimits/read") result = { rateLimits: { primary: { usedPercent: mode === "limit" ? 100 : 10, resetsAt: 2000000000, windowDurationMins: 300 }, secondary: null, planType: "pro" } };
+  // A test that drops no-windows gets a reading with no percentage window, as a workspace member's can be.
+  if (message.method === "account/rateLimits/read") result = { rateLimits: { primary: fs.existsSync(`${root}/no-windows`) ? null : { usedPercent: mode === "limit" ? 100 : 10, resetsAt: 2000000000, windowDurationMins: 300 }, secondary: null, planType: "pro" } };
   if (message.method === "thread/start") result = { thread: { id: threadId } };
   if (message.method === "thread/realtime/stop" && mode?.startsWith("hangup-timeout")) {
     // Establish the inherited stdout before acknowledging stop: the Viewer

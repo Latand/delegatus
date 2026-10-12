@@ -173,3 +173,15 @@ test("headless selection treats a fresh reached-limit reading as exhausted while
   // Only the provider's live word counts; a carried reading does not refuse on it.
   expect(selectHeadlessAccount([accounts[0]!], [{ ...reached, provenance: { source: "cache", reason: "quota-probe-failed", staleSince: null } }], "default", [], NOW)).toEqual({ kind: "available", accountId: "default" });
 });
+
+test("headless selection honours a fresh reached-limit reading that carries no percentage window", () => {
+  const bare = { ...observation("default", 0), limitReached: true, limits: { session: null, weekly: null, plan: "pro", capturedAt: Math.floor((NOW - 1_000) / 1_000) } };
+  expect(selectHeadlessAccount(accounts, [bare], "default", [], NOW)).toEqual({ kind: "available", accountId: "spare" });
+  expect(selectHeadlessAccount([accounts[0]!], [bare], "default", [], NOW)).toEqual({ kind: "exhausted", resetsAt: null });
+  // A probe that read the marker but no limits at all says the same.
+  expect(selectHeadlessAccount([accounts[0]!], [{ ...bare, limits: null }], "default", [], NOW)).toEqual({ kind: "exhausted", resetsAt: null });
+  // A confirmed clear marker, the freshness horizon, or a carried reading leaves the account unknown and eligible.
+  expect(selectHeadlessAccount([accounts[0]!], [{ ...bare, limitReached: false }], "default", [], NOW)).toEqual({ kind: "available", accountId: "default" });
+  expect(selectHeadlessAccount([accounts[0]!], [bare], "default", [], NOW + 5 * 60_000)).toEqual({ kind: "available", accountId: "default" });
+  expect(selectHeadlessAccount([accounts[0]!], [{ ...bare, provenance: { source: "cache", reason: "quota-probe-failed", staleSince: null } }], "default", [], NOW)).toEqual({ kind: "available", accountId: "default" });
+});

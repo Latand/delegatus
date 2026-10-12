@@ -145,6 +145,32 @@ for (const [name, reading, recordedPercent] of [
   } finally { await service.close(session.sessionId); await f.provider.hangup("voice_thread", ""); }
 });
 
+test("a reached marker with no percentage window records the account out, and the next pick avoids it before any process starts", async () => {
+  const f = fixture("sdp", undefined, { accounts: ["account-a", "account-b"], recorded: true });
+  fs.writeFileSync(path.join(f.root, "sdp"), "ready"); fs.writeFileSync(path.join(f.root, "no-windows"), "ready");
+  const { admission, service } = sessions(f.root, f.provider, undefined, { limitGraceMs: 10_000 });
+  const session = await service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  const pid = Number(fs.readFileSync(path.join(f.root, "pid"), "utf8"));
+  try {
+    expect(f.observations.at(-1)!.accountId).toBe("account-a");
+    notify(f.root, "account/rateLimits/updated", { rateLimits: { planType: "pro", primary: null, secondary: null, rateLimitReachedType: "workspace_member_usage_limit_reached" } });
+    await until(() => spokenTexts(f.root).length > 0);
+    assistant(f.root, "done", UK_LIMIT);
+    await until(() => closures(admission, session.sessionId).length > 0);
+    expect(closures(admission, session.sessionId)).toEqual([expect.objectContaining({ reason: "limit" })]);
+    await until(() => gone(pid));
+    const recorded = f.observations.map(observation => durableQuotaObservation(observation, "fixture"));
+    expect(recorded.at(-1)).toMatchObject({ accountId: "account-a", limitReached: true, limits: { session: null, weekly: null } });
+    // Workers avoid it while another candidate is only unknown, and with it alone report it exhausted with no reset to name.
+    expect(selectHeadlessAccount([{ id: "account-a", authPresent: true }, { id: "account-b", authPresent: true }], recorded, "account-a", [], Date.now())).toEqual({ kind: "available", accountId: "account-b" });
+    expect(selectHeadlessAccount([{ id: "account-a", authPresent: true }], recorded, null, [], Date.now())).toEqual({ kind: "exhausted", resetsAt: null });
+    // A restarted Viewer's provider refuses the sole account before it launches anything.
+    f.accounts.ids = ["account-a"];
+    await expect(f.fresh().create("", "en", "v=0", "Fixture", "fixture")).rejects.toMatchObject({ message: "CODEX_LIMIT_REACHED", resetsAt: null });
+    expect(Number(fs.readFileSync(path.join(f.root, "pid"), "utf8"))).toBe(pid);
+  } finally { await service.close(session.sessionId); await f.provider.hangup("voice_thread", ""); }
+});
+
 test("a limit while the voice answers a backing turn waits for that answer, drops later reports, and says its sentence once", async () => {
   const f = fixture(); fs.writeFileSync(path.join(f.root, "sdp"), "ready");
   const { admission, service } = sessions(f.root, f.provider, undefined, { limitGraceMs: 10_000 });
@@ -367,6 +393,12 @@ test("capacity honours project bindings and never falls back to the legacy home"
   expect(selectVoiceAccount(accounts.slice(0, 2), [{ ...reached("account-a"), limitReached: false }], [], "fixture", now).id).toBe("account-a");
   // So does the selector's freshness horizon: a stale mark proves nothing.
   expect(selectVoiceAccount(accounts.slice(0, 2), [reached("account-a", now - 5 * 60_000 - 1)], [], "fixture", now).id).toBe("account-a");
+  // A reading with no percentage window carries the marker alone, and it still holds.
+  const bare = (accountId: string, limitReached: boolean, at = now): DurableQuotaObservation => ({ ...reached(accountId, at), limitReached, limits: { session: null, weekly: null, capturedAt: at / 1000, plan: "pro" } });
+  expect(() => selectVoiceAccount(accounts.slice(0, 2), [bare("account-a", true)], [], "fixture", now)).toThrow("CODEX_LIMIT_REACHED");
+  expect(selectVoiceAccount(accounts.slice(0, 3), [bare("account-a", true)], [], "fixture", now).id).toBe("account-b");
+  expect(selectVoiceAccount(accounts.slice(0, 2), [bare("account-a", false)], [], "fixture", now).id).toBe("account-a");
+  expect(selectVoiceAccount(accounts.slice(0, 2), [bare("account-a", true, now - 5 * 60_000 - 1)], [], "fixture", now).id).toBe("account-a");
 });
 
 test("Codex tool calls use the session registry and reuse the read ledger across turns", async () => {

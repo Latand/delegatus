@@ -51,7 +51,10 @@ assertions that said there was no backend to choose.
    `account/rateLimits/read` (`codexAppServer.test.ts`,
    `quotaController.test.ts`). The shared capacity check treats a fresh live
    reading that says the limit is reached as exhausted whatever its windows
-   show, so the worker pick (`selectHeadlessAccount`), automatic balancing
+   show, and also when the reading carries no percentage window at all (both
+   windows null, as a workspace member's can be; a separate case drives that
+   reading through the stub mid-call, and the pick then names no reset), so
+   the worker pick (`selectHeadlessAccount`), automatic balancing
    (`effectiveRemaining`) and a provider built after a restart all avoid the
    account. The next start, through the same provider or a fresh one, runs
    on the other managed account; with only the reached account it is
