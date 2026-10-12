@@ -62,7 +62,7 @@ import {
   type ProjectionBuildSample,
 } from "./candidatePerformance";
 import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser } from "./candidateBrowserRun";
-import { startCandidateRuntimeHost, type CandidateRuntimeHost } from "./candidateRuntimeHost";
+import { startCandidateRuntimeHost, waitForServerStartup, type CandidateRuntimeHost } from "./candidateRuntimeHost";
 import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
 const SCOPES = 8;
@@ -75,6 +75,8 @@ const WRITE_INTERVAL_MS = 60;
 const SCOPE_ROUND_MS = 1_500;
 const KEYED_READ_INTERVAL_MS = 150;
 const PING_INTERVAL_MS = 500;
+/** A step of a release, or a timer tick, this late is named in the gate's log. */
+const SLOW_STEP_MS = 100;
 /** A serving Viewer's runtime traffic: a snapshot and a receipt read each tick. */
 const RPC_INTERVAL_MS = 500;
 /** An agent mid-turn writes an event every second or so. */
@@ -117,11 +119,16 @@ const importedAlready = (): never => { throw new Error("the candidate performanc
  */
 function lagWindow() {
   const samples: number[] = [];
+  /* The late ticks worth naming, with the wall clock they ended at, so a
+     refusal can be read against what the release was doing then. */
+  const stalls: Array<{ at: number; ms: number }> = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   let expected = 0;
   const tick = () => {
     const now = performance.now();
-    samples.push(Math.max(0, now - expected));
+    const late = Math.max(0, now - expected);
+    samples.push(late);
+    if (late >= SLOW_STEP_MS && stalls.length < 20) stalls.push({ at: Date.now(), ms: Math.round(late) });
     expected = now + 10;
     timer = setTimeout(tick, 10);
   };
@@ -137,7 +144,7 @@ function lagWindow() {
     },
     summary() {
       const sorted = [...samples].sort((left, right) => left - right);
-      return { p95Ms: sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)]! : 0, maxMs: sorted.at(-1) ?? 0 };
+      return { p95Ms: sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)]! : 0, maxMs: sorted.at(-1) ?? 0, stalls: [...stalls] };
     },
   };
 }
@@ -220,7 +227,7 @@ function child(mode: Exclude<Mode, "gate">, args: string[], env: Record<string, 
   started.stdout?.on("data", (chunk) => { stdout = `${stdout}${String(chunk)}`.slice(-4_000_000); });
   started.stderr?.on("data", (chunk) => {
     stderr = `${stderr}${String(chunk)}`.slice(-4_000);
-    if (debugging()) process.stderr.write(`[${label}] ${String(chunk)}`);
+    if (debugging()) process.stderr.write(`[${label} ${Date.now()}] ${String(chunk)}`);
   });
   const result = new Promise<ChildOutcome>((resolve) => {
     const timer = setTimeout(() => { started.kill("SIGKILL"); }, CHILD_DEADLINE_MS);
@@ -471,6 +478,14 @@ async function viewerMain(): Promise<void> {
   let writeMismatches = 0;
   let writeFailures = 0;
   const keyedLatencies: number[] = [];
+  /* Each step of this release that took SLOW_STEP_MS or more, with the wall
+     clock it ended at: what a late timer tick is read against. */
+  const slowSteps: Array<{ step: string; at: number; ms: number }> = [];
+  const step = (name: string, startedAt: number) => {
+    const ms = performance.now() - startedAt;
+    if (ms >= SLOW_STEP_MS && slowSteps.length < 40) slowSteps.push({ step: name, at: Date.now(), ms: Math.round(ms) });
+    return ms;
+  };
   const samples: ProjectionBuildSample[] = [];
   const replacements = new Map<string, StartedWorker>();
   let appointedAt: number | null = null;
@@ -529,7 +544,13 @@ async function viewerMain(): Promise<void> {
     let activation = "waiting" as "waiting" | "running" | "done";
     let activationMs: number | null = null;
     /* No idle cutoff: a cold scope may wait its turn longer than Bun's default. */
-    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: (request) => GET(request) });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: (request) => {
+      /* The handler's synchronous part, up to its first wait. */
+      const startedAt = performance.now();
+      const answer = GET(request);
+      step("board request", startedAt);
+      return answer;
+    } });
 
     const { captureProcessIdentity } = await import("@/lib/processIdentity");
     const { UnixRuntimeHostClient, runtimeHostRequestTotals } = await import("@/lib/runtime/client");
@@ -579,6 +600,7 @@ async function viewerMain(): Promise<void> {
         adoptedAt,
         adopted: Object.fromEntries([...replacements].map(([key, worker]) => [key, worker.pid])),
         runtimeRpc: { ...runtimeHostRequestTotals(), latencies: rpcLatencies },
+        slowSteps,
       });
       loop.disable();
       activationLoop.disable();
@@ -636,7 +658,7 @@ async function viewerMain(): Promise<void> {
             if (inducedDelayMs > 0) busyWait(inducedDelayMs);
             return [...(entry.launchProfile?.mcpServers ?? [])];
           }, false, { operationName: "candidate-performance-writer" }).result;
-          writeLatencies.push(performance.now() - startedAt);
+          writeLatencies.push(step("grant-bearing write", startedAt));
           if (JSON.stringify(servers) !== JSON.stringify(subject.servers)) writeMismatches += 1;
         } catch (error) {
           if (BUSY.test(String(error))) busy += 1;
@@ -651,7 +673,7 @@ async function viewerMain(): Promise<void> {
         const operationId = (index % 4 === 3 ? keyed.hot : keyed.cold)[index % 97 % Math.max(1, keyed.cold.length)] ?? keyed.cold[0]!;
         const startedAt = performance.now();
         writeStore!.read((file) => registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId).length);
-        keyedLatencies.push(performance.now() - startedAt);
+        keyedLatencies.push(step("keyed read", startedAt));
         await Bun.sleep(KEYED_READ_INTERVAL_MS);
       }
     };
@@ -663,7 +685,7 @@ async function viewerMain(): Promise<void> {
         for (const call of [() => client.snapshot(), () => client.operationStatus(keyed.cold[index % Math.max(1, keyed.cold.length)] ?? `candidate-performance-${index}`)]) {
           const startedAt = performance.now();
           try { await call(); } catch (error) { note(`runtime host: ${String(error).slice(0, 160)}`); }
-          rpcLatencies.push(performance.now() - startedAt);
+          rpcLatencies.push(step("runtime-host call", startedAt));
         }
         await Bun.sleep(RPC_INTERVAL_MS);
       }
@@ -844,6 +866,9 @@ async function browserPhase(input: {
         if (response.ok && ((await response.json()) as { files?: unknown[] }).files?.length) break;
       } catch { /* booting */ }
     }
+    const startup = await waitForServerStartup(baseUrl);
+    input.note(`browser: the server's structured-host startup is ${startup}`);
+    if (startup !== "ready") throw new Error(`the production server's structured-host startup is ${startup}, never ready`);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
     const result = await measureBoardInBrowser({
       baseUrl,
@@ -879,9 +904,9 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-candidate-performance-"));
   const log: string[] = [];
   const note = (line: string) => {
-    log.push(line.slice(0, 400));
+    log.push(line.slice(0, 1_000));
     if (log.length > 48) log.shift();
-    if (debugging()) console.error(`[gate] ${line}`);
+    if (debugging()) console.error(`[gate ${Date.now()}] ${line}`);
   };
   const inducedFields = {
     ...(inducedDelayMs > 0 ? { inducedDelayMs } : {}),
@@ -1165,6 +1190,10 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       for (const line of Array.isArray(outcome.report.log) ? outcome.report.log as string[] : []) note(`release ${name}: ${line}`);
     }
     note(`event loop while serving: release A ${JSON.stringify(aReport.servedLoop ?? null)}, release B ${JSON.stringify(bReport.servedLoop ?? null)}`);
+    for (const [name, report] of [["A", aReport], ["B", bReport]] as const) {
+      const slow = Array.isArray(report.slowSteps) ? report.slowSteps as Array<{ step: string; at: number; ms: number }> : [];
+      if (slow.length) note(`release ${name} steps of ${SLOW_STEP_MS}ms or more: ${slow.map((item) => `${item.step} ${item.ms}ms at ${item.at}`).join("; ")}`);
+    }
     const aBuilds = projectionBuildSummary(Array.isArray(aReport.samples) ? aReport.samples as ProjectionBuildSample[] : []);
     const bBuilds = projectionBuildSummary(Array.isArray(bReport.samples) ? bReport.samples as ProjectionBuildSample[] : []);
     note(`warm builds: release A ${JSON.stringify(latencySummary(aBuilds.warm))}, release B ${JSON.stringify(latencySummary(bBuilds.warm))}`);

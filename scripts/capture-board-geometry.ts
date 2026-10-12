@@ -7535,7 +7535,7 @@ async function registryHistoryMain(): Promise<void> {
   const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
   const { browserViewPins, measureBoardInBrowser } = await import("../src/runtime-host/candidateBrowserRun");
   const { CANDIDATE_BROWSER_BOUNDS, candidateBrowserBreaches } = await import("../src/runtime-host/candidateBrowser");
-  const { startCandidateRuntimeHost } = await import("../src/runtime-host/candidateRuntimeHost");
+  const { startCandidateRuntimeHost, waitForServerStartup } = await import("../src/runtime-host/candidateRuntimeHost");
   /* The selected conversations' transcripts live in the sandboxed home, so
      each view's pin names a conversation the board can open. */
   const dataset = buildRegistryPerformanceDataset(STATE_DIR, undefined, { sessionsRoot: path.join(HOME, ".codex", "sessions") });
@@ -7560,6 +7560,8 @@ async function registryHistoryMain(): Promise<void> {
     /* The views open on a server that has started and scanned once, as an
        operator's do; the gate itself bounds the cold first projection. */
     await waitForBoard(baseUrl, false);
+    const startup = await waitForServerStartup(baseUrl);
+    if (startup !== "ready") throw new Error(`the server's structured-host startup is ${startup}, never ready`);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
     const keys = dataset.grantSubjects.filter((subject) => subject.collection === "entries"
       && !dataset.workers.some((worker) => worker.key === subject.key)).map(({ key, servers }) => ({ key, servers }));

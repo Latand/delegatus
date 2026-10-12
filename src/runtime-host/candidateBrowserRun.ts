@@ -55,6 +55,9 @@ export interface BrowserWriters {
   stopFile: string;
 }
 
+/** Chromium's own ends of a request that say nothing about the server. */
+const BROWSER_NOT_A_FAILURE: ReadonlySet<string> = new Set(["net::ERR_ABORTED", "net::ERR_NETWORK_CHANGED"]);
+
 /** One ordinary API request: answered with `status`, or failed with `error` and status 0. */
 interface Request { route: string; files: boolean; status: number; ms: number; queuedMs: number; firstByteMs: number; at: number; error?: string }
 
@@ -278,9 +281,11 @@ export async function measureBoardInBrowser(options: {
       const slowestTimed = [...timed].sort((a, b) => b.ms - a.ms)[0];
       const slowest = [...view.requests].sort((a, b) => b.ms - a.ms);
       /* A poll the page itself abandons for a newer one is the client's
-         choice, and its time above is still counted; a 5xx or any other
-         failure is an error. */
-      const failedRequest = (request: Request) => request.status >= 500 || (request.status === 0 && request.error !== "net::ERR_ABORTED");
+         choice, and a request Chromium drops because the machine's network
+         interfaces changed is the host's; the time of either is still
+         counted above. A 5xx or any other failure is an error. */
+      const failedRequest = (request: Request) => request.status >= 500
+        || (request.status === 0 && !BROWSER_NOT_A_FAILURE.has(request.error ?? ""));
       const errors = view.requests.filter((request) => request.files && failedRequest(request)).length;
       const otherErrors = view.requests.filter((request) => !request.files && failedRequest(request));
       readings.push({
@@ -318,7 +323,7 @@ export async function measureBoardInBrowser(options: {
         unfinished: [...unfinished].sort((a, b) => a.at - b.at).slice(0, 10),
         /* A failed request, and an answer the server refused, with its status. */
         failures: [
-          ...view.failed.filter((failure) => failure.error !== "net::ERR_ABORTED"),
+          ...view.failed.filter((failure) => !BROWSER_NOT_A_FAILURE.has(failure.error)),
           ...view.requests.filter((request) => request.status >= 500).map((request) => ({ route: request.route, error: `HTTP ${request.status}` })),
         ].slice(0, 5),
         document: documentTiming,

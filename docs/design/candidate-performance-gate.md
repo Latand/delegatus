@@ -195,11 +195,22 @@ process, with nothing of the caller's environment but its `PATH`:
   issuing it to its last byte, so a wait for one of the browser's six
   connections counts: the operator waits through it too. That server reaches
   the same runtime host, so the board's runtime surfaces answer as they do
-  in production. Every `/api/` request is an ordinary request except the
+  in production; the views open once its structured-host startup reports
+  ready on `/api/runtime/snapshot`, since that startup is a release's
+  activation, bounded above. Every `/api/` request is an ordinary request except the
   page's declared event streams (`/api/streams`, `/api/runtime/stream`,
   `/api/logs/stream`): a failed one counts the time until it failed, one
   still open when the window closes counts its age so far, and a 5xx or a
-  failure from any ordinary route is an error.
+  failure from any ordinary route is an error. Two ends of Chromium's own
+  are not: a request the page aborted, and one dropped because the machine's
+  network interfaces changed (`net::ERR_NETWORK_CHANGED`, which other
+  containers starting on the host cause); their time still counts.
+
+Each release reports its event-loop stalls of 100 ms or more and its own
+steps of that length (a registry write, a keyed read, the board handler's
+synchronous part, a runtime-host call), each with the wall clock it ended
+at, and the gate's log carries both, so a refused event-loop bound can be
+read against what the release was doing.
 
 Every board answer is compared with its scope's settled answer from before
 the first write; every worker is pinged twice a second and its progress read

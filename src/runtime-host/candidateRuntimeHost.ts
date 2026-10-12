@@ -155,6 +155,25 @@ export async function startCandidateRuntimeHost(options: {
   };
 }
 
+/**
+ * Wait until a production server over this host has finished its
+ * structured-host startup, which `/api/runtime/snapshot` reports. That startup
+ * is a release's activation, bounded apart by the gate; the views measure a
+ * started server, as an operator's do. Returns the last state it saw.
+ */
+export async function waitForServerStartup(baseUrl: string, timeoutMs = 120_000): Promise<string> {
+  let state = "unanswered";
+  for (const until = performance.now() + timeoutMs; performance.now() < until; await Bun.sleep(500)) {
+    try {
+      const response = await fetch(`${baseUrl}/api/runtime/snapshot?view=summary`);
+      const body = await response.json() as { structuredStartup?: string | null; error?: string };
+      state = response.ok ? String(body.structuredStartup ?? "disabled") : `HTTP ${response.status}`;
+      if (response.ok && body.structuredStartup !== "pending") return state;
+    } catch { /* booting */ }
+  }
+  return state;
+}
+
 if (import.meta.main) {
   const owner = Number(process.argv[process.argv.indexOf("--owner") + 1]);
   if (!Number.isSafeInteger(owner) || owner <= 1) throw new Error("the candidate runtime host needs --owner <pid>");
