@@ -1,5 +1,7 @@
 "use client";
 
+import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
+
 /**
  * The conversation outbox (issues #561 / #569): the durable, queue-first record
  * of what the operator submitted into ONE conversation window.
@@ -39,6 +41,8 @@ export interface OutboxEntry {
   /** Idempotency key of this submission — also the bubble's stable identity. */
   id: string;
   text: string;
+  /** Server-created full-text attachment; original text stays available for retry. */
+  textAttachment?: MessageTextAttachment;
   /** An idle parallel ask keeps its original draft until normal admission. */
   idleParallelDraft?: string;
   idleParallelTextSettled?: boolean;

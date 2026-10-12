@@ -6,6 +6,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 import type { MessageSender } from "@/lib/team/contract";
 import { SenderLine } from "@/components/team/SenderLine";
+import { messageTextAttachmentFromText } from "@/lib/messageTextAttachment";
 
 import { ChevronUp, Layers } from "../icons";
 import { stripTaskReferencePrelude, taskReferencesFromText } from "@/lib/selection/selectedContext";
@@ -73,9 +74,11 @@ export function UserMessageRow({
   /* The seat's plain reference lines are what its record already says as chips:
      the row shows the operator's words and the chips, not both. */
   const tasks = selectedContext?.tasks ?? taskReferencesFromText(rawText);
-  const text = tasks?.length ? stripTaskReferencePrelude(rawText, tasks).replace(/^\n+/, "") : rawText;
+  const body = tasks?.length ? stripTaskReferencePrelude(rawText, tasks).replace(/^\n+/, "") : rawText;
+  const attachment = messageTextAttachmentFromText(body);
+  const text = attachment ? tr("composer.attachmentsCount", { count: body.split("\n").length - 1 }) : body;
   const long = text.length > LONG_MESSAGE;
-  const gutter = action ?? <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
+  const gutter = action ?? <CopyButton text={copyText ?? body} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
   return (
     <div className="my-3 flex flex-col items-end" {...rowAttributes}>
       {sender ? <SenderLine sender={sender} mobile={isMobile} /> : null}
@@ -120,6 +123,12 @@ export function UserMessageRow({
             mdBlocks(text)
           )}
           {bubbleFooter}
+          {attachment ? (
+            <a data-text-attachment href={`#f=${encodeURIComponent(attachment.path)}`}
+              className="mt-1 inline-flex items-center gap-1 rounded bg-surface px-2 py-1 text-caption font-semibold text-muted">
+              📎 {attachment.name}
+            </a>
+          ) : null}
         </div>
       </div>
       {/* The 44 px target keeps its size; the negative margins hand the part

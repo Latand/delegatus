@@ -4739,3 +4739,63 @@ describe("prototype review: the orchestrator's open composer says a prototype is
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+
+describe("automatic long-text attachment", () => {
+  browserTest("sent bubble and retry show the full-text file at desktop and 390px", async () => {
+    const out = path.resolve(".artifacts/long-text-attachment");
+    const evidence = path.resolve("evidence/long-text-attachment");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [1280, 390]) for (const retry of [false, true]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=lifecycle&lang=uk&long-text=1${retry ? "&retry-long-text=1" : ""}`,
+          { width, height: 844 }, "dark", "uk", "no-preference", width === 390);
+        try {
+          await page.waitForSelector("textarea");
+          await page.fill("textarea", "я".repeat(30_000));
+          await page.click('button[type="submit"]');
+          if (retry) {
+            await page.waitForSelector("[data-outbox-retry]");
+            await page.click("[data-outbox-retry]");
+          }
+          await page.waitForSelector("[data-text-attachment]");
+          await page.locator("[data-text-attachment]").scrollIntoViewIfNeeded();
+          const reading = await page.evaluate((viewport) => {
+            const chip = document.querySelector("[data-text-attachment]")!;
+            const rect = chip.getBoundingClientRect();
+            return { label: chip.textContent?.trim(), href: chip.getAttribute("href"),
+              left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+              overflow: Math.max(0, document.documentElement.scrollWidth - viewport),
+              failed: Boolean(document.querySelector("[data-outbox-retry]")),
+              implementationVisible: document.body.textContent?.includes("Read the file in full"),
+              longTextVisible: document.body.textContent?.includes("я".repeat(30_000)) };
+          }, width);
+          expect(pageErrors).toEqual([]);
+          expect(reading.label).toContain("message.txt");
+          expect(reading.overflow).toBeLessThanOrEqual(1);
+          expect(reading.left).toBeGreaterThanOrEqual(0);
+          expect(reading.right).toBeLessThanOrEqual(width);
+          expect(reading.top).toBeGreaterThanOrEqual(0);
+          expect(reading.bottom).toBeLessThanOrEqual(844);
+          expect(reading.failed).toBe(false);
+          expect(reading.implementationVisible).toBe(false);
+          expect(reading.longTextVisible).toBe(false);
+          const tag = `${width}-${retry ? "retry" : "send"}`;
+          readings[tag] = reading;
+          await page.screenshot({ path: path.join(out, `${tag}.png`) });
+          // Adoption uses the same marker and chip from the transcript.
+          await page.evaluate(() => (window as unknown as { llvHost: { echo(): void } }).llvHost.echo());
+          await page.waitForTimeout(300);
+          expect(await page.locator("[data-text-attachment]").count()).toBe(1);
+          expect(await page.locator("[data-outbox-entry]").count()).toBe(0);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  }, 120_000);
+});

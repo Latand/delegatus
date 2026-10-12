@@ -158,7 +158,8 @@ export function ConversationMessageRow({
       progress: pendingOperation ? progress.records.get(pendingOperation) ?? null : null,
     })
     : null;
-  const text = entry?.text.trim() ? entry.text : canonical?.text ?? entry?.text ?? "";
+  const text = entry?.textAttachment ? entry.textAttachment.text
+    : entry?.text.trim() ? entry.text : canonical?.text ?? entry?.text ?? "";
   const selectedContext = canonical?.selectedContext ?? entry?.selectedContext ?? null;
   const attachments = entry ? entry.images + (entry.files ?? 0) : 0;
   const disclosureLabel = t(open ? "outbox.hideDelivery" : "outbox.showDelivery");
@@ -352,6 +353,7 @@ export function ConversationMessageRow({
   return (
     <UserMessageRow
       text={text}
+      copyText={entry?.textAttachment ? entry.text : undefined}
       sender={sender}
       tone={entry?.intent === "context" ? "context" : undefined}
       selectedContext={selectedContext}

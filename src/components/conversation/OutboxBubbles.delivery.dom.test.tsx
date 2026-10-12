@@ -330,6 +330,22 @@ test("#1224 a bubble for a document-only submission names its attachment instead
   expect(images.textContent).toContain(translate("en", "composer.imagesCount", { count: 2 }));
 });
 
+test("a converted long message shows its file chip and retains the original retry text", async () => {
+  const original = "я".repeat(30_000);
+  const text = "The full message is attached as message.txt. Read the file in full before responding.\n/inbox/files/fixture/message.txt";
+  const host = await bubble({ text: original, state: "delivered", textAttachment: {
+    name: "message.txt", path: "/inbox/files/fixture/message.txt", text,
+  } }, SUBMITTED_AT + 1_000);
+  expect(host.querySelector("[data-text-attachment]")?.textContent).toContain("message.txt");
+  expect(host.textContent).not.toContain(original);
+});
+
+test("the transcript's converted marker survives a following image path", async () => {
+  const text = "The full message is attached as message-2.txt. Read the file in full before responding.\n/inbox/files/fixture/notes.log\n/inbox/files/fixture/message-2.txt\n/inbox/image.png";
+  const host = await bubble({ text, state: "delivered", images: 1 }, SUBMITTED_AT + 1_000);
+  expect(host.querySelector("[data-text-attachment]")?.textContent).toContain("message-2.txt");
+});
+
 /**
  * Sending into a host that is gone.
  *

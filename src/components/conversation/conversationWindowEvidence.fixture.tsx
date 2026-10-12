@@ -65,6 +65,7 @@ import {
 } from "./outbox";
 
 const params = new URLSearchParams(window.location.search);
+let longTextAttempts = 0;
 
 const ADMITTED_AT = Date.parse("2026-09-19T03:02:09.021Z");
 const DELIVERED_AT = ADMITTED_AT + 19_000;
@@ -743,6 +744,18 @@ function installFakeTransport(): void {
     }
     if (url === "/api/runtime/send") {
       const body = JSON.parse(String(init?.body ?? "{}")) as { idempotencyKey: string; selectedContext?: unknown };
+      if (params.has("long-text")) {
+        longTextAttempts += 1;
+        if (params.has("retry-long-text") && longTextAttempts === 1) {
+          return Response.json({ error: "structured message text exceeds the 32000-byte envelope bound" }, { status: 413 });
+        }
+        const text = "The full message is attached as message.txt. Read the file in full before responding.\n/inbox/files/evidence/message.txt";
+        const receipt = lifecycleReceipt(body.idempotencyKey, "delivered", { text });
+        fakeHost.receipts = [receipt];
+        queueMicrotask(announceHost);
+        return Response.json({ operationId: receipt.operationId, receipt,
+          textAttachment: { name: "message.txt", path: "/inbox/files/evidence/message.txt", text } });
+      }
       if (fakeHost.release) await new Promise<void>((resolve) => { fakeHost.release = resolve; });
       /* What the ledger records beside the delivery: the reference it carried. */
       fakeHost.selectedContext = body.selectedContext ?? null;
@@ -941,7 +954,7 @@ function lifecycleControls(): LifecycleControls {
         ...((entry?.images ?? 0) > 0 ? [LIFE_INBOX_IMAGE] : []),
         ...((entry?.files ?? 0) > 0 ? [LIFE_INBOX_FILE] : []),
       ];
-      const delivered = [entry?.text ?? LIFE_TEXT, ...carried].filter(Boolean).join("\n");
+      const delivered = [entry?.textAttachment?.text ?? entry?.text ?? LIFE_TEXT, ...carried].filter(Boolean).join("\n");
       fakeHost.lines = [lifeOpening(), JSON.stringify({
         type: "event_msg",
         timestamp,
