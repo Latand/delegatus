@@ -460,6 +460,8 @@ export interface ProjectCatalogEntry {
 export interface FilesResponse {
   /** One waiting prototype review per task, for the orchestrator notice and needs-you count. */
   prototypeReviewNotices?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
+  /** The orchestrators' own open questions, which no task carries. */
+  seatDecisions?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
   /** Board-only read: execution bodies remain on targeted full endpoints. */
   readProjection?: "board-summary";
   files: FileEntry[];

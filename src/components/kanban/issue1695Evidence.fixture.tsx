@@ -2299,6 +2299,18 @@ function transcriptOf(pathname: string): string {
       ...(voice.answered ? [answered(10, demoAnswer(UK ? "uk" : "en"))] : []),
     ].join("\n")}\n`;
   }
+  if (DECISIONS && file === orchestrator) {
+    const result = (secondsAgo: number, id: string, answer: Record<string, unknown>) => line(secondsAgo, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: JSON.stringify(answer, null, 2) }] }] } });
+    const ask = seatRounds[0]!;
+    return `${[
+      said(16 * MIN, L("Quiet tick: three lanes are working, two wait for their turn at review.", "Тик спокійний: три лейни працюють, два чекають своєї черги на перевірку.")),
+      asked(6 * MIN, L("What about «Done» and the deploy?", "Що з «Готово» і деплоєм?")),
+      said(4 * MIN + 30, L("«Done» (#2744) passed review and the visual check. Two decisions are needed to merge and deploy it:", "«Готово» (#2744) пройшло рев’ю і візуальну перевірку. Щоб злити й задеплоїти, потрібні два рішення:")),
+      line(4 * MIN + 10, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_decision_ask", name: "mcp__viewer__publish_prototype_review", input: { clientRequestId: "seat-done-ask", title: ask.title, questions: ask.questions } }] } }),
+      result(4 * MIN, "toolu_decision_ask", { reviewId: ask.id, taskId: null, project: PROJECT, title: ask.title, variants: 0, questions: ask.questions!.length, frames: 0, videos: 0 }),
+      ...(ask.decision ? [said(30, L("Taken: «Done» above «Waiting for you», deploy as soon as main is green. Merging #2744.", "Прийняв: «Готово» зверху «Чекають на вас», деплой одразу після мержу. Зливаю #2744."))] : []),
+    ].join("\n")}\n`;
+  }
   if (REPORT_PREVIEW && file === orchestrator) {
     /* Documentation-range addresses and invented names; the path and the token are joined here so no line of this file holds one. */
     const path = ["", "home", "someone", ".config", "app", "state", "launches.json"].join("/");
@@ -2962,6 +2974,68 @@ if (PROTO) {
     },
   });
 }
+/* Every operator decision as a form (`&decisions=1`, docs/design/operator-decision-forms.md,
+   variant 3): the seat asked two questions without a task, one of them in its
+   feed, and a lane's prototype round waits on the search task with two numbered
+   frames and two questions. `GET /api/projects/decisions` answers the column
+   the way the Viewer does, and `POST` records an answer. `&decisions=answered`
+   is the same board after the seat's question in the feed was answered;
+   `&decisions=seat-frames` gives the seat's second question two numbered
+   frames, a taskless round with no review window to open them in. `&decisions=long`
+   gives the first seat question a ninety-character title and a long recommended option. */
+const DECISIONS = params.get("decisions");
+const decisionPosts: unknown[] = [];
+const seatRounds: PrototypeRoundView[] = [];
+const SEAT_ASK_ID = `pr_${"d".repeat(32)}`;
+if (DECISIONS) {
+  const ask = (id: string, title: string, ago: number, questions: PrototypeQuestion[]): PrototypeRoundView => ({ id, taskId: null, project: PROJECT, title, createdAt: iso(ago), source: { conversationId: orchestrator.conversationId ?? null }, variants: [], questions });
+  seatRounds.push(ask(SEAT_ASK_ID, L("«Done»: placement and deploy", "«Готово»: місце і деплой"), 4 * MIN, [
+    { id: "place", text: L("Where should the «Done» list be pinned?", "Де закріпити список «Готово»?"), other: true, options: [
+      { label: L("Above «Waiting for you»", "Зверху «Чекають на вас»"), recommended: true }, { label: L("Above the report feed", "Зверху стрічки звітів") }, { label: L("In both places", "В обох місцях") }] },
+    { id: "deploy", text: L("When to deploy after the merge?", "Коли деплоїти після мержу?"), options: [
+      { label: L("At once, as soon as main is green", "Одразу, щойно main зелений"), recommended: true }, { label: L("In the evening, in one deploy", "Увечері, одним деплоєм") }] },
+  ]));
+  seatRounds.push(ask(`pr_${"e".repeat(32)}`, L("Account for the night Codex lanes", "Акаунт для нічних лейнів Codex"), 2 * MIN, [
+    { id: "account", text: L("Which account runs the night lanes?", "Який акаунт веде нічні лейни?"), options: [{ label: L("Account A (Pro)", "Акаунт A (Pro)"), recommended: true }, { label: L("Account B (Plus)", "Акаунт B (Plus)") }] },
+  ]));
+  let mediaId = 0;
+  const frame = (hue: number, label: string): PrototypeMediaView => ({ id: `d${mediaId += 1}`.padEnd(64, "0"), mime: "image/png", bytes: 48_000, available: true, url: mockRender(960, 600, hue, label) });
+  protoRounds["t-search"] = [{ id: `pr_${"c".repeat(32)}`, taskId: "t-search", project: PROJECT, title: L("Update confirmation window", "Вікно підтвердження оновлення"), createdAt: iso(26 * MIN), source: { conversationId: null, pipelineId: "p-search", stageId: "design", attempt: 1 },
+    variants: [
+      { number: 1, name: L("List by project", "Список за проєктами"), description: L("One line per project.", "Рядок на проєкт."), videos: [], frames: [{ image: frame(205, "list · 1440"), caption: "", width: 1440 }] },
+      { number: 2, name: L("Summary and «Show»", "Підсумок і «Показати»"), description: L("A summary with a disclosure.", "Підсумок із розкриттям."), videos: [], frames: [{ image: frame(150, "summary · 1440"), caption: "", width: 1440 }] },
+    ],
+    questions: [
+      { id: "variant", text: L("Which variant do we build?", "Який варіант будуємо?"), options: [{ label: L("1 — List by project", "1 — Список за проєктами"), recommended: true }, { label: L("2 — Summary and «Show»", "2 — Підсумок і «Показати»") }] },
+      { id: "phone", text: L("On the phone: a bottom sheet or a centred window?", "На телефоні: шторка знизу чи вікно по центру?"), options: [{ label: L("Bottom sheet", "Шторка знизу"), recommended: true }, { label: L("Centred window", "Вікно по центру") }] },
+    ] }];
+  if (DECISIONS === "seat-frames") seatRounds[1]!.variants = [
+    { number: 1, name: L("Account A for every lane", "Акаунт A на всі лейни"), description: "", videos: [], frames: [{ image: frame(265, "account A · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
+    { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
+  ];
+  /* `&decisions=long`: the first seat question has a title of ninety characters and a recommended option of a sentence. */
+  if (DECISIONS === "long") {
+    const held = seatRounds[0]!;
+    held.title = L("Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project", "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту");
+    held.questions![1]!.options[0] = { label: L("Right after the merge, once main is green and the checks on the merged commit have passed", "Одразу після мержу, щойно main зелений і перевірки на змерженому коміті пройшли"), recommended: true };
+  }
+  if (DECISIONS === "answered") {
+    const held = seatRounds[0]!;
+    held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
+  }
+  protoPublish();
+  Object.assign(window, { decisionPosts });
+}
+/* What the Viewer answers for the column: each task's waiting round with its task, then the seat's open questions. */
+function fixtureDecisions() {
+  const fromTasks = Object.entries(protoRounds).flatMap(([taskId, rounds]) => {
+    const waiting = rounds.at(-1);
+    const held = tasks.find((entry) => entry.id === taskId);
+    return waiting && !waiting.decision && !protoHidden.has(waiting.id) && held ? [{ ...waiting, taskTitle: held.text.split("\n")[0] }] : [];
+  });
+  return [...fromTasks, ...seatRounds.filter((round) => !round.decision)].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision).map((round) => ({ id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
 const albumSource = (file: FileEntry, stage?: { pipelineId: string; stageId: string; attempt: number; round?: number }) => ({ key: file.conversationId ?? file.path, conversationId: file.conversationId ?? null, path: file.path, ...(stage ? { stage } : {}) });
@@ -3303,7 +3377,21 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
     }
   }
-  if (PROTO && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
+  if ((DECISIONS || PROTO) && url.pathname === "/api/projects/decisions") {
+    if (method === "POST") {
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[] };
+      decisionPosts.push(body);
+      const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
+      if (!held) return json({ error: "review not found" }, 404);
+      held.decision = { chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
+      protoPublish();
+      return json({ project: PROJECT, decisions: fixtureDecisions() });
+    }
+    const review = url.searchParams.get("review");
+    const round = review ? [...seatRounds, ...Object.values(protoRounds).flat()].find((entry) => entry.id === review) ?? null : undefined;
+    return json({ project: PROJECT, decisions: fixtureDecisions(), ...(round === undefined ? {} : { round }) });
+  }
+  if ((PROTO || DECISIONS) && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
     if (method === "POST") {
@@ -3470,7 +3558,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
            folder it had before Confirm, since a seat read keyed on another folder answers from its own older cache. */
         ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
-    const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...(DECISIONS && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
@@ -3856,7 +3944,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY || VOICE) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY || VOICE || DECISIONS) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }

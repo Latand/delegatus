@@ -62,7 +62,8 @@ import { DismissalError, dismissAttention as dismissAttentionService, parseDismi
 import type { DismissalTarget, DismissedBy } from "@/lib/attention/dismissalTypes";
 import { conversationRouteKey, laneNeedKind, laneRouteKey, parseEscalation } from "@/lib/attention/routeTypes";
 import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
-import { withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { seatDecisionNotices, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { loadSeatRounds } from "@/lib/prototypeReview/seatRounds";
 import {
   CONVERSATION_PATH_EXAMPLE,
   describeFocusTargetRejection,
@@ -6827,22 +6828,24 @@ async function escalateThroughService(
   const project = canonicalOrchestratorProject(await focusTargetProject(focus, "", dependencies));
   const verdict = permitAttentionDismissal(authority, seats, project);
   if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
-  let taskId = "";
+  let taskId: string | null = "";
   if (round) {
     /* The round is the operator's question: it has to exist in this project
        and still wait, or the wait would leave the seat for a form nobody sees. */
     const task = dependencies.loadTasks().find(candidate => candidate.prototypeReviews?.some(held => held.id === round.reviewId));
-    if (!task || canonicalOrchestratorProject(task.project) !== project) {
+    const seatRound = task ? null : loadSeatRounds().find(held => held.id === round.reviewId);
+    if ((!task && !seatRound) || canonicalOrchestratorProject(task?.project ?? seatRound!.project) !== project) {
       throw new McpToolRefusal(`no decision round ${round.reviewId} in this project: ask with publish_prototype_review first and pass the reviewId it answers`, { code: "ROUND_NOT_FOUND" });
     }
     /* Waiting as the operator's board draws it: the task's newest round,
-       undecided and not dismissed. A dismissed round is invisible, and a
+       undecided and not dismissed, or an open taskless seat form. A dismissed round is invisible, and a
        wait escalated to it would leave the seat for a form nobody sees. */
-    const summary = withPrototypeReviewSummaries([task])[0]?.prototypeReview;
-    if (!prototypeWaitsOnOperator(summary) || summary?.waitingReviewId !== round.reviewId) {
+    const summary = task ? withPrototypeReviewSummaries([task])[0]?.prototypeReview : undefined;
+    const seatNotice = seatRound ? seatDecisionNotices(project).find(notice => notice.reviewId === round.reviewId && !notice.undelivered) : undefined;
+    if (task ? !prototypeWaitsOnOperator(summary) || summary?.waitingReviewId !== round.reviewId : !seatNotice) {
       throw new McpToolRefusal(`decision round ${round.reviewId} no longer waits: read it with read_prototype_review and carry its answer to the asker`, { code: "ROUND_NOT_WAITING" });
     }
-    taskId = task.id;
+    taskId = task?.id ?? null;
   }
   const attribution = attributionOf(dependencies);
   const by: DismissedBy = {
@@ -7441,8 +7444,9 @@ async function prototypeReceiptScope(mode: "publish" | "read",args: McpToolArgs,
   if (!capability) throw new Error("prototype reviews require an identified caller");
   const scope = await viewerControlForCall(control,context).post("/api/prototype-reviews/scope",
     { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-  if (typeof scope.conversationId !== "string" || typeof scope.taskId !== "string") throw new Error("the Viewer did not name the caller and task of this prototype call");
-  return `${scope.conversationId}\n${scope.taskId}`;
+  /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
+  if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
+  return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
 }
 
 /**

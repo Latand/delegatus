@@ -1,15 +1,15 @@
 # Orchestrator decision tools
 
 Every operator decision a seat needs goes through `publish_prototype_review`
-on the relevant board task: 3–7 questions with options and exactly one
-recommended option per question. Variants are optional. The seat restates the
-ask in chat with `suggest_replies` and files a question bridge report when
-bridge reports are enabled. The form holds the decision.
+with 3–7 questions when attached to a board task, or 1–7 questions without a
+task to gather open decisions together. Every question has options and exactly
+one recommended option. Variants are optional. Chat and reports point to the
+form, where the operator answers the decision.
 
 PR #2758 supplies the project's «Рішення» column and seat rounds through this
 same tool. This change adds no form store, delivery route or rendered surface.
 It upgrades shipped mandate text and appends the rule to bespoke mandates.
-Version 48 preserves main's outcome-report rule and marks existing default
+Version 49 preserves main's outcome-report rule and marks existing default
 seats stale until rotation or upgrade.
 
 Native questions are denied on fresh launches, boot re-hosts and terminal
