@@ -173,6 +173,9 @@ export interface BoardProjectStateV1 {
        build older than the key ignores it entirely. The phone reads `viewMode`
        alone and never this. */
     desktopBoard?: string | null;
+    /* The old desktop Tasks panel's open state. No surface reads or writes it
+       since the panel left the board; it stays in the schema so stored boards
+       and tabs of an older build keep loading and saving. */
     taskPanelOpen: boolean;
   };
 }

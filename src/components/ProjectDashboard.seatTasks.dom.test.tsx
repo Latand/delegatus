@@ -1,12 +1,12 @@
 /**
- * The seat's own tasks stay out of the Tasks panel on EITHER desktop face (#1841).
+ * The seat's own tasks draw nothing on the desktop board, and the desktop
+ * reads the seat once (#1841).
  *
  * A seat launch mints a task to keep the seat's notes in, and section 2 of the
- * design says that task draws nothing: no band, no row in the Tasks panel and
- * no share of `Tasks N`. The panel and its count live above the two desktop
- * faces, so they cannot be answered by the board's own read of the seat — on
- * the Conversations face the board is not mounted at all. This file mounts the
- * dashboard on both faces and asserts the same answer from each.
+ * design says that task draws nothing: no card on the board. The old Tasks
+ * panel, which listed tasks above the board, left the desktop on 2026-10-12; a
+ * board stored with it open draws no panel. The dashboard reads the seat above
+ * the board and hands the board the answer.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -44,7 +44,7 @@ const G = globalThis as Record<string, unknown>;
 const SEAT_CONVERSATION = "conversation_seat_live";
 const RETIRED_CONVERSATION = "conversation_seat_retired";
 const SEAT_PATH = "/seats/live.jsonl";
-/* Another project's seat, which the panel's «all» scope lists tasks from. */
+/* Another project's seat. */
 const NEIGHBOUR_PROJECT = "seat-tasks-neighbour";
 const NEIGHBOUR_CONVERSATION = "conversation_seat_neighbour";
 
@@ -58,7 +58,7 @@ const emptyBoard = (): BoardProjectStateV1 => ({
   revision: 1,
   updatedAt: new Date(0).toISOString(),
   pathAliases: {},
-  /* The panel is open from the first frame, which is how the operator left it. */
+  /* Stored by a build that still had the Tasks panel, left open: nothing reads it now. */
   prefs: { manual: ["/alpha"], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: true },
 });
 
@@ -249,23 +249,20 @@ function mount(withDock = false): HTMLElement {
   return host as unknown as HTMLElement;
 }
 
-const panelRows = (host: HTMLElement) =>
-  [...host.querySelectorAll("[data-task-panel] [data-task-board-toggle]")].map((node) => node.getAttribute("data-task-board-toggle"));
-const taskCount = (host: HTMLElement) => host.querySelector("[data-task-panel-toggle]")?.textContent?.trim() ?? "";
+const taskCards = (host: HTMLElement) =>
+  [...host.querySelectorAll('.card[data-id^="task:"]')].map((node) => node.getAttribute("data-id"));
 
-test("the Tasks panel and its count leave the seat's tasks out on the Board (#1841)", async () => {
+test("the Board draws the product task and not the seat's, and no task panel (#1841)", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  expect(await waitFor(() => panelRows(host).length > 0)).toBe(true);
+  expect(await waitFor(() => taskCards(host).length > 0)).toBe(true);
   await settle();
 
-  /* The Board is the one desktop face: one product row, and the count says one. */
+  /* The Board is the one desktop face: the product task's card, no card for either seat task, and
+     no panel although the stored board says it was open. */
   expect(host.querySelector('button[data-view-tab]')).toBeNull();
-  expect(host.querySelector("[data-task-panel]")).not.toBeNull();
-  expect(panelRows(host)).toEqual(["task-product"]);
-  expect(taskCount(host)).toContain("1");
-  /* And the seat's rows are not merely reordered out of view. */
-  expect(host.querySelector("[data-task-panel]")?.textContent).not.toContain("Manager seat");
+  expect(taskCards(host)).toEqual(["task:task-product"]);
+  expect(host.querySelector("[data-task-panel], [data-task-panel-toggle]")).toBeNull();
 });
 
 test("a dashboard saved on Conversations opens on the Board, and the seat is read once (#1841)", async () => {
@@ -275,11 +272,10 @@ test("a dashboard saved on Conversations opens on the Board, and the seat is rea
   boards = { [PROJECT]: { ...emptyBoard(), prefs: { ...emptyBoard().prefs, viewMode: "list" } } };
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  expect(await waitFor(() => panelRows(host).length > 0)).toBe(true);
+  expect(await waitFor(() => taskCards(host).length > 0)).toBe(true);
   await settle();
   expect(host.querySelector("[data-desktop-conversations-scroll]")).toBeNull();
-  expect(panelRows(host)).toEqual(["task-product"]);
-  expect(taskCount(host)).toContain("1");
+  expect(taskCards(host)).toEqual(["task:task-product"]);
   /* One reader, so one request: on the Board face the board is handed this
      same answer instead of polling the route for the same project and cwd. */
   expect(seatReads).toBe(1);
@@ -292,7 +288,7 @@ test("a dock open beside the dashboard adds no second seat request (#1841)", asy
   boards = { [PROJECT]: { ...emptyBoard(), prefs: { ...emptyBoard().prefs, viewMode: "list" } } };
   const host = mount(true);
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  expect(await waitFor(() => panelRows(host).length > 0)).toBe(true);
+  expect(await waitFor(() => taskCards(host).length > 0)).toBe(true);
   await settle();
 
   /* The dock paints the live seat, from the answer the dashboard's read
@@ -308,24 +304,3 @@ test("a dock open beside the dashboard adds no second seat request (#1841)", asy
   expect(dock!.querySelector('[data-orchestrator-state="live"]')).not.toBeNull();
 /* One poll interval of real waiting: the count over TIME is the claim. */
 }, SEAT_POLL_MS + 12_000);
-
-/* The panel's «all» scope lists every project's tasks, and a seat of ANOTHER
-   project is no more a task than this project's is (#1841). */
-test("the Tasks panel's all scope leaves every project's seat tasks out (#1841)", async () => {
-  const host = mount();
-  expect(await waitFor(() => panelRows(host).length > 0)).toBe(true);
-  await settle();
-  expect(panelRows(host)).toEqual(["task-product"]);
-
-  const scopes = [...host.querySelectorAll("[data-task-panel] button[aria-pressed]")] as HTMLButtonElement[];
-  expect(scopes).toHaveLength(2);
-  flushSync(() => scopes[1]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
-  await settle();
-
-  /* Both projects' product tasks, neither project's seat task. */
-  expect(panelRows(host)?.slice().sort()).toEqual(["task-neighbour-product", "task-product"]);
-  const panel = host.querySelector("[data-task-panel]")?.textContent ?? "";
-  expect(panel).toContain("Ship the neighbour's columns");
-  expect(panel).not.toContain("Neighbour seat");
-  expect(panel).not.toContain("Manager seat");
-});

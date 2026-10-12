@@ -16747,10 +16747,11 @@ describe("done task retention", () => {
             await page.waitForSelector('[data-task-sheet-row="t-expired"]');
             expect(await page.locator('[data-task-sheet-row="t-legacy"]').count()).toBe(1);
           } else {
-            await page.getByRole("button", { name: "Toggle the task panel", exact: true }).click();
-            await page.waitForSelector("[data-task-panel]");
-            expect(await page.locator("[data-task-panel]").getByText("Retained completion history", { exact: true }).count()).toBe(1);
-            expect(await page.locator("[data-task-panel]").getByText("Legacy completion history", { exact: true }).count()).toBe(1);
+            /* The desktop lists the tasks its board does not draw in the Hidden tray, under ⋯. */
+            await page.locator("[data-kanban-board] [data-bar-more]").click();
+            await page.locator("[data-bar-more-hidden]").click();
+            await page.waitForSelector('[data-hidden-task="t-expired"]');
+            expect(await page.locator('[data-hidden-task="t-legacy"]').count()).toBe(1);
           }
           await page.screenshot({ path: path.join(out, `${width}-task-list.png`) });
           expect(pageErrors).toEqual([]);
@@ -18242,10 +18243,10 @@ describe("task motion and waiting reasons", () => {
             input.value = originalValue;
             const filter = bar.querySelector<HTMLElement>('[data-bar-filter-toggle]')!.getBoundingClientRect();
             const chip = bar.querySelector<HTMLElement>('[data-attention-count]')!.getBoundingClientRect();
-            const taskToggle = bar.querySelector<HTMLElement>('[data-task-panel-toggle]')!.getBoundingClientRect();
+            const panelToggle = bar.querySelector<HTMLElement>('[data-orchestrator-toggle]')!.getBoundingClientRect();
             const moreMenu = bar.querySelector<HTMLElement>('[data-bar-group="more"]')!.getBoundingClientRect();
             return {
-              chipLeft: chip.left, chipRight: chip.right, taskToggleRight: taskToggle.right, moreRight: moreMenu.right,
+              chipLeft: chip.left, chipRight: chip.right, panelToggleRight: panelToggle.right, moreRight: moreMenu.right,
               top: rect.top, bottom: rect.bottom, height: rect.height, barWidth: rect.width,
               /* The reasons are a menu of the bar's one filter: no chip in the row and no row under it. */
               chips: bar.closest('[data-kanban-board]')!.querySelectorAll('.reason-filter, .reason-filter-row').length,
@@ -18273,8 +18274,8 @@ describe("task motion and waiting reasons", () => {
             expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
             expect(topbar.placeholderScrollWidth, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.placeholderClientWidth);
             // The attention chip is the row's last item, in the flow: it starts after
-            // the task-panel toggle, so «13» never reads as «1», and after ⋯, and ends inside the bar.
-            expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.taskToggleRight);
+            // the orchestrator toggle and after ⋯, and ends inside the bar.
+            expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.panelToggleRight);
             expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.moreRight);
             expect(topbar.chipRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.barRight);
             expect(topbar.barOverflow, JSON.stringify(topbar)).toBeLessThanOrEqual(0);
@@ -18612,8 +18613,7 @@ describe("task motion and waiting reasons", () => {
     expect(failures).toEqual([]);
   }, 180_000);
 
-  /* The reason filters stand under the bar when the bar is narrower than 1168 px (1280 with the Tasks panel
-     beside it). Their row's height comes out of the reader and draft height twice, so a launched agent and the next
+  /* The reason filters stand under the bar when the bar is narrower than 1168 px. Their row's height comes out of the reader and draft height twice, so a launched agent and the next
      draft's prompt keep the places they have with the filters in the bar. Window 900 px high, seat closed; the
      launched agent's share is read where the board shows columns, as the first-prompt case reads it (above
      60% at 1280, where the reader's column is cut at the window's side). The prompt may end 24 px above the window's

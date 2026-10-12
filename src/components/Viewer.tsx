@@ -1075,7 +1075,7 @@ function ViewerApp() {
 
   /* The width the board's columns have, for whether the panel can dock
      beside them: the kanban's own pane, which it hands in when it mounts (a
-     seat open beside the board and the Tasks panel take theirs out of it),
+     seat open beside the board takes its width out of it),
      else the whole main column. Both are observed, so a window resize and a
      seat moving to the side each re-measure. */
   const [boardPane, setBoardPane] = useState<HTMLElement | null>(null);
