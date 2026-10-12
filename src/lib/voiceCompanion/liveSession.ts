@@ -38,6 +38,13 @@ function triedTool(name: string, args: string, speech: string): string {
   let query = ""; try { const parsed = JSON.parse(args); if (typeof parsed.query === "string") query = ` for «${byteShort(parsed.query, 80)}»`; } catch { /* Invalid arguments have no query to report. */ }
   return byteShort(`${labels[name] ?? "called a tool"}${query}: ${speech.split(". ")[0].replace(/\.$/, "")}`, 150);
 }
+function hasEmptyArguments(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && Object.keys(parsed).length === 0;
+  } catch { return false; }
+}
 /** A backing turn's project, send source turn and waiting confirmation stay frozen; the operator's latest
  * attempt steered into it moves on, and it alone binds hang-up intent and an explicit ask again. */
 interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt; privateHistory?: boolean }
@@ -65,6 +72,8 @@ interface ActiveSession {
   codexTurn?: CodexTurnContext;
   runningCodexTurnId?: string;
   codexTurns: Map<string, CodexTurnContext>;
+  /** A private owner-history result remains in provider context for the life of the session. */
+  privateHistory?: boolean;
   /** The paying account's plan ran out: the call says so once and ends with reason limit. */
   limitReached?: boolean;
   /** The latest handoff: the operator turn then latest, the turn it was given, and whether the voice spoke since. */
@@ -364,7 +373,8 @@ export class CompanionLiveSessions {
         const running = active.runningCodexTurnId ? active.codexTurns.get(active.runningCodexTurnId) : undefined;
         // A handoff steered into the running turn is a later operator attempt, unless it duplicates the previous handoff.
         if (running) Object.assign(running, { endSourceTurn: turn }, duplicate ? {} : { attempt });
-        active.codexTurn = { project: stored.currentProject === undefined ? stored.project : stored.currentProject, sourceTurn: turn, confirmationProposalId: this.admission.awaiting(active.id)?.proposalId ?? null };
+        active.codexTurn = { project: stored.currentProject === undefined ? stored.project : stored.currentProject, sourceTurn: turn, confirmationProposalId: this.admission.awaiting(active.id)?.proposalId ?? null,
+          privateHistory: active.privateHistory === true };
       } else this.delegate(active, delegation.id, turn, attempt);
     } else if (event.type === "codex.plan" && active.codex) {
       const plan = companionPlan(event.plan);
@@ -424,7 +434,7 @@ export class CompanionLiveSessions {
       const refusalReasons: string[] = [];
       const tried: string[] = [];
       let viewed = false;
-      let ownerHistoryInContext = false;
+      let ownerHistoryInContext = active.privateHistory === true;
       const stored = this.admission.session(active.id);
       // Freeze default context for this backend turn: a browser switch while a
       // read is awaiting must not change the target of its following send.
@@ -477,7 +487,8 @@ export class CompanionLiveSessions {
         }
         for (const item of asked) {
           calls.add(item.call_id as string);
-          const privateHistoryBlocked = ownerHistoryInContext && item.name !== "relay_owner_history";
+          const privateHistoryBlocked = ownerHistoryInContext && item.name !== "relay_owner_history"
+            && !(item.name === "end_conversation" && hasEmptyArguments(item.arguments));
           // Execute the original selector, but replay only scrubbed text to the
           // backend. Opaque call references must still pair with their output.
           const scrub = (text: string) => withoutLocalPaths(withoutCredentials(text,active.secrets));
@@ -520,7 +531,8 @@ export class CompanionLiveSessions {
     confirmationProposalId?: string | null, project: string | null = this.admission.session(active.id).project, attempt?: OperatorAttempt,
     privateHistoryContext = false): Promise<unknown> {
     const callId = item.call_id as string; const name = item.name as string;
-    const privateHistoryBlocked = privateHistoryContext && name !== "relay_owner_history";
+    const privateHistoryBlocked = (privateHistoryContext || active.privateHistory === true) && name !== "relay_owner_history"
+      && !(name === "end_conversation" && hasEmptyArguments(item.arguments));
     const recordedCallId = privateHistoryBlocked || PRIVATE_RESULT_TOOLS.has(name)
       ? `private_${createHash("sha256").update(callId).digest("hex").slice(0,32)}` : callId;
     const atMs = this.now() - active.createdAt;
@@ -542,6 +554,9 @@ export class CompanionLiveSessions {
       const result = await runCompanionTool({ project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId, ...(attempt ? { attempt } : {}),
         admission: this.admission, reads: this.reads, ownerHistory: this.options.ownerHistory, read:(name,args)=>this.read(active,project,name,args,delegationId), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
       const output = jsonObject(result);
+      if (name === "relay_owner_history" && output?.status === "done") {
+        active.privateHistory = true;
+      }
       if (active.codex && name === "relay_owner_history" && output?.status === "done") {
         const context = active.codexTurns.get(delegationId) ?? active.codexTurn;
         if (context) context.privateHistory = true;

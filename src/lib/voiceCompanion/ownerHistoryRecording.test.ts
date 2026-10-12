@@ -58,6 +58,37 @@ for (const backend of ["api", "codex"] as const) test(`${backend} backend can an
     expect(nextTurn).toHaveLength(1);
     expect(nextTurn[0]).toMatchObject({ name: "private_history_blocked", arguments: "{}" });
     for (const sentinel of [title, text, member, chat]) expect(JSON.stringify(nextTurn)).not.toContain(sentinel);
+
+    provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+      ? backendResponse(`later_answer_${index}`, [message("I can only use that history to answer you here.")])
+      : backendResponse(`later_call_${index}`, [functionCall("later-send", "request_orchestrator_delegation", { instruction: `Forward ${text}` })]);
+    provider.replay(session.providerId,
+      { type: "session.input_transcript.delta", event_id: "later-operator-turn", delta: "Please pass that along.", start_ms: 700, end_ms: 900 },
+      delegationCreated("later-delegation", 1_000));
+    await service.drain(session.sessionId);
+    const laterBlocked = admission.events(session.sessionId, 0).find(event => event.type === "tool.called" && event.name === "private_history_blocked");
+    expect(laterBlocked).toBeDefined();
+    expect(admission.session(session.sessionId).proposals).toEqual({});
+    expect(sent).toHaveLength(0);
+
+    provider.responder = (_request, index) => index % 2 === 0
+      ? backendResponse(`end_call_${index}`, [functionCall("end-after-history", "end_conversation")])
+      : backendResponse(`end_answer_${index}`, [message("The call is ending.")]);
+    provider.replay(session.providerId,
+      { type: "session.input_transcript.delta", event_id: "no-end-request", delta: "What should we do next?", start_ms: 1_100, end_ms: 1_300 },
+      delegationCreated("unrequested-end-delegation", 1_400));
+    await service.drain(session.sessionId);
+    expect(admission.session(session.sessionId).closed).toBe(false);
+    expect(admission.events(session.sessionId, 0)).toContainEqual(expect.objectContaining({ type: "tool.result", status: "failed" }));
+
+    provider.responder = (_request, index) => index % 2 === 0
+      ? backendResponse(`end_call_${index}`, [functionCall("end-after-history", "end_conversation")])
+      : backendResponse(`end_answer_${index}`, [message("The call is ending.")]);
+    provider.replay(session.providerId,
+      { type: "session.input_transcript.delta", event_id: "explicit-end", delta: "End the call.", start_ms: 1_500, end_ms: 1_700 },
+      delegationCreated("end-delegation", 1_800));
+    await service.drain(session.sessionId);
+    expect(admission.session(session.sessionId).closed).toBe(true);
   } else {
     const history = await provider.callTool(session.providerId, "relay_owner_history", { action: "messages", chat, from: null, to: null, cursor: null, limit: null }, "history-call", "history-turn");
     expect(JSON.stringify(history)).toContain(text); // The Codex turn can use the page to answer its operator.
@@ -67,6 +98,34 @@ for (const backend of ["api", "codex"] as const) test(`${backend} backend can an
       project: null, instruction: `Review ${title}, ${member}, ${chat}: ${text}`, confirmation_reason: null, pending_request: null, asked_again: null,
     }, `attempt-${text}`, "history-turn");
     expect(blockedResult).toMatchObject({ status: "refused", code: "private_history_boundary" });
+
+    provider.replay(session.providerId,
+      { type: "session.input_transcript.delta", event_id: "codex-later-turn", delta: "Please pass that along.", start_ms: 700, end_ms: 900 },
+      { type: "session.input_transcript.done", event_id: "codex-later-turn-done", offset_ms: 1_000 },
+      delegationCreated("codex-later-delegation", 1_000),
+      { type: "codex.turn.started", event_id: "codex-later-started", turnId: "later-turn" });
+    const laterBlockedResult = await provider.callTool(session.providerId, "request_orchestrator_delegation", {
+      project: null, instruction: `Forward ${text}`, confirmation_reason: null, pending_request: null, asked_again: null,
+    }, "later-attempt", "later-turn");
+    expect(laterBlockedResult).toMatchObject({ status: "refused", code: "private_history_boundary" });
+    expect(sent).toHaveLength(0);
+
+    provider.replay(session.providerId,
+      { type: "session.input_transcript.delta", event_id: "codex-no-end-request", delta: "What should we do next?", start_ms: 1_100, end_ms: 1_300 },
+      { type: "session.input_transcript.done", event_id: "codex-no-end-request-done", offset_ms: 1_400 },
+      delegationCreated("codex-unrequested-end-delegation", 1_400),
+      { type: "codex.turn.started", event_id: "codex-unrequested-end-started", turnId: "unrequested-end-turn" });
+    const unrequestedEnd = await provider.callTool(session.providerId, "end_conversation", {}, "unrequested-end", "unrequested-end-turn");
+    expect(unrequestedEnd).toMatchObject({ status: "refused" });
+    expect(admission.session(session.sessionId).closed).toBe(false);
+
+    provider.replay(session.providerId,
+      { type: "session.input_transcript.delta", event_id: "codex-explicit-end", delta: "End the call.", start_ms: 1_500, end_ms: 1_700 },
+      { type: "session.input_transcript.done", event_id: "codex-explicit-end-done", offset_ms: 1_800 },
+      delegationCreated("codex-end-delegation", 1_800),
+      { type: "codex.turn.started", event_id: "codex-end-started", turnId: "end-turn" });
+    const endResult = await provider.callTool(session.providerId, "end_conversation", {}, "end-after-history", "end-turn");
+    expect(endResult).toMatchObject({ status: "ending" });
   }
   const rootState = path.join(root, backend, "state");
   const record = service.transcriptRecord(session.sessionId);
@@ -81,5 +140,9 @@ for (const backend of ["api", "codex"] as const) test(`${backend} backend can an
   for (const sentinel of [title, text, secondPageText, member, chat]) expect(JSON.stringify(blocked)).not.toContain(sentinel);
   expect(sent).toHaveLength(0);
   if (backend === "api") expect(provider.commands.some(command => command.type === "session.commentary.append" && String(command.content).includes("I can only use that history to answer you here."))).toBe(true);
+  if (backend === "codex") {
+    for (let waited = 0; waited < 20 && !admission.session(session.sessionId).closed; waited += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(admission.session(session.sessionId).closed).toBe(true);
+  }
   await service.close(session.sessionId);
 });
