@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
 
-import { admittedAs, lexicalAllowedRoots, realAllowedRoots, realpathAdmitted, resolveLocal, type AllowedRoots } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, realAllowedRootsSync, realpathAdmitted, resolveLocal, type AllowedRoots } from "@/lib/artifact/localFile";
 
 import type { AlbumVia } from "./extract";
 import type { AlbumSeenStore } from "./seen";
@@ -70,16 +70,18 @@ const fileChecks = new Map<string, { at: number; ok: boolean }>();
 
 /** Whether a named file exists as a regular file under a served root, both
     as written and once its links are resolved. Cached briefly: a board
-    summary asks about the same files every few seconds. */
-async function drawableFile(pathname: string, lexical: AllowedRoots, real: () => Promise<AllowedRoots>): Promise<boolean> {
+    summary asks about the same files every few seconds. Checked without an
+    await: two syscalls, where an await each queued behind every other
+    request a busy server was answering, a second or more apiece. */
+function drawableFile(pathname: string, lexical: AllowedRoots, real: () => AllowedRoots): boolean {
   const cached = fileChecks.get(pathname);
   if (cached && Date.now() - cached.at < STAT_TTL_MS) return cached.ok;
   let ok = false;
   const admission = admittedAs(pathname, lexical);
   if (admission) {
     try {
-      const resolved = await fs.realpath(pathname);
-      ok = realpathAdmitted(admission, resolved, await real()) && (await fs.stat(resolved)).isFile();
+      const resolved = fs.realpathSync(pathname);
+      ok = realpathAdmitted(admission, resolved, real()) && fs.statSync(resolved).isFile();
     } catch {
       ok = false;
     }
@@ -109,16 +111,16 @@ async function collect(taskId: string, deps: TaskAlbumDeps, budget: number): Pro
 }
 
 /** The drawable pictures, newest first, capped. */
-async function drawable(taskId: string, collected: Collected[]): Promise<Array<Collected & { src: string; file: string | null }>> {
+function drawable(taskId: string, collected: Collected[]): Array<Collected & { src: string; file: string | null }> {
   const lexical = lexicalAllowedRoots();
-  let realRoots: Promise<AllowedRoots> | null = null;
-  const real = () => (realRoots ??= realAllowedRoots());
+  let realRoots: AllowedRoots | null = null;
+  const real = () => (realRoots ??= realAllowedRootsSync());
   const ordered = [...collected].sort((a, b) => b.image.ts - a.image.ts || a.image.key.localeCompare(b.image.key));
   const out: Array<Collected & { src: string; file: string | null }> = [];
   for (const entry of ordered) {
     if (out.length >= ALBUM_MAX_IMAGES) break;
     const file = entry.image.path ? resolveLocal(entry.image.path) : null;
-    if (file && (await drawableFile(file, lexical, real))) {
+    if (file && drawableFile(file, lexical, real)) {
       out.push({ ...entry, file, src: `/api/artifact?${new URLSearchParams({ path: file }).toString()}` });
     } else if (entry.image.inline) {
       out.push({ ...entry, file: null, src: `/api/tasks/${encodeURIComponent(taskId)}/album/image?id=${albumImageId(entry.image.key)}` });
@@ -144,7 +146,7 @@ export async function readTaskAlbum(
   deps: TaskAlbumDeps,
 ): Promise<AlbumPage> {
   const { collected, indexing } = await collect(taskId, deps, options.budget ?? ALBUM_INDEX_BUDGET);
-  const images = await drawable(taskId, collected);
+  const images = drawable(taskId, collected);
   const lastOpenedAt = deps.seen.lastOpened(taskId);
   /* An open album keeps judging «new» against the mark it found when it
      opened (`since`), so its own mark moving underneath it clears nothing
@@ -199,7 +201,7 @@ export async function taskAlbumSummaries(taskIds: readonly string[], deps: TaskA
        where this one stopped. */
     const { collected, read } = await collect(taskId, deps, Math.max(0, left));
     left -= read;
-    const images = await drawable(taskId, collected);
+    const images = drawable(taskId, collected);
     const lastOpenedAt = deps.seen.lastOpened(taskId);
     out[taskId] = {
       count: images.length,
