@@ -5790,13 +5790,17 @@ export class AgentRegistry {
       if (isSpawnDeniedRole(existingConversation?.agentRole)) profile.allowSubagents = false;
       const memoryRole = existingConversation?.agentRole ?? role;
       const memoryProject = explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
-      if (memoryRole === "orchestrator" || memoryRole === "maintainer") {
+      const adoptedSeatRole = existingConversation?.agentRole === "orchestrator" || existingConversation?.agentRole === "maintainer";
+      if (adoptedSeatRole) {
         /* Designation is an explicit role transition. A conversation adopted
            from a stage must shed that stage's selector and clean-memory flag. */
         profile.cleanMemory = false;
         if (memoryProject) profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       } else if (roleIsClean(memoryRole)) {
         profile.cleanMemory = true;
+      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
+        && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
+        profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       }
       /* A delegated conversation never acquires a plugin grant (#687): a role
          preset or a lineage parent denies it on resume, successor and restart
