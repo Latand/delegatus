@@ -10,10 +10,35 @@
  */
 
 /** Who cleared it, attributed on the server and never taken from the caller.
-    An agent's is the same shape the attention record's `raisedBy` carries. */
+    An agent's is the same shape the attention record's `raisedBy` carries.
+    `system` is Delegatus itself, clearing a reason its own evidence proves is
+    no longer asked (docs/design/attention-auto-resolve.md); only the
+    server's reconciliation writes it, and only onto a conversation's record. */
 export type DismissedBy =
   | { kind: "operator"; surface?: "desktop" | "phone" }
-  | { kind: "manager" | "agent" | "gateway" | "unidentified"; conversationId: string | null; role: string | null; via?: { deputy: string } };
+  | { kind: "manager" | "agent" | "gateway" | "unidentified"; conversationId: string | null; role: string | null; via?: { deputy: string } }
+  | { kind: "system"; rule: AttentionSystemRule };
+
+/** The rules that clear a reason without anyone, each proven by evidence on
+    the exact reason it clears (docs/design/attention-auto-resolve.md,
+    «Implementation plan for acceptance 2»). */
+export const ATTENTION_SYSTEM_RULES = [
+  /** A seat that was replaced and whose conversation ended: its asks went
+      with it, and its successor holds the project now. */
+  "retired-seat",
+  /** The operator wrote to the conversation after its prose ask. */
+  "operator-replied",
+  /** A turn ran after the memory kill, so the agent is going again. */
+  "resumed",
+  /** The stage attempt that asked has settled, and its lane carries what is
+      left to decide. */
+  "stage-settled",
+] as const;
+export type AttentionSystemRule = typeof ATTENTION_SYSTEM_RULES[number];
+
+export function isAttentionSystemRule(value: unknown): value is AttentionSystemRule {
+  return typeof value === "string" && (ATTENTION_SYSTEM_RULES as readonly string[]).includes(value);
+}
 
 /** The reasons a conversation can need the operator for (§4). */
 export type ConversationReasonKind = "decision" | "question" | "plan" | "permission" | "delivery" | "launch" | "memory" | "ask";
@@ -32,6 +57,20 @@ export interface AttentionDismissalMark {
       before a new signal arrived cannot clear it. A mark without one (an
       agent's call) covers what started at or before `at`. */
   reasonId?: string | null;
+  /** Only on a mark Delegatus wrote (`by.kind === "system"`): what it
+      cleared, so the card keeps the reason and its Undo after the source
+      stops raising it (docs/design/attention-auto-resolve.md). */
+  cleared?: SystemClearSnapshot;
+}
+
+/** What an automatic clear hid, kept on its record: the reason's kind, when
+    it began to ask, and the title the row drew for it. */
+export interface SystemClearSnapshot {
+  reason: ConversationReasonKind;
+  /** Epoch seconds. */
+  raisedAt: number;
+  title: string;
+  project: string;
 }
 
 /** One subject a dismissal touched. A `report` is an orchestrator's
@@ -85,6 +124,7 @@ export function isDismissedBy(value: unknown): value is DismissedBy {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const by = value as Record<string, unknown>;
   if (by.kind === "operator") return by.surface === undefined || by.surface === "desktop" || by.surface === "phone";
+  if (by.kind === "system") return isAttentionSystemRule(by.rule);
   return (by.kind === "manager" || by.kind === "agent" || by.kind === "gateway" || by.kind === "unidentified")
     && nullableString(by.conversationId) && nullableString(by.role);
 }

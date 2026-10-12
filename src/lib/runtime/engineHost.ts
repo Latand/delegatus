@@ -3,7 +3,7 @@ import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import type { MessageOrigin } from "./messageOrigin";
-import type { PendingPermissionRequest } from "./permissionRequests";
+import type { PendingPermissionRequest, PendingToolUse } from "./permissionRequests";
 import type { RuntimeSendSettings, RuntimeHostDiagnostics } from "./contracts";
 import type { RuntimeVoiceDelivery, RuntimeVoiceResponse } from "./voiceDelivery";
 import {
@@ -122,6 +122,10 @@ export interface HostState {
       what the tool would do and why the engine asked. A subset of
       `pendingAttention`; absent from hosts that raise none. */
   pendingPermissions?: PendingPermissionRequest[];
+  /** The pending attentions that are native questions or plans, each with
+      the transcript tool use it answers. A subset of `pendingAttention`;
+      absent from hosts that raise none. */
+  pendingToolUses?: PendingToolUse[];
   /** The provider retry the engine announced for the running turn (#2215): the
       only evidence that a quiet turn is waiting on the provider. Cleared once
       the provider produces output again or the turn ends. */
