@@ -67,6 +67,7 @@ export interface ClaudeLoginPorts {
   /** `indeterminate` marks a status read that failed to observe the account
       (timeout, spawn failure, bad output) — distinct from a live sign-out. */
   status(home: string): Promise<{ loggedIn: boolean; method: string | null; email: string | null; plan: string | null; indeterminate?: boolean }>;
+  observeSignedIn(accountId: string): Promise<void>;
   now(): number;
   setTimeout(callback: () => void, ms: number): NodeJS.Timeout;
   clearTimeout(timer: NodeJS.Timeout): void;
@@ -257,6 +258,10 @@ export const realClaudeLoginPorts: ClaudeLoginPorts = {
   kill: (pid, signal) => { try { process.kill(-pid, signal); } catch { try { process.kill(pid, signal); } catch { /* process already exited */ } } },
   ...processIdentityPorts(),
   status: structuredStatus,
+  observeSignedIn: async (accountId) => {
+    const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
+    await refreshAccountLimits("claude", accountId, { phase: "login-complete" });
+  },
   now: Date.now,
   setTimeout,
   clearTimeout,
@@ -620,6 +625,16 @@ export class ClaudeLoginSupervisor {
       const current = this.operations.get(id);
       if (!current || current.phase !== "verifying") return;
       const credentialsSafe = !status.indeterminate && isSupervisedClaudeHome(home) && readClaudeCredentials(home).state === "present";
+      if (status.loggedIn && credentialsSafe) {
+        const timer = this.timers.get(id);
+        if (timer) this.ports.clearTimeout(timer);
+        this.timers.delete(id);
+        if (current.accountId) {
+          try { await this.ports.observeSignedIn(current.accountId); }
+          catch { console.warn("Claude login completed, but its account observation failed"); }
+        }
+        if (this.operations.get(id)?.phase !== "verifying") return;
+      }
       try {
         this.finish(
           id,

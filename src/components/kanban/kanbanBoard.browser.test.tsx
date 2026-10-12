@@ -7633,7 +7633,7 @@ describe("the orchestrator seat's header keeps every element readable and clicka
     const all = [...root.querySelectorAll("*")].filter(rendered);
     const atoms = all.filter(el =>
       interactive(el)
-      || el.matches(".role-mark, .av")
+      || el.matches(".role-mark, .av, [data-role-avatar]")
       || (ownText(el) && !el.parentElement.closest("button, a[href]")));
     const runsOf = el => {
       const out = [];
@@ -10830,7 +10830,7 @@ describe("#2179 #2185 agent replies wider than the operator's bubble, a seat dra
     const strong = w.__ink(title?.querySelector("strong") ?? null);
     const proj = w.__ink(title?.querySelector(".proj") ?? null);
     const state = w.__box(title?.querySelector(".state i") ?? null) ?? w.__ink(title?.querySelector(".state") ?? null);
-    const av = w.__box(root.querySelector(".seat-head .av"));
+    const av = w.__box(root.querySelector(".seat-head [data-role-avatar]"));
     const fold = w.__box(root.querySelector("[data-seat-collapse]"));
     const strip = root.querySelector("[data-agent-control-strip]");
     const field = root.querySelector("[data-orchestrator-conversation] form textarea")?.parentElement ?? null;
@@ -11729,7 +11729,7 @@ describe("#2166 the desktop leads with the orchestrator", () => {
     const footer = form.lastElementChild as HTMLElement;
     const bodyBox = body.getBoundingClientRect();
     const footerBox = footer.getBoundingClientRect();
-    const avatar = seat.querySelector(".seat-head .av")?.getBoundingClientRect() ?? null;
+    const avatar = seat.querySelector(".seat-head [data-role-avatar]")?.getBoundingClientRect() ?? null;
     const fold = seat.querySelector(".seat-fold")?.getBoundingClientRect() ?? null;
     const heading = ink(form.querySelector("h2"));
     const intro = ink(form.querySelector("[data-orchestrator-intro]"));
@@ -28055,7 +28055,7 @@ describe("orchestrator wire routing across the board's layouts", () => {
     }).filter(shown);
     const seatNode = document.querySelector<HTMLElement>("[data-kanban-seat], [data-mobile2-seat-card]");
     /* Folded on top with no frame, the seat the operator sees is its avatar and title; the strip's other controls are text. */
-    const avatar = seatNode?.querySelector(".seat-head .av")?.parentElement ?? null;
+    const avatar = seatNode?.querySelector(".seat-head [data-role-avatar]")?.parentElement ?? null;
     const title = seatNode?.querySelector(".seat-head .seat-title") ?? null;
     const quiet = !!seatNode && seatNode.dataset.collapsed === "1" && seatNode.dataset.placement !== "side" && !!avatar && !!title
       && getComputedStyle(seatNode.querySelector("[data-orchestrator-panel]") ?? seatNode).borderTopColor === "rgba(0, 0, 0, 0)";
@@ -28922,6 +28922,147 @@ describe("account chips with the weekly limit left: the launch chooser and the r
   }, 300_000);
 });
 
+describe("role avatars: Delegatus in each role's costume on answers, internal cards and the conversation header", () => {
+  /*
+   * Rendered evidence for docs/design/role-avatars.md (§10, the build): the real
+   * Viewer over `issue1695Evidence.fixture.tsx?scenario=role-avatars`, in
+   * Chromium, at 1440 and 1000 and on a 390 px phone, light and dark, English
+   * and Ukrainian:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "role avatars"
+   *
+   * The seat's feed holds the orchestrator's answers and one internal message
+   * from each of the other eleven roles and from an agent that names no role
+   * (the tuxedo); a builder's stage conversation and one started by hand, with
+   * no role, open in the agent window (on the phone, in the conversation screen). Per frame: every
+   * avatar is the expected costume at its size (26 px answers and cards, 20 px
+   * in the phone's answer header), the role and the engine stay two separate
+   * things (the engine's glyph and name beside the time, the model chip in the
+   * header), each card names the role alone and none is cut, every card header
+   * has one height, the phone's card clock has no seconds, nothing scrolls
+   * sideways.
+   *
+   * Readings go to `evidence/role-avatars/rendered.json`; frames to
+   * `.artifacts/role-avatars/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/role-avatars");
+  const EVIDENCE = path.resolve("evidence/role-avatars");
+  const SENDERS = ["architect", "builder", "reviewer", "visual-critic", "verifier", "cleaner", "merger", "deployer", "prod-auditor", "maintainer", "issue-reporter", "neutral"];
+  const SHAPES = [
+    { name: "1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "1000", viewport: { width: 1000, height: 800 }, phone: false },
+    { name: "390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+
+  /** Everything the frame shows inside `scope`: avatars by role and size, the answers' engine labels, the cards. */
+  const read = (page: Page, scope: string) => page.evaluate((scope) => {
+    const root = document.querySelector(scope);
+    const size = (element: Element) => { const box = element.getBoundingClientRect(); return `${Math.round(box.width)}x${Math.round(box.height)}`; };
+    const answers = [...(root?.querySelectorAll("[data-tts-message]") ?? [])].map((answer) => {
+      const row = answer.closest(".group\\/msg") ?? answer;
+      const avatar = row.querySelector("[data-role-avatar]");
+      const header = row.querySelector("[data-mobile-message-header]") ?? answer.firstElementChild;
+      const engine = row.querySelector("[data-message-engine], [data-mobile-message-speaker]");
+      const headerBox = header?.getBoundingClientRect() ?? null;
+      const avatarBox = avatar?.getBoundingClientRect() ?? null;
+      return {
+        avatar: avatar ? `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}` : null,
+        engine: engine?.textContent?.trim() ?? null,
+        engineInsideAvatar: Boolean(avatar && engine && avatar.contains(engine)),
+        /* On the phone the avatar sits inside its 20 px header row. */
+        overflow: avatarBox && headerBox && row.querySelector("[data-mobile-message-header]")
+          ? Math.max(0, headerBox.top - avatarBox.top, avatarBox.bottom - headerBox.bottom) : 0,
+      };
+    });
+    const cards = [...(root?.querySelectorAll("[data-agent-author]") ?? [])].map((label) => {
+      const head = label.parentElement!;
+      const avatar = head.querySelector("[data-role-avatar]");
+      const range = document.createRange(); range.selectNodeContents(label);
+      return {
+        avatar: avatar ? `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}` : null,
+        label: label.textContent?.trim() ?? "",
+        cut: Math.round((range.getBoundingClientRect().width - label.getBoundingClientRect().width) * 10) / 10,
+        head: Math.round(head.getBoundingClientRect().height),
+        clock: head.querySelector("[data-card-clock]")?.textContent?.trim() ?? null,
+      };
+    });
+    return {
+      answers, cards,
+      header: [...document.querySelectorAll(".conv-head [data-role-avatar], .seat-head [data-role-avatar], [data-mobile2-bar] [data-role-avatar]")].map((avatar) => `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}`),
+      models: [...document.querySelectorAll(".conv-head .ch-model, .seat-head [data-orchestrator-model]")].map((chip) => chip.textContent?.trim() ?? ""),
+      /* The phone bar: its role pictures (the costume stands where the frame's emblem ribbon stood) and its state line, which carries the model. */
+      phoneBar: (() => {
+        const bar = document.querySelector("[data-mobile2-bar]");
+        const line = bar?.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
+        return bar ? { marks: bar.querySelectorAll(".role-mark").length, avatars: bar.querySelectorAll("[data-role-avatar]").length, line: line?.textContent ?? null, lineOver: line ? line.scrollWidth - line.clientWidth : null } : null;
+      })(),
+      sideways: document.documentElement.scrollWidth - innerWidth,
+      broken: [...document.images].filter((image) => image.hasAttribute("data-role-avatar") && !(image.complete && image.naturalWidth > 0)).length,
+    };
+  }, scope);
+
+  browserTest("every costume at its size beside the engine, light and dark, en and uk, desktop and phone", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/role-avatars-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const shape of SHAPES) {
+        const name = (role: string) => role === "neutral" ? translate(lang, "roleFrame.neutral") : translate(lang, `roleCopy.${role}.name` as Parameters<typeof translate>[1]);
+        const answerSize = shape.phone ? "20x20" : "26x26";
+        for (const [view, conversation, role] of [["seat", "conversation_orchestrator", "orchestrator"], ["builder", "conversation_search-impl-2", "builder"], ["agent", "conversation_ra-agent", "neutral"]] as const) {
+          /* On the desktop the seat sits above the board; every other conversation opens in the agent window. */
+          if (view === "seat" && !shape.phone && shape.name === "1000") continue;
+          const label = `${view}-${shape.name}-${scheme}-${lang}`;
+          const hash = view === "seat" && !shape.phone ? "" : `#c=${conversation}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-avatars${hash}`, shape.viewport, scheme, lang, "reduce", shape.phone, shape.phone ? 2 : 1);
+          try {
+            await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+            /* The frame variant production draws by default (the layout's boot script, which the fixture does not run). */
+            await page.evaluate((frame) => document.documentElement.setAttribute("data-role-frame", frame), DEFAULT_ROLE_FRAME);
+            const scope = shape.phone ? "[data-testid='mobile-focused-pane']" : view === "seat" ? "[data-kanban-seat]" : "[data-agent-window] .reader-slot:not([data-incoming])";
+            await page.waitForSelector(`${scope} [data-tts-message] [data-tts-body]`, { timeout: 30_000 }).catch(() => undefined);
+            if (view === "seat") await page.waitForFunction((scope) => document.querySelectorAll(`${scope} [data-agent-author]`).length >= 12, scope, { timeout: 20_000 }).catch(() => undefined);
+            await page.waitForFunction(() => [...document.images].every((image) => image.complete), undefined, { timeout: 10_000 }).catch(() => undefined);
+            await page.waitForTimeout(400);
+            const reading = await read(page, scope);
+            frames[label] = { ...reading, pageErrors };
+            await page.screenshot({ path: path.join(OUT, `${label}.png`), fullPage: !shape.phone });
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`);
+            if (reading.sideways > 0) failures.push(`${label}: scrolls ${reading.sideways}px sideways`);
+            if (reading.broken) failures.push(`${label}: ${reading.broken} avatars did not load`);
+            if (!reading.answers.length) failures.push(`${label}: no answer rendered`);
+            for (const answer of reading.answers) {
+              if (answer.avatar !== `${role}:${answerSize}`) failures.push(`${label}: an answer draws ${answer.avatar}, not ${role}:${answerSize}`);
+              if (answer.engine !== "Claude" || answer.engineInsideAvatar) failures.push(`${label}: an answer's engine reads ${JSON.stringify(answer.engine)} apart from the avatar: ${!answer.engineInsideAvatar}`);
+              if (answer.overflow > 0.5) failures.push(`${label}: an answer avatar leaves its header row by ${answer.overflow}px`);
+            }
+            if (!reading.header.some((avatar) => avatar.startsWith(`${role}:`))) failures.push(`${label}: the conversation header draws ${JSON.stringify(reading.header)}, not ${role}`);
+            if (!shape.phone && view !== "seat" && !reading.models.some((model) => model.length > 0)) failures.push(`${label}: the header lost its model chip`);
+            if (shape.phone && (reading.phoneBar?.avatars !== 1 || reading.phoneBar.marks !== 0 || !reading.phoneBar.line?.includes("Opus"))) failures.push(`${label}: the phone bar ${JSON.stringify(reading.phoneBar)}`);
+            if (view === "seat") {
+              const expected = SENDERS.map((sender) => `${sender}:26x26`);
+              if (JSON.stringify(reading.cards.map((card) => card.avatar)) !== JSON.stringify(expected)) failures.push(`${label}: cards draw ${JSON.stringify(reading.cards.map((card) => card.avatar))}`);
+              const labels = reading.cards.map((card) => card.label);
+              if (JSON.stringify(labels) !== JSON.stringify(SENDERS.map(name))) failures.push(`${label}: card labels ${JSON.stringify(labels)}`);
+              const cut = reading.cards.filter((card) => card.cut > 0.5);
+              if (cut.length) failures.push(`${label}: cut labels ${JSON.stringify(cut)}`);
+              if (new Set(reading.cards.map((card) => card.head)).size !== 1) failures.push(`${label}: card headers of heights ${JSON.stringify(reading.cards.map((card) => card.head))}`);
+              const clocks = reading.cards.map((card) => card.clock ?? "");
+              if (!clocks.every((clock) => (shape.phone ? /^\d{2}:\d{2}$/ : /^\d{1,2}:\d{2}:\d{2}$/).test(clock))) failures.push(`${label}: card clocks ${JSON.stringify(clocks)}`);
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "?scenario=role-avatars", frames, failures }, null, 2)}\n`);
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 /*
  * «Створити клона» in the Celestia card (docs/research/celestia-clone-creation.md,
  * variant 1), in the real relay settings dialog: with no clones, with clones,
@@ -29181,7 +29322,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
           } finally { await context.close(); }
         }
 
-        /* The phone: its account lines are the accounts screen behind the menu; each corner names the week. */
+        /* The phone: its account lines are the accounts screen behind the menu; each collapsed card's corner names the week, and the active card, which lists its windows, repeats none. */
         {
           const name = `accounts-390-${lang}`;
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
@@ -29189,7 +29330,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
             await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 40_000 });
             await page.click('[data-mobile2-open="menu"]');
             await page.click('[data-mobile2-go="accounts"]');
-            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(4).waitFor({ timeout: 15_000 });
+            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(2).waitFor({ timeout: 15_000 });
             await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
             const cards = await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').evaluateAll((elements) => elements.map((card) => {
               const corner = card.querySelector<HTMLElement>("[data-mobile2-account-corner]");
@@ -29200,7 +29341,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
               };
             }));
             const week = (percent: number) => `${tr("mobile2.meter.left", { left: percent })} ${tr("limits.week")}`;
-            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([week(77), week(41), tr("limits.noWeekly"), week(78), week(23)]);
+            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([null, week(41), tr("limits.noWeekly"), null, week(23)]);
             expect(cards.every((card) => card.inside !== false), `${name} corners inside the screen`).toBe(true);
             expect(await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth)), `${name} no sideways scroll`).toBe(0);
             await page.screenshot({ path: path.join(out, `${name}.png`) });

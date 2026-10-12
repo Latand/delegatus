@@ -148,7 +148,7 @@ export function MobileSheet({
         </div>
         {/* A full sheet's body takes the height the header and the footer leave,
             so the footer stands at the foot of the screen whatever the body holds. */}
-        <div className={`min-h-0 overflow-y-auto pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
+        <div className={`min-h-0 overflow-y-auto overflow-x-hidden pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
           {children}
         </div>
         <MobileReceipt store={receiptStore} placement="sheet" />
