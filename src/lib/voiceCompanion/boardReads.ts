@@ -6,7 +6,7 @@ import { byteShort, captionHead, matchRounds, reviewAnswer, selectFrames } from 
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { READ_SCHEMAS, validToolValue } from "./readSchemas";
 
-export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame"] as const;
+export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame", "agent_fleet"] as const;
 export type ReadToolName = typeof READ_TOOL_NAMES[number];
 export const VOICE_IMAGES = Symbol("voice prototype frames");
 export interface BoardReadPaths {
@@ -65,6 +65,7 @@ export class CompanionBoardReads {
     if (Object.keys(args).some(key => !Object.hasOwn(schema,key)) || Object.entries(schema).some(([key,property]) => !validToolValue(property,args[key]))) throw new Error("INVALID_TOOL_ARGUMENTS");
     const values = Object.fromEntries(Object.entries(args).filter(([key,value]) => key !== "project" && key !== "refresh" && value !== null && value !== undefined));
     return { ...values, project, ...(name.startsWith("list_") || name.endsWith("messages") ? {limit:values.limit ?? 10} : {}),
+      ...(name === "agent_fleet" ? {limit:values.limit ?? 10} : {}),
       ...(name === "agent_activity" ? {liveOnly:values.liveOnly ?? true,limit:values.limit ?? 10} : {}),
       ...(name.endsWith("messages") ? {roles:values.roles ?? (name === "orchestrator_messages" ? ["assistant"] : ["user","assistant"])} : {}),
       ...(name === "search_transcripts" ? {order:values.order ?? "relevance",limit:6} : {}) };
@@ -76,7 +77,7 @@ export class CompanionBoardReads {
   }
   async read(project: string, name: string, args: Record<string, unknown>, secrets: readonly string[] = NO_SECRETS): Promise<SpeechReadResult> {
     project = canonicalProject(project);
-    const kind = name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (name === "agent_activity" && args.conversationId) ? "conversation" : null;
+    const kind = (name === "agent_fleet" && args.pipelineId) || name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (["agent_activity", "agent_fleet"].includes(name) && args.conversationId) ? "conversation" : null;
     const id = String(args[kind === "pipeline" ? "pipelineId" : kind === "task" ? "taskId" : "conversationId"] ?? "");
     if (kind && (id || !name.includes("prototype")) && canonicalProject(await this.paths.projectFor(kind,id) ?? "") !== project) throw new Error("PROJECT_REFUSED");
     if (name === "read_prototype_review" || name === "view_prototype_frame") {
@@ -139,6 +140,18 @@ export class CompanionBoardReads {
       const item = {...pipelineRow(source), stages:rows(source.stages).slice(0,12).map(stage=>({title:short(stage.id,32),kind:short(stage.kind,32),role:short(stage.roleId,64),state:short(object(stage.latestAttempt).state ?? stage.state ?? "pending",32),verdict:object(stage.latestAttempt).verdict ?? stage.verdict ?? null})),
         ...(args.stageId ? {stageId:args.stageId,stageDetail:{kind:short(object(source.stage).kind,32),role:short(object(source.stage).roleId,32),state:short(object(source.attempt).state,32)},verdict:object(source.attempt).verdict ?? null,summary:short(object(source.attempt).summary,600),findings:(Array.isArray(object(source.attempt).findings) ? object(source.attempt).findings as unknown[] : []).slice(0,5).map(finding=>short(finding,200))} : {})};
       return {item,speech:short(`${item.title}: ${item.state}. ${args.stageId ? `${item.stageId}: ${item.stageDetail?.state}. ${item.verdict ?? ""}. ${item.summary}` : item.stages.map(stage=>`${stage.title}: ${stage.state}`).join(". ")}`,600),truncated:rows(source.stages).length>12 || (Array.isArray(object(source.attempt).findings) && (object(source.attempt).findings as unknown[]).length>5)};
+    }
+    if (name === "agent_fleet") {
+      const summary = object(source.summary ?? source), counts = object(summary.agents);
+      const engines = Object.entries(object(summary.byEngine)).map(([engine,pair]) => `${engine}: ${Array.isArray(pair) ? pair[1] : 0} running`).join(". ");
+      const result: SpeechReadResult = { item: summary,
+        ...(Array.isArray(source.agents) ? { rows: source.agents, shown: source.agents.length, total: Number(source.total ?? source.agents.length),
+          nextCursor: typeof source.nextCursor === "string" ? source.nextCursor : null } : {}),
+        speech: short(`${counts.live ?? 0} live agents, ${counts.running ?? 0} running. ${engines}. ${counts.limitWait ?? 0} waiting for an account limit. ${counts.stalled ?? 0} stalled.${summary.coverage ? " Some evidence is pending or stale; these counts are partial." : ""}`,600),
+        ...(summary.coverage ? {coverage:object(summary.coverage)} : {}),
+        truncated: source.hasMore === true || !!summary.coverage };
+      if (Buffer.byteLength(JSON.stringify(result)) > 4000) throw new Error("ANSWER_TOO_LARGE");
+      return result;
     }
     if (name === "agent_activity") {
       const result = page({...source, remainingCount:source.budgetOmittedCount},rows(source.conversations).map(row=>({handle:row.conversationId,title:short(row.title)||"Agent",state:short(row.lifecycle,32),turn:short(row.turn ?? row.turnState,32)})),"observed agents");

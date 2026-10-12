@@ -9,7 +9,7 @@ import type { McpToolArgs, McpToolCallContext, McpToolName, McpToolResult } from
 /** These reads otherwise materialize registry, scanner and resource caches in
  * every agent. The Viewer owns their projections and bounded durable receipts. */
 export const VIEWER_LARGE_READS: ReadonlySet<McpToolName> = new Set([
-  "conversation_messages", "resources", "operator_snapshot", "board_snapshot",
+  "agent_fleet", "conversation_messages", "resources", "operator_snapshot", "board_snapshot",
 ]);
 
 function record(value: unknown): Record<string, unknown> | null {

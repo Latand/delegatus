@@ -67,6 +67,62 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("CPU admission queue", () => {
+  browserTest("the waiting card shows queue position and remaining minutes in en and uk", async () => {
+    const out = path.resolve(".artifacts/cpu-queue");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue`, { width, height: 900 }, "dark", lang, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
+          const target = page.locator(selector);
+          const line = target.locator("[data-cpu-queue]");
+          await line.waitFor(); await target.scrollIntoViewIfNeeded();
+          const text = lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
+          expect(await line.textContent()).toBe(text);
+          expect(await target.textContent()).toContain("#2190");
+          expect(await target.locator('[data-motion="working"]').count()).toBe(0);
+          const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
+          expect(geometry.clipped).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await target.screenshot({ path: path.join(out, `variant-1-${width}-${lang}.png`) });
+          readings.push({ lang, viewport: width, ...geometry });
+          if (width === 390) {
+            await target.click();
+            const lane = page.locator('[data-phone-task-lane="p-search"]');
+            for (const surface of ["task", "stages"] as const) {
+              if (surface === "stages") await lane.locator("[data-open-stages]").click();
+              const panel = surface === "task" ? lane : page.locator('[data-mobile2-pipeline="p-search"]');
+              const reason = panel.locator("[data-cpu-queue]");
+              await reason.waitFor({ timeout: 5000 });
+              expect(await reason.innerText()).toBe(text);
+              const box = await reason.evaluate(element => {
+                const rect = element.getBoundingClientRect(), range = document.createRange();
+                range.selectNodeContents(element);
+                const ink = range.getBoundingClientRect();
+                return { clipped: element.scrollWidth > element.clientWidth + 1 || ink.right > rect.right + 1, visible: rect.top >= 0 && rect.bottom <= window.innerHeight, text: element.textContent };
+              });
+              expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
+              expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+              expect(pageErrors).toEqual([]);
+              await page.screenshot({ path: path.join(out, `phone-${surface}-${lang}.png`) });
+              readings.push({ lang, viewport: width, surface, ...box });
+            }
+          }
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+      fs.mkdirSync("evidence/cpu-queue", { recursive: true });
+      fs.writeFileSync("evidence/cpu-queue/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+});
+
 describe("memory profile", () => {
   browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("direct-call timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
@@ -16530,10 +16586,11 @@ describe("done task retention", () => {
             await page.waitForSelector('[data-task-sheet-row="t-expired"]');
             expect(await page.locator('[data-task-sheet-row="t-legacy"]').count()).toBe(1);
           } else {
-            await page.getByRole("button", { name: "Toggle the task panel", exact: true }).click();
-            await page.waitForSelector("[data-task-panel]");
-            expect(await page.locator("[data-task-panel]").getByText("Retained completion history", { exact: true }).count()).toBe(1);
-            expect(await page.locator("[data-task-panel]").getByText("Legacy completion history", { exact: true }).count()).toBe(1);
+            /* The desktop lists the tasks its board does not draw in the Hidden tray, under ⋯. */
+            await page.locator("[data-kanban-board] [data-bar-more]").click();
+            await page.locator("[data-bar-more-hidden]").click();
+            await page.waitForSelector('[data-hidden-task="t-expired"]');
+            expect(await page.locator('[data-hidden-task="t-legacy"]').count()).toBe(1);
           }
           await page.screenshot({ path: path.join(out, `${width}-task-list.png`) });
           expect(pageErrors).toEqual([]);
@@ -18025,10 +18082,10 @@ describe("task motion and waiting reasons", () => {
             input.value = originalValue;
             const filter = bar.querySelector<HTMLElement>('[data-bar-filter-toggle]')!.getBoundingClientRect();
             const chip = bar.querySelector<HTMLElement>('[data-attention-count]')!.getBoundingClientRect();
-            const taskToggle = bar.querySelector<HTMLElement>('[data-task-panel-toggle]')!.getBoundingClientRect();
+            const panelToggle = bar.querySelector<HTMLElement>('[data-orchestrator-toggle]')!.getBoundingClientRect();
             const moreMenu = bar.querySelector<HTMLElement>('[data-bar-group="more"]')!.getBoundingClientRect();
             return {
-              chipLeft: chip.left, chipRight: chip.right, taskToggleRight: taskToggle.right, moreRight: moreMenu.right,
+              chipLeft: chip.left, chipRight: chip.right, panelToggleRight: panelToggle.right, moreRight: moreMenu.right,
               top: rect.top, bottom: rect.bottom, height: rect.height, barWidth: rect.width,
               /* The reasons are a menu of the bar's one filter: no chip in the row and no row under it. */
               chips: bar.closest('[data-kanban-board]')!.querySelectorAll('.reason-filter, .reason-filter-row').length,
@@ -18056,8 +18113,8 @@ describe("task motion and waiting reasons", () => {
             expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
             expect(topbar.placeholderScrollWidth, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.placeholderClientWidth);
             // The attention chip is the row's last item, in the flow: it starts after
-            // the task-panel toggle, so «13» never reads as «1», and after ⋯, and ends inside the bar.
-            expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.taskToggleRight);
+            // the orchestrator toggle and after ⋯, and ends inside the bar.
+            expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.panelToggleRight);
             expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.moreRight);
             expect(topbar.chipRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.barRight);
             expect(topbar.barOverflow, JSON.stringify(topbar)).toBeLessThanOrEqual(0);
@@ -18395,8 +18452,7 @@ describe("task motion and waiting reasons", () => {
     expect(failures).toEqual([]);
   }, 180_000);
 
-  /* The reason filters stand under the bar when the bar is narrower than 1168 px (1280 with the Tasks panel
-     beside it). Their row's height comes out of the reader and draft height twice, so a launched agent and the next
+  /* The reason filters stand under the bar when the bar is narrower than 1168 px. Their row's height comes out of the reader and draft height twice, so a launched agent and the next
      draft's prompt keep the places they have with the filters in the bar. Window 900 px high, seat closed; the
      launched agent's share is read where the board shows columns, as the first-prompt case reads it (above
      60% at 1280, where the reader's column is cut at the window's side). The prompt may end 24 px above the window's
