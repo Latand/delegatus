@@ -46,6 +46,8 @@ import { launchedAt, mobileRowState, nowFragment, type MobileBoardConversation }
 import { attentionReason } from "../attention";
 import { takeRequestedLane } from "./taskLaneRequest";
 import { TaskChronology } from "@/components/kanban/TaskChronology";
+import { laneState } from "@/components/kanban/cardState";
+import { laneAnswerItems, stopLinkAnswers } from "@/components/kanban/laneAnswerMenu";
 import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { taskChronology } from "@/components/kanban/taskChronologyModel";
 import { LaneAnswerRows, mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useScrolledAway, type PendingPipelineActs } from "./MobilePipelineScreen";
@@ -938,7 +940,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 />
               );
             })}
-            <LaneAnswerRows pipeline={pipeline} acting={acting} onAnswer={lane.answer} close={close} />
+            <LaneAnswerRows pipeline={pipeline} acting={acting} onAnswer={lane.answer} close={close} stopLinks />
           </div>
         </MobileSheet>
       );
@@ -1337,6 +1339,21 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     onOpen={(conversation) => {
                       const file = files.find((entry) => (conversation.conversationId && entry.conversationId === conversation.conversationId) || (conversation.path && entry.path === conversation.path));
                       if (file) props.onOpenConversation(file);
+                    }}
+                    stopLinks={(pipelineId) => {
+                      const summary = lanes.find((entry) => entry.pipeline.id === pipelineId);
+                      if (!summary) return [];
+                      const names = stageNames(t, summary.pipeline);
+                      const owner = laneState(summary.pipeline).owner;
+                      return stopLinkAnswers(laneAnswerItems(t, summary.pipeline, owner, (stage) => names.get(stage.id) ?? stage.id), owner);
+                    }}
+                    onStopLink={(pipelineId, answer) => {
+                      const summary = lanes.find((entry) => entry.pipeline.id === pipelineId);
+                      if (summary) lane.answer(summary.pipeline, answer);
+                    }}
+                    linksBusy={(pipelineId) => {
+                      const summary = lanes.find((entry) => entry.pipeline.id === pipelineId);
+                      return Boolean(summary && lane.acting(summary.pipeline));
                     }}
                     onStopMenu={(pipelineId) => {
                       setLaneFor(pipelineId);

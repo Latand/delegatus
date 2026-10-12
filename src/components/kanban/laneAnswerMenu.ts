@@ -29,3 +29,17 @@ export function laneAnswerItems(t: TFunction, pipeline: Pipeline, owner: CardOwn
 
 /** Skip and Close are the two acts the engine cannot take back: the board holds them for their receipt. */
 export const heldAnswer = (answer: Pick<PipelineAnswer, "action">): boolean => answer.action === "skip-stage" || answer.action === "close";
+
+/**
+ * Skip and Retry on a lane the orchestrator owns ride the lane's stop entry in
+ * the task's timeline as quiet links (the form decision on the calm cards,
+ * variant 2); they are not repeated in the ⋯. A lane the operator owns keeps
+ * every answer in the menu, and accept-head, retry-merge and leave-PR-open stay
+ * in the card's ⋯ on either.
+ */
+const isStopLink = (answer: Pick<PipelineAnswer, "action">): boolean => answer.action === "skip-stage" || answer.action === "retry-stage";
+
+export const stopLinkAnswers = (items: readonly LaneAnswerItem[], owner: CardOwner | null): LaneAnswerItem[] => (owner === "seat" ? items.filter(isStopLink) : []);
+
+/** The answers the ⋯ lists: all of them, less the two the stop entry carries as links. */
+export const menuAnswers = (items: readonly LaneAnswerItem[], owner: CardOwner | null): LaneAnswerItem[] => (owner === "seat" ? items.filter((item) => !isStopLink(item)) : [...items]);

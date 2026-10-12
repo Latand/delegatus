@@ -19,7 +19,7 @@ import { summarizePipeline, workingStageConversations } from "../kanban/kanbanMo
 import { pastAttempts } from "../kanban/pipelineGraph";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "../kanban/PipelineSection";
 import { laneState } from "../kanban/cardState";
-import { laneAnswerItems } from "../kanban/laneAnswerMenu";
+import { laneAnswerItems, menuAnswers } from "../kanban/laneAnswerMenu";
 import { browserPipelinePorts, type PipelinePorts } from "../kanban/pipelinePorts";
 import { pipelineActionOptions, type PipelineActionKind } from "../kanban/stagesModel";
 import { usePipelineActions, type PipelineActionIntent } from "../kanban/usePipelineActions";
@@ -315,8 +315,10 @@ const ANSWER_ICON: Record<PipelineAnswer["action"], typeof Check> = {
  * left the screens' faces; a caption says they are a manual override where
  * the orchestrator owns the lane. Nothing when the lane asks nothing.
  */
-export function LaneAnswerRows({ pipeline, acting, onAnswer, close }: {
+export function LaneAnswerRows({ pipeline, acting, onAnswer, close, stopLinks = false }: {
   pipeline: Pipeline;
+  /** The screen shows a timeline whose stop entry carries Skip and Retry as links on a lane the seat owns. */
+  stopLinks?: boolean;
   acting: PipelineActionKind | null;
   onAnswer: (pipeline: Pipeline, answer: PipelineAnswer) => void;
   close: () => void;
@@ -324,7 +326,8 @@ export function LaneAnswerRows({ pipeline, acting, onAnswer, close }: {
   const { t } = useLocale();
   const names = stageNames(t, pipeline);
   const owner = laneState(pipeline).owner;
-  const items = laneAnswerItems(t, pipeline, owner, (stage) => names.get(stage.id) ?? stage.id);
+  const all = laneAnswerItems(t, pipeline, owner, (stage) => names.get(stage.id) ?? stage.id);
+  const items = stopLinks ? menuAnswers(all, owner) : all;
   if (!items.length) return null;
   return (
     <>

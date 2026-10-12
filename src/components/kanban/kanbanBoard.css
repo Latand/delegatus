@@ -1963,6 +1963,14 @@
 .chronology-earlier button { font-size: var(--text-label); line-height: 16px; color: var(--color-muted); border-radius: 3px; }
 .chronology-earlier button:hover { color: var(--color-secondary); text-decoration: underline; text-underline-offset: 2px; }
 .kb .card .chronology-menu { width: 22px; height: 18px; margin: -1px 0; }
+/* Skip / Retry on a seat-handled stop: quiet links under the entry's text, on one row (the calm cards' chosen form). */
+.chronology-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; margin-top: 2px; }
+.chronology-link { all: unset; box-sizing: border-box; cursor: pointer; color: var(--color-accent); font-size: var(--text-label); line-height: 16px; min-height: 22px; display: inline-flex; align-items: center; border-radius: 4px; }
+.chronology-link:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 2px; }
+.chronology-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.chronology-link:disabled { cursor: default; opacity: 0.5; }
+.chronology.phone .chronology-acts { gap: 0 18px; }
+.chronology.phone .chronology-link { min-height: 44px; font-size: var(--text-ui); }
 /* The phone: the time leads the entry's line, and the stop's ⋯ keeps 44 px. */
 .chronology.phone { padding: 8px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); }
 .chronology.phone .chronology-entry { display: flex; align-items: flex-start; gap: 6px; line-height: 18px; font-size: var(--text-ui); }

@@ -29842,12 +29842,39 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
     "t-calm-commit": "seat", "t-calm-merge": "seat", "t-calm-form": "you", "t-calm-ask": "you", "t-calm-run": "working",
     "t-calm-wait": "waiting", "t-calm-done": "done", "t-calm-long": "seat", "t-calm-cleared": "waiting",
   };
-  /* The answers each lane's own `pipelineAnswers` gives: two for a decision and for a stopped merge. */
-  const ANSWERS: Record<string, { lane: string; actions: string[] }> = {
-    "t-calm-commit": { lane: "p-calm-commit", actions: ["answer:skip-stage", "answer:retry-stage"] },
-    "t-calm-merge": { lane: "p-calm-merge", actions: ["answer:dismiss", "answer:retry-merge"] },
-    "t-calm-form": { lane: "p-calm-form", actions: ["answer:skip-stage", "answer:retry-stage"] },
-    "t-calm-long": { lane: "p-calm-long-a", actions: ["answer:skip-stage", "answer:retry-stage"] },
+  /* The answers each lane's own `pipelineAnswers` gives, split by where they live: on a lane the seat owns,
+     Skip and Retry are the stop entry's links (`links`) and the ⋯ holds the rest (`actions`); the operator's
+     own lane keeps both in the ⋯. */
+  const ANSWERS: Record<string, { lane: string; actions: string[]; links: string[] }> = {
+    "t-calm-commit": { lane: "p-calm-commit", actions: [], links: ["skip-stage", "retry-stage"] },
+    "t-calm-merge": { lane: "p-calm-merge", actions: ["answer:dismiss", "answer:retry-merge"], links: [] },
+    "t-calm-form": { lane: "p-calm-form", actions: ["answer:skip-stage", "answer:retry-stage"], links: [] },
+    "t-calm-long": { lane: "p-calm-long-a", actions: [], links: ["skip-stage", "retry-stage"] },
+  };
+  /* A stop entry's links as drawn: on one row, whole inside the entry, at least `minHeight` tall, and no ⋯ beside them. */
+  const READ_STOP_LINKS = ({ root, lane }: { root: string; lane: string }) => {
+    const entry = document.querySelector<HTMLElement>(`${root} [data-chronology-stop="${lane}"]`);
+    const links = entry ? [...entry.querySelectorAll<HTMLElement>("[data-chronology-link]")] : [];
+    const box = entry?.getBoundingClientRect();
+    const boxes = links.map((link) => link.getBoundingClientRect());
+    return {
+      found: Boolean(entry),
+      actions: links.map((link) => link.getAttribute("data-chronology-link") ?? ""),
+      labels: links.map((link) => (link.textContent ?? "").trim()),
+      oneRow: new Set(boxes.map((rect) => Math.round(rect.top))).size <= 1,
+      inside: Boolean(box) && boxes.every((rect) => rect.width > 0 && rect.left >= box!.left - 1 && rect.right <= box!.right + 1 && rect.bottom <= box!.bottom + 1),
+      minHeight: boxes.length ? Math.min(...boxes.map((rect) => rect.height)) : 0,
+      menu: Boolean(entry?.querySelector("[data-chronology-stop-menu]")),
+    };
+  };
+  const checkStopLinks = (label: string, id: string, got: ReturnType<typeof READ_STOP_LINKS>, failures: string[], minHeight: number) => {
+    const want = ANSWERS[id]!;
+    if (!got.found) failures.push(`${label} ${id}: no stop entry`);
+    else if (JSON.stringify(got.actions) !== JSON.stringify(want.links)) failures.push(`${label} ${id}: stop links ${JSON.stringify(got.actions)}`);
+    if (!got.oneRow) failures.push(`${label} ${id}: stop links on several rows`);
+    if (!got.inside) failures.push(`${label} ${id}: a stop link sticks out of its entry`);
+    if (got.minHeight < minHeight) failures.push(`${label} ${id}: a stop link is ${got.minHeight}px tall`);
+    if (got.menu) failures.push(`${label} ${id}: a seat-handled stop keeps its ⋯`);
   };
   /* Every card asked of the closed board: who has it, its line, its dot, its «Answer», and whatever amber it draws. */
   type CardReading = {
@@ -30062,8 +30089,7 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
               const root = document.querySelector(`${selector} [data-chronology]`)!;
               const entries = [...root.querySelectorAll<HTMLElement>("[data-chronology-entry]")];
               const stop = root.querySelector<HTMLElement>('[data-chronology-stop="p-calm-long-a"]');
-              const menu = stop?.querySelector<HTMLElement>("[data-chronology-stop-menu]");
-              const box = menu?.getBoundingClientRect();
+              const box = stop?.querySelector<HTMLElement>("[data-chronology-link]")?.getBoundingClientRect();
               return {
                 entries: entries.length, earlier: root.querySelector("[data-chronology-earlier]")?.textContent ?? null,
                 stopShown: Boolean(stop && box && box.width > 0 && box.height > 0), stopFirst: entries[0] === stop,
@@ -30072,7 +30098,7 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
             }, card("t-calm-long"));
             if (timeline.entries !== 8) failures.push(`${label}: C8 shows ${timeline.entries} entries`);
             if (!timeline.earlier?.startsWith(t("chronology.earlier", { count: "\u0000" }).split("\u0000")[0]!)) failures.push(`${label}: C8 fold row ${JSON.stringify(timeline.earlier)}`);
-            if (!timeline.stopShown || !timeline.stopFirst) failures.push(`${label}: C8's stop is not first after the fold, with its ⋯`);
+            if (!timeline.stopShown || !timeline.stopFirst) failures.push(`${label}: C8's stop is not first after the fold, with its links`);
             if (timeline.times.some((text) => /\b(AM|PM)\b/i.test(text))) failures.push(`${label}: AM/PM in ${timeline.times.join(", ")}`);
             reading.timeline = timeline;
             const openMeta = await page.evaluate(READ_META, { ids: ["t-calm-commit"], phone: false });
@@ -30082,20 +30108,28 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
             for (const got of opened) if (got.needs || got.warningInk.length) failures.push(`${label} ${got.id} opened: amber on ${got.warningInk.join(", ") || "data-needs"}`);
             reading.opened = opened;
 
-            /* The stop entry's ⋯ holds the same answers. */
-            await page.locator(`${card("t-calm-commit")} [data-chronology-stop-menu="p-calm-commit"]`).click();
-            const stopMenu = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [data-menu-item^="answer:"]')].map((item) => item.getAttribute("data-menu-item")));
-            if (JSON.stringify(stopMenu) !== JSON.stringify(ANSWERS["t-calm-commit"]!.actions)) failures.push(`${label}: the stop entry's ⋯ holds ${JSON.stringify(stopMenu)}`);
-            await page.locator(".menu").first().screenshot({ path: path.join(OUT, `stop-menu-c1-${label}.png`) });
-            reading.stopMenu = stopMenu;
+            /* The seat-handled stop carries Skip and Retry as links on its entry, on one row, and no ⋯ of its own. */
+            const stopLinks: Record<string, unknown> = {};
+            for (const id of ["t-calm-commit", "t-calm-long"]) {
+              const got = await page.evaluate(READ_STOP_LINKS, { root: card(id), lane: ANSWERS[id]!.lane });
+              checkStopLinks(label, id, got, failures, 20);
+              stopLinks[id] = got;
+              const entry = page.locator(`${card(id)} [data-chronology-stop="${ANSWERS[id]!.lane}"]`);
+              await entry.scrollIntoViewIfNeeded();
+              await entry.screenshot({ path: path.join(OUT, `stop-links-${id.replace("t-calm-", "")}-${label}.png`) });
+            }
+            /* The operator's own stop keeps its ⋯ and draws no link. */
+            const own = await page.evaluate(READ_STOP_LINKS, { root: card("t-calm-form"), lane: ANSWERS["t-calm-form"]!.lane });
+            if (own.actions.length || !own.menu) failures.push(`${label}: the operator's own stop ${JSON.stringify(own)}`);
+            reading.stopLinks = stopLinks;
             if (lang === "en") {
               /* A manual retry goes out as the board's guarded retry. */
-              await page.locator('.menu [data-menu-item="answer:retry-stage"]').click();
+              await page.locator(`${card("t-calm-commit")} [data-chronology-link="retry-stage"]`).click();
               await page.waitForTimeout(800);
               const patches = await page.evaluate(() => (window as unknown as { evidence?: { pipelinePatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence?.pipelinePatches ?? []);
               if (!patches.some((entry) => entry.id === "p-calm-commit" && entry.body.action === "retry-stage" && entry.body.expectedStageId === "build")) failures.push(`${label}: manual retry sent ${JSON.stringify(patches)}`);
               reading.patches = patches;
-            } else await page.keyboard.press("Escape");
+            }
           }
           readings[label] = reading;
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
@@ -30158,18 +30192,19 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
             await chronology.scrollIntoViewIfNeeded();
             await page.screenshot({ path: path.join(OUT, `task-c1-${label}.png`) });
             if (await page.locator("[data-answer-action]").count()) failures.push(`${label}: an answer button on the task screen`);
-            await page.locator('[data-chronology-stop-menu="p-calm-commit"]').click();
+            /* The stop's links stand on the entry, 44 px tall and on one row; the lane sheet holds the other answers only. */
+            const links = await page.evaluate(READ_STOP_LINKS, { root: "body", lane: "p-calm-commit" });
+            checkStopLinks(label, "t-calm-commit", links, failures, 44);
+            reading.stopLinks = links;
+            await page.screenshot({ path: path.join(OUT, `stop-links-c1-${label}.png`) });
+            await page.locator('[data-phone-task-lane="p-calm-commit"] [data-pipeline-menu]').click();
             await page.locator('[data-phone-task-lane-sheet="p-calm-commit"]').waitFor({ timeout: 10_000 });
             await page.waitForTimeout(300);
             const sheet = await page.evaluate(() => ({
-              answers: [...document.querySelectorAll<HTMLElement>("[data-phone-lane-answer]")].map((row) => ({ action: row.getAttribute("data-phone-lane-answer"), height: row.getBoundingClientRect().height })),
+              answers: [...document.querySelectorAll<HTMLElement>("[data-phone-lane-answer]")].map((row) => row.getAttribute("data-phone-lane-answer")),
               caption: document.querySelector("[data-phone-lane-answers-caption]")?.textContent ?? null,
-              rows: [...document.querySelectorAll<HTMLElement>('[data-phone-task-lane-sheet] [role="menuitem"], [data-phone-task-lane-sheet] button')].map((row) => row.getBoundingClientRect().height),
             }));
-            if (JSON.stringify(sheet.answers.map((row) => `answer:${row.action}`)) !== JSON.stringify(ANSWERS["t-calm-commit"]!.actions)) failures.push(`${label}: lane sheet answers ${JSON.stringify(sheet.answers)}`);
-            if (sheet.caption !== t("cardState.manualCaption")) failures.push(`${label}: lane sheet caption ${JSON.stringify(sheet.caption)}`);
-            if (sheet.rows.some((height) => height < 44)) failures.push(`${label}: a sheet row under 44px: ${sheet.rows.join(", ")}`);
-            await page.screenshot({ path: path.join(OUT, `lane-sheet-c1-${label}.png`) });
+            if (sheet.answers.length) failures.push(`${label}: the lane sheet still lists ${JSON.stringify(sheet.answers)}`);
             reading.sheet = sheet;
             await page.locator("[data-mobile2-close]").first().click();
             await page.goBack();
@@ -30182,11 +30217,10 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
             const timeline = await page.evaluate(() => {
               const root = document.querySelector("[data-chronology]")!;
               const entries = [...root.querySelectorAll<HTMLElement>("[data-chronology-entry]")];
-              const menu = root.querySelector<HTMLElement>('[data-chronology-stop="p-calm-long-a"] [data-chronology-stop-menu]')?.getBoundingClientRect();
-              return { entries: entries.length, earlier: Boolean(root.querySelector("[data-chronology-earlier]")), stopFirst: entries[0]?.getAttribute("data-chronology-stop") === "p-calm-long-a", menu: menu ? { width: menu.width, height: menu.height } : null };
+              return { entries: entries.length, earlier: Boolean(root.querySelector("[data-chronology-earlier]")), stopFirst: entries[0]?.getAttribute("data-chronology-stop") === "p-calm-long-a" };
             });
             if (timeline.entries !== 8 || !timeline.earlier || !timeline.stopFirst) failures.push(`${label}: C8 timeline ${JSON.stringify(timeline)}`);
-            if (!timeline.menu || timeline.menu.height < 44 || timeline.menu.width < 44) failures.push(`${label}: C8 stop ⋯ ${JSON.stringify(timeline.menu)}`);
+            checkStopLinks(label, "t-calm-long", await page.evaluate(READ_STOP_LINKS, { root: "body", lane: "p-calm-long-a" }), failures, 44);
             await page.screenshot({ path: path.join(OUT, `task-c8-${label}.png`) });
             reading.timeline = timeline;
             await page.goBack();

@@ -7,6 +7,7 @@ import type { PatchPipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
+import { laneRouteKey } from "@/lib/attention/routeTypes";
 import { stageDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 
 import type { PipelinePorts, PipelineWriteResult } from "./pipelinePorts";
@@ -1005,6 +1006,48 @@ test("a lane that waits on a decision says what it stopped on and offers no answ
   await tick();
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
   expect(receiptTexts(host).at(-1)).toBe("Retrying Verify in «Restore search results after the index rebuild»");
+});
+
+/* The orchestrator owns the lane (docs/design/calm-task-cards-build.md §4, the chosen form): Skip and Retry are quiet links on the stop's timeline entry, held out of the ⋯. */
+const seatOwnedOnVerify = (): Pipeline => {
+  const lane = parkedOnVerify();
+  lane.attentionRoute = { key: laneRouteKey(lane, "lane-decision"), owner: "seat", seat: "conversation_seat" };
+  return lane;
+};
+
+test("a seat-owned stop carries Skip and Retry as links on its entry, not in the ⋯; Retry sends one request", async () => {
+  const { host, route } = mount(seatOwnedOnVerify());
+  await tick();
+  const links = [...card(host).querySelectorAll<HTMLElement>('[data-chronology-stop="p-search"] [data-chronology-link]')];
+  expect(links.map((link) => [link.getAttribute("data-chronology-link"), link.textContent])).toEqual([["skip-stage", "Skip Verify"], ["retry-stage", "Retry Verify"]]);
+  /* One row: both links share the same acts container, and the stop has no ⋯ of its own. */
+  expect(new Set(links.map((link) => link.parentElement)).size).toBe(1);
+  expect(card(host).querySelector("[data-chronology-stop-menu]")).toBeNull();
+  click(laneMenu(host));
+  expect(menuItem(host, "Skip Verify")).toBeNull();
+  expect(menuItem(host, "Retry Verify")).toBeNull();
+  click(laneMenu(host));
+  click(links[1]);
+  await tick();
+  expect(route.patches).toEqual([{ id: "p-search", body: { action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
+});
+
+test("Skip as a link is held for its receipt before anything is sent", async () => {
+  const { host, route } = mount(seatOwnedOnVerify());
+  await tick();
+  click(card(host).querySelector('[data-chronology-link="skip-stage"]'));
+  await tick();
+  expect(route.patches).toEqual([]);
+  expect(receiptTexts(host).at(-1)).toBe("Skipping Verify in «Restore search results after the index rebuild»");
+  await tick(4_300);
+  expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
+});
+
+test("the operator's own stop keeps its ⋯ and shows no link", async () => {
+  const { host } = mount(parkedOnVerify());
+  await tick();
+  expect(card(host).querySelector("[data-chronology-link]")).toBeNull();
+  expect(card(host).querySelector('[data-chronology-stop="p-search"] [data-chronology-stop-menu]')).toBeTruthy();
 });
 
 test("Skip from the ⋯ waits out its receipt before anything is sent, and its Undo sends nothing", async () => {

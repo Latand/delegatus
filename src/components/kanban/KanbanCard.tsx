@@ -39,7 +39,8 @@ import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
 import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
-import { cardAnswers, cardState, type CardState } from "./cardState";
+import { cardAnswers, cardState, laneState, type CardState } from "./cardState";
+import { laneAnswerItems, stopLinkAnswers, type LaneAnswerItem } from "./laneAnswerMenu";
 import { CardStateLine, PriorityMark } from "./CardStateLine";
 import { TaskChronology } from "./TaskChronology";
 import { hasTaskMeta, TaskMeta } from "./TaskMeta";
@@ -237,6 +238,8 @@ export interface KanbanCardProps {
   pipelinePorts: PipelinePorts;
   onOpenSheet: (cardId: string, pipeline: Pipeline) => void;
   onPipelineMenu: (cardId: string, pipeline: Pipeline, anchor: HTMLElement) => void;
+  /** A manual answer pressed as a link on a lane's stop entry. */
+  onLaneAnswer: (cardId: string, pipeline: Pipeline, answer: LaneAnswerItem) => void;
   onStagePanelFold: (panelKey: string, folded: boolean) => void;
   onStagePanelClose: (panelKey: string) => void;
   onStagePanelMenu: (panelKey: string, anchor: HTMLElement) => void;
@@ -424,6 +427,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      operator an answer, which the foot names. A stalled member keeps its red
      state word on its tile and no longer colours the card. */
   const attention = card.motion.key === "needs-you" ? "needs" : undefined;
+  /* The flag's Dismiss and its Undo live in the card's ⋯ (§2.2). */
+  const dismissable = (card.needsYou && card.reasons.length > 0) || (!card.needsYou && card.cleared.length > 0);
   /* Who has the card now (§5): the state line, the dot and «Answer» read it. */
   const state = cardState(card, nowMs / 1000);
   const answers = collapsed && cardAnswers(state) && props.onAnswerCard ? props.onAnswerCard : null;
@@ -618,7 +623,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               <CloseGlyph />
             </button>
           ) : null}
-          {card.task ? (
+          {/* A task's card always has its ⋯; a card with no task has one only while it holds a flag to clear or restore. */}
+          {card.task || dismissable ? (
             <button
               type="button"
               className="icon-btn"
@@ -796,6 +802,17 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           pipelines={card.pipelines.map((summary) => summary.pipeline)}
           nowMs={nowMs}
           onOpen={props.onOpenAttempt}
+          stopLinks={(pipelineId) => {
+            const summary = card.pipelines.find((entry) => entry.pipeline.id === pipelineId);
+            if (!summary) return [];
+            const names = stageNames(t, summary.pipeline);
+            return stopLinkAnswers(laneAnswerItems(t, summary.pipeline, laneState(summary.pipeline).owner, (stage) => names.get(stage.id) ?? stage.id), laneState(summary.pipeline).owner);
+          }}
+          onStopLink={(pipelineId, answer) => {
+            const summary = card.pipelines.find((entry) => entry.pipeline.id === pipelineId);
+            if (summary) props.onLaneAnswer(card.id, summary.pipeline, answer);
+          }}
+          linksBusy={(pipelineId) => acting.has(pipelineId)}
           onStopMenu={(pipelineId, anchor) => {
             const summary = card.pipelines.find((entry) => entry.pipeline.id === pipelineId);
             if (summary) props.onPipelineMenu(card.id, summary.pipeline, anchor);

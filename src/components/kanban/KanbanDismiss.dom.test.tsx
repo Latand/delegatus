@@ -333,3 +333,21 @@ test("a lane that parked again before the click landed stays flagged, and the re
   expect(host.textContent).toContain("changed since you saw it, so it stays flagged");
   expect(host.textContent).not.toContain("Cleared «");
 });
+
+test("a needs-you card with no task still dismisses and restores from its own ⋯", async () => {
+  const asker = asking(1, "Unit", 900);
+  const { host } = mount({ tasks: [], files: [asker] });
+  const loose = [...host.querySelectorAll<HTMLElement>(".card")].find((card) => card.getAttribute("data-attention") === "needs") ?? null;
+  expect(loose).toBeTruthy();
+  const id = loose!.getAttribute("data-id")!;
+  expect(id.startsWith("task:")).toBe(false);
+  click(menuRow(host, "dismissFlag", id));
+  const afterDismiss = cardEl(host, id)!;
+  expect(afterDismiss.hasAttribute("data-attention")).toBe(false);
+  await tick();
+  expect(posted.at(-1)).toMatchObject({ undo: false, target: { kind: "subjects", subjects: [{ kind: "conversation", conversationId: asker.conversationId }] } });
+  click(menuRow(host, "undoFlag", id));
+  await tick();
+  expect(posted.at(-1)).toMatchObject({ undo: true });
+  expect(cardEl(host, id)!.getAttribute("data-attention")).toBe("needs");
+});

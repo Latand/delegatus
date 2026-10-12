@@ -6,7 +6,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { answerLabel, pipelineAnswers } from "@/components/pipelines/pipelineBlockModel";
 
 import { laneState } from "./cardState";
-import { heldAnswer, laneAnswerItems } from "./laneAnswerMenu";
+import { heldAnswer, laneAnswerItems, menuAnswers, stopLinkAnswers } from "./laneAnswerMenu";
 
 /*
  * docs/design/calm-task-cards-build.md §4: the answer buttons left the card's
@@ -93,4 +93,23 @@ test("a lane that asks nothing has no answers; skip is held for its receipt, ret
   expect(heldAnswer({ action: "close" })).toBe(true);
   expect(heldAnswer({ action: "retry-stage" })).toBe(false);
   expect(heldAnswer({ action: "retry-merge" })).toBe(false);
+});
+
+test("on a seat-owned lane Skip and Retry are the stop entry's links and leave the ⋯; every other answer stays in it", () => {
+  for (const make of [decision, reviewStopLane]) {
+    const owned = seatOwned(make());
+    const items = laneAnswerItems(en, owned, "seat", nameOf);
+    expect(stopLinkAnswers(items, "seat").map((item) => item.action)).toEqual(["skip-stage", "retry-stage"]);
+    expect(menuAnswers(items, "seat")).toEqual([]);
+  }
+  expect(stopLinkAnswers(laneAnswerItems(en, seatOwned(reviewStopLane()), "seat", nameOf), "seat").map((item) => item.label)).toEqual(["Accept without review", "Review again"]);
+  for (const make of [needsReview, stoppedMerge]) {
+    const items = laneAnswerItems(en, seatOwned(make()), "seat", nameOf);
+    expect(stopLinkAnswers(items, "seat")).toEqual([]);
+    expect(menuAnswers(items, "seat").map((item) => item.action)).toEqual(items.map((item) => item.action));
+  }
+  /* The operator's own lane keeps both in the ⋯ and carries no link. */
+  const own = laneAnswerItems(en, decision(), "you", nameOf);
+  expect(stopLinkAnswers(own, "you")).toEqual([]);
+  expect(menuAnswers(own, "you").map((item) => item.action)).toEqual(["skip-stage", "retry-stage"]);
 });

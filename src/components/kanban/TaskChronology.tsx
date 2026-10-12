@@ -9,6 +9,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import { laneStopWhy } from "./cardState";
+import type { LaneAnswerItem } from "./laneAnswerMenu";
 import { MoreGlyph } from "./kanbanGlyphs";
 import { pastAttemptLabel, pastAttemptState, pipelineTitle, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
@@ -18,7 +19,8 @@ import { foldChronology, type ChronologyEntry } from "./taskChronologyModel";
  * The expanded card's timeline (docs/design/calm-task-cards-build.md §3.3):
  * the task's events oldest first, the latest eight shown and the rest behind
  * «Earlier · N». An attempt or round with a kept conversation opens it; the
- * lane's stop carries its ⋯ (the manual answers) and the record's own words
+ * lane's stop carries the manual answers (Skip / Retry as quiet links where
+ * the orchestrator owns the lane, else its ⋯) and the record's own words
  * under «Details». There is no «now» entry: the state line above says it.
  */
 
@@ -97,7 +99,7 @@ export function chronologyEntryText(t: TFunction, entry: ChronologyEntry, pipeli
   }
 }
 
-export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, phone = false }: {
+export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, stopLinks, onStopLink, linksBusy, phone = false }: {
   entries: readonly ChronologyEntry[];
   pipelines: readonly Pipeline[];
   nowMs: number;
@@ -105,6 +107,11 @@ export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, 
   onOpen: (conversation: PastAttempt["conversation"]) => void;
   /** The stop entry's ⋯: the lane's menu on the desktop, its sheet on the phone. */
   onStopMenu?: (pipelineId: string, anchor: HTMLElement) => void;
+  /** The links a seat-handled lane's stop carries; the stop has no ⋯ while it has them. */
+  stopLinks?: (pipelineId: string) => readonly LaneAnswerItem[];
+  onStopLink?: (pipelineId: string, answer: LaneAnswerItem) => void;
+  /** A lane's action is in flight: its links wait. */
+  linksBusy?: (pipelineId: string) => boolean;
   phone?: boolean;
 }) {
   const { t, locale } = useLocale();
@@ -130,6 +137,7 @@ export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, 
           const pipeline = entry.pipelineId ? byId.get(entry.pipelineId) : undefined;
           const text = chronologyEntryText(t, entry, pipeline);
           const conversation = entry.conversation;
+          const links = entry.stop && entry.pipelineId && onStopLink ? stopLinks?.(entry.pipelineId) ?? [] : [];
           return (
             <li
               key={entry.key}
@@ -150,8 +158,24 @@ export function TaskChronology({ entries, pipelines, nowMs, onOpen, onStopMenu, 
                     <p>{entry.detail}</p>
                   </details>
                 ) : null}
+                {links.length ? (
+                  <span className="chronology-acts" data-chronology-acts={entry.pipelineId}>
+                    {links.map((link) => (
+                      <button
+                        key={link.action}
+                        type="button"
+                        className="chronology-link"
+                        data-chronology-link={link.action}
+                        disabled={linksBusy?.(entry.pipelineId!) ?? false}
+                        onClick={() => onStopLink!(entry.pipelineId!, link)}
+                      >
+                        {link.label}
+                      </button>
+                    ))}
+                  </span>
+                ) : null}
               </span>
-              {entry.stop && entry.pipelineId && onStopMenu ? (
+              {entry.stop && entry.pipelineId && onStopMenu && !links.length ? (
                 <button
                   type="button"
                   className="icon-btn chronology-menu"

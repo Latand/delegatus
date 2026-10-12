@@ -63,7 +63,7 @@ import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type Reade
 import { stagePanelKey } from "./KanbanCard";
 import { kanbanCardsOpenByDefault } from "./cardOpenDefault";
 import { laneState, type CardState } from "./cardState";
-import { heldAnswer, laneAnswerItems } from "./laneAnswerMenu";
+import { heldAnswer, laneAnswerItems, menuAnswers, type LaneAnswerItem } from "./laneAnswerMenu";
 import { isLaunchedConversation, LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
 import { cycleOpenAgent, openAgents } from "./openAgents";
 import { AgentWindow, OPEN_AGENTS_SHORTCUT, OpenAgentsPill } from "./AgentWindow";
@@ -1470,6 +1470,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (value.kind === "status") {
       return { label: t("kanban.statusOf", { title }), items: [{ type: "head", label: t("kanban.moveTo") }, ...statusItems(card, true), ...common] };
     }
+    /* A flagged conversation or lane on no task: no task to move or rename, so its ⋯ holds only the flag's Dismiss or Undo. */
+    if (!card.task) {
+      const flag: KanbanMenuItem[] = card.needsYou && card.reasons.length
+        ? [{ type: "item", id: "dismissFlag", label: t("cardState.dismissMenu"), why: t("needs.dismissHint"), onSelect: () => dismissCard(card) }]
+        : !card.needsYou && card.cleared.length ? [{ type: "item", id: "undoFlag", label: t("cardState.undoMenu"), why: clearedLine(t, card.cleared[0]!, modelNow), onSelect: () => undoDismissCard(card) }] : [];
+      return flag.length ? { label: t("kanban.cardActions", { title }), items: flag } : null;
+    }
     const swatches: KanbanMenuItem = {
       type: "swatches",
       id: "colour",
@@ -1622,8 +1629,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     /* The lane's answers left its row for this menu (docs/design/calm-task-cards-build.md
        §4.1), in their buttons' words and marked manual where the orchestrator
        owns the lane. A lane with none keeps Retry and Skip with their refusals. */
-    const answers = laneAnswerItems(t, pipeline, laneState(pipeline).owner, (stage) => names.get(stage.id) ?? stage.id);
-    const answerItems: KanbanMenuItem[] = answers.length ? answers.map((answer) => ({
+    const owner = laneState(pipeline).owner;
+    const answers = laneAnswerItems(t, pipeline, owner, (stage) => names.get(stage.id) ?? stage.id);
+    /* On a task's card the seat-handled stop carries Skip and Retry as links on
+       its timeline entry; they are not repeated here. */
+    const inMenu = card.task ? menuAnswers(answers, owner) : answers;
+    const answerItems: KanbanMenuItem[] = answers.length ? inMenu.map((answer) => ({
       type: "item",
       id: `answer:${answer.action}`,
       label: answer.label,
@@ -1791,7 +1802,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       event.preventDefault();
       const more = element.querySelector<HTMLElement>("[data-menu]");
       if (more) openStatusMenu(card, more);
-    } else if ((key === "m" || key === "M") && card.task) {
+    } else if ((key === "m" || key === "M") && (card.task || element.querySelector("[data-menu]"))) {
       event.preventDefault();
       const more = element.querySelector<HTMLElement>("[data-menu]");
       if (more) openCardMenu(card, more);
@@ -2152,6 +2163,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openPipelineMenu = useCallback((cardId: string, pipeline: Pipeline, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "pipeline", cardId, pipelineId: pipeline.id } });
   }, [menu]);
+  /* Skip or Retry pressed as a link on the stop's entry: the menu row's request, with Skip held for its receipt. */
+  const answerLane = useCallback((cardId: string, pipeline: Pipeline, answer: LaneAnswerItem) => {
+    const card = cardsById.get(cardId);
+    startPipelineAction(
+      { pipelineId: pipeline.id, title: card ? (card.titlePending ? t("kanban.untitled") : card.title) : pipeline.task, action: answer.action, stageId: answer.stageId, stageName: answer.stageName, expectedAttempt: answer.expectedAttempt },
+      { hold: heldAnswer(answer) },
+    );
+  }, [cardsById, startPipelineAction, t]);
   /* «Answer» on a closed card (§4.3) goes where the answer is given: the
      decision form, the asking conversation, or the lane's menu. */
   const answerCard = useCallback((card: KanbanCardModel, state: CardState, anchor: HTMLElement) => {
@@ -2766,6 +2785,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         pipelinePorts,
         onOpenSheet: openSheet,
         onPipelineMenu: openPipelineMenu,
+        onLaneAnswer: answerLane,
         onWorkLinks: openWorkLinks,
         onAnswerCard: answerCard,
         seatConversationIds,
@@ -3133,7 +3153,7 @@ type CardHandlers = Pick<
   | "onToggleCollapsed" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onIconMenu"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswerCard" | "seatConversationIds" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
+  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onLaneAnswer" | "onWorkLinks" | "onAnswerCard" | "seatConversationIds" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
