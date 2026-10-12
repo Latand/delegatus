@@ -45,7 +45,7 @@ import { purgeLegacyOperatorCredential } from "./operatorCredential";
 import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
 import { OnboardingWalk } from "./onboarding/OnboardingWalk";
-import { publishBlockerNames } from "./selfUpdate/blockerNames";
+import { publishBlockerNames, useWantedBlockerNames } from "./selfUpdate/blockerNames";
 import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
@@ -60,6 +60,7 @@ import { VoiceCompanionHost } from "./voiceCompanion/VoiceCompanionHost";
 import { VoiceCompanionSettingsHost } from "./voiceCompanion/VoiceCompanionSetting";
 import { focusHandoffBus } from "./attention/focusHandoffBus";
 import { expandKanbanSeat } from "./kanban/kanbanSeatStore";
+import { textField } from "./kanban/taskText";
 import { ConnectionPill } from "./ConnectionPill";
 import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows";
 import { KeepAwakeProvider } from "./KeepAwakeControl";
@@ -986,14 +987,30 @@ function ViewerApp() {
   /* The update surface names the work it waits on by project name and
      conversation title; the server sends keys and ids. */
   const updateBlockers = updateFeed.snapshot?.auto?.blockers;
+  /* The update confirmation reads the work from the dialog's own feed and
+     asks for its names here: card titles by task and by conversation. */
+  const wantedNames = useWantedBlockerNames();
   useEffect(() => {
-    const wanted = new Set([...(updateBlockers?.turnList ?? []), ...(updateDecision?.blockers?.turnList ?? [])].map((turn) => turn.conversationId));
+    const wanted = new Set([...(updateBlockers?.turnList ?? []).map((turn) => turn.conversationId),
+      ...(updateDecision?.blockers?.turnList ?? []).map((turn) => turn.conversationId), ...wantedNames.conversations]);
     const conversations: Record<string, string> = {};
     if (wanted.size) for (const file of allFiles) {
       if (file.conversationId && wanted.has(file.conversationId) && file.title) conversations[file.conversationId] = cleanTitle(file.title, 90);
     }
-    publishBlockerNames({ projects: projectDisplayNames, conversations });
-  }, [updateBlockers, updateDecision, allFiles, projectDisplayNames]);
+    const wantedTasks = new Set(wantedNames.tasks);
+    const wantedCards = new Set(wantedNames.conversations);
+    const taskTitles: Record<string, string> = {};
+    const cards: Record<string, string> = {};
+    if (wantedTasks.size || wantedCards.size) for (const task of tasks) {
+      const title = textField(task.text, "title");
+      if (!title) continue;
+      if (wantedTasks.has(task.id)) taskTitles[task.id] = title;
+      for (const assignment of task.assignments) {
+        if (assignment.conversationId && wantedCards.has(assignment.conversationId)) cards[assignment.conversationId] ??= title;
+      }
+    }
+    publishBlockerNames({ projects: projectDisplayNames, conversations, tasks: taskTitles, cards });
+  }, [updateBlockers, updateDecision, wantedNames, allFiles, tasks, projectDisplayNames]);
   const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks), [files, pipelines, clock, closingPipelines, updateDecision, tasks]);
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */

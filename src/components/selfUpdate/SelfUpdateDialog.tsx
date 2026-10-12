@@ -5,11 +5,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Z } from "@/components/layers";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { Snapshot } from "@/lib/selfUpdate/types";
 
 import { OPEN_SELF_UPDATE_EVENT } from "./openSelfUpdate";
-import { actionError, type ActionError } from "./selfUpdateCopy";
+import { SelfUpdateConfirm } from "./SelfUpdateConfirm";
+import { actionError, targetText, type ActionError } from "./selfUpdateCopy";
 import { SelfUpdateView, type ViewActions, type ViewState } from "./SelfUpdateView";
 import { selfUpdateTicket, useSelfUpdateFeed } from "./useSelfUpdateFeed";
 
@@ -46,6 +47,8 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const feed = useSelfUpdateFeed();
   const s = feed.snapshot;
   const [armed, setArmed] = useState(false);
+  /* The apply action waiting on the confirmation; null while none is asked. */
+  const [confirming, setConfirming] = useState<"update" | "retry" | "install-action" | null>(null);
   const [openLogs, setOpenLogs] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<ActionError | null>(null);
@@ -56,6 +59,8 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
   if (s && firstWebPid === undefined) setFirstWebPid(s.processes.web.pid);
   if (s?.busy === "restart-runtime-host" && armed) setArmed(false);
+  /* Something else began updating or restarting: the question is moot. */
+  if (s && s.busy !== null && confirming) setConfirming(null);
 
   /* A web restart is over once a different web process answers healthy. */
   const web = s?.processes.web;
@@ -92,27 +97,46 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     }
   }, [feed]);
 
-  const confirmApply = () => {
-    const work = s?.resumeWork;
-    const lines = [t("selfUpdate.applyConfirm")];
-    /* Work not read yet is not "no work": it is said so, never counted as 0. */
-    if (s?.workEvidence?.state === "pending") lines.push(t("selfUpdate.work.pendingConfirm"));
-    else if (s?.workEvidence?.state === "unavailable") lines.push(t("selfUpdate.auto.block.unreadable", { detail: s.workEvidence.error ?? "" }));
-    if (work?.unreadable) lines.push(t("selfUpdate.auto.block.unreadable", { detail: work.unreadable }));
-    else if (work) {
-      lines.push(t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }));
-      lines.push(...(work.stageList ?? []).map(stage => `${stage.stageId} · ${stage.task}`));
-      lines.push(...(work.turnList ?? []).filter(turn => !turn.stage).map(turn => `${turn.engine} · ${turn.project ?? turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`));
-    }
-    return window.confirm(lines.join("\n"));
+  /* The question names what it applies: the action's own words, else the
+     target it updates to. */
+  const actionWords = () => confirming === "install-action" && s?.action?.button ? t(`selfUpdate.actionButton.${s.action.id}` as MessageKey) : null;
+  const confirmTitle = () => {
+    if (!s) return "";
+    const action = actionWords();
+    if (action) return t("selfUpdate.confirmApply.actionTitle", { action });
+    if (confirming === "retry") return t("selfUpdate.confirmApply.retryTitle");
+    if (s.available && s.check.state === "update-available") return t("selfUpdate.confirmApply.title", { target: targetText(s.available.short, s.available.version || null) });
+    return t("selfUpdate.confirmApply.nowTitle");
+  };
+
+  /* The retry's title stays short enough for the phone's one line; the
+     target it retries is said in the body. */
+  const confirmLead = () => confirming === "retry" && s?.update.targetShort
+    ? t("selfUpdate.confirmApply.retryTarget", { target: targetText(s.update.targetShort, s.update.targetVersion) })
+    : null;
+
+  /* «Update now» closes the question; the Update card shows the progress. */
+  const apply = () => {
+    const action = confirming;
+    setConfirming(null);
+    /* The Update button the confirmation would hand focus back to is
+       disabled while the update starts, so focus stays in this dialog. */
+    requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      panel?.querySelector('[data-section="update"]')?.scrollIntoView({ block: "nearest" });
+      if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
+    });
+    if (action === "install-action") void act("install-action", "/api/self-update/action");
+    else if (action === "update") void act("update", "/api/self-update/update", { key: newKey() });
+    else if (action === "retry") void act("update", "/api/self-update/update", { key: newKey(), retry: true });
   };
 
   const actions: ViewActions = {
-    installAction: () => { if (confirmApply()) void act("install-action", "/api/self-update/action"); },
+    installAction: () => setConfirming("install-action"),
     toggleAuto: () => { if (s?.auto) void act("auto", "/api/self-update/auto", { enabled: !s.auto.enabled }); },
     check: () => { void act("check", "/api/self-update/check"); },
-    update: () => { if (confirmApply()) void act("update", "/api/self-update/update", { key: newKey() }); },
-    retry: () => { if (confirmApply()) void act("update", "/api/self-update/update", { key: newKey(), retry: true }); },
+    update: () => setConfirming("update"),
+    retry: () => setConfirming("retry"),
     restartWeb: () => {
       const pid = s?.processes.web.pid ?? null;
       void act("restart-web", "/api/self-update/restart", { role: "web" }).then((ok) => { if (ok) setWebRestart({ pid }); });
@@ -147,10 +171,15 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     reloadTo: replaced ? (s?.serving.web?.short || s?.installed.short || null) : null,
   };
 
-  /* Escape takes back an armed confirmation first, then closes. Tab stays
-     inside the panel; focus returns to whatever opened it. */
+  /* Escape takes back an open or armed confirmation first, then closes. Tab
+     stays inside the panel, or inside the confirmation over it, which owns
+     Tab itself; focus returns to whatever opened it. */
   const escapeRef = useRef<() => void>(() => {});
-  useEffect(() => { escapeRef.current = () => { if (armed) setArmed(false); else onClose(); }; });
+  const confirmingRef = useRef(false);
+  useEffect(() => {
+    confirmingRef.current = confirming !== null;
+    escapeRef.current = () => { if (confirming) setConfirming(null); else if (armed) setArmed(false); else onClose(); };
+  });
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     panelRef.current?.focus();
@@ -163,7 +192,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
         escapeRef.current();
         return;
       }
-      if (event.key !== "Tab") return;
+      if (event.key !== "Tab" || confirmingRef.current) return;
       const focusable = Array.from(panel.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])"))
         .filter((element) => element.getClientRects().length > 0);
       if (!focusable.length) return;
@@ -196,6 +225,11 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
       ? <p role="alert" data-self-update-failure="" className="m-0 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger [overflow-wrap:anywhere]">{t("selfUpdate.loadFailed")}</p>
       : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;
 
+  /* Portaled to the body: here only so it closes with this dialog. */
+  const confirm = s && confirming
+    ? <SelfUpdateConfirm snapshot={s} title={confirmTitle()} lead={confirmLead()} goLabel={actionWords()} onConfirm={apply} onCancel={() => setConfirming(null)} />
+    : null;
+
   if (isMobile) {
     return (
       <div ref={panelRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} data-self-update-dialog="" className={`fixed inset-0 ${Z.modal} flex flex-col bg-canvas outline-none`}>
@@ -208,6 +242,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
           </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(24px+env(safe-area-inset-bottom))] pt-4">{body}</div>
+        {confirm}
       </div>
     );
   }
@@ -222,6 +257,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto p-6">{body}</div>
+        {confirm}
       </div>
     </div>
   );
