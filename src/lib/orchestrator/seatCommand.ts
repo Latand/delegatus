@@ -143,6 +143,9 @@ export interface SeatCommandDependencies {
       from the launch receipt, for reconciling an accepted launch whose
       accepting request died before activation. */
   launchSettlement(input: { launchId: string | null; clientRequestId: string }): LaunchSettlement;
+  /** Retire a reservation whose membership prerequisite never committed after
+   * its bounded SQLite retry budget is spent. */
+  retireUnconsumedLaunch?(clientRequestId: string, reason: string): Promise<void>;
   /** How long a designation queues for the account store; `SEAT_STORE_WAIT_MS`
       when absent. A seam for tests that hold the store past the bound. */
   seatStoreWaitMs?: number;
@@ -362,6 +365,7 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
     const registry = agentRegistry();
     const receipt = registry.spawnReceiptForClientAttempt(clientRequestId);
     if (!receipt || (launchId && receipt.launchId !== launchId)) return { kind: "unknown" };
+    if (receipt.membershipAdmitted === false && receipt.state === "starting" && !receipt.key && !receipt.pane) return { kind: "unknown" };
     if (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted") {
       return { kind: "failed", error: receipt.error ?? receipt.rejection?.guidance ?? `spawn receipt is terminally ${receipt.state}` };
     }
@@ -377,6 +381,9 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
       engine: receipt.engine,
       model: receipt.launchProfile.model,
     };
+  },
+  retireUnconsumedLaunch: async (clientRequestId, reason) => {
+    agentRegistry().retireUnconsumedSpawn(clientRequestId, reason);
   },
   resolvedConversation: (conversationId) => {
     if (!conversationId) return null;
@@ -799,7 +806,7 @@ export const READ_FAILURE_GRACE_MS = 15_000;
  * progresses synchronously to its durable begin before yielding, which is what
  * keeps two concurrent requests serialized by the pending-intent write.
  */
-function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDependencies, failureGraceMs = 0): Promise<unknown> | null {
+function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDependencies, failureGraceMs = 0, retryingSqliteRequestId?: string): Promise<unknown> | null {
   const pending = orchestratorSeatFor(project).pending;
   if (!pending || pending.intent.mode !== "spawn" || pending.intent.error !== null) return null;
   const settlement = dependencies.launchSettlement({
@@ -818,6 +825,10 @@ function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDe
     }, dependencies);
   }
   if (settlement.kind === "failed") {
+    // This invocation still owes its bounded SQLite replay. The spawn layer
+    // can reclaim a failed receipt under the same key; recording terminal
+    // history here would end the intent before that replay gets its chance.
+    if (pending.intent.clientRequestId === retryingSqliteRequestId) return null;
     const age = Date.parse(dependencies.now()) - Date.parse(pending.designatedAt);
     if (failureGraceMs > 0 && Number.isFinite(age) && age < failureGraceMs) return null;
     failOrchestratorSeatIntent(project, pending.intent.clientRequestId, settlement.error, dependencies.now());
@@ -836,6 +847,14 @@ const SEAT_STORE_BUSY_REPLAYS = 3;
     every replay. It names no holder: which writer held the lock is nothing the
     operator chose and nothing they can act on. */
 export const SEAT_STORE_BUSY_REASON = "the account store stayed busy, so the designation could not be recorded; try again";
+
+/** SQLite reports contention either as a driver code or as an HTTP error. */
+function isSqliteBusy(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error ? error.code : null;
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error :
+    error && typeof error === "object" && "error" in error ? String(error.error) : "";
+  return code === "SQLITE_BUSY" || /\bSQLITE_BUSY\b|database is (?:locked|busy)/i.test(message);
+}
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -873,7 +892,8 @@ async function seatStoreReleased(deadline: number, attempt: number): Promise<boo
  * on the intent, which terminalizes it into `intentHistory`, and the caller is
  * answered with that row and a code it can act on.
  *
- * A BUSY STORE IS WAITED OUT FIRST. That lock is one lock for every account
+ * A BUSY STORE IS WAITED OUT FIRST. SQLite contention uses the same replay
+ * and time limits and retains its original reason when those limits run out. That lock is one lock for every account
  * write on the machine, and the account controller takes it on its own once a
  * minute for each Codex account with a login on record. A creation that asked
  * in the same few milliseconds failed with a message about an engine the
@@ -891,20 +911,40 @@ async function seatStoreReleased(deadline: number, attempt: number): Promise<boo
 async function guardedSeatTransition(
   rawBody: Record<string, unknown>,
   code: "seat_transition_failed" | "rotation_failed",
-  run: () => Promise<SeatCommandResult>,
-  busy: { replay: boolean; waitMs?: number; launchAccepted?: (clientRequestId: string) => boolean } = { replay: false },
+  run: (retryingSqliteRequestId?: string) => Promise<SeatCommandResult>,
+  busy: {
+    replay: boolean;
+    waitMs?: number;
+    launchAccepted?: (clientRequestId: string) => boolean;
+    retireUnconsumedLaunch?: (clientRequestId: string, reason: string) => Promise<void>;
+  } = { replay: false },
 ): Promise<SeatCommandResult> {
   const deadline = performance.now() + (busy.waitMs ?? SEAT_STORE_WAIT_MS);
+  let retryingSqliteRequestId: string | undefined;
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await run();
+      return await run(retryingSqliteRequestId);
     } catch (thrown) {
-      const storeBusy = isAccountAdmissionRetryable(thrown);
-      if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS && await seatStoreReleased(deadline, attempt)) continue;
+      const sqliteBusy = isSqliteBusy(thrown);
+      const storeBusy = sqliteBusy || isAccountAdmissionRetryable(thrown);
+      if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS) {
+        if (sqliteBusy) {
+          await delay(Math.min(25 * attempt, Math.max(0, deadline - performance.now())));
+          if (performance.now() < deadline) {
+            retryingSqliteRequestId = text(rawBody.clientRequestId);
+            continue;
+          }
+        } else if (await seatStoreReleased(deadline, attempt)) continue;
+      }
       const admissionChanged = thrown instanceof AccountAdmissionChangedError;
-      const reason = admissionChanged ? thrown.message : storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
-      const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      const reason = storeBusy && !sqliteBusy && !admissionChanged ? SEAT_STORE_BUSY_REASON : message;
       const clientRequestId = text(rawBody.clientRequestId);
+      if (sqliteBusy && busy.replay && CLIENT_REQUEST_ID.test(clientRequestId)) {
+        try { await busy.retireUnconsumedLaunch?.(clientRequestId, reason); }
+        catch { /* The terminal intent below still retains the original cause. */ }
+      }
+      const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
       let terminalized: OrchestratorSeatTerminalization | null = null;
       let launchAccepted = false;
       if (named && CLIENT_REQUEST_ID.test(clientRequestId)) {
@@ -960,10 +1000,11 @@ export function executeOrchestratorSeatRequest(
   triggeredBy: OrchestratorSeatTrigger | null = null,
   admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy, admission), {
+  return guardedSeatTransition(rawBody, "seat_transition_failed", (retryingSqliteRequestId) => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy, admission, retryingSqliteRequestId), {
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+    retireUnconsumedLaunch: dependencies.retireUnconsumedLaunch,
   });
 }
 
@@ -972,6 +1013,7 @@ async function runOrchestratorSeatRequest(
   dependencies: SeatCommandDependencies,
   triggeredBy: OrchestratorSeatTrigger | null,
   admission?: SeatLaunchAdmission,
+  retryingSqliteRequestId?: string,
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key", admission: "refused" } };
@@ -1007,7 +1049,7 @@ async function runOrchestratorSeatRequest(
      died is not an incumbent, and rolling it back here is what puts the
      predecessor back in front of this request (#1757). */
   reconcileActiveSeatLaunch(project, dependencies);
-  const reconciliation = reconcilePendingSeatIntent(project, dependencies);
+  const reconciliation = reconcilePendingSeatIntent(project, dependencies, 0, retryingSqliteRequestId);
   if (reconciliation) await reconciliation;
 
   const completedReplay = reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
@@ -1289,6 +1331,7 @@ async function runOrchestratorSeatRequest(
     /* The spawn route answers its own busy store as a plain failure. It is the
        same wait as ours: nothing was launched, and the replay asks again under
        the same attempt id. */
+    if (isSqliteBusy(spawned.body)) throw Object.assign(new Error(text(spawned.body.error) || "SQLITE_BUSY"), { code: "SQLITE_BUSY" });
     if (spawned.body.code === "account_admission_changed" || text(spawned.body.error) === "spawn account changed during admission") throw new AccountAdmissionChangedError();
     if (spawned.body.code === "account_store_busy" || text(spawned.body.error) === ACCOUNT_STORE_BUSY_MESSAGE || text(spawned.body.error).startsWith("account mutation is busy")) throw new AccountMutationBusyError();
     const error = text(spawned.body.error)
@@ -1479,10 +1522,11 @@ export function executeOrchestratorRotation(
   actor: ViewerActor | null = null,
   admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor, admission), {
+  return guardedSeatTransition(rawBody, "rotation_failed", (retryingSqliteRequestId) => runOrchestratorRotation(rawBody, dependencies, actor, admission, retryingSqliteRequestId), {
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+    retireUnconsumedLaunch: dependencies.retireUnconsumedLaunch,
   });
 }
 
@@ -1491,6 +1535,7 @@ async function runOrchestratorRotation(
   dependencies: SeatCommandDependencies,
   actor: ViewerActor | null,
   admission?: SeatLaunchAdmission,
+  retryingSqliteRequestId?: string,
 ): Promise<SeatCommandResult> {
   const triggeredBy = actor ? rotationTrigger(actor) : null;
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
@@ -1522,7 +1567,7 @@ async function runOrchestratorRotation(
       },
     }
     : {};
-  const reconciliation = reconcilePendingSeatIntent(project, dependencies);
+  const reconciliation = reconcilePendingSeatIntent(project, dependencies, 0, retryingSqliteRequestId);
   if (reconciliation) await reconciliation;
   const incumbent = orchestratorSeatFor(project).active;
   if (!incumbent?.conversationId) {

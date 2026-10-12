@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { leaveLessons, projectView, recordLessonRequest, roleMemoryCollection, roleScope, newRuleId } from "../roleStore";
-import type { RuleSource, RoleMemoryRule } from "../roleTypes";
+import type { StageRuleSource as RuleSource, RoleMemoryRule } from "../roleTypes";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, patchPass } from "./store";
 import { readCuration } from "./read";

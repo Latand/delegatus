@@ -61,8 +61,19 @@ export function prototypeRoundsSuperseded(rounds: ReadonlyArray<{ id: string; de
   }
   return superseded;
 }
-export function prototypeReviewNotices(tasks: readonly BoardTask[], now = Date.now()): PrototypeReviewNotice[] {
-  return tasks.flatMap((task): PrototypeReviewNotice[] => {
+/** A seat's own unanswered question as a notice: no task to land on, so it
+    opens in the seat's «Рішення» column (docs/design/operator-decision-forms.md §2.2). */
+export function seatRoundNotice(round: Pick<PrototypeReviewRound, "id" | "project" | "title" | "createdAt" | "questions">): PrototypeReviewNotice {
+  return { id: `prototype:${round.id}`, project: round.project, taskId: null, reviewId: round.id, title: round.title,
+    ...(round.questions?.length ? { asks: "questions" as const } : {}), createdAt: round.createdAt,
+    target: { kind: "seat-decision", project: round.project, reviewId: round.id } };
+}
+/** Every round waiting on the operator: one per task, then each open seat
+    question the page's read carried beside the tasks. */
+export function prototypeReviewNotices(tasks: readonly BoardTask[], seatOrNow: readonly PrototypeReviewNotice[] | number = [], now = Date.now()): PrototypeReviewNotice[] {
+  const seat = typeof seatOrNow === "number" ? [] : seatOrNow;
+  if (typeof seatOrNow === "number") now = seatOrNow;
+  return [...tasks.flatMap((task): PrototypeReviewNotice[] => {
     const summary = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary);
     const reviewId = summary?.waitingReviewId;
     /* A decided latest round whose message keeps failing waits on the operator too: the row opens the review, where the retry is. */
@@ -81,7 +92,7 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[], now = Date.n
     return [{ id: `prototype:${reviewId}`, project: task.project, taskId: task.id, reviewId, title: firstLineTitle(task.text), ...(roundTitle ? { roundTitle } : {}),
       ...(waiting?.questions?.length || summary.asks === "questions" ? { asks: "questions" as const } : {}),
       createdAt: summary.createdAt, target: { kind: "prototype-review" as const, taskId: task.id, reviewId } }];
-  });
+  }), ...seat];
 }
 
 export function prototypeWaitsOnOperator(summary: PrototypeReviewSummary | undefined): boolean {

@@ -205,6 +205,14 @@ function voiceFeed(feed: string): string {
   return `${feed}${rows.join("\n")}\n`;
 }
 const files: FileEntry[] = [
+  ...(new URLSearchParams(location.search).has("true-activity") ? (["working", "checking", "idle"] as const).map((state, index) => {
+    const age = [20, 300, 840][index]!;
+    return conversation(`/repo/activity-${state}.jsonl`, `Activity ${state}`, {
+      proc: "running", pid: 4401, activity: age > 180 ? "stalled" : "live", activityReason: "jsonl_turn_open", mtime: now - age,
+      lastTurn: { startedAt: (now - 900) * 1000, endedAt: null },
+      agentActivity: { lastRecordAt: (now - age) * 1000, checking: state === "checking", check: state === "checking" ? "privacy-publication-gate-with-an-extremely-long-check-name".repeat(3) : null },
+    });
+  }) : []),
   conversation(RUNNING_PATH, AGENT_LABEL ? "Orchestrator" : "Rebuild the board status projection", {
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
     /* A real launch model, not a one-word one: the bar line has to hold

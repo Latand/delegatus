@@ -1,6 +1,8 @@
 import { hardenedRedact } from "@/lib/view/compactText";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { PrototypeReviewRead } from "@/lib/prototypeReview/types";
+import type { BoardTask } from "@/lib/tasks/types";
+import { byteShort, captionHead, matchRounds, reviewAnswer, selectFrames } from "./prototypeRead";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { READ_SCHEMAS, validToolValue } from "./readSchemas";
 
@@ -13,9 +15,11 @@ export interface BoardReadPaths {
   recipient(project: string): string | null;
   resolveProject(current: string | null, requested?: string): string;
   review(id: string): PrototypeReviewRead;
+  prototypeTasks?(project: string, taskId?: string): readonly BoardTask[];
   frame(id: string, reviewId: string, mediaId: string): Promise<{ mime: string; data: string }>;
 }
 export interface SpeechReadResult {
+  status?: string; code?: string; match?: string;
   speech: string; total?: number; shown?: number; more?: number; nextCursor?: string | null;
   rows?: unknown[]; item?: unknown; truncated: boolean;
   repeated?: true; readSecondsAgo?: number;
@@ -74,18 +78,44 @@ export class CompanionBoardReads {
     project = canonicalProject(project);
     const kind = name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (name === "agent_activity" && args.conversationId) ? "conversation" : null;
     const id = String(args[kind === "pipeline" ? "pipelineId" : kind === "task" ? "taskId" : "conversationId"] ?? "");
-    if (kind && canonicalProject(await this.paths.projectFor(kind,id) ?? "") !== project) throw new Error("PROJECT_REFUSED");
-    if (name === "read_prototype_review") {
-      const review = this.paths.review(id);
-      // Complete review text is the operator's explicit one-call exception to
-      // list budgets. Internal delivery text and local paths never leave it.
-      const scrub = (value: unknown): unknown => typeof value === "string" ? clean(withoutCredentials(value,secrets)) : Array.isArray(value) ? value.map(scrub)
-        : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).filter(([key]) => !["source","url"].includes(key)).map(([key,value]) => [key,scrub(value)])) : value;
-      return { item:scrub(review),speech:`${review.rounds.length} prototype review rounds. Read every variant, question, recommendation and saved decision from the item.`,truncated:!!review.historyTruncated };
-    }
-    if (name === "view_prototype_frame") {
-      const image = await this.paths.frame(id,String(args.reviewId),String(args.mediaId));
-      return {item:{taskId:id,reviewId:args.reviewId,mediaId:args.mediaId},speech:"The prototype frame is attached for visual inspection. Describe only what you can see; this read saves no decision.",truncated:false,[VOICE_IMAGES]:[image]};
+    if (kind && (id || !name.includes("prototype")) && canonicalProject(await this.paths.projectFor(kind,id) ?? "") !== project) throw new Error("PROJECT_REFUSED");
+    if (name === "read_prototype_review" || name === "view_prototype_frame") {
+      if (!this.paths.prototypeTasks) throw new Error("TOOL_NOT_ALLOWED");
+      const tasks = this.paths.prototypeTasks(project, id || undefined);
+      const observed = new Map<string, PrototypeReviewRead>();
+      const read = (id: string) => { if (!observed.has(id)) observed.set(id, this.paths.review(id)); return observed.get(id)!; };
+      const candidates = matchRounds(tasks, read, args);
+      const scrub = (text: string) => clean(withoutCredentials(text, secrets));
+      // Mask complete text before a title, caption or speech budget can cut it.
+      const answer = () => reviewAnswer(cleanStrings(candidates, scrub), cleanStrings(tasks, scrub), cleanStrings(matchRounds(tasks, read, {}), scrub), scrub(project), cleanStrings(args, scrub));
+      if (name === "read_prototype_review") return answer();
+      if (candidates.length !== 1) {
+        const result = answer();
+        return { ...result, status: "refused", code: "FRAME_UNAVAILABLE", speech: `No frame was opened: select one prototype review first. Nothing was seen. ${result.speech}` };
+      }
+      const candidate = candidates[0];
+      const attached: Array<{ variant: number; view: string; width?: number; lang?: string; original: boolean }> = [];
+      const missing: Array<{ variant: number; reason: string; views: string[] }> = [];
+      const images: Array<{ mime: string; data: string }> = [];
+      let bytes = 0;
+      for (const choice of selectFrames(candidate, args)) {
+        let reason = choice.reason;
+        if (!reason && bytes + choice.media!.bytes > 8 * 1024 * 1024) reason = "the 8 MiB picture budget is spent";
+        if (!reason) {
+          try {
+            const image = await this.paths.frame(candidate.task.id, candidate.round.id, choice.media!.id);
+            images.push(image); bytes += choice.media!.bytes;
+            attached.push({ variant: choice.variant, view: captionHead(scrub(choice.frame!.caption)), width: choice.frame!.width, lang: choice.frame!.lang, original: args.original === true });
+          } catch { reason = "stored picture could not be opened or verified"; }
+        }
+        if (reason) missing.push({ variant: choice.variant, reason, views: cleanStrings(choice.views, scrub) });
+      }
+      const misses = missing.map(row => `variant ${row.variant}: ${row.reason}`).join("; ");
+      return { status: images.length ? "done" : "refused", ...(!images.length ? { code: "FRAME_UNAVAILABLE" } : {}),
+        item: { taskId: candidate.task.id, reviewId: candidate.round.id, attached, missing, requested: cleanStrings(args, scrub) },
+        speech: images.length ? byteShort(`Attached ${images.length} picture(s): ${attached.map(row => `variant ${row.variant} «${row.view}»`).join(", ")}. Describe only what these pictures show and name each variant and view.${missing.length ? ` Not attached: ${misses}.` : ""}`, 1200)
+          : `No frame was opened: ${misses}. Nothing was seen. Say that you could not view it and what you asked for, and describe nothing about how it looks.`,
+        truncated: false, ...(images.length ? { [VOICE_IMAGES]: images } : {}) };
     }
     let tool = name;
     if (name === "orchestrator_messages") {

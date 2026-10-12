@@ -74,6 +74,41 @@ function messageRecords(payload: McpToolPayload): Array<{ text: string; author?:
   return payload.records as Array<{ text: string; author?: unknown }>;
 }
 
+test("leave_lesson accepts a designated root seat and refuses unseated gateway and worker callers", async () => {
+  const project = "fixture-seat-memory-root";
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    attentionAuthority: () => ({ kind: "root", conversationId: "conversation_root_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_root_seat", project, path: null }],
+  } as never);
+  const service = createMcpToolService(bindings, {
+    claim: async () => ({ kind: "fresh" as const }),
+    complete: async () => {},
+  } as never);
+  const accepted = await service.callTool("leave_lesson", {
+    clientRequestId: "root-seat-rule",
+    lesson: { scope: "role", rule: "Check the latest transcript tail before calling a conversation stalled.", why: "A status read reported a false stall." },
+  });
+  expect(accepted).toMatchObject({ ok: true, project, roleId: "orchestrator" });
+
+  const refusedGateway = viewerMcpBindings(undefined, undefined, {
+    attentionAuthority: () => ({ kind: "root", conversationId: "conversation_unseated_root" }),
+    authorizedSeats: () => [],
+  } as never);
+  await expect(refusedGateway.leave_lesson({
+    clientRequestId: "unseated-root-rule",
+    lesson: { scope: "role", rule: "Check the latest transcript tail before calling a conversation stalled.", why: "A status read reported a false stall." },
+  })).rejects.toMatchObject({ details: { code: "LESSON_NOT_A_SEAT" } });
+
+  const refusedWorker = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "agent", conversationId: "conversation_worker", role: "builder" }),
+    authorizedSeats: () => [{ conversationId: "conversation_worker", project, path: null }],
+  } as never);
+  await expect(refusedWorker.leave_lesson({
+    clientRequestId: "worker-seat-rule",
+    lesson: { scope: "role", rule: "Check the latest transcript tail before calling a conversation stalled.", why: "A status read reported a false stall." },
+  })).rejects.toMatchObject({ details: { code: "LESSON_NOT_AN_ATTEMPT" } });
+});
+
 afterEach(() => {
   setAgentRegistryForTests(null);
   resetTeamStoreForTests();
