@@ -4,6 +4,7 @@ import { Flag, Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
 import { pipelineTaskFinishState } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
@@ -566,6 +567,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const selected = props.selected ?? NO_STAGES;
   const title = pipelineTitle(t, pipeline);
   const progress = pipelineProgress(t, summary, nameOf);
+  const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   const answers = props.managedOn ? null : pipelineAnswers(pipeline, nameOf);
   const root = {
     "data-pipeline": pipeline.id,
@@ -600,7 +602,12 @@ export function PipelineBlock(props: PipelineBlockProps) {
     const aside = props.aside ? <span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span> : null;
     return (
       <span className="pblock" {...root} data-managed={props.managedOn ? "" : undefined}>
-        <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />
+        {cpuWaiting ? (
+          <span className="pb-line sub">
+            <span className="min-w-0 [overflow-wrap:anywhere]" data-cpu-queue>{progress}</span>
+            <span className="pb-grow" />{text}
+          </span>
+        ) : <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />}
         {aside ? (
           <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
         ) : reasonLine}
@@ -698,6 +705,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           {controls}
         </div>
       )}
+      {cpuWaiting ? <p className="pb-line sub" data-cpu-queue>{progress}</p> : null}
       {graphOpen ? (
         <>
           <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
@@ -999,10 +1007,12 @@ function ScreenBlock(props: PipelineBlockProps & {
   const hasLinks = Boolean(links?.links.length || links?.noPr);
   const hasFlag = finishFlagShown(pipeline, props.taskId);
   const diskWait = pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null;
+  const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   return (
     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
       {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
       {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
+      {cpuWaiting ? <p className="pb-reason" data-cpu-queue>{pipelineProgress(t, summary, nameOf)}</p> : null}
       {hasLinks || hasFlag ? (
         <div className="pb-links-row">
           <FinishFlag pipeline={pipeline} taskId={props.taskId} />

@@ -67,6 +67,62 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("CPU admission queue", () => {
+  browserTest("the waiting card shows queue position and remaining minutes in en and uk", async () => {
+    const out = path.resolve(".artifacts/cpu-queue");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue`, { width, height: 900 }, "dark", lang, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
+          const target = page.locator(selector);
+          const line = target.locator("[data-cpu-queue]");
+          await line.waitFor(); await target.scrollIntoViewIfNeeded();
+          const text = lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
+          expect(await line.textContent()).toBe(text);
+          expect(await target.textContent()).toContain("#2190");
+          expect(await target.locator('[data-motion="working"]').count()).toBe(0);
+          const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
+          expect(geometry.clipped).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await target.screenshot({ path: path.join(out, `variant-1-${width}-${lang}.png`) });
+          readings.push({ lang, viewport: width, ...geometry });
+          if (width === 390) {
+            await target.click();
+            const lane = page.locator('[data-phone-task-lane="p-search"]');
+            for (const surface of ["task", "stages"] as const) {
+              if (surface === "stages") await lane.locator("[data-open-stages]").click();
+              const panel = surface === "task" ? lane : page.locator('[data-mobile2-pipeline="p-search"]');
+              const reason = panel.locator("[data-cpu-queue]");
+              await reason.waitFor({ timeout: 5000 });
+              expect(await reason.innerText()).toBe(text);
+              const box = await reason.evaluate(element => {
+                const rect = element.getBoundingClientRect(), range = document.createRange();
+                range.selectNodeContents(element);
+                const ink = range.getBoundingClientRect();
+                return { clipped: element.scrollWidth > element.clientWidth + 1 || ink.right > rect.right + 1, visible: rect.top >= 0 && rect.bottom <= window.innerHeight, text: element.textContent };
+              });
+              expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
+              expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+              expect(pageErrors).toEqual([]);
+              await page.screenshot({ path: path.join(out, `phone-${surface}-${lang}.png`) });
+              readings.push({ lang, viewport: width, surface, ...box });
+            }
+          }
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+      fs.mkdirSync("evidence/cpu-queue", { recursive: true });
+      fs.writeFileSync("evidence/cpu-queue/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+});
+
 describe("memory profile", () => {
   browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("direct-call timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.

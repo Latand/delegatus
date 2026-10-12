@@ -4475,6 +4475,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.progress.provisioning": "готується робоче дерево · жоден етап не почався",
   "kanban.progress.needs": "{stage} чекає на вас",
   "kanban.progress.live": "{stage} {state}",
+  "kanban.progress.cpuQueue": "Чекає черги CPU · {position}-й · до {minutes} хв",
   "kanban.progress.failed": "{stage} не пройшов · зупинено",
   "kanban.stageAria": "{stage}: {state}",
   "kanban.stageAriaRounds": { one: "{stage}: {state}, {count} раунд ревʼю", few: "{stage}: {state}, {count} раунди ревʼю", many: "{stage}: {state}, {count} раундів ревʼю", other: "{stage}: {state}, {count} раундів ревʼю" },

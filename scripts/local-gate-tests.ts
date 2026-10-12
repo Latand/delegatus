@@ -4,6 +4,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, rea
 import path from "node:path";
 import { decodeXML } from "entities";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
 export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[] }
@@ -200,22 +201,33 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
   return [`--test-name-pattern=^(?:${names.join("|")})$`, "--pass-with-no-tests"];
 }
 
-function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void } = {}): TestRun {
+interface TestBudgets { fileMs: number; runMs: number }
+const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
+function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; now?: () => number; budgets?: TestBudgets } = {}): TestRun {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
+  const now = options.now ?? (() => performance.now());
+  const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   for (const file of files) {
-    const remaining = Math.floor(Math.min(RUN_BUDGET_MS - (performance.now() - started), (options.deadline ?? Infinity) - performance.now()));
+    const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
     if (remaining <= 0) throw new Error(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget`);
     const filter = options.sites ? testNameFilter(options.sites.filter(site => site.file === file)) : [];
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
     const env = isolatedEnvironment(privateRoot, inherited);
+    // The outer heavy gate retains its shared machine admission. Synthetic
+    // stage tickets created inside a test belong only to that test's sandbox.
+    env.LLV_GATE_LOCK_DIR = path.join(privateRoot, "cpu-gate");
+    mkdirSync(env.LLV_GATE_LOCK_DIR, { recursive: true });
     env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
     const fd = openSync(log, "w");
     let result: Bun.SyncSubprocess;
     try {
-      result = Bun.spawnSync({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
-        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(FILE_BUDGET_MS, remaining)) }, stdio: ["ignore", fd, fd], timeout: Math.min(FILE_BUDGET_MS, remaining) + 5_000, killSignal: "SIGKILL",
+      result = Bun.spawnSync({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+        // Keep the independent five-second cleanup allowance, measured as
+        // execution time by the outer guard. A fixed wall timeout here would
+        // kill a healthy supervisor during a nested CPU queue wait.
+        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(budgets.fileMs, remaining)) }, stdio: ["ignore", fd, fd],
       });
     } finally { closeSync(fd); }
     // The owned runner ends the service cgroup. A group number after the root
@@ -289,10 +301,14 @@ function dependencyGraph(root: string) {
   return { fingerprint, shareable };
 }
 
-export function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { cache?: string; env?: NodeJS.ProcessEnv; log?: (line: string) => void } = {}) {
+export function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { cache?: string; env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
   const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"));
   const log = options.log ?? console.log;
-  const inherited = options.env ?? process.env;
+  const budget = cpuWaitBudget(options.env ?? process.env);
+  const inherited = budget.env;
+  const budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
+  const now = () => performance.now() - budget.elapsed();
+  const runOptions = { now, budgets };
   const env = isolatedEnvironment(sandbox, inherited);
   const git = (...args: string[]) => command(["git", ...args], root, env);
   try {
@@ -309,8 +325,8 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     const remote = oldFiles.length ? git("config", "--get", "remote.origin.url").trim() : "";
     // Scope ids and journal descriptors change on each gate-slot invocation;
     // they do not change the test inputs. Keep semantic environment in the key.
-    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM", "LLV_OWNED_TEST_RUNNER_PID", "LLV_OWNED_TEST_RUN_CGROUP", "LLV_OWNED_RUN_PARENT_IDENTITY", "LLV_FIXTURE_PARENT_IDENTITY"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
-    const identity = digest(JSON.stringify(["per-file-junit-v6-kernel-owned-runners", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
+    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "LLV_GATE_SLOT_LEASE", "LLV_CPU_WAIT_ROOTS", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM", "LLV_OWNED_TEST_RUNNER_PID", "LLV_OWNED_TEST_RUN_CGROUP", "LLV_OWNED_RUN_PARENT_IDENTITY", "LLV_FIXTURE_PARENT_IDENTITY"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
+    const identity = digest(JSON.stringify(["per-file-junit-v10-private-test-cpu-queue", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment, budgets]));
     const cache = options.cache ?? path.join(gateTemporaryRoot(), `delegatus-test-baselines-${process.getuid?.() ?? "user"}`);
     prepareCache(cache);
     const entry = path.join(cache, `${identity}.json`);
@@ -329,7 +345,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
       if (checkout) return checkout;
       const target = path.join(sandbox, "baseline");
       const execute = (args: string[], cwd = root) => {
-        const remaining = Math.floor(Math.min(FILE_BUDGET_MS, deadline - performance.now()));
+        const remaining = Math.floor(Math.min(budgets.fileMs, deadline - now()));
         if (remaining <= 0) throw new Error("baseline: flaky rerun budget exhausted during setup");
         return command(args, cwd, env, remaining);
       };
@@ -346,7 +362,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
       return target;
     };
     if (!baseline) {
-      baseline = oldFiles.length ? runFiles(prepareBaseline(), oldFiles, sandbox, inherited, "baseline")
+      baseline = oldFiles.length ? runFiles(prepareBaseline(), oldFiles, sandbox, inherited, "baseline", runOptions)
         : { failures: [], passed: [], completed: [], elapsedMs: 0 };
       const payload = { identity, run: baseline };
       const serialized = JSON.stringify({ ...payload, integrity: digest(JSON.stringify(payload)) });
@@ -360,14 +376,14 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     }
     log(`touched-tests: baseline ${cached ? "cache hit" : "run"} ${(performance.now() - baselineStarted).toFixed(0)}ms (tests ${baseline.elapsedMs.toFixed(0)}ms)`);
     log(`touched-tests: ${files.length - oldFiles.length} new file(s), judged on head alone`);
-    const head = runFiles(root, files, sandbox, inherited, "head");
+    const head = runFiles(root, files, sandbox, inherited, "head", runOptions);
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
     // A base file that did not finish certifies nothing, unless the head fails
     // to finish the same file with the same diagnostic: then the push changed
     // nothing there and the comparison below lists it as PRE-EXISTING.
     const headErrors = new Set(head.failures.filter(site => site.kind === "error").map(key));
     for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
-    const retryStarted = performance.now(), deadline = retryStarted + FLAKY_BUDGET_MS;
+    const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
     let reruns = 0;
     const comparison = confirmFailures(baseline, head, (side, sites) => {
       reruns++;
@@ -375,7 +391,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
       try {
         return runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, {
-          sites, deadline,
+          ...runOptions, sites, deadline,
           // Evict on the first parsed base failure, before a later file can
           // abort this retry batch and discard its partial result.
           onFailure: side === "base" ? () => rmSync(entry, { force: true }) : undefined,
@@ -393,7 +409,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     }
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally { budget.close(); rmSync(sandbox, { recursive: true, force: true }); }
 }
 
 if (import.meta.main) {

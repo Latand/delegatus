@@ -20,9 +20,12 @@ test("reads some avg10 from the kernel's pressure file", () => {
 
 test("shell and engine defaults agree on pressure thresholds and stabilisation", () => {
   const shell = readFileSync(new URL("../../../scripts/gate-slot.sh", import.meta.url), "utf8");
-  expect(Number(/LLV_CPU_PRESSURE_HOLD:-([\d.]+)/.exec(shell)?.[1])).toBe(DEFAULT_CPU_PRESSURE_POLICY.holdAt);
-  expect(Number(/LLV_CPU_PRESSURE_RELEASE:-([\d.]+)/.exec(shell)?.[1])).toBe(DEFAULT_CPU_PRESSURE_POLICY.releaseBelow);
-  expect(Number(/LLV_GATE_PSI_RELEASE_SECONDS:-([\d.]+)/.exec(shell)?.[1]) * 1000).toBe(DEFAULT_CPU_PRESSURE_POLICY.releaseAfterMs);
+  expect(shell).toContain('/cpu-admission.ts"');
+  const helper = readFileSync(new URL("../../../scripts/cpu-admission.ts", import.meta.url), "utf8");
+  expect(helper).toContain('from "../src/lib/runtime/cpuPressure"');
+  expect(helper).toContain("const policy = cpuPressurePolicy();");
+  expect(helper).toContain("...(policy ?? DEFAULT_CPU_PRESSURE_POLICY)");
+  expect(Number(/LLV_GATE_PSI_RELEASE_SECONDS \?\? ([\d.]+)/.exec(helper)?.[1]) * 1000).toBe(DEFAULT_CPU_PRESSURE_POLICY.releaseAfterMs);
 });
 
 test("holds at 30%, admits at 29%, and releases only after ten seconds below 20%", () => {

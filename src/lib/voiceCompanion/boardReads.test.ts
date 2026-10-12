@@ -2,6 +2,27 @@ import { fixtureBoardReads } from "./boardReads.fixture";
 import { expect, test } from "bun:test";
 import { CompanionBoardReads, READ_TOOL_NAMES } from "./boardReads";
 
+test("agent_fleet speaks compact counts for its project and fences targeted detail", async () => {
+  const calls: unknown[] = [];
+  const reads = new CompanionBoardReads({
+    call: async (name, args) => { calls.push({name,args}); return { observedAt: "now", scope: {project:args.project},
+      agents: {live:20,running:12,limitWait:5,stalled:1}, byEngine: {claude:[12,5],codex:[8,7]} }; },
+    resolveProject: (current, requested) => { if (!current || requested && requested !== current) throw new Error("PROJECT_REFUSED"); return current; },
+    projectFor: async () => "project-two", recipient: () => null,
+    review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); },
+  });
+  const result = await reads.call("project-one", "agent_fleet", {});
+  expect(result.speech).toContain("20 live agents, 12 running");
+  expect(result.speech).toContain("claude: 5 running");
+  expect(result.speech).toContain("5 waiting for an account limit");
+  expect(calls).toEqual([{name:"agent_fleet",args:{project:"project-one",limit:10,compact:true,includeHints:false}}]);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(4000);
+  await expect(reads.call("project-one", "agent_fleet", {project:"project-two"})).rejects.toThrow("PROJECT_REFUSED");
+  await expect(reads.call("project-one", "agent_fleet", {pipelineId:"pipeline-two"})).rejects.toThrow("PROJECT_REFUSED");
+  await expect(reads.call("project-one", "agent_fleet", {conversationId:"conversation_two"})).rejects.toThrow("PROJECT_REFUSED");
+  expect(calls).toHaveLength(1);
+});
+
 test("active credentials are masked before a speech projection can cut their fragments", async () => {
   const key = `fixture-private-${"Q7vLm2Xr9TbW4nZc8KpY3dHs6FgJ1aE5".repeat(5)}`;
   const pieces = key.match(/.{1,6}/g)!.join(" ");

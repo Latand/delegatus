@@ -5,7 +5,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
-import { registryConversationsForPath, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { registryConversationsForPath, registryLivenessRows, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 const directories: string[] = [];
 const stores: SqliteAgentRegistryStore[] = [];
@@ -95,6 +95,56 @@ function archiveAll(store: SqliteAgentRegistryStore) {
   }
   throw new Error("archive pass did not converge");
 }
+
+test("fleet liveness census skips archived dead entries and completed dead-host receipts", () => {
+  const { open,initial } = fixture();
+  for (const index of [0,1]) initial.entries[`codex:${id(index)}`]!.status = "live";
+  const entryTemplate = initial.entries[`codex:${id(2)}`]!;
+  for (let index = 0; index < 200; index++) {
+    const key = { engine: "codex" as const,sessionId: id(index + 20_000) };
+    initial.entries[`codex:${key.sessionId}`] = { ...structuredClone(entryTemplate),key,artifactPath: `/sessions/${key.sessionId}.jsonl`,status: "dead",
+      host: null,structuredHost: null,claimOwner: null,pendingAction: null,structuredTerminationSurvivors: [] };
+  }
+  const template = initial.receipts["archive-launch-0"]!;
+  for (let index = 0; index < 200; index++) {
+    const key = { engine: "codex" as const,sessionId: id(index + 10_000) };
+    const launchId = `completed-dead-host-${index}`;
+    initial.receipts[launchId] = { ...structuredClone(template),launchId,key,artifactPath: `/sessions/${key.sessionId}.jsonl`,state: "completed",
+      verifiedHost: { kind: "tmux",endpoint: "fixture",server: { pid: 900_000 + index,startIdentity: "old" },paneId: "dead-pane",
+        panePid: { pid: 900_000 + index,startIdentity: "old" },windowName: "dead",agent: { pid: 900_000 + index,startIdentity: "old" },argv: [] } };
+  }
+  const liveKey = { engine: "codex" as const,sessionId: id(0) };
+  initial.receipts["completed-live-host"] = { ...structuredClone(template),launchId: "completed-live-host",key: liveKey,state: "completed",
+    verifiedHost: { kind: "tmux",endpoint: "fixture",server: { pid: 42,startIdentity: "current" },paneId: "live-pane",
+      panePid: { pid: 42,startIdentity: "current" },windowName: "live",agent: { pid: 42,startIdentity: "current" },argv: [] } };
+  const metrics = { reads: 0,loads: 0 };
+  const store = open(metrics);
+  archiveAll(store);
+  const db = new Database(path.join(store.filename));
+  try {
+    expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM registry_cold WHERE collection='entries' AND row_key LIKE 'codex:%'").get()!.count).toBe(200);
+    expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM registry_cold WHERE collection='receipts' AND row_key LIKE 'completed-dead-host-%'").get()!.count).toBe(200);
+    const plan = db.query<{ detail: string }, [string,string]>(`EXPLAIN QUERY PLAN SELECT r.row_key FROM registry_rows r INDEXED BY registry_liveness_receipt_session
+      JOIN registry_liveness_entries e ON e.row_key IN (?,?)
+      WHERE r.collection='receipts'
+        AND (json_extract(r.value_json,'$.key.engine')||':'||json_extract(r.value_json,'$.key.sessionId'))=e.row_key
+        AND (json_extract(r.value_json,'$.verifiedHost.agent') IS NOT NULL OR json_extract(r.value_json,'$.pane.panePid') IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='receipts' AND c.row_key=r.row_key)`)
+      .all(`codex:${id(0)}`,`codex:${id(1)}`).map(row => row.detail).join(" ");
+    expect(plan).toContain("registry_liveness_receipt_session");
+  } finally { db.close(); }
+  const snapshot = store.readOnlySnapshot().file;
+  metrics.reads = metrics.loads = 0;
+
+  const rows = registryLivenessRows(snapshot);
+
+  expect(rows.entries.map(row => row.key.sessionId)).toContain(id(0));
+  expect(rows.entries.map(row => row.key.sessionId)).toContain(id(1));
+  expect(rows.receipts.map(row => row.launchId)).not.toContain("completed-dead-host-0");
+  expect(rows.receipts.map(row => row.launchId)).toContain("completed-live-host");
+  expect(metrics.loads).toBe(0);
+  expect(metrics.reads).toBeLessThanOrEqual(8);
+});
 
 for (const archived of [false,true]) {
   for (const external of [false,true]) {
