@@ -27,6 +27,27 @@ test("fingerprint matching compares the entire digest and exact catalog spelling
   }
 });
 
+test("every Unicode window retains UTF-8 bytes at surrogate and block boundaries", () => {
+  const texts = ["ASCII\0tail", "éα💡𐐀\ud800z\udc00\ufffdtail", "a💡💡b", "\ud800\ud800\udc00\udc00"];
+  for (const text of texts) {
+    for (let length = 1; length <= text.length; length += 1) {
+      for (let start = 0; start <= text.length - length; start += 1) {
+        const hashes = new Set([referenceDigest(text.slice(start, start + length))]);
+        expect(matchesFingerprintWindows(text, length, hashes)).toBe(referenceMatch(text, length, hashes));
+      }
+    }
+  }
+  for (const middle of ["💡", "\ud800", "\udc00", "é"]) {
+    const text = "a".repeat(16_383) + middle + "z".repeat(1024);
+    for (const length of [4, 12, 512]) {
+      for (const start of [16_382, 16_383, 16_384]) {
+        const hashes = new Set([referenceDigest(text.slice(start, start + length))]);
+        expect(matchesFingerprintWindows(text, length, hashes)).toBe(referenceMatch(text, length, hashes));
+      }
+    }
+  }
+});
+
 test("fingerprint digests match node crypto on Unicode and every sliding window", () => {
   const cases = ["", "ascii", "é", "e\u0301", "💡", "\ud800", "\udc00", "a\0b", "＿Ｆ", "\ufffd"];
   const source = "abcdefé💡e\u0301\ud800\0＿".repeat(6250);

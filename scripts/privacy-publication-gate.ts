@@ -9,6 +9,7 @@ import { inflateSync } from "node:zlib";
 
 import { preparedPrivacyText } from "./privacy-text-preparation";
 import { privacyMarkupSpans, stripPrivacyHtml } from "./privacy-markup";
+import { fingerprintNegativeCache } from "./privacy-fingerprint-cache";
 import { canonicalSensitiveText, decodeSensitiveText } from "../src/lib/privacy/canonicalText";
 import { mailboxPattern } from "../src/lib/privacy/mailbox";
 import { staticSensitiveClasses } from "../src/lib/privacy/staticDetectors";
@@ -1292,7 +1293,8 @@ export function matchesFingerprintWindows(text: string, length: number, hashes: 
   return false;
 }
 
-const fingerprintPlans = new Map<boolean, { raw: string[]; hashed: Map<number, Set<string>> }>();
+const negativeFingerprintCache = fingerprintNegativeCache(import.meta.path, matchesFingerprintWindows.toString());
+const fingerprintPlans = new Map<boolean, { raw: string[]; hashed: Map<number, Set<string>>; policy: string }>();
 
 function matchesKnownFingerprint(text: string, exactOnly = false): boolean {
   let plan = fingerprintPlans.get(exactOnly);
@@ -1322,13 +1324,19 @@ function matchesKnownFingerprint(text: string, exactOnly = false): boolean {
       hashes.add(fingerprint.sha256);
       fingerprintsByLength.set(fingerprint.length, hashes);
     }
-    plan = { raw: rawValues, hashed: fingerprintsByLength };
+    const policy = JSON.stringify([exactOnly, [...fingerprintsByLength]
+      .sort(([left], [right]) => left - right).map(([length, hashes]) => [length, [...hashes].sort()])]);
+    plan = { raw: rawValues, hashed: fingerprintsByLength, policy };
     fingerprintPlans.set(exactOnly, plan);
   }
   if (plan.raw.some((raw) => text.includes(raw))) return true;
+  if (plan.hashed.size === 0) return false;
+  const cacheKey = negativeFingerprintCache?.key(text, plan.policy);
+  if (cacheKey && negativeFingerprintCache?.has(cacheKey)) return false;
   for (const [length, hashes] of plan.hashed) {
     if (matchesFingerprintWindows(text, length, hashes)) return true;
   }
+  if (cacheKey) negativeFingerprintCache?.add(cacheKey);
   return false;
 }
 
