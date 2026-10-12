@@ -2710,9 +2710,11 @@ function readOnTop(which: string) {
   const r = element.getBoundingClientRect();
   const covered: string[] = [];
   let points = 0;
+  /* The grid starts inside the surface's rounded corners: a point in a corner's cut belongs to what lies under it. */
+  const inset = Math.max(3, parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0);
   for (let i = 0; i < 8; i += 1) for (let j = 0; j < 8; j += 1) {
-    const x = r.x + 3 + ((r.width - 6) * i) / 7;
-    const y = r.y + 3 + ((r.height - 6) * j) / 7;
+    const x = r.x + inset + ((r.width - 2 * inset) * i) / 7;
+    const y = r.y + inset + ((r.height - 2 * inset) * j) / 7;
     if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
     points += 1;
     const top = document.elementFromPoint(x, y);

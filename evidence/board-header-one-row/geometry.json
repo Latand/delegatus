@@ -1,0 +1,5094 @@
+{
+ "driver": "BOARD_CAPTURE_CASE=header bun scripts/capture-board-geometry.ts",
+ "build": "next build --webpack, production server, synthetic home, Chromium",
+ "before": {
+  "commit": "69ad5cf84d097cd19682f1c79ba782f8dd256a2f",
+  "note": "the header before this change, read by the same case with HEADER_ROW_ONLY=1; the case fails there by design",
+  "frames": {
+   "2254-en-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 2006,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "2254-en-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1686,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "2254-en-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 2006,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "2254-en-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1686,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "2254-uk-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 2006,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "2254-uk-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1686,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "2254-uk-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 2006,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "2254-uk-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1686,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1960-en-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1712,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1960-en-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1392,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1960-en-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1712,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1960-en-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1392,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1960-uk-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1712,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [
+     "«Більше дій» × «3 чекають» 31.8×31.5px"
+    ],
+    "truncated": [],
+    "covered": [
+     "Більше дій"
+    ]
+   },
+   "1960-uk-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1392,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1960-uk-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1712,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [
+     "«Більше дій» × «3 чекають» 31.8×31.5px"
+    ],
+    "truncated": [],
+    "covered": [
+     "Більше дій"
+    ]
+   },
+   "1960-uk-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1392,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1440-en-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1192,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [
+     "«harbor-ledger-service» scroll 139 > 71",
+     "«harbor-ledger-service» text 264.0–402.8 outside 264.0–335.3"
+    ],
+    "covered": []
+   },
+   "1440-en-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 872,
+     "h": 48
+    },
+    "rowsUnderBar": 1,
+    "overlaps": [],
+    "truncated": [
+     "«harbor-ledger-service» scroll 139 > 48",
+     "«harbor-ledger-service» text 264.0–402.8 outside 264.0–312.0",
+     "placeholder «Find a task» needs 58.7px of 70.0"
+    ],
+    "covered": []
+   },
+   "1440-en-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1192,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [
+     "«harbor-ledger-service» scroll 139 > 71",
+     "«harbor-ledger-service» text 264.0–402.8 outside 264.0–335.3"
+    ],
+    "covered": []
+   },
+   "1440-en-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 872,
+     "h": 48
+    },
+    "rowsUnderBar": 1,
+    "overlaps": [],
+    "truncated": [
+     "«harbor-ledger-service» scroll 139 > 48",
+     "«harbor-ledger-service» text 264.0–402.8 outside 264.0–312.0",
+     "placeholder «Find a task» needs 58.7px of 70.0"
+    ],
+    "covered": []
+   },
+   "1440-uk-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1192,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [
+     "«harbor-ledger-service» scroll 139 > 48",
+     "«harbor-ledger-service» text 264.0–402.8 outside 264.0–312.0"
+    ],
+    "covered": []
+   },
+   "1440-uk-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 872,
+     "h": 48
+    },
+    "rowsUnderBar": 1,
+    "overlaps": [],
+    "truncated": [
+     "«harbor-ledger-service» scroll 139 > 48",
+     "«harbor-ledger-service» text 264.0–402.8 outside 264.0–312.0",
+     "placeholder «Знайти задачу» needs 80.6px of 70.0"
+    ],
+    "covered": []
+   },
+   "1440-uk-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1192,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "overlaps": [],
+    "truncated": [
+     "«harbor-ledger-service» scroll 139 > 48",
+     "«harbor-ledger-service» text 264.0–402.8 outside 264.0–312.0"
+    ],
+    "covered": []
+   },
+   "1440-uk-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 872,
+     "h": 48
+    },
+    "rowsUnderBar": 1,
+    "overlaps": [],
+    "truncated": [
+     "«harbor-ledger-service» scroll 139 > 48",
+     "«harbor-ledger-service» text 264.0–402.8 outside 264.0–312.0",
+     "placeholder «Знайти задачу» needs 80.6px of 70.0"
+    ],
+    "covered": []
+   },
+   "1000-en-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 752,
+     "h": 88
+    },
+    "rowsUnderBar": 1,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1000-en-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 752,
+     "h": 88
+    },
+    "rowsUnderBar": 1,
+    "overlaps": [],
+    "truncated": [],
+    "covered": []
+   },
+   "1000-uk-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 752,
+     "h": 88
+    },
+    "rowsUnderBar": 1,
+    "overlaps": [],
+    "truncated": [
+     "placeholder «Знайти задачу» needs 80.6px of 92.0"
+    ],
+    "covered": []
+   },
+   "1000-uk-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 752,
+     "h": 88
+    },
+    "rowsUnderBar": 1,
+    "overlaps": [],
+    "truncated": [
+     "placeholder «Знайти задачу» needs 80.6px of 92.0"
+    ],
+    "covered": []
+   },
+   "390-en-light": {
+    "h": 52,
+    "text": "harbor-ledger-service3",
+    "targets": [
+     {
+      "x": 4,
+      "w": 236,
+      "h": 44
+     },
+     {
+      "x": 242,
+      "w": 52,
+      "h": 44
+     },
+     {
+      "x": 296,
+      "w": 44,
+      "h": 44
+     },
+     {
+      "x": 342,
+      "w": 44,
+      "h": 44
+     }
+    ],
+    "menuRows": [
+     "new-agent",
+     "new-task",
+     "new-pipeline",
+     "tasks",
+     "pipelines",
+     "hidden",
+     "view-board",
+     "view-catalog",
+     "accounts",
+     "host",
+     "activity",
+     "team",
+     "self-update",
+     "settings",
+     "help",
+     "rules"
+    ]
+   },
+   "390-en-dark": {
+    "h": 52,
+    "text": "harbor-ledger-service3",
+    "targets": [
+     {
+      "x": 4,
+      "w": 236,
+      "h": 44
+     },
+     {
+      "x": 242,
+      "w": 52,
+      "h": 44
+     },
+     {
+      "x": 296,
+      "w": 44,
+      "h": 44
+     },
+     {
+      "x": 342,
+      "w": 44,
+      "h": 44
+     }
+    ],
+    "menuRows": [
+     "new-agent",
+     "new-task",
+     "new-pipeline",
+     "tasks",
+     "pipelines",
+     "hidden",
+     "view-board",
+     "view-catalog",
+     "accounts",
+     "host",
+     "activity",
+     "team",
+     "self-update",
+     "settings",
+     "help",
+     "rules"
+    ]
+   },
+   "390-uk-light": {
+    "h": 52,
+    "text": "harbor-ledger-service3",
+    "targets": [
+     {
+      "x": 4,
+      "w": 236,
+      "h": 44
+     },
+     {
+      "x": 242,
+      "w": 52,
+      "h": 44
+     },
+     {
+      "x": 296,
+      "w": 44,
+      "h": 44
+     },
+     {
+      "x": 342,
+      "w": 44,
+      "h": 44
+     }
+    ],
+    "menuRows": [
+     "new-agent",
+     "new-task",
+     "new-pipeline",
+     "tasks",
+     "pipelines",
+     "hidden",
+     "view-board",
+     "view-catalog",
+     "accounts",
+     "host",
+     "activity",
+     "team",
+     "self-update",
+     "settings",
+     "help",
+     "rules"
+    ]
+   },
+   "390-uk-dark": {
+    "h": 52,
+    "text": "harbor-ledger-service3",
+    "targets": [
+     {
+      "x": 4,
+      "w": 236,
+      "h": 44
+     },
+     {
+      "x": 242,
+      "w": 52,
+      "h": 44
+     },
+     {
+      "x": 296,
+      "w": 44,
+      "h": 44
+     },
+     {
+      "x": 342,
+      "w": 44,
+      "h": 44
+     }
+    ],
+    "menuRows": [
+     "new-agent",
+     "new-task",
+     "new-pipeline",
+     "tasks",
+     "pipelines",
+     "hidden",
+     "view-board",
+     "view-catalog",
+     "accounts",
+     "host",
+     "activity",
+     "team",
+     "self-update",
+     "settings",
+     "help",
+     "rules"
+    ]
+   }
+  }
+ },
+ "after": {
+  "commit": "c5cda079b3830b5422fa33bf2c81487b2f71b284",
+  "note": "the product code of this commit; the driver's on-top grid was corrected after it, with no product change",
+  "failures": [],
+  "frames": {
+   "1000-en-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 752,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "accounts labels chip",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 260,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "5",
+      "x": 414.8,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 466.5,
+      "w": 206.1,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 672.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 720.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 768.6,
+      "w": 33,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 801.6,
+      "w": 44.7,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 846.3,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 894.3,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 waiting",
+      "x": 942.3,
+      "w": 45.7,
+      "h": 32
+     }
+    ],
+    "chip": "3",
+    "inRow": {
+     "accounts": 0,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 waiting"
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Accounts",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "accounts",
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 438.3125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 752,
+      "h": 48
+     },
+     "fit": "accounts labels chip",
+     "overlaps": [],
+     "truncated": []
+    },
+    "floatingNeedsYouPanel": {
+     "rect": {
+      "x": 628,
+      "y": 45.5,
+      "w": 360,
+      "h": 544.5
+     },
+     "coveredPoints": 0
+    }
+   },
+   "1000-en-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 752,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "accounts labels chip",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 260,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "5",
+      "x": 414.8,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 466.5,
+      "w": 206.1,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 672.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 720.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 768.6,
+      "w": 33,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 801.6,
+      "w": 44.7,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 846.3,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 894.3,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 waiting",
+      "x": 942.3,
+      "w": 45.7,
+      "h": 32
+     }
+    ],
+    "chip": "3",
+    "inRow": {
+     "accounts": 0,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 waiting"
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Accounts",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "accounts",
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 438.3125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 752,
+      "h": 48
+     },
+     "fit": "accounts labels chip",
+     "overlaps": [],
+     "truncated": []
+    },
+    "floatingNeedsYouPanel": {
+     "rect": {
+      "x": 628,
+      "y": 45.5,
+      "w": 360,
+      "h": 544.5
+     },
+     "coveredPoints": 0
+    }
+   },
+   "1000-uk-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 752,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "accounts labels chip",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 260,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "5",
+      "x": 414.8,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 466.5,
+      "w": 206.1,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 672.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 720.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 768.6,
+      "w": 33,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 801.6,
+      "w": 44.7,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 846.3,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 894.3,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 чекають",
+      "x": 942.3,
+      "w": 45.7,
+      "h": 32
+     }
+    ],
+    "chip": "3",
+    "inRow": {
+     "accounts": 0,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 чекають"
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Акаунти",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "accounts",
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 438.3125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 752,
+      "h": 48
+     },
+     "fit": "accounts labels chip",
+     "overlaps": [],
+     "truncated": []
+    },
+    "floatingNeedsYouPanel": {
+     "rect": {
+      "x": 628,
+      "y": 45.5,
+      "w": 360,
+      "h": 544.5
+     },
+     "coveredPoints": 0
+    }
+   },
+   "1000-uk-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 752,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "accounts labels chip",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 260,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "5",
+      "x": 414.8,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 466.5,
+      "w": 206.1,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 672.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 720.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 768.6,
+      "w": 33,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 801.6,
+      "w": 44.7,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 846.3,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 894.3,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 чекають",
+      "x": 942.3,
+      "w": 45.7,
+      "h": 32
+     }
+    ],
+    "chip": "3",
+    "inRow": {
+     "accounts": 0,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 чекають"
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Акаунти",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "accounts",
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 438.3125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 752,
+      "h": 48
+     },
+     "fit": "accounts labels chip",
+     "overlaps": [],
+     "truncated": []
+    },
+    "floatingNeedsYouPanel": {
+     "rect": {
+      "x": 628,
+      "y": 45.5,
+      "w": 360,
+      "h": 544.5
+     },
+     "coveredPoints": 0
+    }
+   },
+   "1440-en-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1192,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 264,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 410.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 536.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 666.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 717.9,
+      "w": 190.2,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 908.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 956.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1004.1,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1123.8,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1215.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1263.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 waiting",
+      "x": 1311.6,
+      "w": 112.4,
+      "h": 32
+     }
+    ],
+    "chip": "Needs you 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 waiting"
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 807.625,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 1192,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "1440-en-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 872,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "accounts",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 264,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "5",
+      "x": 418.8,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 470.5,
+      "w": 246.0,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 716.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 764.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 812.5,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 932.2,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1024,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1072,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 0,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Accounts",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "accounts",
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 616,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "1440-en-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1192,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 264,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 410.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 536.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 666.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 717.9,
+      "w": 190.2,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 908.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 956.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1004.1,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1123.8,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1215.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1263.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 waiting",
+      "x": 1311.6,
+      "w": 112.4,
+      "h": 32
+     }
+    ],
+    "chip": "Needs you 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 waiting"
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 807.625,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 1192,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "1440-en-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 872,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "accounts",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 264,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "5",
+      "x": 418.8,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 470.5,
+      "w": 246.0,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 716.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 764.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 812.5,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 932.2,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1024,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1072,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 0,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Accounts",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "accounts",
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 616,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "1440-uk-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1192,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 264,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 410.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 536.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 666.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 717.9,
+      "w": 173.8,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 891.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 939.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 987.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1110.9,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1208.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1256.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 чекають",
+      "x": 1304.0,
+      "w": 120.0,
+      "h": 32
+     }
+    ],
+    "chip": "Потрібні ви 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 чекають"
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 800.03125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 1192,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "1440-uk-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 872,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "accounts",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 264,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "5",
+      "x": 418.8,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 470.5,
+      "w": 237.2,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 707.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 755.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 803.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 926.8,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1024,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1072,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 0,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Акаунти",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "accounts",
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 616,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "1440-uk-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1192,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 264,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 410.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 536.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 666.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 717.9,
+      "w": 173.8,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 891.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 939.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 987.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1110.9,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1208.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1256.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 чекають",
+      "x": 1304.0,
+      "w": 120.0,
+      "h": 32
+     }
+    ],
+    "chip": "Потрібні ви 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 чекають"
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 800.03125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 1192,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "1440-uk-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 872,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "accounts",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 264,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "5",
+      "x": 418.8,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 470.5,
+      "w": 237.2,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 707.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 755.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 803.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 926.8,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1024,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1072,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 0,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Акаунти",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "accounts",
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 616,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "390-en-light": {
+    "h": 52,
+    "text": "harbor-ledger-service3",
+    "targets": [
+     {
+      "x": 4,
+      "w": 236,
+      "h": 44
+     },
+     {
+      "x": 242,
+      "w": 52,
+      "h": 44
+     },
+     {
+      "x": 296,
+      "w": 44,
+      "h": 44
+     },
+     {
+      "x": 342,
+      "w": 44,
+      "h": 44
+     }
+    ],
+    "menuRows": [
+     "new-agent",
+     "new-task",
+     "new-pipeline",
+     "tasks",
+     "pipelines",
+     "hidden",
+     "view-board",
+     "view-catalog",
+     "accounts",
+     "host",
+     "activity",
+     "team",
+     "self-update",
+     "settings",
+     "help",
+     "rules"
+    ]
+   },
+   "390-en-dark": {
+    "h": 52,
+    "text": "harbor-ledger-service3",
+    "targets": [
+     {
+      "x": 4,
+      "w": 236,
+      "h": 44
+     },
+     {
+      "x": 242,
+      "w": 52,
+      "h": 44
+     },
+     {
+      "x": 296,
+      "w": 44,
+      "h": 44
+     },
+     {
+      "x": 342,
+      "w": 44,
+      "h": 44
+     }
+    ],
+    "menuRows": [
+     "new-agent",
+     "new-task",
+     "new-pipeline",
+     "tasks",
+     "pipelines",
+     "hidden",
+     "view-board",
+     "view-catalog",
+     "accounts",
+     "host",
+     "activity",
+     "team",
+     "self-update",
+     "settings",
+     "help",
+     "rules"
+    ]
+   },
+   "390-uk-light": {
+    "h": 52,
+    "text": "harbor-ledger-service3",
+    "targets": [
+     {
+      "x": 4,
+      "w": 236,
+      "h": 44
+     },
+     {
+      "x": 242,
+      "w": 52,
+      "h": 44
+     },
+     {
+      "x": 296,
+      "w": 44,
+      "h": 44
+     },
+     {
+      "x": 342,
+      "w": 44,
+      "h": 44
+     }
+    ],
+    "menuRows": [
+     "new-agent",
+     "new-task",
+     "new-pipeline",
+     "tasks",
+     "pipelines",
+     "hidden",
+     "view-board",
+     "view-catalog",
+     "accounts",
+     "host",
+     "activity",
+     "team",
+     "self-update",
+     "settings",
+     "help",
+     "rules"
+    ]
+   },
+   "390-uk-dark": {
+    "h": 52,
+    "text": "harbor-ledger-service3",
+    "targets": [
+     {
+      "x": 4,
+      "w": 236,
+      "h": 44
+     },
+     {
+      "x": 242,
+      "w": 52,
+      "h": 44
+     },
+     {
+      "x": 296,
+      "w": 44,
+      "h": 44
+     },
+     {
+      "x": 342,
+      "w": 44,
+      "h": 44
+     }
+    ],
+    "menuRows": [
+     "new-agent",
+     "new-task",
+     "new-pipeline",
+     "tasks",
+     "pipelines",
+     "hidden",
+     "view-board",
+     "view-catalog",
+     "accounts",
+     "host",
+     "activity",
+     "team",
+     "self-update",
+     "settings",
+     "help",
+     "rules"
+    ]
+   },
+   "1960-en-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1712,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 1016.1,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 1424.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 1472.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1520.1,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1639.8,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1731.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1779.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 waiting",
+      "x": 1827.6,
+      "w": 112.4,
+      "h": 32
+     }
+    ],
+    "chip": "Needs you 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 waiting"
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1323.625,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 1712,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "1960-en-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1392,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 824.5,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 1232.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 1280.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1328.5,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1448.2,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1540,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1588,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1132,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "1960-en-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1712,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 1016.1,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 1424.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 1472.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1520.1,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1639.8,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1731.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1779.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 waiting",
+      "x": 1827.6,
+      "w": 112.4,
+      "h": 32
+     }
+    ],
+    "chip": "Needs you 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 waiting"
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1323.625,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 1712,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "1960-en-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1392,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 824.5,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 1232.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 1280.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1328.5,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1448.2,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1540,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1588,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1132,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "1960-uk-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1712,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 999.7,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 1407.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 1455.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 1503.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1626.9,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1724.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1772.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 чекають",
+      "x": 1820.0,
+      "w": 120.0,
+      "h": 32
+     }
+    ],
+    "chip": "Потрібні ви 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 чекають"
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1316.03125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 1712,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "1960-uk-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1392,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 815.7,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 1223.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 1271.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 1319.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1442.8,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1540,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1588,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1132,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "1960-uk-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1712,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 999.7,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 1407.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 1455.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 1503.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1626.9,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1724.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1772.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 чекають",
+      "x": 1820.0,
+      "w": 120.0,
+      "h": 32
+     }
+    ],
+    "chip": "Потрібні ви 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 чекають"
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1316.03125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 1712,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "1960-uk-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1392,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 815.7,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 1223.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 1271.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 1319.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1442.8,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1540,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1588,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1132,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "2254-en-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 2006,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 1310.1,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 1718.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 1766.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1814.1,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1933.8,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 2025.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 2073.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 waiting",
+      "x": 2121.6,
+      "w": 112.4,
+      "h": 32
+     }
+    ],
+    "chip": "Needs you 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 waiting"
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1617.625,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 2006,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "2254-en-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1686,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 1118.5,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 1526.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 1574.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1622.5,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1742.2,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1834,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1882,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1426,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "2254-en-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 2006,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 1310.1,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 1718.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 1766.1,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1814.1,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1933.8,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 2025.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 2073.6,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 waiting",
+      "x": 2121.6,
+      "w": 112.4,
+      "h": 32
+     }
+    ],
+    "chip": "Needs you 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 waiting"
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1617.625,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 2006,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "2254-en-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1686,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Claude accounts — switch or add — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Codex accounts — switch or add — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Find a task",
+      "x": 1118.5,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Filter",
+      "x": 1526.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Create",
+      "x": 1574.5,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Orchestrator panel",
+      "x": 1622.5,
+      "w": 119.7,
+      "h": 32
+     },
+     {
+      "name": "Toggle the task panel",
+      "x": 1742.2,
+      "w": 91.8,
+      "h": 32
+     },
+     {
+      "name": "Recent agents",
+      "x": 1834,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "More actions",
+      "x": 1882,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "New task",
+     "New conversation with an agent"
+    ],
+    "more": {
+     "rows": [
+      "Search your messages (/)",
+      "2 hidden tasks and conversations",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Hidden2"
+    },
+    "filter": {
+     "needs": "Needs you1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "All tasks"
+      },
+      {
+       "id": "no-reason",
+       "text": "No reason2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1426,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "2254-uk-light": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 2006,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 1293.7,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 1701.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 1749.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 1797.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1920.9,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 2018.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 2066.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 чекають",
+      "x": 2114.0,
+      "w": 120.0,
+      "h": 32
+     }
+    ],
+    "chip": "Потрібні ви 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 чекають"
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1610.03125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 2006,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "2254-uk-light-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1686,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 1109.7,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 1517.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 1565.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 1613.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1736.8,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1834,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1882,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1426,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "2254-uk-dark": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 2006,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 1293.7,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 1701.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 1749.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 1797.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1920.9,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 2018.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 2066.0,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "3 чекають",
+      "x": 2114.0,
+      "w": 120.0,
+      "h": 32
+     }
+    ],
+    "chip": "Потрібні ви 3",
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": true,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "tabAfterMore": {
+     "inIsland": true,
+     "label": "3 чекають"
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1610.03125,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    },
+    "tasksOpen": {
+     "bar": {
+      "x": 248,
+      "y": 0,
+      "w": 2006,
+      "h": 48
+     },
+     "fit": "",
+     "overlaps": [],
+     "truncated": []
+    }
+   },
+   "2254-uk-dark-docked": {
+    "bar": {
+     "x": 248,
+     "y": 0,
+     "w": 1686,
+     "h": 48
+    },
+    "rowsUnderBar": 0,
+    "fit": "",
+    "overflow": 0,
+    "overlaps": [],
+    "truncated": [],
+    "covered": [],
+    "unnamedIcons": [],
+    "controls": [
+     {
+      "name": "harbor-ledger-service",
+      "x": 268,
+      "w": 138.8,
+      "h": 19.6
+     },
+     {
+      "name": "Акаунти Claude — змінити або додати — Main",
+      "x": 414.8,
+      "w": 117.4,
+      "h": 32
+     },
+     {
+      "name": "Акаунти Codex — змінити або додати — Main",
+      "x": 540.2,
+      "w": 114.0,
+      "h": 32
+     },
+     {
+      "name": "5",
+      "x": 670.2,
+      "w": 19.7,
+      "h": 17.4
+     },
+     {
+      "name": "Знайти задачу",
+      "x": 1109.7,
+      "w": 408,
+      "h": 32
+     },
+     {
+      "name": "Фільтр",
+      "x": 1517.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Створити",
+      "x": 1565.7,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Панель оркестратора",
+      "x": 1613.7,
+      "w": 123.1,
+      "h": 32
+     },
+     {
+      "name": "Показати або сховати панель задач",
+      "x": 1736.8,
+      "w": 97.2,
+      "h": 32
+     },
+     {
+      "name": "Недавні агенти",
+      "x": 1834,
+      "w": 32,
+      "h": 32
+     },
+     {
+      "name": "Більше дій",
+      "x": 1882,
+      "w": 32,
+      "h": 32
+     }
+    ],
+    "chip": null,
+    "inRow": {
+     "accounts": 2,
+     "status": true,
+     "search": true,
+     "filter": true,
+     "create": true,
+     "orchestrator": true,
+     "tasks": true,
+     "recentAgents": true,
+     "more": true,
+     "needsYou": false,
+     "viewSwitch": false,
+     "hiddenPill": false,
+     "createButtons": false,
+     "funnel": false,
+     "reasonChips": false
+    },
+    "create": [
+     "Нова задача",
+     "Нова розмова з агентом"
+    ],
+    "more": {
+     "rows": [
+      "Пошук моїх повідомлень (/)",
+      "2 приховані задачі чи розмови",
+      "Вимкнути звукові сповіщення",
+      "Рівні звуку",
+      "Вивчені правила0 правил",
+      "Мердж і синхронізація",
+      "Оркестратор"
+     ],
+     "sections": [
+      "merging",
+      "seat"
+     ],
+     "hidden": "Приховані2"
+    },
+    "filter": {
+     "needs": "Потрібні ви1F",
+     "reasons": [
+      {
+       "id": "",
+       "text": "Усі задачі"
+      },
+      {
+       "id": "no-reason",
+       "text": "Без причини2"
+      }
+     ]
+    },
+    "recentAgents": {
+     "rows": 24,
+     "count": "24",
+     "rect": {
+      "x": 1426,
+      "y": 43.5,
+      "w": 440,
+      "h": 560
+     }
+    }
+   },
+   "2254:quiet": {
+    "long": {
+     "fit": "",
+     "height": 48,
+     "nameWidth": 220,
+     "nameCut": true,
+     "overflow": 0
+    },
+    "menu": {
+     "rows": [
+      "Search your messages (/)",
+      "Mute sound notifications",
+      "Sound levels",
+      "Learned rules0 rules",
+      "Merging and syncing",
+      "Orchestrator",
+      "Archive or delete"
+     ],
+     "sections": [
+      "merging",
+      "seat",
+      "project"
+     ]
+    }
+   }
+  }
+ }
+}
