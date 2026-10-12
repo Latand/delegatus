@@ -203,24 +203,41 @@ function useShell(probe: React.RefObject<HTMLElement | null>, own: React.RefObje
 }
 
 interface Row { top: number; bottom: number }
-/** Every line of text, icon and control the panes show, and every message and card whole, as spans of height a plate's edge must not cross. */
+/**
+ * Every line of text, icon and control the panes show, and every message and card whole, as spans of height a plate's
+ * edge must not cross. A line a clamped title or any other clipping ancestor cuts off is not on screen and is not a row:
+ * its rectangle is cut to the clips between it and the pane, and text nobody sees (screen-reader only, hidden) adds none.
+ */
 function pageRows(): Row[] {
   const rows: Row[] = [];
   const range = document.createRange();
+  const clips = new Map<Element, Box | null>();
+  const clipOf = (node: Element): Box | null => {
+    if (!clips.has(node)) {
+      const style = getComputedStyle(node);
+      clips.set(node, style.overflowX !== "visible" || style.overflowY !== "visible" ? box(node) : null);
+    }
+    return clips.get(node)!;
+  };
   for (const pane of panes()) {
     const frame = box(pane)!;
-    const add = (rect: DOMRect) => {
-      const top = Math.max(rect.top, frame.y), bottom = Math.min(rect.bottom, frame.y + frame.height);
+    const add = (rect: DOMRect, within: Element) => {
+      let top = Math.max(rect.top, frame.y), bottom = Math.min(rect.bottom, frame.y + frame.height);
+      for (let parent: Element | null = within; parent && parent !== pane; parent = parent.parentElement) {
+        const clip = clipOf(parent);
+        if (clip) { top = Math.max(top, clip.y); bottom = Math.min(bottom, clip.y + clip.height); }
+      }
       if (rect.width >= 1 && bottom - top >= 1) rows.push({ top, bottom });
     };
     const walker = document.createTreeWalker(pane, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (!node.textContent?.trim()) continue;
+      const parent = node.parentElement;
+      if (!parent || !node.textContent?.trim() || parent.closest(".sr-only, [hidden]")) continue;
       range.selectNodeContents(node);
-      for (const line of range.getClientRects()) add(line);
+      for (const line of range.getClientRects()) add(line, parent);
     }
-    for (const mark of pane.querySelectorAll("svg, img, button")) add(mark.getBoundingClientRect());
-    for (const block of pane.querySelectorAll(ATOMIC)) add(block.getBoundingClientRect());
+    for (const mark of pane.querySelectorAll("svg, img, button")) add(mark.getBoundingClientRect(), mark);
+    for (const block of pane.querySelectorAll(ATOMIC)) add(block.getBoundingClientRect(), block);
   }
   return rows;
 }

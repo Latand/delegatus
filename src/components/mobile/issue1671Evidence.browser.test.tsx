@@ -10459,6 +10459,8 @@ describe("phone voice head", () => {
     drag: { uk: "перетягування в лівий кут", en: "dragging to the left corner" },
     navigation: { uk: "розмова триває на дошці проєкту B", en: "the call goes on on project B's board" },
     "navigation-product": { uk: "на дошці проєкту B без розмови", en: "on project B's board, no call" },
+    "navigation-column-end": { uk: "кінець колонки, картки видно", en: "column end, last card clear" },
+    "navigation-product-column-end": { uk: "кінець колонки без розмови", en: "column end, no call" },
   };
   const HEAD = "[data-phone-voice-head]";
   const BAR_MENU = '[data-mobile2-bar] [data-mobile2-open="menu"]';
@@ -10573,6 +10575,14 @@ describe("phone voice head", () => {
       paneAtEnd: (() => {
         const pane = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller], [data-phone-kanban-column]")].map((node) => ({ node, r: rect(node) })).filter(({ r }) => r && r.x > -1 && r.x + r.width < innerWidth + 1).sort((a, b) => b.r!.height - a.r!.height)[0]?.node;
         return pane ? pane.scrollHeight - pane.scrollTop - pane.clientHeight < 4 : true;
+      })(),
+      /* Where the list the head stands over ends: its box, the padding kept at its end and its last card or message whole. */
+      listTail: (() => {
+        const pane = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller], [data-phone-kanban-column]")].map((node) => ({ node, r: rect(node) })).filter(({ r }) => r && r.x > -1 && r.x + r.width < innerWidth + 1).sort((a, b) => b.r!.height - a.r!.height)[0]?.node;
+        if (!pane) return null;
+        const last = [...pane.querySelectorAll("[data-mobile-message], [data-phone-card-shell], [data-phone-kanban-more], [data-phone-kanban-unlinked]")].flatMap((node) => rect(node) ?? []).sort((a, b) => b.y + b.height - (a.y + a.height))[0] ?? null;
+        const frame = pane.getBoundingClientRect();
+        return { paneBottom: frame.bottom, padding: parseFloat(getComputedStyle(pane).paddingBottom), lastBottom: last ? last.y + last.height : null };
       })(),
       stored: localStorage.getItem("llv:phone-voice:v1"),
       record: (window as unknown as { phoneVoice: { starts: string[]; projects: Array<string | null>; closes: number; sessionRequests: number } }).phoneVoice,
@@ -10861,6 +10871,9 @@ describe("phone voice head", () => {
               await pause(page, 600);
               const atEnd = await read(page);
               readings.push({ group, combo, scene: `${group}-column-end`, reading: atEnd });
+              await stamp(size, await page.screenshot(), band(`${group}-column-end`, false), path.join(out, `${group}-column-end-${combo}.png`));
+              /* At a list's end the band holds the head's room: the plate is the head and its words, 8 px around, and clears no card. */
+              if (atEnd.plate && atEnd.plate.height > 68.5) fail(group, `at the column's end the plate is ${atEnd.plate.height}px high, not 68, and hides the cards under it (the last card ends at ${atEnd.listTail?.lastBottom})`);
               if (!atEnd.paneAtEnd || atEnd.textUnderHeadPx2 > 0 || atEnd.controlsUnderHeadPx2 > 0 || atEnd.textUnderWordsPx2 > 0) fail(group, `at the column's end the head lies on ${atEnd.textUnderHeadPx2 + atEnd.textUnderWordsPx2}px² of text and ${atEnd.controlsUnderHeadPx2}px² of controls`);
               readings.push({ group, combo, scene: `${group}-path`, reading: { projects: [first, second], atA: { phase: atA.phase, callStart: atA.callStart }, overTask: { head: overTask.head, phase: overTask.phase } } });
               if (!same) fail(group, "the head was mounted again on the way");

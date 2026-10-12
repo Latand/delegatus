@@ -114,7 +114,9 @@ variant 1).
 - **Cleared page.** While the bubble shows, the head and the bubble stand on a plate in the pane's own colour with no
   border and no shadow, spanning both with 8 px around; each edge moves outward to the nearest gap between whole
   messages (`[data-mobile-message]`) or whole cards (`[data-phone-card-shell]`, `[data-phone-kanban-more]`,
-  `[data-phone-kanban-unlinked]`), as the prototype's `WordsPlate` does. At the end of a list the plate is 68 px and
+  `[data-phone-kanban-unlinked]`), as the prototype's `WordsPlate` does. A line that a clamped title or another clipping
+  ancestor cuts off is cut to that clip and adds no row (a clamped title's hidden lines once read as rows below the last
+  card and stretched the plate over it); screen-reader-only text adds none. At the end of a list the plate is 68 px and
   clears nothing (the band holds that room). It takes the touch. It is computed only while the bubble shows, and again
   on scroll (one per animation frame at most).
 - **Drag.** Past 6 px of movement the head follows the finger; the two resting places (bottom left and bottom right of

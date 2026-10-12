@@ -32,7 +32,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791821917986,
+        "callStart": 1791832470495,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -66,6 +66,11 @@
         "feedBand": 76,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 649,
+          "padding": 12,
+          "lastBottom": 626
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -103,7 +108,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791821917986,
+        "callStart": 1791832470495,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -151,6 +156,11 @@
         "feedBand": 76,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 649,
+          "padding": 12,
+          "lastBottom": 626
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -198,7 +208,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": "open",
-        "callStart": 1791821917986,
+        "callStart": 1791832470495,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -232,6 +242,11 @@
         "feedBand": 0,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 725,
+          "padding": 12,
+          "lastBottom": 664
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -274,7 +289,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": "full",
-        "callStart": 1791821917986,
+        "callStart": 1791832470495,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -303,6 +318,11 @@
         "feedBand": 0,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 725,
+          "padding": 12,
+          "lastBottom": 664
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -356,6 +376,11 @@
         "feedBand": 0,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 725,
+          "padding": 12,
+          "lastBottom": 664
+        },
         "stored": "{\"hidden\":true,\"side\":\"right\"}",
         "record": {
           "starts": [
@@ -393,7 +418,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791821957018,
+        "callStart": 1791832509946,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -427,6 +452,11 @@
         "feedBand": 76,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 472,
+          "padding": 12,
+          "lastBottom": 431
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -464,7 +494,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791821957018,
+        "callStart": 1791832509946,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -512,6 +542,11 @@
         "feedBand": 76,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 472,
+          "padding": 12,
+          "lastBottom": 431
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -559,7 +594,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": "open",
-        "callStart": 1791821957018,
+        "callStart": 1791832509946,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -593,6 +628,11 @@
         "feedBand": 0,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 548,
+          "padding": 12,
+          "lastBottom": 469
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -635,7 +675,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": "full",
-        "callStart": 1791821957018,
+        "callStart": 1791832509946,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -664,6 +704,11 @@
         "feedBand": 0,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 548,
+          "padding": 12,
+          "lastBottom": 469
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -717,6 +762,11 @@
         "feedBand": 0,
         "feedAtEnd": true,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 548,
+          "padding": 12,
+          "lastBottom": 469
+        },
         "stored": "{\"hidden\":true,\"side\":\"right\"}",
         "record": {
           "starts": [
@@ -775,6 +825,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 787,
+          "padding": 0,
+          "lastBottom": null
+        },
         "stored": "{\"hidden\":true,\"side\":\"right\"}",
         "record": {
           "starts": [],
@@ -861,6 +916,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 787,
+          "padding": 76,
+          "lastBottom": null
+        },
         "stored": "{\"hidden\":false,\"side\":\"right\"}",
         "record": {
           "starts": [],
@@ -918,6 +978,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 787,
+          "padding": 76,
+          "lastBottom": null
+        },
         "stored": "{\"hidden\":false,\"side\":\"right\"}",
         "record": {
           "starts": [],
@@ -975,6 +1040,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 787,
+          "padding": 76,
+          "lastBottom": null
+        },
         "stored": "{\"hidden\":false,\"side\":\"left\"}",
         "record": {
           "starts": [],
@@ -1029,6 +1099,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 610,
+          "padding": 0,
+          "lastBottom": null
+        },
         "stored": "{\"hidden\":true,\"side\":\"right\"}",
         "record": {
           "starts": [],
@@ -1115,6 +1190,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 610,
+          "padding": 76,
+          "lastBottom": null
+        },
         "stored": "{\"hidden\":false,\"side\":\"right\"}",
         "record": {
           "starts": [],
@@ -1172,6 +1252,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 610,
+          "padding": 76,
+          "lastBottom": null
+        },
         "stored": "{\"hidden\":false,\"side\":\"right\"}",
         "record": {
           "starts": [],
@@ -1229,6 +1314,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 610,
+          "padding": 76,
+          "lastBottom": null
+        },
         "stored": "{\"hidden\":false,\"side\":\"left\"}",
         "record": {
           "starts": [],
@@ -1267,7 +1357,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791821939185,
+        "callStart": 1791832491264,
         "chromeLine": 787,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -1301,6 +1391,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 787,
+          "padding": 76,
+          "lastBottom": 602.25
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -1345,7 +1440,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791821939185,
+        "callStart": 1791832491264,
         "chromeLine": 787,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -1379,6 +1474,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 787,
+          "padding": 76,
+          "lastBottom": 602.25
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -1405,7 +1505,7 @@
         ],
         "atA": {
           "phase": "idle",
-          "callStart": 1791821939185
+          "callStart": 1791832491264
         },
         "overTask": {
           "head": {
@@ -1437,9 +1537,9 @@
         },
         "plate": {
           "x": 0,
-          "y": 394.5,
+          "y": 498.625,
           "width": 375,
-          "height": 215.5
+          "height": 111.375
         },
         "pop": null,
         "sheet": null,
@@ -1447,7 +1547,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791821978134,
+        "callStart": 1791832530213,
         "chromeLine": 610,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -1481,6 +1581,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": false,
+        "listTail": {
+          "paneBottom": 610,
+          "padding": 76,
+          "lastBottom": 602.25
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -1515,9 +1620,9 @@
         },
         "plate": {
           "x": 0,
-          "y": 314.5,
+          "y": 542,
           "width": 375,
-          "height": 295.5
+          "height": 68
         },
         "pop": null,
         "sheet": null,
@@ -1525,7 +1630,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791821978134,
+        "callStart": 1791832530213,
         "chromeLine": 610,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -1559,6 +1664,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 610,
+          "padding": 76,
+          "lastBottom": 522.25
+        },
         "stored": null,
         "record": {
           "starts": [
@@ -1585,7 +1695,7 @@
         ],
         "atA": {
           "phase": "idle",
-          "callStart": 1791821978134
+          "callStart": 1791832530213
         },
         "overTask": {
           "head": {
@@ -1646,6 +1756,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 787,
+          "padding": 76,
+          "lastBottom": 602.25
+        },
         "stored": null,
         "record": {
           "starts": [],
@@ -1703,6 +1818,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 787,
+          "padding": 76,
+          "lastBottom": 602.25
+        },
         "stored": null,
         "record": {
           "starts": [],
@@ -1784,6 +1904,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": false,
+        "listTail": {
+          "paneBottom": 610,
+          "padding": 76,
+          "lastBottom": 602.25
+        },
         "stored": null,
         "record": {
           "starts": [],
@@ -1841,6 +1966,11 @@
         "feedBand": null,
         "feedAtEnd": null,
         "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 610,
+          "padding": 76,
+          "lastBottom": 522.25
+        },
         "stored": null,
         "record": {
           "starts": [],
