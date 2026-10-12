@@ -404,3 +404,21 @@ other fenced lanes had no published branch yet.
   first real session is the operator's own.
 - The on-screen keyboard: headless Chromium has none; the head follows the composer's box, which is what the keyboard
   moves.
+
+## Build notes (2026-10-12)
+
+What the build changed from this design, each found while rendering it:
+
+- **The band on the conversation is a margin.** The phone feed aligns its tail on the blank space under its last row
+  (`alignFollowedTop` in `LogFeed.tsx`): with the band as padding, that space grew by 76 px and the feed stepped back
+  into it, so the last message sat in the band and the cleared page hid it. The head's stylesheet gives the feed's
+  scroller `margin-bottom` instead, so the conversation ends above the head; the board's column keeps the band as
+  `padding-bottom`. Neither file is edited.
+- **«Показати голос» is in the ⋯ menu that holds «Налаштування»:** the board's and the Overview's. A conversation's
+  ⋯ is its own menu (this turn, the conversation, close or stop) and has no settings row, so the row is not there.
+- **A bubble holds two lines' worth of a line** (`PHONE_BUBBLE_CHARS`, 58 characters: two of the four lines
+  `bubbleChars(280)` sizes), so the two-line clamp never cuts a piece the nominal pace has reached.
+- **The `sim` scene goes through the product host.** `VoiceCompanionHost` takes its adapter from a factory that only the
+  fixture replaces (`setVoiceCompanionAdapterForTests`), so the navigation case runs the Viewer's own mount and
+  `dashboardProject`. The full-height sheet is the real `MobileSheet full` with a footer, opened by the fixture; the
+  phone fixture has no prototype review of its own.

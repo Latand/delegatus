@@ -1,0 +1,1879 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "design": "docs/design/phone-voice-head-build.md",
+  "groups": [
+    "call",
+    "product",
+    "navigation",
+    "navigation-product"
+  ],
+  "readings": [
+    {
+      "group": "call",
+      "combo": "390x844-uk-light",
+      "scene": "talk",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 665,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 42,
+          "y": 665,
+          "width": 280,
+          "height": 52
+        },
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1791821917986,
+        "chromeLine": 725,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(255, 253, 250)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": false
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "Ось уся картина релізу. Від ранку злито",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 76,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "390x844-uk-light",
+      "scene": "menu",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 665,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": {
+          "x": 146,
+          "y": 483,
+          "width": 236,
+          "height": 174
+        },
+        "sheet": null,
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1791821917986,
+        "chromeLine": 725,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [
+          {
+            "key": "mute",
+            "height": 44,
+            "text": "Вимкнути мікрофон",
+            "cut": false
+          },
+          {
+            "key": "end",
+            "height": 44,
+            "text": "Завершити розмову",
+            "cut": false
+          },
+          {
+            "key": "hide",
+            "height": 44,
+            "text": "Сховати",
+            "cut": false
+          }
+        ],
+        "status": "Говорю· 0:02",
+        "sideways": 0,
+        "feedBand": 76,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "390x844-uk-light",
+      "scene": "sheet",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 412,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 49.625,
+          "y": 422,
+          "width": 272.375,
+          "height": 32
+        },
+        "plate": {
+          "x": 1,
+          "y": 288.25,
+          "width": 388,
+          "height": 183.75
+        },
+        "pop": null,
+        "sheet": {
+          "x": 0,
+          "y": 472,
+          "width": 390,
+          "height": 372
+        },
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": "open",
+        "callStart": 1791821917986,
+        "chromeLine": 725,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(255, 253, 250)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": true
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "чотири смуги: банер повтору, адаптер",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 0,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "390x844-uk-light",
+      "scene": "full-sheet",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 724,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": {
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 844
+        },
+        "footer": {
+          "x": 0,
+          "y": 784,
+          "width": 390,
+          "height": 54
+        },
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": "full",
+        "callStart": 1791821917986,
+        "chromeLine": 725,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 1560,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 2704,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 412,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 0,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "390x844-uk-light",
+      "scene": "hidden",
+      "reading": {
+        "head": null,
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": null,
+        "side": null,
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 725,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": null,
+        "headLook": null,
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 0,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":true,\"side\":\"right\"}",
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 1,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "375x667-en-dark",
+      "scene": "talk",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 488,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 27,
+          "y": 488,
+          "width": 280,
+          "height": 52
+        },
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1791821957018,
+        "chromeLine": 548,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(25, 27, 35)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": false
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "Here's the whole picture of the release. Four",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 76,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "375x667-en-dark",
+      "scene": "menu",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 488,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": {
+          "x": 131,
+          "y": 306,
+          "width": 236,
+          "height": 174
+        },
+        "sheet": null,
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1791821957018,
+        "chromeLine": 548,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [
+          {
+            "key": "mute",
+            "height": 44,
+            "text": "Mute",
+            "cut": false
+          },
+          {
+            "key": "end",
+            "height": 44,
+            "text": "End conversation",
+            "cut": false
+          },
+          {
+            "key": "hide",
+            "height": 44,
+            "text": "Hide",
+            "cut": false
+          }
+        ],
+        "status": "Speaking· 0:02",
+        "sideways": 0,
+        "feedBand": 76,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "375x667-en-dark",
+      "scene": "sheet",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 235,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 27,
+          "y": 235,
+          "width": 280,
+          "height": 52
+        },
+        "plate": {
+          "x": 1,
+          "y": 93.25,
+          "width": 373,
+          "height": 205.75
+        },
+        "pop": null,
+        "sheet": {
+          "x": 0,
+          "y": 295,
+          "width": 375,
+          "height": 372
+        },
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": "open",
+        "callStart": 1791821957018,
+        "chromeLine": 548,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(25, 27, 35)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": true
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "lanes merged since this morning: the retry",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 0,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "375x667-en-dark",
+      "scene": "full-sheet",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 547,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": {
+          "x": 0,
+          "y": 0,
+          "width": 375,
+          "height": 667
+        },
+        "footer": {
+          "x": 0,
+          "y": 607,
+          "width": 375,
+          "height": 54
+        },
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": "full",
+        "callStart": 1791821957018,
+        "chromeLine": 548,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 1560,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 2704,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 534,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 0,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "375x667-en-dark",
+      "scene": "hidden",
+      "reading": {
+        "head": null,
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": null,
+        "side": null,
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 548,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": null,
+        "headLook": null,
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 0,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":true,\"side\":\"right\"}",
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 1,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "product",
+      "combo": "390x844-uk-light",
+      "scene": "menu-hidden",
+      "reading": {
+        "head": null,
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": {
+          "x": 0,
+          "y": 139,
+          "width": 390,
+          "height": 705
+        },
+        "footer": null,
+        "phase": null,
+        "side": null,
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 787,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": null,
+        "headLook": null,
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":true,\"side\":\"right\"}",
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "product",
+      "combo": "390x844-uk-light",
+      "scene": "menu-hidden-row",
+      "reading": {
+        "keys": [
+          "new-agent",
+          "new-task",
+          "new-pipeline",
+          "tasks",
+          "pipelines",
+          "hidden",
+          "view-board",
+          "view-catalog",
+          "accounts",
+          "host",
+          "activity",
+          "team",
+          "self-update",
+          "voice-show",
+          "settings",
+          "help",
+          "rules"
+        ],
+        "text": "Показати голос",
+        "height": 44,
+        "inBody": true
+      }
+    },
+    {
+      "group": "product",
+      "combo": "390x844-uk-light",
+      "scene": "restored",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 727,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "right",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 787,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":false,\"side\":\"right\"}",
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "product",
+      "combo": "390x844-uk-light",
+      "scene": "drag",
+      "reading": {
+        "head": {
+          "x": 130,
+          "y": 667,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "right",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 787,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":false,\"side\":\"right\"}",
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "product",
+      "combo": "390x844-uk-light",
+      "scene": "drag-reloaded",
+      "reading": {
+        "head": {
+          "x": 8,
+          "y": 727,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "left",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 787,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":false,\"side\":\"left\"}",
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "product",
+      "combo": "375x667-en-dark",
+      "scene": "menu-hidden",
+      "reading": {
+        "head": null,
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": {
+          "x": 0,
+          "y": 80.046875,
+          "width": 375,
+          "height": 586.953125
+        },
+        "footer": null,
+        "phase": null,
+        "side": null,
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 610,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": null,
+        "headLook": null,
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":true,\"side\":\"right\"}",
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "product",
+      "combo": "375x667-en-dark",
+      "scene": "menu-hidden-row",
+      "reading": {
+        "keys": [
+          "new-agent",
+          "new-task",
+          "new-pipeline",
+          "tasks",
+          "pipelines",
+          "hidden",
+          "view-board",
+          "view-catalog",
+          "accounts",
+          "host",
+          "activity",
+          "team",
+          "self-update",
+          "voice-show",
+          "settings",
+          "help",
+          "rules"
+        ],
+        "text": "Show voice",
+        "height": 44,
+        "inBody": true
+      }
+    },
+    {
+      "group": "product",
+      "combo": "375x667-en-dark",
+      "scene": "restored",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 550,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "right",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 610,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":false,\"side\":\"right\"}",
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "product",
+      "combo": "375x667-en-dark",
+      "scene": "drag",
+      "reading": {
+        "head": {
+          "x": 124,
+          "y": 490,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "right",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 610,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":false,\"side\":\"right\"}",
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "product",
+      "combo": "375x667-en-dark",
+      "scene": "drag-reloaded",
+      "reading": {
+        "head": {
+          "x": 8,
+          "y": 550,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "left",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 610,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": "{\"hidden\":false,\"side\":\"left\"}",
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation",
+      "combo": "390x844-uk-light",
+      "scene": "navigation",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 727,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 42,
+          "y": 727,
+          "width": 280,
+          "height": 52
+        },
+        "plate": {
+          "x": 0,
+          "y": 719,
+          "width": 390,
+          "height": 68
+        },
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1791821939185,
+        "chromeLine": 787,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(244, 241, 236)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": false
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "Ось уся картина релізу. Від ранку злито",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "repo-c3d4c3d4c3d4c3d4"
+          ],
+          "projects": [
+            null,
+            "repo-c3d4c3d4c3d4c3d4",
+            "repo-a1b2a1b2a1b2a1b2"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation",
+      "combo": "390x844-uk-light",
+      "scene": "navigation-column-end",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 727,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 49.625,
+          "y": 737,
+          "width": 272.375,
+          "height": 32
+        },
+        "plate": {
+          "x": 0,
+          "y": 719,
+          "width": 390,
+          "height": 68
+        },
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1791821939185,
+        "chromeLine": 787,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(244, 241, 236)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": false
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "чотири смуги: банер повтору, адаптер",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "repo-c3d4c3d4c3d4c3d4"
+          ],
+          "projects": [
+            null,
+            "repo-c3d4c3d4c3d4c3d4",
+            "repo-a1b2a1b2a1b2a1b2"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation",
+      "combo": "390x844-uk-light",
+      "scene": "navigation-path",
+      "reading": {
+        "projects": [
+          "repo-c3d4c3d4c3d4c3d4",
+          "repo-a1b2a1b2a1b2a1b2"
+        ],
+        "atA": {
+          "phase": "idle",
+          "callStart": 1791821939185
+        },
+        "overTask": {
+          "head": {
+            "x": 330,
+            "y": 727,
+            "width": 52,
+            "height": 52
+          },
+          "phase": "speaking"
+        }
+      }
+    },
+    {
+      "group": "navigation",
+      "combo": "375x667-en-dark",
+      "scene": "navigation",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 550,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 27,
+          "y": 550,
+          "width": 280,
+          "height": 52
+        },
+        "plate": {
+          "x": 0,
+          "y": 394.5,
+          "width": 375,
+          "height": 215.5
+        },
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1791821978134,
+        "chromeLine": 610,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(17, 18, 24)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": false
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "Here's the whole picture of the release. Four",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": false,
+        "stored": null,
+        "record": {
+          "starts": [
+            "repo-c3d4c3d4c3d4c3d4"
+          ],
+          "projects": [
+            null,
+            "repo-c3d4c3d4c3d4c3d4",
+            "repo-a1b2a1b2a1b2a1b2"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation",
+      "combo": "375x667-en-dark",
+      "scene": "navigation-column-end",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 550,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 27,
+          "y": 550,
+          "width": 280,
+          "height": 52
+        },
+        "plate": {
+          "x": 0,
+          "y": 314.5,
+          "width": 375,
+          "height": 295.5
+        },
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1791821978134,
+        "chromeLine": 610,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(17, 18, 24)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": false
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "lanes merged since this morning: the retry",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [
+            "repo-c3d4c3d4c3d4c3d4"
+          ],
+          "projects": [
+            null,
+            "repo-c3d4c3d4c3d4c3d4",
+            "repo-a1b2a1b2a1b2a1b2"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation",
+      "combo": "375x667-en-dark",
+      "scene": "navigation-path",
+      "reading": {
+        "projects": [
+          "repo-c3d4c3d4c3d4c3d4",
+          "repo-a1b2a1b2a1b2a1b2"
+        ],
+        "atA": {
+          "phase": "idle",
+          "callStart": 1791821978134
+        },
+        "overTask": {
+          "head": {
+            "x": 315,
+            "y": 550,
+            "width": 52,
+            "height": 52
+          },
+          "phase": "speaking"
+        }
+      }
+    },
+    {
+      "group": "navigation-product",
+      "combo": "390x844-uk-light",
+      "scene": "navigation-product",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 727,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "right",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 787,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation-product",
+      "combo": "390x844-uk-light",
+      "scene": "navigation-product-column-end",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 727,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "right",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 787,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation-product",
+      "combo": "390x844-uk-light",
+      "scene": "navigation-product-path",
+      "reading": {
+        "projects": [
+          "repo-c3d4c3d4c3d4c3d4",
+          "repo-a1b2a1b2a1b2a1b2"
+        ],
+        "atA": {
+          "phase": "offline",
+          "callStart": null
+        },
+        "overTask": {
+          "head": {
+            "x": 330,
+            "y": 727,
+            "width": 52,
+            "height": 52
+          },
+          "phase": "offline"
+        }
+      }
+    },
+    {
+      "group": "navigation-product",
+      "combo": "375x667-en-dark",
+      "scene": "navigation-product",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 550,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "right",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 610,
+        "textUnderHeadPx2": 381,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 2496,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": false,
+        "stored": null,
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation-product",
+      "combo": "375x667-en-dark",
+      "scene": "navigation-product-column-end",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 550,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "offline",
+        "side": "right",
+        "sheetState": null,
+        "callStart": null,
+        "chromeLine": 610,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": null,
+        "feedAtEnd": null,
+        "paneAtEnd": true,
+        "stored": null,
+        "record": {
+          "starts": [],
+          "projects": [],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "navigation-product",
+      "combo": "375x667-en-dark",
+      "scene": "navigation-product-path",
+      "reading": {
+        "projects": [
+          "repo-c3d4c3d4c3d4c3d4",
+          "repo-a1b2a1b2a1b2a1b2"
+        ],
+        "atA": {
+          "phase": "offline",
+          "callStart": null
+        },
+        "overTask": {
+          "head": {
+            "x": 315,
+            "y": 550,
+            "width": 52,
+            "height": 52
+          },
+          "phase": "offline"
+        }
+      }
+    }
+  ],
+  "failures": []
+}
