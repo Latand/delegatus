@@ -32,6 +32,9 @@ export async function releaseCut(deployments: ReleaseDeployment[], isAncestor: R
   }
   return null;
 }
+export function releaseGapStart(lastTagAt: number, settled?: ReleaseInput["settled"]): number {
+  return Math.max(lastTagAt, settled && settled.outcome !== "published" ? settled.at : 0);
+}
 export async function releaseState(input: ReleaseInput): Promise<ReleaseDecision> {
   const count = input.changes.filter(c => classifyPaths(c.files, c.subject) === "visible").length;
   const cut = await releaseCut(input.deployments, input.isAncestor, input.now);
@@ -51,7 +54,7 @@ export async function releaseState(input: ReleaseInput): Promise<ReleaseDecision
   if (input.tools.length) return answer("blocked", 10, `capture-tools: ${input.tools.join(", ")}`);
   if (!input.requested) {
     if (input.settled?.outcome === "declined" && input.settled.cut === cut.revision) return answer("not-due", null, "declined-cut");
-    const gapFrom = Math.max(input.lastTag.at, input.settled?.at ?? 0);
+    const gapFrom = releaseGapStart(input.lastTag.at, input.settled);
     if (input.now - gapFrom < input.minGapHours * 3_600_000) return answer("not-due", null, "gap");
     if (count < input.minChanges) return answer("not-due", null, "changes");
   }

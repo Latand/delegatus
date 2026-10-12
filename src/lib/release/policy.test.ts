@@ -59,3 +59,10 @@ test("failure and decline cool down; a declined cut stays refused, a request byp
   input.requested = true;
   expect((await releaseState(input)).state).toBe("due");
 });
+
+test("a late merge after publication does not restart the twelve-hour tag gap", async () => {
+  const input = ready();
+  input.deployments = [{ revision: "one", at: 12 * hour }];
+  input.settled = { cut: "earlier", at: input.now - hour, outcome: "published" };
+  expect((await releaseState(input)).state).toBe("due");
+});

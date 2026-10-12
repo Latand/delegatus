@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import type { CreatePipelineRequest } from "@/lib/pipelines/types";
 import type { ReleaseInput } from "./policy";
-import { releaseState } from "./policy";
+import { releaseGapStart, releaseState } from "./policy";
 import { releaseStages } from "./stages";
 import { mutateReleaseProject, readReleaseProject, type ReleaseRun, type ReleaseProject } from "./store";
 import type { ReleaseSetting } from "./settings";
@@ -85,7 +85,7 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
         settled: row.history.at(-1) ?? null });
       const now = ports.now();
       mutateReleaseProject(project, current => ({ ...current, observation: { ...decision, at: now, lastTag: observed.policy.lastTag.name,
-        nextEligibleAt: Math.max(observed.policy.lastTag.at, row.history.at(-1)?.at ?? 0) + observed.policy.minGapHours * 3_600_000 },
+        nextEligibleAt: releaseGapStart(observed.policy.lastTag.at, row.history.at(-1)) + observed.policy.minGapHours * 3_600_000 },
         blocked: decision.blocker && (!!row.request || decision.count >= observed.policy.minChanges && now - observed.policy.lastTag.at >= observed.policy.minGapHours * 3_600_000)
           ? current.blocked?.kind === decision.blocker ? current.blocked : { kind: decision.blocker, since: now, episode: `${decision.blocker}:${now}` } : null }));
       if (decision.state !== "due" || !decision.cut) return `release: ${decision.reason}`;
