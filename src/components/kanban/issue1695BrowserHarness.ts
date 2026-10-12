@@ -660,7 +660,7 @@ export async function capturePrototypeQuestions(page: Page, phone: boolean) {
   return page.evaluate((phone) => {
     const frame = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review]" : "[data-prototype-review] [role=dialog]")!;
     const questions = document.querySelector<HTMLElement>("[data-prototype-questions]")!;
-    const stage = document.querySelector<HTMLElement>("[data-prototype-stage]");
+    const stage = document.querySelector<HTMLElement>("[data-prototype-gallery]");
     const bounds = frame.getBoundingClientRect();
     const options = [...document.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]")];
     const pillOverflow = [...document.querySelectorAll<HTMLElement>("[data-prototype-recommended]")].filter(pill => {

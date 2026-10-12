@@ -4704,7 +4704,7 @@ describe("prototype review: the orchestrator's open composer says a prototype is
           /* The jump: the review of the task the line names, on its waiting round. */
           await page.locator('[data-evidence-composer] [data-prototype-notice-open="t-search"]').click();
           await page.waitForSelector('[data-mobile2-sheet="prototype-review"] [data-prototype-variant]', { timeout: 10_000 });
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-tile] img")].every((image) => image.complete && image.naturalWidth > 0));
           await page.waitForTimeout(400);
           const jump = await page.evaluate(() => {
             const review = document.querySelector<HTMLElement>("[data-prototype-review]");

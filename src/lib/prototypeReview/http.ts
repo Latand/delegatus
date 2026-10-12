@@ -3,6 +3,7 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
+import { prototypeCriticGate, criticRefusal } from "./criticGate";
 import { publishPrototype } from "./store";
 import { readPrototypeReviews } from "./read";
 import { decidePrototype, prototypeDelivery, type PrototypeDelivery } from "./decision";
@@ -65,9 +66,16 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
   try {
     const input = parsePrototypeInput(await request.json());
     const { caller, stage, taskId } = publicationTarget(request,input.taskId,world);
-    const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId });
+    let critic;
+    if (input.variants?.length) {
+      const gate = prototypeCriticGate(stage?.source.pipelineId ? world.pipeline(stage.source.pipelineId) : null, stage?.source.stageId ?? "");
+      if (!gate.ok) throw new PrototypeError(criticRefusal(gate.missing), 409);
+      critic = gate.pass;
+    }
+    const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId },critic);
     void postPrototypeReviewToTelegram(round);
     return NextResponse.json({ reviewId: round.id, taskId, title: round.title, variants: round.variants.length,
+      ...(round.critic ? { critic: { stageId: round.critic.stageId, attempt: round.critic.attempt, outcome: round.critic.outcome } } : {}),
       ...(round.questions ? { questions: round.questions.length } : {}),
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });
   } catch (error) { return prototypeFailure(error); }

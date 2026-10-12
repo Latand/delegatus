@@ -1,0 +1,2870 @@
+{
+  "desktop-1440-en-light": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 5,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, narrow pane · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "results page, before and after · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "phone, before and after · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "nothing found · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "hover and keyboard walk",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 32,
+      "actionHeights": [
+        32,
+        32
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Simplify every variant.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/desktop-1440-en-light-rest.png",
+      ".artifacts/prototype-review/desktop-1440-en-light-enlarged.png",
+      ".artifacts/prototype-review/desktop-1440-en-light-picked.png",
+      ".artifacts/prototype-review/desktop-1440-en-light-pickedtext.png",
+      ".artifacts/prototype-review/desktop-1440-en-light-asks.png",
+      ".artifacts/prototype-review/desktop-1440-en-light-armed.png",
+      ".artifacts/prototype-review/desktop-1440-en-light-rejected.png"
+    ]
+  },
+  "desktop-1440-en-dark": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 5,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, narrow pane · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "results page, before and after · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "phone, before and after · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "nothing found · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "hover and keyboard walk",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 32,
+      "actionHeights": [
+        32,
+        32
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Simplify every variant.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/desktop-1440-en-dark-rest.png",
+      ".artifacts/prototype-review/desktop-1440-en-dark-enlarged.png",
+      ".artifacts/prototype-review/desktop-1440-en-dark-picked.png",
+      ".artifacts/prototype-review/desktop-1440-en-dark-pickedtext.png",
+      ".artifacts/prototype-review/desktop-1440-en-dark-asks.png",
+      ".artifacts/prototype-review/desktop-1440-en-dark-armed.png",
+      ".artifacts/prototype-review/desktop-1440-en-dark-rejected.png"
+    ]
+  },
+  "desktop-1440-uk-light": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 5,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, вузька панель · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "сторінка результатів, до і після · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "телефон, до і після · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "нічого не знайдено · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "наведення і прохід клавіатурою",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 32,
+      "actionHeights": [
+        32,
+        32
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Спростити всі варіанти.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/desktop-1440-uk-light-rest.png",
+      ".artifacts/prototype-review/desktop-1440-uk-light-enlarged.png",
+      ".artifacts/prototype-review/desktop-1440-uk-light-picked.png",
+      ".artifacts/prototype-review/desktop-1440-uk-light-pickedtext.png",
+      ".artifacts/prototype-review/desktop-1440-uk-light-asks.png",
+      ".artifacts/prototype-review/desktop-1440-uk-light-armed.png",
+      ".artifacts/prototype-review/desktop-1440-uk-light-rejected.png"
+    ]
+  },
+  "desktop-1440-uk-dark": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 5,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, вузька панель · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "сторінка результатів, до і після · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "телефон, до і після · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "нічого не знайдено · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "наведення і прохід клавіатурою",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 32,
+      "actionHeights": [
+        32,
+        32
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Спростити всі варіанти.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/desktop-1440-uk-dark-rest.png",
+      ".artifacts/prototype-review/desktop-1440-uk-dark-enlarged.png",
+      ".artifacts/prototype-review/desktop-1440-uk-dark-picked.png",
+      ".artifacts/prototype-review/desktop-1440-uk-dark-pickedtext.png",
+      ".artifacts/prototype-review/desktop-1440-uk-dark-asks.png",
+      ".artifacts/prototype-review/desktop-1440-uk-dark-armed.png",
+      ".artifacts/prototype-review/desktop-1440-uk-dark-rejected.png"
+    ]
+  },
+  "pane-1000-en-light": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 3,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, narrow pane · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "results page, before and after · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "phone, before and after · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "nothing found · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "hover and keyboard walk",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 32,
+      "actionHeights": [
+        32,
+        32
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Simplify every variant.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/pane-1000-en-light-rest.png",
+      ".artifacts/prototype-review/pane-1000-en-light-enlarged.png",
+      ".artifacts/prototype-review/pane-1000-en-light-picked.png",
+      ".artifacts/prototype-review/pane-1000-en-light-pickedtext.png",
+      ".artifacts/prototype-review/pane-1000-en-light-asks.png",
+      ".artifacts/prototype-review/pane-1000-en-light-armed.png",
+      ".artifacts/prototype-review/pane-1000-en-light-rejected.png"
+    ]
+  },
+  "pane-1000-en-dark": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 3,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, narrow pane · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "results page, before and after · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "phone, before and after · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "nothing found · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "hover and keyboard walk",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 32,
+      "actionHeights": [
+        32,
+        32
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Simplify every variant.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/pane-1000-en-dark-rest.png",
+      ".artifacts/prototype-review/pane-1000-en-dark-enlarged.png",
+      ".artifacts/prototype-review/pane-1000-en-dark-picked.png",
+      ".artifacts/prototype-review/pane-1000-en-dark-pickedtext.png",
+      ".artifacts/prototype-review/pane-1000-en-dark-asks.png",
+      ".artifacts/prototype-review/pane-1000-en-dark-armed.png",
+      ".artifacts/prototype-review/pane-1000-en-dark-rejected.png"
+    ]
+  },
+  "pane-1000-uk-light": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 3,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, вузька панель · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "сторінка результатів, до і після · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "телефон, до і після · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "нічого не знайдено · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "наведення і прохід клавіатурою",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 32,
+      "actionHeights": [
+        32,
+        32
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Спростити всі варіанти.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/pane-1000-uk-light-rest.png",
+      ".artifacts/prototype-review/pane-1000-uk-light-enlarged.png",
+      ".artifacts/prototype-review/pane-1000-uk-light-picked.png",
+      ".artifacts/prototype-review/pane-1000-uk-light-pickedtext.png",
+      ".artifacts/prototype-review/pane-1000-uk-light-asks.png",
+      ".artifacts/prototype-review/pane-1000-uk-light-armed.png",
+      ".artifacts/prototype-review/pane-1000-uk-light-rejected.png"
+    ]
+  },
+  "pane-1000-uk-dark": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 3,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, вузька панель · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "сторінка результатів, до і після · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "телефон, до і після · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "нічого не знайдено · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "наведення і прохід клавіатурою",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 32,
+      "actionHeights": [
+        32,
+        32
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Спростити всі варіанти.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/pane-1000-uk-dark-rest.png",
+      ".artifacts/prototype-review/pane-1000-uk-dark-enlarged.png",
+      ".artifacts/prototype-review/pane-1000-uk-dark-picked.png",
+      ".artifacts/prototype-review/pane-1000-uk-dark-pickedtext.png",
+      ".artifacts/prototype-review/pane-1000-uk-dark-asks.png",
+      ".artifacts/prototype-review/pane-1000-uk-dark-armed.png",
+      ".artifacts/prototype-review/pane-1000-uk-dark-rejected.png"
+    ]
+  },
+  "phone-390-en-light": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 2,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, narrow pane · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "results page, before and after · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "phone, before and after · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "nothing found · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "hover and keyboard walk",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 44,
+      "actionHeights": [
+        44,
+        44
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Simplify every variant.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/phone-390-en-light-rest.png",
+      ".artifacts/prototype-review/phone-390-en-light-enlarged.png",
+      ".artifacts/prototype-review/phone-390-en-light-picked.png",
+      ".artifacts/prototype-review/phone-390-en-light-pickedtext.png",
+      ".artifacts/prototype-review/phone-390-en-light-asks.png",
+      ".artifacts/prototype-review/phone-390-en-light-armed.png",
+      ".artifacts/prototype-review/phone-390-en-light-rejected.png"
+    ]
+  },
+  "phone-390-en-dark": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 2,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, narrow pane · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "results page, before and after · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "phone, before and after · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "nothing found · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "table state 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, desktop · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "results, phone · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "hover and keyboard walk",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 44,
+      "actionHeights": [
+        44,
+        44
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Simplify every variant.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/phone-390-en-dark-rest.png",
+      ".artifacts/prototype-review/phone-390-en-dark-enlarged.png",
+      ".artifacts/prototype-review/phone-390-en-dark-picked.png",
+      ".artifacts/prototype-review/phone-390-en-dark-pickedtext.png",
+      ".artifacts/prototype-review/phone-390-en-dark-asks.png",
+      ".artifacts/prototype-review/phone-390-en-dark-armed.png",
+      ".artifacts/prototype-review/phone-390-en-dark-rejected.png"
+    ]
+  },
+  "phone-390-uk-light": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 2,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, вузька панель · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "сторінка результатів, до і після · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "телефон, до і після · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "нічого не знайдено · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "наведення і прохід клавіатурою",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 44,
+      "actionHeights": [
+        44,
+        44
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Спростити всі варіанти.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/phone-390-uk-light-rest.png",
+      ".artifacts/prototype-review/phone-390-uk-light-enlarged.png",
+      ".artifacts/prototype-review/phone-390-uk-light-picked.png",
+      ".artifacts/prototype-review/phone-390-uk-light-pickedtext.png",
+      ".artifacts/prototype-review/phone-390-uk-light-asks.png",
+      ".artifacts/prototype-review/phone-390-uk-light-armed.png",
+      ".artifacts/prototype-review/phone-390-uk-light-rejected.png"
+    ]
+  },
+  "phone-390-uk-dark": {
+    "geometry": {
+      "tiles": 49,
+      "stage": false,
+      "strip": false,
+      "columns": 2,
+      "scrollLeft": 0,
+      "vertical": true,
+      "contained": true,
+      "squares": true,
+      "numbers": true,
+      "captions": [
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, вузька панель · 1000 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "сторінка результатів, до і після · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "телефон, до і після · 390 · en",
+          "fits": true
+        },
+        {
+          "text": "нічого не знайдено · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 1 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 2 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 3 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 4 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 5 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 6 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 7 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 8 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 9 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 10 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 11 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 12 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 13 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 14 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 15 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 16 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 17 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 18 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 19 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 20 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 21 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 22 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 23 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 24 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 25 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 26 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 27 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 28 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 29 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 30 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 31 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 32 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 33 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 34 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 35 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 36 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 37 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 38 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 39 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "стан таблиці 40 · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, десктоп · 1440 · en",
+          "fits": true
+        },
+        {
+          "text": "результати, телефон · 390 · uk",
+          "fits": true
+        },
+        {
+          "text": "наведення і прохід клавіатурою",
+          "fits": true
+        }
+      ]
+    },
+    "returned": true,
+    "armed": true,
+    "footer": {
+      "chipHeight": 44,
+      "actionHeights": [
+        44,
+        44
+      ],
+      "oneRow": true,
+      "promptVisible": true,
+      "overlaps": false
+    },
+    "posted": {
+      "taskId": "t-search",
+      "reviewId": "r-search",
+      "chosen": [],
+      "comment": "Спростити всі варіанти.",
+      "reject": true
+    },
+    "frames": [
+      ".artifacts/prototype-review/phone-390-uk-dark-rest.png",
+      ".artifacts/prototype-review/phone-390-uk-dark-enlarged.png",
+      ".artifacts/prototype-review/phone-390-uk-dark-picked.png",
+      ".artifacts/prototype-review/phone-390-uk-dark-pickedtext.png",
+      ".artifacts/prototype-review/phone-390-uk-dark-asks.png",
+      ".artifacts/prototype-review/phone-390-uk-dark-armed.png",
+      ".artifacts/prototype-review/phone-390-uk-dark-rejected.png"
+    ]
+  }
+}

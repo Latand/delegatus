@@ -3122,3 +3122,22 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
     });
   }
 }
+
+
+test("prototype publication tells callers about the critic gate and fresh refusal retries", async () => {
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as unknown as McpToolBindings;
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const client = new Client({ name: "prototype-gate-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const tool = (await client.listTools()).tools.find(entry => entry.name === "publish_prototype_review")!;
+    expect(tool.description).toContain("visual-critic pass or a passed fix after its last fail");
+    expect(tool.description).toContain("proto-fix (2 rounds)");
+    expect(tool.description).toContain("new clientRequestId");
+    expect(tool.description).toContain("questions without variants");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

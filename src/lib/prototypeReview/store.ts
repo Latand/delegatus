@@ -125,7 +125,7 @@ export function findPrototypeRound(taskId: string, reviewId: string): PrototypeR
   return loadTasks().find(t => t.id === taskId)?.prototypeReviews?.find(r => r.id === reviewId);
 }
 /** Metadata is a task extension in the existing revisioned, linked SQLite store. */
-export async function publishPrototype(input: PublishPrototypeInput, taskId: string, source: PrototypeReviewRound["source"]): Promise<PrototypeReviewRound> {
+export async function publishPrototype(input: PublishPrototypeInput, taskId: string, source: PrototypeReviewRound["source"], critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
   const publicationKey = `${source.conversationId ?? "operator"}:${input.clientRequestId}`;
   const inputDigest = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
   const id = `pr_${crypto.createHash("sha256").update(publicationKey).digest("hex").slice(0,32)}`;
@@ -148,7 +148,7 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
     const removed: string[] = [];
     try {
       await fs.writeFile(path.join(staging,"manifest.json"),JSON.stringify({ id }), { mode: 0o600, flush: true });
-      const round: PrototypeReviewRound = { id, taskId, project: "", title: input.title, publicationKey, inputDigest, source,
+      const round: PrototypeReviewRound = { id, taskId, project: "", title: input.title, publicationKey, inputDigest, source, ...(critic ? { critic } : {}),
         createdAt: new Date().toISOString(), variants: [], ...(input.questions ? { questions: input.questions } : {}) };
       let bytes = 0, imageBytes = 0;
       const copy = async (raw: string) => {
