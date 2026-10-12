@@ -1,7 +1,7 @@
 "use client";
 
 import { CornerDownRight, Film, GalleryHorizontalEnd, MessageCircleQuestionMark, ImageOff, Loader2, RotateCw, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
@@ -15,10 +15,11 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { usePrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { PrototypeAnswer, PrototypeMediaView, PrototypeQuestion, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeMediaView, PrototypeRoundView } from "@/lib/prototypeReview/types";
 
 import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
 
+import { DecisionQuestions, selectPrototypeAnswer } from "./DecisionQuestions";
 import { markPrototypeReviewSeen } from "./prototypeReviewStore";
 
 type Variant = PrototypeRoundView["variants"][number];
@@ -88,6 +89,12 @@ function galleryOf(t: TFunction, round: PrototypeRoundView, slides: readonly Sli
     return [];
   });
 }
+
+/** Every frame of a round, for a surface that shows its pictures without the
+    review window (a seat's taskless round in the «Рішення» column). The viewer
+    steps across the variants, so it counts the round's frames itself. */
+export const roundGallery = (t: TFunction, round: PrototypeRoundView): GalleryImage[] =>
+  galleryOf(t, round, slidesOf(round), new Set()).map(({ place: _place, ...image }) => image);
 
 const typing = (target: EventTarget | null) => {
   const element = target as HTMLElement | null;
@@ -564,59 +571,14 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   const selectAnswer = (questionId: string, option: number | "other") => {
     if (!open) return;
-    const question = round!.questions!.find(q => q.id === questionId)!;
-    setDraft(held => ({ ...held, answers: held.answers.map(answer => {
-      if (answer.questionId !== questionId) return answer;
-      if (option === "other") {
-        const other = !answer.other;
-        return { questionId, options: question.multiple ? answer.options : [], ...(other ? { other: true as const } : {}) };
-      }
-      const options = question.multiple ? answer.options.includes(option) ? answer.options.filter(i => i !== option) : [...answer.options, option].sort((a,b) => a-b) : [option];
-      return { questionId, options, ...(question.multiple && answer.other ? { other: true as const } : {}) };
-    }) }));
+    setDraft(held => ({ ...held, answers: selectPrototypeAnswer(round!.questions!, held.answers, questionId, option) }));
   };
-  /* A single-choice group is one tab stop: the arrows move the focus and the
-     answer together, wrapping from the last choice (Other included) to the first. */
-  const stepAnswer = (event: ReactKeyboardEvent<HTMLButtonElement>, question: PrototypeQuestion, from: number) => {
-    const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
-    if (!forward && event.key !== "ArrowLeft" && event.key !== "ArrowUp") return;
-    event.preventDefault();
-    event.stopPropagation();
-    const buttons = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button") ?? []);
-    const at = (from + (forward ? 1 : -1) + buttons.length) % buttons.length;
-    selectAnswer(question.id, at === question.options.length ? "other" : at);
-    buttons[at]?.focus();
-  };
-  /* An answered or retired questionnaire no longer asks: the choices left
-     unpicked fade and the "choose any" hint goes, so it reads as a record. */
-  const closed = !open;
   const questionBlock = !hasQuestions ? null : (
     <section data-prototype-questions="" aria-label={t("proto.questions")} className={`flex min-h-0 min-w-0 flex-col gap-3 ${phone ? "px-4 py-2" : `overflow-y-auto p-4 ${hasVariants ? "w-[360px] shrink-0 border-l border-border" : "flex-1"}`}`}>
       {hasVariants ? <p data-prototype-questions-label="" className="m-0 text-label font-semibold text-secondary">{t("proto.questions")}</p> : null}
-      {round!.questions!.map((question, at) => {
-        const answer = (round!.decision?.answers ?? draft.answers).find(a => a.questionId === question.id);
-        const choice = (index: number | "other", label: string, recommended = false) => {
-          const checked = index === "other" ? Boolean(answer?.other) : Boolean(answer?.options.includes(index));
-          return <button key={index} type="button" role={question.multiple ? "checkbox" : "radio"} aria-checked={checked} disabled={!open}
-            {...(index === "other" ? { "data-prototype-other": question.id } : { "data-prototype-option": `${question.id}:${index}` })}
-            className={`flex min-h-11 w-full items-start gap-2 rounded-control border px-2.5 py-2 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${checked ? "border-accent/50 bg-accent-soft text-accent" : closed ? "border-transparent bg-transparent text-muted opacity-60" : "border-border bg-canvas text-primary enabled:hover:border-accent/45"}`}
-            {...(question.multiple ? {} : { tabIndex: checked || (!answer?.other && !answer?.options.length && index === 0) ? 0 : -1, onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => open && stepAnswer(event, question, index === "other" ? question.options.length : index) })}
-            onClick={() => selectAnswer(question.id, index)}>
-            <span aria-hidden data-prototype-mark="" className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center ${question.multiple ? "rounded-sm" : "rounded-full"} border ${checked ? "border-accent bg-accent text-white" : "border-border bg-sunken"}`}>{checked ? <Check className="h-3.5 w-3.5" /> : null}</span>
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{label}</span>
-            {recommended ? <span data-prototype-recommended="" className="shrink-0 self-start whitespace-nowrap rounded-full bg-sunken px-1.5 py-0.5 text-caption font-semibold text-secondary">{t("proto.q.recommended")}</span> : null}
-          </button>;
-        };
-        return <fieldset key={question.id} data-prototype-question={question.id} className="m-0 min-w-0 rounded-control border border-border bg-card p-3">
-          <legend className="sr-only">{question.text}</legend>
-          <div className="mb-2 flex items-start gap-1.5"><span data-prototype-question-number="" className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-sunken text-caption font-bold">{at + 1}</span><p className="m-0 min-w-0 flex-1 text-ui font-semibold text-primary [overflow-wrap:anywhere]">{question.text}</p></div>
-          {question.multiple && !closed ? <p data-prototype-hint="" className="m-0 mb-2 text-label text-muted">{t("proto.q.multiple")}</p> : null}
-          <div role={question.multiple ? "group" : "radiogroup"} aria-label={question.text} className="flex flex-col gap-1.5">
-            {question.options.map((option, index) => choice(index, option.label, option.recommended))}
-            {question.other ? choice("other", t("proto.q.other")) : null}
-          </div>
-        </fieldset>;
-      })}
+      {/* An answered or retired questionnaire no longer asks: the choices left
+          unpicked fade and the "choose any" hint goes, so it reads as a record. */}
+      <DecisionQuestions questions={round!.questions!} answers={round!.decision?.answers ?? draft.answers} open={open} onSelect={selectAnswer} />
     </section>
   );
 

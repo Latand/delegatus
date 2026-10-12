@@ -65,10 +65,9 @@ function DraftPanes({ ids }: { ids: readonly string[] }) {
 
 /**
  * `+ Task`: an inline card at the top of Inbox (plan §12). The full shared
- * composer (text, voice, images, deadline) over the project's own task draft,
- * so text started here is the same draft the Tasks panel shows, and the same
- * create (`useTaskCreateDraft`): one task per request id, and a refusal keeps
- * the text and says why.
+ * composer (text, voice, images, deadline) over the project's own task draft
+ * and its create (`useTaskCreateDraft`): one task per request id, and a
+ * refusal keeps the text and says why.
  */
 export function KanbanTaskComposer({ project, onCreated, onCancel }: { project: string; onCreated: (task: BoardTask) => void; onCancel: () => void }) {
   const { t } = useLocale();

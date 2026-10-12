@@ -14,9 +14,9 @@ export interface FavoriteRow {
 /**
  * Resolve the crowned ids to one row each — the freshest scanned generation of
  * that conversation, so a resumed chat lists once under its current file — and
- * sort freshest-first. Shared by the docked task panel, the mobile task sheet,
- * and the attention («Чекають») popover so every favorites surface mirrors the
- * pinned scheme row (issues #185, #224).
+ * sort freshest-first. Shared by the board's collapse pins and the attention
+ * («Чекають») popover so every favorites surface mirrors the pinned scheme row
+ * (issues #185, #224).
  */
 export function resolveFavoriteRows(files: FileEntry[], favoriteIds: readonly string[]): FavoriteRow[] {
   if (favoriteIds.length === 0) return [];

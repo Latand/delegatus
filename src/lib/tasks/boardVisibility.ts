@@ -1,4 +1,4 @@
-import type { BoardTask, TaskAssignment } from "./types";
+import type { BoardTask } from "./types";
 import { groupHideState } from "./groupHide";
 import { withTaskCompletion } from "./completion";
 
@@ -12,8 +12,8 @@ export type BoardVisibilityContext = Partial<Parameters<typeof groupHideState>[1
  * ever created therefore reached the canvas, including the several hundred that
  * never had an agent on them: the operator's board became a vertical stack of
  * empty full-width bands with the working ones scrolled far off screen. The
- * repair is a per-task flag, not a deletion and not an archive — the task list
- * keeps every row, and «Show on board» puts a band back at any time.
+ * repair is a per-task flag, not a deletion and not an archive — the kanban's
+ * Hidden tray keeps every row, and «Show on board» puts a band back at any time.
  *
  * Done tasks expire after DONE_TASK_BOARD_RETENTION_MS, with the seat and
  * hidden-group resurfacing exceptions. For other tasks the flag is honoured
@@ -37,11 +37,6 @@ export type BoardVisibilityContext = Partial<Parameters<typeof groupHideState>[1
  * camera frames a part of the board, and a member scrolled far out of view is
  * still a member. Nothing in this module reads a viewport.
  *
- * The scan-keyed helpers below answer a smaller, honest question for surfaces
- * that have no scene to consult — "does this task still name a conversation the
- * scan carries?" — which the task panel shows as a note beside its preference
- * control. They are never the visibility rule.
- *
  * Pure by design — the board's client bundle imports this. The one-time
  * migration that first set the flag lives in `boardVisibilityMigration`, which
  * reaches the task store and stays server-side.
@@ -49,43 +44,6 @@ export type BoardVisibilityContext = Partial<Parameters<typeof groupHideState>[1
 
 /** Name recorded in the tasks file once the migration has run. */
 export const EMPTY_BOARD_VISIBILITY_MIGRATION = "emptyTaskBandsHidden";
-
-/** The conversations a board carries, by every key an assignment can name. */
-export type BoardConversationKeys = ReadonlySet<string>;
-
-/**
- * Indexes a board's conversations for {@link taskHasBoardMembers}.
- *
- * Both keys are recorded because an assignment may carry either: a durable
- * conversation id (which survives the transcript moving to a new generation and
- * a new path) or, while a spawn is still awaiting scanner attribution, only the
- * path it was launched at.
- */
-export function boardConversationKeys(
-  files: Iterable<{ path: string; conversationId?: string | null }>,
-): Set<string> {
-  const keys = new Set<string>();
-  for (const file of files) {
-    if (file.path) keys.add(file.path);
-    if (file.conversationId) keys.add(file.conversationId);
-  }
-  return keys;
-}
-
-/** Whether one recorded assignment still names a conversation on the board. */
-export function assignmentOnBoard(assignment: TaskAssignment, keys: BoardConversationKeys): boolean {
-  if (assignment.conversationId && keys.has(assignment.conversationId)) return true;
-  return Boolean(assignment.path && keys.has(assignment.path));
-}
-
-/**
- * Whether at least one recorded assignment still names a conversation the scan
- * carries. Not membership — the board may draw no card for that conversation —
- * but enough to tell a task that once had an agent from one that never did.
- */
-export function taskHasBoardMembers(task: BoardTask, keys: BoardConversationKeys): boolean {
-  return task.assignments.some((assignment) => assignmentOnBoard(assignment, keys));
-}
 
 /**
  * Whether the board should draw a band for this task.
@@ -143,17 +101,4 @@ export function countBoardTasks(
     if (taskShowsOnBoard(task, hasMembers(task), context(task))) count += 1;
   }
   return count;
-}
-
-/**
- * The note the task panel shows: does this row still name a conversation the
- * open project's scan carries?
- *
- * A task belonging to another project is answered from its own recorded
- * assignments, because this scan carries no conversation of that board and its
- * silence is not evidence. Informational only — the panel offers its preference
- * control on every row whatever this says.
- */
-export function taskMembershipInScope(task: BoardTask, project: string, keys: BoardConversationKeys): boolean {
-  return task.project === project ? taskHasBoardMembers(task, keys) : task.assignments.length > 0;
 }

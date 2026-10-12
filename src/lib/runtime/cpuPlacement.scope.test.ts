@@ -240,7 +240,7 @@ scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out
   fs.writeFileSync(pressure, "some avg10=1.00 avg60=0.00 avg300=0.00 total=1\n");
   const result = await gated;
   expect(result.code).toBe(0);
-  expect(result.output).toContain("gate-slot: held for CPU pressure: avg10 80.00% >= 30%");
+  expect(result.output).toContain("gate-slot: Waiting for the CPU queue · 1st · up to 10 min");
   expect(result.output).toContain("taken"); // the gate holds the shared slot while its command runs
   expect(fs.readFileSync(marker, "utf8")).toBe("run\n");
   const seen = report(result.output);

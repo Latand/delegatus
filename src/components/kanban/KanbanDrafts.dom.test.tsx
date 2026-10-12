@@ -140,17 +140,23 @@ const type = (field: Element | null, value: string) => {
   const key = Object.keys(field as object).find((name) => name.startsWith("__reactProps$"))!;
   flushSync(() => (field as unknown as Record<string, { onChange: (event: unknown) => void }>)[key]!.onChange({ target: { value } }));
 };
+/* The bar's one + and the row of its menu that says `label`. */
+const createItem = (host: HTMLElement, label: string) => {
+  if (!host.querySelector('.menu[role="menu"]')) click(host.querySelector("[data-bar-create]"));
+  return [...host.querySelectorAll<HTMLElement>('.menu[role="menu"] [role="menuitem"]')].find((item) => item.textContent?.includes(label)) ?? null;
+};
 const columnOf = (element: Element | null | undefined) => element?.closest<HTMLElement>(".column")?.dataset.status ?? null;
 
 test("+ Task opens a card at the top of Inbox, creates the task once with its request id and draws it at once", async () => {
   taskAnswer = (body) => new Response(JSON.stringify({ task: { ...task("created", "inbox", String(body.text)), placement: body.placement } }), { status: 200, headers: { "content-type": "application/json" } });
   const { host } = mount([task("a", "inbox", "An older inbox task")]);
-  click(host.querySelector("[data-new-task]"));
+  click(createItem(host, "New task"));
   const composer = host.querySelector("[data-kanban-new-task]");
   expect(columnOf(composer)).toBe("inbox");
   /* First in the column, above every card. */
   expect(composer?.parentElement?.firstElementChild === composer).toBe(true);
-  expect(host.querySelector("[data-new-task]")?.getAttribute("aria-expanded")).toBe("true");
+  /* The + stays pressed while the card it opened is being written. */
+  expect(host.querySelector("[data-bar-create]")?.getAttribute("aria-expanded")).toBe("true");
 
   type(composer!.querySelector('textarea[aria-label="Task text"]'), "Write the migration guide\nFor the release notes");
   flushSync(() => composer!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
@@ -170,7 +176,7 @@ test("a created task drawn ahead of the poll leaves with the next tasks payload 
   const stored = [task("a", "inbox", "An older inbox task")];
   const { host, render } = mount(stored);
   const create = async (text: string) => {
-    click(host.querySelector("[data-new-task]"));
+    click(createItem(host, "New task"));
     const composer = host.querySelector("[data-kanban-new-task]")!;
     type(composer.querySelector('textarea[aria-label="Task text"]'), text);
     flushSync(() => composer.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
@@ -192,7 +198,7 @@ test("a created task drawn ahead of the poll leaves with the next tasks payload 
 test("a refused create keeps the text on the new card and says why; Escape closes it without writing", async () => {
   taskAnswer = () => new Response(JSON.stringify({ error: "Project task limit reached" }), { status: 409, headers: { "content-type": "application/json" } });
   const { host } = mount([]);
-  click(host.querySelector("[data-new-task]"));
+  click(createItem(host, "New task"));
   const composer = host.querySelector("[data-kanban-new-task]")!;
   type(composer.querySelector('textarea[aria-label="Task text"]'), "Refused text stays");
   flushSync(() => composer.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
@@ -208,7 +214,7 @@ test("a refused create keeps the text on the new card and says why; Escape close
   expect(posts).toHaveLength(1);
 });
 
-test("+ Agent in the bar asks for a draft once the board has loaded; a card's + Agent asks for one on that card", () => {
+test("the + menu's agent row asks for a draft once the board has loaded; a card's + Agent asks for one on that card", () => {
   const asked: string[] = [];
   const onCard: Array<{ id: string; taskId: string | null; title: string }> = [];
   const { host, render } = mount([task("a", "assigned", "Repair old links")], {
@@ -216,12 +222,15 @@ test("+ Agent in the bar asks for a draft once the board has loaded; a card's + 
     onNewAgent: () => asked.push("bar"),
     onAddAgent: (band) => onCard.push({ id: band.id, taskId: band.task?.id ?? null, title: band.title }),
   });
-  const bar = host.querySelector<HTMLButtonElement>("[data-new-agent]");
-  expect(bar?.getAttribute("aria-label")).toBe("New conversation with an agent");
-  expect(bar?.disabled).toBe(true);
+  /* Creation is one + in the bar; its second row is the agent, inert until the board has loaded. */
+  expect(host.querySelector("[data-new-agent], [data-new-task]")).toBeNull();
+  const waiting = createItem(host, "New conversation with an agent");
+  expect(waiting?.getAttribute("aria-disabled")).toBe("true");
+  click(waiting);
+  expect(asked).toEqual([]);
 
   render({ loaded: true });
-  click(host.querySelector("[data-new-agent]"));
+  click(createItem(host, "New conversation with an agent"));
   expect(asked).toEqual(["bar"]);
 
   const add = host.querySelector('.card[data-id="task:a"] [data-add-agent]');

@@ -1,3 +1,4 @@
+import { fileAgentActivity, type AgentActivity } from "@/lib/lifecycle/agentActivity";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
 import type { FileEntry } from "@/lib/types";
@@ -7,7 +8,7 @@ import { turnIsRunning } from "./turnDuration";
 import { workingSince } from "./workingSince";
 
 /**
- * The one operator-facing textual status of a board card (issue #961).
+ * The status projection of a board card (issue #961).
  *
  * A pure projection over the authorities the board already trusts — it owns no
  * state and invents no lifecycle; the one thing it remembers, through
@@ -33,7 +34,7 @@ import { workingSince } from "./workingSince";
 export type CardStatus =
   | { kind: "needs-you" }
   | { kind: "held"; count: number }
-  | { kind: "running"; elapsedSeconds: number | null }
+  | { kind: "running"; elapsedSeconds: number | null; activity?: AgentActivity }
   | { kind: "queued" };
 
 export function cardStatus(file: FileEntry, nowMs: number = Date.now()): CardStatus | null {
@@ -41,10 +42,12 @@ export function cardStatus(file: FileEntry, nowMs: number = Date.now()): CardSta
   const migration = activeCardMigration(file.migration, accountIdFromPath(file.path));
   const held = migration?.heldDeliveries ?? 0;
   if (held > 0) return { kind: "held", count: held };
+  if (file.agentActivity && file.rateLimit) return null;
   if (turnIsRunning(file)) {
     const startedAt = workingSince(file);
     return {
       kind: "running",
+      ...(file.agentActivity ? { activity: fileAgentActivity(file, nowMs) } : {}),
       elapsedSeconds: startedAt === null ? null : Math.max(0, (nowMs - startedAt) / 1000),
     };
   }

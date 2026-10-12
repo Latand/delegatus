@@ -154,6 +154,7 @@ describe("the panel names every state in the map (#977)", () => {
       error: "the accepted launch failed before its conversation became readable: runtime host timed out",
       retry: "fresh",
       designatedAt: "2026-09-18T09:46:49.000Z",
+      failedAt: "2026-09-18T09:47:31.000Z",
     });
   });
 

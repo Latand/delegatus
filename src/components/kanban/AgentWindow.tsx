@@ -1,5 +1,6 @@
 "use client";
 
+import { rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 
 import { useLocale } from "@/lib/i18n";
@@ -156,7 +157,7 @@ export function OpenAgentsList({ agents, current, onJump, onClose, onCloseAll }:
       <ol ref={listRef} className="or-list">
         {agents.map((agent, index) => {
           const role = frameRoleName(t, agent.role);
-          const state = t(`kanban.memberState.${agent.state}`);
+          const state = rowStateWord(t, agent);
           const label = agent.card ? `${agent.name} · ${agent.card}` : agent.name;
           return (
             <li key={agent.key} className="or-seg" data-role={agent.role} data-open-agent={agent.key} data-current={current === agent.key ? "" : undefined}>
@@ -171,7 +172,7 @@ export function OpenAgentsList({ agents, current, onJump, onClose, onCloseAll }:
               >
                 <span className="or-emblem" aria-hidden="true">
                   <RoleEmblem role={agent.role} />
-                  <i className={`or-dot tone-${agent.tone}${agent.live ? " live" : ""}`} data-open-agent-dot={agent.live ? "live" : "idle"} />
+                  <i className={`or-dot tone-${agent.tone}${agent.live ? " live" : ""}${agent.activity === "checking" ? " hollow" : ""}`} data-open-agent-dot={agent.live ? "live" : "idle"} />
                 </span>
                 <span className="or-names">
                   <span className="or-name">{agent.name}</span>

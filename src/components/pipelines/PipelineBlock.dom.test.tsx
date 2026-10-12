@@ -140,6 +140,23 @@ test("every density says what the desktop says: the stage names, the stage state
   expect(texts(screen, ".pb-loops li")).toEqual([`↺ ${t("kanban.loopRest", { from: "Verify", to: "Implement", count: 2 })}`]);
 });
 
+test.each(["card", "task"] as const)("CPU waiting preserves %s work links and stage controls", density => {
+  const pipeline = searchPipeline({ stateDetail: "Waiting for the CPU queue · 2nd · up to 7 min" });
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const opened: string[] = [];
+    const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} onOpenStage={(_pipeline, stage) => opened.push(stage.id)} />, {
+      "p-search": { links: [link(41)], noPr: false } as ResolvedWorkLinks,
+    });
+    expect(host.querySelector("[data-cpu-queue]")?.textContent).toBe(translate(lang, "kanban.progress.cpuQueue", { ordinal: "2nd", position: 2, minutes: 7 }));
+    expect(host.textContent).toContain("#41");
+    if (density === "task") {
+      click(host.querySelector('button.pb-pill[data-stage="implement"]'));
+      expect(opened).toEqual(["implement"]);
+    }
+  }
+});
+
 test("stage names stay the pipeline's in Ukrainian, and the state words are the desktop's Ukrainian words", () => {
   setLocale("uk");
   const summary = summarizePipeline(parked());

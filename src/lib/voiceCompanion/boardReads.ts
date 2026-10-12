@@ -1,10 +1,12 @@
 import { hardenedRedact } from "@/lib/view/compactText";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { PrototypeReviewRead } from "@/lib/prototypeReview/types";
+import type { BoardTask } from "@/lib/tasks/types";
+import { byteShort, captionHead, matchRounds, reviewAnswer, selectFrames } from "./prototypeRead";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { READ_SCHEMAS, validToolValue } from "./readSchemas";
 
-export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame"] as const;
+export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame", "agent_fleet"] as const;
 export type ReadToolName = typeof READ_TOOL_NAMES[number];
 export const VOICE_IMAGES = Symbol("voice prototype frames");
 export interface BoardReadPaths {
@@ -13,9 +15,11 @@ export interface BoardReadPaths {
   recipient(project: string): string | null;
   resolveProject(current: string | null, requested?: string): string;
   review(id: string): PrototypeReviewRead;
+  prototypeTasks?(project: string, taskId?: string): readonly BoardTask[];
   frame(id: string, reviewId: string, mediaId: string): Promise<{ mime: string; data: string }>;
 }
 export interface SpeechReadResult {
+  status?: string; code?: string; match?: string;
   speech: string; total?: number; shown?: number; more?: number; nextCursor?: string | null;
   rows?: unknown[]; item?: unknown; truncated: boolean;
   repeated?: true; readSecondsAgo?: number;
@@ -61,6 +65,7 @@ export class CompanionBoardReads {
     if (Object.keys(args).some(key => !Object.hasOwn(schema,key)) || Object.entries(schema).some(([key,property]) => !validToolValue(property,args[key]))) throw new Error("INVALID_TOOL_ARGUMENTS");
     const values = Object.fromEntries(Object.entries(args).filter(([key,value]) => key !== "project" && key !== "refresh" && value !== null && value !== undefined));
     return { ...values, project, ...(name.startsWith("list_") || name.endsWith("messages") ? {limit:values.limit ?? 10} : {}),
+      ...(name === "agent_fleet" ? {limit:values.limit ?? 10} : {}),
       ...(name === "agent_activity" ? {liveOnly:values.liveOnly ?? true,limit:values.limit ?? 10} : {}),
       ...(name.endsWith("messages") ? {roles:values.roles ?? (name === "orchestrator_messages" ? ["assistant"] : ["user","assistant"])} : {}),
       ...(name === "search_transcripts" ? {order:values.order ?? "relevance",limit:6} : {}) };
@@ -72,20 +77,46 @@ export class CompanionBoardReads {
   }
   async read(project: string, name: string, args: Record<string, unknown>, secrets: readonly string[] = NO_SECRETS): Promise<SpeechReadResult> {
     project = canonicalProject(project);
-    const kind = name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (name === "agent_activity" && args.conversationId) ? "conversation" : null;
+    const kind = (name === "agent_fleet" && args.pipelineId) || name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (["agent_activity", "agent_fleet"].includes(name) && args.conversationId) ? "conversation" : null;
     const id = String(args[kind === "pipeline" ? "pipelineId" : kind === "task" ? "taskId" : "conversationId"] ?? "");
-    if (kind && canonicalProject(await this.paths.projectFor(kind,id) ?? "") !== project) throw new Error("PROJECT_REFUSED");
-    if (name === "read_prototype_review") {
-      const review = this.paths.review(id);
-      // Complete review text is the operator's explicit one-call exception to
-      // list budgets. Internal delivery text and local paths never leave it.
-      const scrub = (value: unknown): unknown => typeof value === "string" ? clean(withoutCredentials(value,secrets)) : Array.isArray(value) ? value.map(scrub)
-        : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).filter(([key]) => !["source","url"].includes(key)).map(([key,value]) => [key,scrub(value)])) : value;
-      return { item:scrub(review),speech:`${review.rounds.length} prototype review rounds. Read every variant, question, recommendation and saved decision from the item.`,truncated:!!review.historyTruncated };
-    }
-    if (name === "view_prototype_frame") {
-      const image = await this.paths.frame(id,String(args.reviewId),String(args.mediaId));
-      return {item:{taskId:id,reviewId:args.reviewId,mediaId:args.mediaId},speech:"The prototype frame is attached for visual inspection. Describe only what you can see; this read saves no decision.",truncated:false,[VOICE_IMAGES]:[image]};
+    if (kind && (id || !name.includes("prototype")) && canonicalProject(await this.paths.projectFor(kind,id) ?? "") !== project) throw new Error("PROJECT_REFUSED");
+    if (name === "read_prototype_review" || name === "view_prototype_frame") {
+      if (!this.paths.prototypeTasks) throw new Error("TOOL_NOT_ALLOWED");
+      const tasks = this.paths.prototypeTasks(project, id || undefined);
+      const observed = new Map<string, PrototypeReviewRead>();
+      const read = (id: string) => { if (!observed.has(id)) observed.set(id, this.paths.review(id)); return observed.get(id)!; };
+      const candidates = matchRounds(tasks, read, args);
+      const scrub = (text: string) => clean(withoutCredentials(text, secrets));
+      // Mask complete text before a title, caption or speech budget can cut it.
+      const answer = () => reviewAnswer(cleanStrings(candidates, scrub), cleanStrings(tasks, scrub), cleanStrings(matchRounds(tasks, read, {}), scrub), scrub(project), cleanStrings(args, scrub));
+      if (name === "read_prototype_review") return answer();
+      if (candidates.length !== 1) {
+        const result = answer();
+        return { ...result, status: "refused", code: "FRAME_UNAVAILABLE", speech: `No frame was opened: select one prototype review first. Nothing was seen. ${result.speech}` };
+      }
+      const candidate = candidates[0];
+      const attached: Array<{ variant: number; view: string; width?: number; lang?: string; original: boolean }> = [];
+      const missing: Array<{ variant: number; reason: string; views: string[] }> = [];
+      const images: Array<{ mime: string; data: string }> = [];
+      let bytes = 0;
+      for (const choice of selectFrames(candidate, args)) {
+        let reason = choice.reason;
+        if (!reason && bytes + choice.media!.bytes > 8 * 1024 * 1024) reason = "the 8 MiB picture budget is spent";
+        if (!reason) {
+          try {
+            const image = await this.paths.frame(candidate.task.id, candidate.round.id, choice.media!.id);
+            images.push(image); bytes += choice.media!.bytes;
+            attached.push({ variant: choice.variant, view: captionHead(scrub(choice.frame!.caption)), width: choice.frame!.width, lang: choice.frame!.lang, original: args.original === true });
+          } catch { reason = "stored picture could not be opened or verified"; }
+        }
+        if (reason) missing.push({ variant: choice.variant, reason, views: cleanStrings(choice.views, scrub) });
+      }
+      const misses = missing.map(row => `variant ${row.variant}: ${row.reason}`).join("; ");
+      return { status: images.length ? "done" : "refused", ...(!images.length ? { code: "FRAME_UNAVAILABLE" } : {}),
+        item: { taskId: candidate.task.id, reviewId: candidate.round.id, attached, missing, requested: cleanStrings(args, scrub) },
+        speech: images.length ? byteShort(`Attached ${images.length} picture(s): ${attached.map(row => `variant ${row.variant} «${row.view}»`).join(", ")}. Describe only what these pictures show and name each variant and view.${missing.length ? ` Not attached: ${misses}.` : ""}`, 1200)
+          : `No frame was opened: ${misses}. Nothing was seen. Say that you could not view it and what you asked for, and describe nothing about how it looks.`,
+        truncated: false, ...(images.length ? { [VOICE_IMAGES]: images } : {}) };
     }
     let tool = name;
     if (name === "orchestrator_messages") {
@@ -109,6 +140,18 @@ export class CompanionBoardReads {
       const item = {...pipelineRow(source), stages:rows(source.stages).slice(0,12).map(stage=>({title:short(stage.id,32),kind:short(stage.kind,32),role:short(stage.roleId,64),state:short(object(stage.latestAttempt).state ?? stage.state ?? "pending",32),verdict:object(stage.latestAttempt).verdict ?? stage.verdict ?? null})),
         ...(args.stageId ? {stageId:args.stageId,stageDetail:{kind:short(object(source.stage).kind,32),role:short(object(source.stage).roleId,32),state:short(object(source.attempt).state,32)},verdict:object(source.attempt).verdict ?? null,summary:short(object(source.attempt).summary,600),findings:(Array.isArray(object(source.attempt).findings) ? object(source.attempt).findings as unknown[] : []).slice(0,5).map(finding=>short(finding,200))} : {})};
       return {item,speech:short(`${item.title}: ${item.state}. ${args.stageId ? `${item.stageId}: ${item.stageDetail?.state}. ${item.verdict ?? ""}. ${item.summary}` : item.stages.map(stage=>`${stage.title}: ${stage.state}`).join(". ")}`,600),truncated:rows(source.stages).length>12 || (Array.isArray(object(source.attempt).findings) && (object(source.attempt).findings as unknown[]).length>5)};
+    }
+    if (name === "agent_fleet") {
+      const summary = object(source.summary ?? source), counts = object(summary.agents);
+      const engines = Object.entries(object(summary.byEngine)).map(([engine,pair]) => `${engine}: ${Array.isArray(pair) ? pair[1] : 0} running`).join(". ");
+      const result: SpeechReadResult = { item: summary,
+        ...(Array.isArray(source.agents) ? { rows: source.agents, shown: source.agents.length, total: Number(source.total ?? source.agents.length),
+          nextCursor: typeof source.nextCursor === "string" ? source.nextCursor : null } : {}),
+        speech: short(`${counts.live ?? 0} live agents, ${counts.running ?? 0} running. ${engines}. ${counts.limitWait ?? 0} waiting for an account limit. ${counts.stalled ?? 0} stalled.${summary.coverage ? " Some evidence is pending or stale; these counts are partial." : ""}`,600),
+        ...(summary.coverage ? {coverage:object(summary.coverage)} : {}),
+        truncated: source.hasMore === true || !!summary.coverage };
+      if (Buffer.byteLength(JSON.stringify(result)) > 4000) throw new Error("ANSWER_TOO_LARGE");
+      return result;
     }
     if (name === "agent_activity") {
       const result = page({...source, remainingCount:source.budgetOmittedCount},rows(source.conversations).map(row=>({handle:row.conversationId,title:short(row.title)||"Agent",state:short(row.lifecycle,32),turn:short(row.turn ?? row.turnState,32)})),"observed agents");
