@@ -394,7 +394,15 @@ leased spawn; `server.ts` picks the Codex provider when
    by number in chat before the default changes.
 4. The default backend becomes Codex; with no key configured the voice starts.
 
-**Slice 4. Delete the API-key path.** About 1,000 lines removed, half a day.
+The operator replaced item 4 on 2026-10-11 and cancelled slice 4: the voice
+settings choose the backend, through the API with its key (the default, as
+before) or Codex V3 on the subscription, and the key field and the cap show
+only for the API. `docs/verification/voice-codex-slice3.md` quotes the
+decision and records how slice 3 was built against it.
+
+**Slice 4. Delete the API-key path.** Cancelled by the operator on
+2026-10-11; the API path stays as the default backend. As planned: about
+1,000 lines removed, half a day.
 Acceptance:
 
 1. Nothing under `src/lib/voiceCompanion` or `src/app/api/voice-companion`
