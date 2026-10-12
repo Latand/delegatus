@@ -40,6 +40,7 @@ test("agent_fleet advertises summary-first filters and bounded detail through th
     const tool = (await client.listTools()).tools.find(tool => tool.name === "agent_fleet")!;
     expect(tool.description).toContain("summary first");
     expect(tool.inputSchema.properties).toHaveProperty("detail");
+    expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
     for (const field of ["pipelineId", "conversationId", "engine", "model", "effort", "account", "state", "project", "cursor"]) expect(tool.inputSchema.properties).toHaveProperty(field);
     const result = await client.callTool({ name: "agent_fleet", arguments: { detail: true, engine: "claude", model: "opus", effort: "high", account: "account-one", state: "limitWait", limit: 200 } });
     expect(result.isError).not.toBe(true);

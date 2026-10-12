@@ -4168,7 +4168,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     transcriptPath: z.string().optional(),
   }).passthrough(),
   agent_fleet: z.object({
-    clientRequestId: clientRequestIdSchema,
+    clientRequestId: clientRequestIdSchema.optional(),
     project: z.string().min(1).max(200).optional(),
     detail: z.boolean().optional(),
     conversationId: z.string().optional(),
