@@ -2083,3 +2083,193 @@ pre-install attempt are excluded from these behavioral results.
 `bunx tsc --noEmit`, `git diff --check` and the fingerprint-aware privacy
 gate with `--check-commits` pass. The normal merge pre-commit hook reported
 privacy PASS and zero introduced or baseline ESLint errors.
+
+## Launch and board server follow-up, 2026-10-11
+
+The historical launch/board backlog and the #2489 keyed-admission result were
+rechecked at main `e5cd0ff3d7e5d2c58225f908ad5c0bb475d2ccd2` before changing
+code. Each test path ran separately through `scripts/gate-slot.sh`, with
+isolated `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR` under an OS-temp
+root and a closed-port Viewer control endpoint. Bun 1.4.0. Installed
+dependencies and a rebuilt MCP bundle preceded the behavioral measurements.
+The earlier whole-repository inventory remains a historical measurement.
+
+| Historical test path | Main pass / fail |
+| --- | --- |
+| `src/app/api/spawn/route.admission.test.ts` | 10 / 0 |
+| `src/lib/agent/failedSpawnDelivery.test.ts` | 9 / 0 |
+| `src/app/api/tasks/route.test.ts` | 6 / 0 |
+| `src/lib/tasks/revision.test.ts` | 5 / 0 |
+| `src/lib/tasks/taskColorGroupHide.test.ts` | 11 / 1 |
+| `src/lib/accounts/claude.test.ts` | 35 / 0 |
+| `src/lib/accounts/codex.test.ts` | 25 / 0 |
+| `src/lib/accounts/removal.test.ts` | 30 / 0 |
+| `src/lib/accounts/manager.interprocess.test.ts` | 4 / 0 |
+| `src/app/api/board/route.test.ts` | 66 / 0 |
+| `src/lib/accounts/migration/coordinator.test.ts` | 123 / 0 |
+| `src/lib/reaperRuntime.test.ts` | 59 / 0 |
+| `src/lib/mcp/writerConcurrency.test.ts` | 4 / 1 |
+| `src/lib/mcp/orchestratorTools.test.ts` | 76 / 0 |
+| `src/runtime-host/mcpRuntimeProbe.test.ts` | 8 / 4 |
+| `src/lib/runtime/structuredMessageDelivery.keyed.test.ts` | 0 / 1 |
+
+### Remaining failures and changes
+
+- Keyed HTTP admission still read **242380** row payloads against `<12000`.
+  The added admission-order regression read **617** against `<100`. Sequence
+  allocation and the earlier-assigned-delivery guard each enumerated every
+  held delivery. Both now use the existing conversation-indexed selector,
+  including historical aliases. The regression requires sequence 8 after an
+  aliased sequence 7, refuses the newer delivery until its predecessor is
+  claimed, and keeps 200 unrelated reservations outside the read budget.
+  The HTTP row and latency limits are unchanged; its diagnostic now records
+  reads per collection even when an assertion fails.
+- The missing-process-identity writer fixture also hid its parent's identity,
+  so the owned-process guard exited before its barrier. The fixture now hides
+  only its own identity and retains the real lookup for its parent.
+- The hide-path import check classified the route's actor-authority import as
+  lifecycle actuation. It now permits exactly that import on the REST task
+  route; registry and other lifecycle imports remain forbidden. The real
+  activity-ledger test now sends a fenced hide request and verifies it writes
+  no work request.
+- The MCP probe fixture hard-coded a Node installation path and expected
+  invalid health admissions to deny ordinary board reads. Node is now resolved
+  from PATH. Under the current B+ policy ordinary sessions can read the board;
+  the adversarial probes instead call a read outside the health surface and
+  distinguish ordinary task failure from the health-only permission refusal.
+  Absent, forged, expired and replayed admissions cannot acquire that identity;
+  a caller-selected socket receives zero admission requests. The existing
+  positive probe still requires the complete tool list and both health reads.
+- A valid release pointer with an unstaged bundle waits for its own release,
+  as documented in `docs/design/mcp-stdio-survival.md`. After correcting Node,
+  its stale fallback expectation timed out after 20 seconds: initialization
+  had not received the configured probe timeout. The probe now passes that
+  timeout to `Client.connect`; the test requires a failed, uninitialized
+  result within five seconds with a 500 ms initialization budget.
+
+### Keyed-admission measurement after the fix
+
+With 6001 sessions, HTTP admission reads **1980** row payloads: 970 held
+deliveries, 780 operation owners, 145 conversations and 85 entries. Admission
+p95 is **46.6 ms**, populated keyed-read p95 **7.5 ms**, and small keyed-read
+p95 **0.8 ms**. The existing `<12000` row and `<250 ms` admission assertions
+pass. The new alias-ordering test also passes its `<100` row assertion.
+
+### Exact-path validation after the changes
+
+| Test path | Pass / fail |
+| --- | --- |
+| `src/lib/agent/registry.deliveryRead.test.ts` | 6 / 0 |
+| `src/lib/runtime/structuredMessageDelivery.keyed.test.ts` | 1 / 0 |
+| `src/lib/tasks/taskColorGroupHide.test.ts` | 12 / 0 |
+| `src/app/api/tasks/activityLedger.test.ts` | 4 / 0 |
+| `src/lib/mcp/writerConcurrency.test.ts` | 5 / 0 |
+| `src/runtime-host/mcpRuntimeProbe.test.ts` | 12 / 0 |
+
+The six changed behavioral paths total **40 pass, 0 fail**. The unstaged-release
+probe returns in **531 ms**. The runtime host rehearsal under pinned Bun 1.4.0
+also passes: succession completes, and the stable listener and runtime socket
+each answer **27/27** requests over 15 seconds while half the clients abandon
+their replies. All fixtures run under the same isolated-state and owned-runner
+constraints as the baseline.
+
+`bunx tsc --noEmit` through the shared gate, `git diff --check`, and the
+fingerprint-aware privacy gate against the merge base with `--check-commits`
+pass.
+
+The separate historical `src/lib/mcp/bindings.test.ts` note is also resolved:
+the unchanged file passes **105/0**. Its three decision fixtures already carry
+the project fields missing from the older inventory result.
+
+The normal publication hook passes privacy, types, changed-file lint and both
+touched/Linux comparisons with zero new failures. Its runtime checks pass the
+Viewer build, all 24 compiled server modules and HTTP 200 from `/`, host
+succession and disconnected-client rehearsal, induced failure controls, both
+native Codex engine versions and their shared contracts.
+
+### Main refresh and probe cleanup regression
+
+The refresh onto main `2fa6519f486d85c973f71a2a2ea2514b9890ccac` retains
+the health-policy fixtures added by #2710: ordinary callers keep the documented
+reads, a valid inherited health admission is limited to its two reads, and a
+caller-selected socket receives no admission request. The missing-release case
+now exercises `probeMcpRuntime` itself, including its configured initialization
+deadline and the recorded child's exit before the probe returns.
+
+An isolated main source export without the initialization-timeout change
+fails this case at its unchanged **20-second** test deadline. With the timeout
+alone, the new exit assertion still fails: the probe returns while its launcher
+is alive, and the owned runner reports a child surviving teardown. The SDK
+starts closing after initialization failure without awaiting it; a second
+transport close previously returned before that cleanup finished. Concurrent
+close calls now share the pending cleanup promise. The focused regression
+passes in **552 ms**, with the recorded child absent at return.
+
+The refreshed runtime-host rehearsal under Bun 1.4.0 passes: succession
+completes, and both endpoints answer **27/27** requests over 15 seconds while
+13 clients per endpoint abandon their replies.
+
+After rebuilding the MCP bundle, all six affected behavioral paths listed
+above pass again: **40 pass, 0 fail**. The refreshed keyed-admission measurement
+is **2400** row payloads (1160 held deliveries, 970 operation owners,
+165 conversations and 105 entries), with admission p95 **89.4 ms**, populated
+keyed-read p95 **6.7 ms** and small keyed-read p95 **1.2 ms**. Both original
+HTTP limits remain unchanged and pass. The full MCP probe file passes **12/0**,
+including the child-exit assertion, with the timeout case taking **543 ms**.
+
+The refreshed historical confirmations also pass by isolated path:
+`src/lib/mcp/bindings.test.ts` **105/0**,
+`src/app/api/board/route.test.ts` **66/0**, and
+`src/lib/accounts/migration/coordinator.test.ts` **123/0**.
+
+The refreshed `bunx tsc --noEmit` through `scripts/gate-slot.sh` passes with
+the gate's default heap, and `git diff --check` passes.
+
+### Forced probe termination
+
+A real Node child that ignores SIGTERM exposed the remaining cleanup gap:
+the timed-out probe returned after **4.55 seconds** with that child still
+running. Sending SIGKILL had completed the shared cleanup promise before the
+child's close event arrived.
+
+Cleanup now awaits that event after escalation, with a **two-second** bound
+that rejects rather than reports successful cleanup if termination is not
+observed. The existing probe test file records the owned child and checks it
+is absent both when each shared close completes and when the probe returns.
+The regression passes in **4.53 seconds**, and the full file passes **13/0**
+under isolated state through the owned gate.
+
+### Probe exit with inherited stdio
+
+Supplemental review reproduced a cleanup rejection after the owned child had
+already exited: a descendant retained stdout and stderr, delaying the child's
+`close` event beyond the SIGKILL deadline. The SDK starts its first close
+without awaiting it, so that rejection escaped the probe's final cleanup.
+
+The transport now observes `exit` or an already-recorded termination status,
+then releases its own pipe handles in `finally`. Concurrent closes retain one
+cleanup promise. Cleanup failures are consumed there and included in the
+probe's redacted failure evidence after its final close.
+
+The existing test file retains the cooperative and SIGTERM-ignoring cases and
+adds an inherited-pipe case: the recorded parent is absent at every completed
+close and at probe return, while its recorded descendant is still alive. The
+fixture stops that descendant by its recorded PID. A separate fault injection
+refuses only the owned child's termination signals; the two-second deadline is reported in
+the probe evidence without an unhandled rejection, and the fixture then stops
+its child. Both cases preserve the eight-second total cleanup bound.
+
+The full isolated probe file passes **15/0**, with inherited-pipe cleanup in
+**4.54 seconds** and the refused-SIGKILL cleanup result in **6.55 seconds**.
+Types through the shared gate, changed-file lint, whitespace and the
+fingerprint-aware local privacy check with commit inspection pass. Pinned Bun
+1.4.0 runtime-host succession passes, with **27/27** responses on each endpoint
+over 15 seconds while 13 clients per endpoint abandon their replies.
+
+The pre-fix source export fails both new cases after **6.55 seconds** and
+**6.53 seconds**, respectively, with the SIGKILL-deadline rejection escaping
+the SDK's first close. Its owned runner also reports interrupted fixture
+cleanup and ends the remaining owned child. The fixed full-file run reports
+no unhandled rejection or surviving child. The fault injection refuses both
+SIGTERM and SIGKILL because Windows terminates a child on SIGTERM even when
+it has installed a handler.

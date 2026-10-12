@@ -19,12 +19,12 @@ import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/account
 import { claudeTierDisplayName } from "@/lib/agent/models";
 import { type TFunction, useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
-import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow } from "@/lib/rateLimit";
+import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow, weeklyQuota } from "@/lib/rateLimit";
 import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types";
 
 import { EngineMark } from "@/components/EngineMark";
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
-import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary } from "./AccountRemovalSummary";
+import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, HiddenAccountOffer } from "./AccountRemovalSummary";
 import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
 import { AccountRowsSkeleton } from "./skeletons";
 import { MobileMeter, meterTone, type MeterTone } from "./mobile/MobileMeter";
@@ -327,9 +327,9 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
   const tint = engineTintOf(engine);
   const usable = account.authPresent && authHealth(account) !== "signed_out" && (!account.provider || authHealth(account) !== "error") && !account.loginPending;
   const selectionDisabled = disabled || !usable;
-  // Removal moves the home into the shared archive, so the first click arms it
-  // and only a second, explicit confirm runs it. Escape or ten quiet seconds
-  // disarm it.
+  // Removal moves the home into the shared archive (Main is only hidden, its
+  // folder untouched), so the first click arms it and only a second, explicit
+  // confirm runs it. Escape or ten quiet seconds disarm it.
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const confirmRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -380,7 +380,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
           <code className="select-all font-semibold text-primary">{account.deviceAuth.code}</code>
         </div>
       ) : null}
-      {confirmingRemove && account.kind === "managed" ? (
+      {confirmingRemove ? (
         <div
           data-account-remove-armed={account.id}
           className="flex items-end gap-1 px-3.5 pb-2 pl-[30px]"
@@ -391,7 +391,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
             setConfirmingRemove(false);
           }}
         >
-          <span className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-danger">{t("accounts.removeConfirm", { label: account.label })}</span>
+          <span className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-danger">{t(account.kind === "legacy" ? "accounts.removeConfirmLegacy" : "accounts.removeConfirm", { label: account.label })}</span>
           <button
             ref={confirmRef}
             type="button"
@@ -429,7 +429,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
             {t("accounts.copyCli")}
           </button>
           <span className="min-w-0 flex-1" />
-          {account.kind !== "managed" ? null : removing ? (
+          {removing ? (
             <span role="status" className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 px-1.5 text-[10.5px] font-semibold text-secondary sm:min-h-[28px]">
               <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />
               {t("accounts.removing")}
@@ -710,6 +710,7 @@ function operationText(operation: AccountOperation, t: TFunction): string {
     case "switch": return t("accounts.operation.switch");
     case "login": return t("accounts.operation.login");
     case "remove": return t("accounts.operation.remove");
+    case "restore": return t("accounts.operation.restore");
     case "cleanup": return t("accounts.operation.cleanup");
     case "terminal": return t("accounts.operation.terminal");
     case "refreshLimits": return t("accounts.operation.refreshLimits");
@@ -722,6 +723,12 @@ function operationText(operation: AccountOperation, t: TFunction): string {
 function rowRefusal(state: EngineAccountsState, accountId: string, phone = false): React.ReactNode {
   const removal = state.removal;
   if (removal?.kind !== "refused" || removal.refusal.accountId !== accountId) return null;
+  /* An open sign-in is ended from the refusal itself: Claude cancels its
+     operation, Codex its device login (which the desktop row has no control for). */
+  const operationId = state.accounts.find((account) => account.id === accountId)?.login?.operationId ?? null;
+  const cancelSignIn = state.engine === "codex"
+    ? () => void cancelCodexDeviceSignIn(state, accountId)
+    : operationId ? () => void state.cancelLogin(operationId) : undefined;
   return (
     <AccountRemovalRefusal
       refusal={removal.refusal}
@@ -730,8 +737,26 @@ function rowRefusal(state: EngineAccountsState, accountId: string, phone = false
       onDismiss={state.dismissRemoval}
       onRetry={() => void state.remove(accountId)}
       onRefresh={() => void state.refresh()}
+      onCancelSignIn={cancelSignIn}
     />
   );
+}
+
+/** The removed default homes account setup offers back. One whose removal
+    summary is still open is offered there instead, never twice. */
+function HiddenAccountOffers({ state, phone = false, className }: { state: EngineAccountsState; phone?: boolean; className: string }) {
+  const summary = state.removal?.kind === "removed" ? state.removal.summary : null;
+  const offered = (state.hidden ?? []).filter((account) => !(summary?.hiddenHome && summary.accountId === account.id));
+  return offered.map((account) => (
+    <HiddenAccountOffer
+      key={account.id}
+      account={account}
+      phone={phone}
+      busy={state.mutation === "restore"}
+      className={className}
+      onRestore={() => void state.restore(account.id)}
+    />
+  ));
 }
 
 /** The footer slot's removal answer (#1857 §5.3, §5.4): the summary of what a
@@ -743,7 +768,7 @@ function RemovalOutcome({ state, phone = false }: { state: EngineAccountsState; 
   if (!removal) return null;
   switch (removal.kind) {
     case "removed":
-      return <AccountRemovalSummary summary={removal.summary} phone={phone} busy={busy} onDismiss={state.dismissRemoval} onFinishCleanup={() => void state.cleanupOrphans()} />;
+      return <AccountRemovalSummary summary={removal.summary} phone={phone} busy={busy} onDismiss={state.dismissRemoval} onFinishCleanup={() => void state.cleanupOrphans()} onRestore={() => void state.restore(removal.summary.accountId)} />;
     case "cleanup":
       return <AccountCleanupResult report={removal.report} phone={phone} onDismiss={state.dismissRemoval} />;
     case "cleanupFailed":
@@ -996,6 +1021,7 @@ export function AccountsPanel({
                 {t("accounts.confirmAdd")}
               </button>
             </form>
+            <HiddenAccountOffers state={state} className="border-t border-border px-3 py-1.5" />
             {engine === "claude" ? <ClaudeProviderEditor state={state} /> : null}
             <div className="flex justify-end border-t border-border px-3 py-1.5">
               <button
@@ -1078,16 +1104,14 @@ export function mobileAccountState(account: AccountOption, activeId: string): Mo
   return MOBILE_STATE_OF[rowState(account, activeId)];
 }
 
-/** The corner number: the tightest window, named. `null` without a reading. */
-export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { left: number; window: string; tone: MeterTone } | null {
-  const effective = effectiveQuota(quota);
-  if (!effective) return null;
-  const effectiveTier = tierOfWindowKey(effective.window);
-  const window = effectiveTier
-    ? t("limits.tierWeek", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
-    : windowLabel(t, effective.window === "weekly" ? "weekly" : "session", effective.value.windowMinutes);
-  const left = Math.round(effective.percent);
-  return { left, window, tone: meterTone(left) };
+/** The corner number: what is left of the weekly window, named, as the sidebar footer reads it.
+    A reading with no weekly window says so (`left` null); `null` without any reading. */
+export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { left: number | null; window: string; tone: MeterTone } | null {
+  if (!quota.session && !quota.weekly && !quota.tiers.length) return null;
+  const weekly = weeklyQuota(quota);
+  if (!weekly) return { left: null, window: t("limits.noWeekly"), tone: "accent" };
+  const left = Math.round(weekly.percent);
+  return { left, window: windowLabel(t, "weekly", weekly.value.windowMinutes), tone: meterTone(left) };
 }
 
 /** The sign-in a row can start: Claude restarts its login in place for any
@@ -1180,6 +1204,9 @@ function MobileEngineFill({ engine }: { engine: "claude" | "codex" }) {
 const CORNER_TONE: Record<MeterTone, string> = { accent: "text-primary", warning: "text-warning", danger: "text-danger" };
 
 function MobileCorner({ corner, t }: { corner: NonNullable<ReturnType<typeof mobileAccountCorner>>; t: TFunction }) {
+  if (corner.left === null) {
+    return <span data-mobile2-account-corner data-mobile2-account-window="" className="ml-auto shrink-0 pr-1.5 text-right text-caption font-semibold text-muted">{corner.window}</span>;
+  }
   return (
     <span
       data-mobile2-account-corner
@@ -1519,6 +1546,7 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
         </div>
       ) : null}
       <MobileAddAccountRow state={state} engineName={engineName} loginBusy={loginBusy} />
+      <HiddenAccountOffers state={state} phone className="mx-3 mb-1.5 pl-3" />
       {engine === "claude" ? <ClaudeProviderEditor state={state} phone /> : null}
     </section>
   );

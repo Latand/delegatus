@@ -1365,6 +1365,62 @@ async function admittedAgentEvidence(): Promise<{ feed: string; provenance: unkn
   }
 }
 
+/** Messages that reached the seat while its Claude turn ran. Claude journals
+ * each as a `queued_command` attachment between two tool results; the real
+ * ledger projection joins its `source_uuid` to the origin admitted with it. */
+const MID_TURN_DELIVERIES = [
+  { id: "mid-turn-voice", text: "Also check why my voice messages never show in the conversation.", origin: { kind: "operator", channel: "voice-delegatus" } },
+  { id: "mid-turn-builder", text: "Builder: the parser lane is green and its pull request is open.", origin: { kind: "agent", role: "builder" } },
+  { id: "mid-turn-operator", text: "Keep the fixture small; one transcript is enough.", origin: { kind: "operator" } },
+  { id: "mid-turn-tick", text: "Seat tick: two lanes are waiting on review.", origin: { kind: "agent", role: "seat-tick" } },
+] as const;
+
+function midTurnDeliveryEvidence(): { feed: string; provenance: unknown } {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mid-turn-evidence-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = sandbox;
+  setAgentRegistryForTests(new AgentRegistry(path.join(sandbox, "registry.json")));
+  try {
+    const session = path.basename(RUNNING_PATH, ".jsonl");
+    const ledger = new FileClaudeDeliveryLedger();
+    const start = Date.now() - 600_000;
+    const at = (seconds: number) => new Date(start + seconds * 1_000).toISOString();
+    const call = (index: number, seconds: number, text: string) => ({ type: "assistant", uuid: `mid-turn-call-${index}`, timestamp: at(seconds), sessionId: session,
+      message: { role: "assistant", content: [{ type: "text", text }, { type: "tool_use", id: `toolu_mid_turn_${index}`, name: "Bash", input: { command: `bun test src/components/feed --step ${index}` } }] } });
+    const result = (index: number, seconds: number) => ({ type: "user", uuid: `mid-turn-result-${index}`, timestamp: at(seconds), sessionId: session,
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_mid_turn_${index}`, content: "ok" }] } });
+    const rows: unknown[] = [
+      { type: "user", uuid: "mid-turn-opening", timestamp: at(0), sessionId: session, message: { role: "user", content: "Fix the flaky board test, then report." } },
+      call(0, 5, "Running the board suite first."),
+    ];
+    MID_TURN_DELIVERIES.forEach((delivery, index) => {
+      const seconds = 30 + index * 40;
+      const source = `${delivery.id}-engine`;
+      ledger.recordQueued(session, { id: delivery.id, text: delivery.text, origin: delivery.origin }, "queued-next-turn");
+      rows.push(result(index, seconds));
+      rows.push({ type: "attachment", uuid: `mid-turn-attachment-${index}`, timestamp: at(seconds + 1), entrypoint: "sdk-cli", userType: "external", isSidechain: false, sessionId: session,
+        attachment: { type: "queued_command", commandMode: "prompt", source_uuid: source, timestamp: at(seconds + 1), prompt: [{ type: "text", text: delivery.text }] },
+        rendered: [{ content: [{ type: "text", text: `<system-reminder>\nThe user sent a new message while you were working:\n${delivery.text}\n</system-reminder>` }] }] });
+      rows.push({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", timestamp: at(seconds + 1), sessionId: session });
+      rows.push(call(index + 1, seconds + 5, `Noted; continuing with step ${index + 2}.`));
+      ledger.confirmDelivered(session, delivery.id, source, "inferred");
+    });
+    rows.push(result(MID_TURN_DELIVERIES.length, 220));
+    rows.push({ type: "assistant", uuid: "mid-turn-answer", timestamp: at(225), sessionId: session,
+      message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The board test is fixed and every message above is handled." }] } });
+    const provenance = { messages: claudeMessageProvenance(RUNNING_PATH), occurrences: [], submissions: {}, senders: {} };
+    for (const delivery of MID_TURN_DELIVERIES) {
+      if (!provenance.messages[`${delivery.id}-engine`]) throw new Error(`mid-turn evidence lost the ledger join of ${delivery.id}`);
+    }
+    return { feed: rows.map((row) => JSON.stringify(row)).join("\n") + "\n", provenance };
+  } finally {
+    setAgentRegistryForTests(null);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}
+
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 
 describe("close-card receipt Reopen", () => {
@@ -1480,6 +1536,96 @@ browserTest("agent-delivered seat message keeps its author at desktop and phone 
     }
   } finally { await browser.close(); stop(); }
 }, 120_000);
+
+/* The same seat conversation, with the messages that reached it while its turn
+   ran. Served on the agent-label route, the fixture's seat with a delivered
+   transcript and its provenance answer. */
+browserTest("messages delivered mid-turn show once, in place, with their senders at 1440, 1000 and 390 px, light and dark, in both languages", async () => {
+  const evidence = midTurnDeliveryEvidence();
+  const { base, stop } = await serveFixture({ "/evidence/agent-message-label": evidence });
+  const out = path.join(os.homedir(), "Pictures/delegatus-review/mid-turn-delivery");
+  fs.mkdirSync(out, { recursive: true });
+  /* Own the browser server and keep its PID, so cleanup stops only this case's browser. */
+  const browserServer = await chromium.launchServer({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
+  const browserPid = browserServer.process().pid;
+  fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
+  const browser = await chromium.connect(browserServer.wsEndpoint());
+  const readings = [];
+  try {
+    for (const scheme of ["dark", "light"] as const) for (const locale of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme,
+        ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
+      try {
+        await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${base}/?agent-label=1#c=conversation_running`);
+        await page.getByText(MID_TURN_DELIVERIES.at(-1)!.text, { exact: true }).first().waitFor({ timeout: 15_000 });
+        /* Desktop shows the seat in its dock and again in the reader window:
+           each feed pane must hold every message exactly once. */
+        const panes = await page.evaluate((texts) => Array.from(document.querySelectorAll("[data-log-feed-scroller]")).flatMap((scroller) => {
+          const found = texts.map((text) => Array.from(scroller.querySelectorAll("*")).filter((element) => element.textContent?.trim() === text
+            && !Array.from(element.children).some((child) => child.textContent?.trim() === text)));
+          if (found.every((hits) => hits.length === 0)) return [];
+          return [found.map((hits) => {
+            const element = hits[0];
+            if (!element) return { count: 0 };
+            const row = element.closest("[data-feed-kind]") ?? element.parentElement!;
+            const author = row.querySelector("[data-agent-author]");
+            const box = row.getBoundingClientRect();
+            return {
+              count: hits.length, top: Math.round(box.top + scroller.scrollTop), left: Math.round(box.left), right: Math.round(box.right),
+              bubble: Boolean(element.closest("[data-user-bubble]")),
+              voice: row.querySelector("[data-voice-relay-author]")?.textContent?.trim() ?? null,
+              agentRole: author?.getAttribute("data-agent-role") ?? null,
+              agentLabel: author?.textContent?.trim() ?? null,
+            };
+          })];
+        }), MID_TURN_DELIVERIES.map((delivery) => delivery.text));
+        expect(panes.length).toBeGreaterThan(0);
+        for (const rows of panes) {
+          for (const row of rows) expect(row.count).toBe(1);
+          const [voice, builder, operator, tick] = rows as Array<Exclude<(typeof rows)[number], { count: 0 }>>;
+          expect(voice!.voice).toBe(translate(locale, "render.voiceDelegatusLabel"));
+          expect(builder!.agentRole).toBe("builder");
+          expect(builder!.agentLabel).toBe(`${translate(locale, "render.agentLabel")} · ${translate(locale, "render.senderRoleBuilder")}`);
+          expect(operator!.bubble).toBe(true);
+          expect(tick!.agentRole).toBe("seat-tick");
+          expect(tick!.agentLabel).toBe(`${translate(locale, "render.agentLabel")} · Delegatus`);
+          /* Transcript order, every row inside the viewport's width. */
+          for (let index = 1; index < rows.length; index += 1) expect(rows[index]!.top!).toBeGreaterThan(rows[index - 1]!.top!);
+          for (const row of rows) { expect(row.left!).toBeGreaterThanOrEqual(0); expect(row.right!).toBeLessThanOrEqual(width); }
+        }
+        const body = await page.locator("body").innerText();
+        expect(body).not.toContain("sent a new message while you were working");
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        expect(pageErrors).toEqual([]);
+        await page.screenshot({ path: path.join(out, `${width}-${scheme}-${locale}-end.png`) });
+        /* Scroll the visible pane up the way the operator would, so the live
+           tail lets go and the first message is in frame. */
+        const first = page.getByText(MID_TURN_DELIVERIES[0].text, { exact: true }).last();
+        const scroller = first.locator("xpath=ancestor::*[@data-log-feed-scroller][1]");
+        for (let step = 0; step < 20; step += 1) {
+          const box = await first.boundingBox();
+          if (box && box.y > 120 && box.y + box.height < 600) break;
+          const area = (await scroller.boundingBox())!;
+          await page.mouse.move(area.x + area.width / 2, area.y + area.height / 2);
+          await page.mouse.wheel(0, -250);
+          await page.waitForTimeout(120);
+        }
+        await page.screenshot({ path: path.join(out, `${width}-${scheme}-${locale}-start.png`) });
+        readings.push({ scheme, locale, width, panes: panes.map((rows) => MID_TURN_DELIVERIES.map((delivery, index) => ({ id: delivery.id, ...rows[index] }))), pageErrors });
+      } finally { await context.close(); }
+    }
+    expect(readings).toHaveLength(12);
+    fs.mkdirSync("evidence/mid-turn-delivery", { recursive: true });
+    fs.writeFileSync("evidence/mid-turn-delivery/rows.json", JSON.stringify(readings, null, 2) + "\n");
+  } finally {
+    await browser.close(); await browserServer.close(); stop();
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
+  }
+}, 300_000);
 
 browserTest("composer queue: a lost seat read drains once on the phone and survives reload", async () => {
   const { base, stop } = await serveFixture();
@@ -9045,8 +9191,11 @@ describe("role memory: rules window and the rule line", () => {
     const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
     /* The card's lane is the fixture's `p-md-decision`, whose builder stage `implement` reported. */
     const seed = (pipelineId: string, stageId: string, minutes: number, roleId: string, lessons: Parameters<typeof store.leaveLessons>[0]["lessons"], project = "atlas") => {
-      store.recordLessonRequest({ pipelineId, stageId, attempt: 1, project, roleId, conversationId: `conversation_${pipelineId}`, at: at(minutes) });
-      store.leaveLessons({ request: { pipelineId, stageId, attempt: 1 }, source: { project, pipelineId, stageId, attempt: 1, roleId, fixRound: stageId === "fix", conversationId: `conversation_${pipelineId}` }, lessons, none: null, now: at(minutes) });
+      lessons.forEach((lesson, index) => {
+        const attempt = index + 1;
+        store.recordLessonRequest({ pipelineId, stageId, attempt, project, roleId, conversationId: `conversation_${pipelineId}`, at: at(minutes) });
+        store.leaveLessons({ request: { pipelineId, stageId, attempt }, source: { project, pipelineId, stageId, attempt, roleId, fixRound: stageId === "fix", conversationId: `conversation_${pipelineId}` }, lessons: [lesson], none: null, now: at(minutes) });
+      });
     };
     seed("p-search", "build", 3 * 24 * 60, "builder", [
       { scope: "role", rule: "Before opening a pull request, check each acceptance criterion of the pinned specification against the head, one by one.", why: "A lane met its brief and failed review on a criterion only the specification named." },

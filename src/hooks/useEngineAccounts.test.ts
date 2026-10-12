@@ -719,7 +719,7 @@ test("a 200 with counts yields the summary; missing and zero counts read as zero
       accountId: "work", label: "Work",
       archive: "/var/tmp/llv/shared/claude/retired/work", files: 1284, bytes: 2_100_000_000,
       conversations: 37, pins: 0, deliveries: 1, migrations: 0,
-      credential: "clean",
+      credential: "clean", bindings: 0, hiddenHome: null,
     },
   });
   expect(store.accounts.map((account) => account.id)).toEqual(["main"]);
@@ -1027,4 +1027,51 @@ test("a stored flagship reading loads as its named tier and an explicit empty li
   const old = { state: "stale", session: null, weekly: null, flagship: { tier: "opus", usedPercent: 63, resetsAt: null } };
   expect(parseAccountLimits(old)?.tiers).toMatchObject([{ tier: "opus", usedPercent: 63 }]);
   expect(parseAccountLimits({ ...old, tiers: [] })).toBeNull();
+});
+
+/* Task d7759de2: the refusal names the live work, the summary says when Main
+   was only hidden, and Show again lists it back. */
+test("a blocked answer keeps the live work it names, at most five, with the full count", async () => {
+  const sessions = Array.from({ length: 7 }, (_, index) => ({ conversationId: `conversation_${index}`, path: null, title: index === 0 ? "First job" : null }));
+  const { store, unsub } = await removalStore(refused(409, { code: "account_removal_blocked", blockers: ["live_sessions"], sessions: [...sessions, { conversationId: null, path: null, title: "nothing to open" }], sessionCount: 12 }));
+  expect(await store.remove("work")).toBeFalse();
+  expect(store.removal).toEqual({ kind: "refused", refusal: {
+    accountId: "work", label: "Work", reasons: ["live_sessions"],
+    sessions: sessions.slice(0, 5), sessionCount: 12,
+  } });
+  unsub();
+});
+
+test("Main's answer reads as hidden with its folder, and restore posts and records Show again", async () => {
+  const { store, unsub, calls } = await removalStore((body) => (body as { action?: string }).action === "restore"
+    ? { restored: { id: "work" } }
+    : { removed: { id: "work" }, hidden: { home: "/fixture/home/.claude" }, cleanupPending: false, moved: { archive: null, files: 0, bytes: 0 }, pinsCleared: 1, bindingsCleared: 2 });
+  expect(await store.remove("work")).toBeTrue();
+  expect(store.removal).toMatchObject({ kind: "removed", summary: { hiddenHome: "/fixture/home/.claude", archive: null, pins: 1, bindings: 2 } });
+  expect(await store.restore("work")).toBeTrue();
+  expect(calls.some((call) => call.method === "POST" && (call.body as { action?: string } | undefined)?.action === "restore")).toBeTrue();
+  expect(store.removal).toMatchObject({ kind: "removed", summary: { restored: "done" } });
+  unsub();
+});
+
+test("a hidden Main reads from the accounts answer, and a failed Show again with no summary open says so in the notice", async () => {
+  let restoreStatus = 500;
+  const { fetcher } = scripted((url, body) => {
+    if (url === "/api/accounts") return claudePayload({ hidden: [{ id: "default", label: "Main" }, { id: 7 }] });
+    if ((body as { action?: string } | undefined)?.action === "restore") return new Response("{}", { status: restoreStatus });
+    return new Response(null, { status: 204 });
+  });
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  expect(store.hidden).toEqual([{ id: "default", label: "Main" }]);
+
+  expect(await store.restore("default")).toBeFalse();
+  expect(store.removal).toBeNull();
+  expect(store.notice).toMatchObject({ kind: "error", operation: "restore", messageKey: "accounts.removed.restoreFailed" });
+
+  restoreStatus = 200;
+  expect(await store.restore("default")).toBeTrue();
+  expect(store.notice).toBeNull();
+  unsub();
 });

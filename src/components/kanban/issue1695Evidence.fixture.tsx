@@ -7,7 +7,7 @@ import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
 import { translate } from "@/lib/i18n";
-import { insertLearnedRules, lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
+import { lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
@@ -43,7 +43,8 @@ import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
-import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import { fireTasksChanged } from "@/components/tasks/taskApi";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -2068,7 +2069,7 @@ const tool = (secondsAgo: number, id: string, name: string, input: Record<string
   line(secondsAgo - 2, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }),
 ];
 /* Role memory's variant 5, the stage as its agent sees it (`&rolememory=1`): the
-   builder's launch message with its learned rules below the brief, its
+   builder's engine instructions and launch message, its
    stage_report and the lesson request in the answer, then its leave_lesson. The
    text is the product's own renderer's. */
 function roleMemoryStageTranscript(): string {
@@ -2082,18 +2083,16 @@ function roleMemoryStageTranscript(): string {
   const finding = "The delta chain is rebuilt on the request thread; the worker must own it.";
   const tool = (secondsAgo: number, id: string, name: string, input: Record<string, unknown>) => line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: `mcp__viewer__${name}`, input }] } });
   const result = (secondsAgo: number, id: string, answer: Record<string, unknown>) => line(secondsAgo, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: JSON.stringify(answer, null, 2) }] }] } });
-  const lessons = [
-    { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." },
-    { scope: "role", role: "visual-critic", rule: "Judge the 390 px Ukrainian frame first: Ukrainian labels run about a third longer than English, and clipping shows there first.", why: "A button clipped only at 390 px in Ukrainian." },
-  ];
+  const lesson = { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." };
   return `${[
-    asked(46 * 60, insertLearnedRules(brief, block)),
+    line(46 * 60 + 1, { type: "system", subtype: "init", systemPrompt: block }),
+    asked(46 * 60, brief),
     said(43 * 60, L("The worker owns the chain now; one check still fails on the request thread.", "Ланцюгом тепер володіє воркер; одна перевірка ще падає в потоці запиту.")),
     tool(41 * 60 + 5, "toolu_role_memory_report", "stage_report", { clientRequestId: "md-impl-report", verdict: "fail", findings: [{ severity: "P1", text: finding }], summary: finding }),
     result(41 * 60, "toolu_role_memory_report", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, replaced: false, report: { seq: 1, verdict: { status: "fail", findingCount: 1 } }, lessonRequest: lessonRequestLines(null) }),
-    tool(40 * 60 + 30, "toolu_role_memory_lesson", "leave_lesson", { clientRequestId: "md-impl-lesson", lessons }),
-    result(40 * 60 + 25, "toolu_role_memory_lesson", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, left: [{ id: "r_8c1e04b7", scope: "role:atlas:builder", state: "active", scopeChars: 606 }, { id: "r_2a7f9c13", scope: "role:atlas:visual-critic", state: "active", scopeChars: 214 }], none: null }),
-    said(40 * 60, L("Two lessons left; the stage itself is complete.", "Лишив два уроки; сам етап завершено.")),
+    tool(40 * 60 + 30, "toolu_role_memory_lesson", "leave_lesson", { clientRequestId: "md-impl-lesson", lesson }),
+    result(40 * 60 + 25, "toolu_role_memory_lesson", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, left: [{ id: "r_8c1e04b7", scope: "role:atlas:builder", state: "active", scopeChars: 606 }], none: null }),
+    said(40 * 60, L("One lesson left; the stage itself is complete.", "Лишив один урок; сам етап завершено.")),
   ].join("\n")}\n`;
 }
 
@@ -2729,7 +2728,9 @@ const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
   const summary = prototypeReviewSummary(rounds)!;
   const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
-  return { ...summary, ...(waitingDismissal ? { waitingDismissal } : {}) };
+  /* As the Viewer's own read: a decision this installation delivers carries its delivery's phase on the card too. */
+  const phase = rounds.at(-1)?.decision?.delivery.phase;
+  return { ...summary, ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -2819,7 +2820,25 @@ if (PROTO) {
     protoRounds["t-export"] = [answered];
   }
   protoPublish();
-  Object.assign(window, { protoPosts });
+  /* A driver's hands on the background delivery (`&proto=1`): `protoSavePhase`
+     answers a save as the Viewer does, its message saved or on its way;
+     `protoHoldSave()` keeps the next save unwritten and unanswered
+     until `protoReleaseSave()`, so a frame shows the review before the server
+     has written the decision; `protoPhase(task, phase)` moves a decided round's delivery. */
+  let releaseSave: (() => void) | null = null;
+  Object.assign(window, {
+    protoPosts,
+    protoHoldSave: () => { (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave = new Promise<void>((resolve) => { releaseSave = resolve; }); },
+    protoReleaseSave: () => { releaseSave?.(); releaseSave = null; delete (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave; },
+    protoPhase: (taskId: string, phase: PrototypeDeliveryPhase) => {
+      const decided = protoRounds[taskId]?.at(-1);
+      if (!decided?.decision) return;
+      const state: PrototypeDeliveryState = phase === "delivered" ? "sent" : phase === "attention" ? "failed" : phase === "waiting-seat" ? "no-orchestrator" : "pending";
+      decided.decision = { ...decided.decision, delivery: { state, retryable: state !== "sent", phase } };
+      protoPublish();
+      fireTasksChanged();
+    },
+  });
 }
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
@@ -3063,12 +3082,12 @@ if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: nu
 Object.assign(window, { launchRun });
 
 /* The account picker's driver block (kanbanBoard.browser.test.tsx, "account chips with the weekly limit left"):
-   `&accountpicker=1` gives any scenario the accounts the build's brief names. Each session window is looser than
-   its weekly one, so the sidebar footer's line (the tightest window) and the chip name the same number. */
+   `&accountpicker=1` gives any scenario the accounts the build's brief names. The sidebar footer's line and the
+   chip both name the weekly window. */
 const ACCOUNT_PICKER = new URLSearchParams(location.search).has("accountpicker");
-const pickerReading = (weeklyUsed: number | null, sessionUsed: number) => ({
+const pickerReading = (weeklyUsed: number | null, sessionUsed: number | null) => ({
   state: "fresh", checkedAt: iso(5 * MIN),
-  session: { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
+  session: sessionUsed === null ? null : { usedPercent: sessionUsed, resetsAt: resetIn(130), windowMinutes: 300 },
   weekly: weeklyUsed === null ? null : { usedPercent: weeklyUsed, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 },
 });
 const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<typeof pickerReading> | null, signedOut = false) => ({
@@ -3078,7 +3097,19 @@ const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<t
 /* `&pickeractive=team` makes the long-labelled account the Claude active one, and `&pickerdelay=<ms>` holds the
    accounts reply back, so the readings land after the chooser is open. */
 const PICKER_PARAMS = new URLSearchParams(location.search);
-const pickerAccounts = {
+/* `&sidebarweekly=1` (the "sidebar names each account's weekly limit" block): Claude «Main» with 77 % of its week
+   and 36 % of its 5-hour window left, «Work» with a week only, «Night» with a 5-hour window only; Codex weekly
+   only, as its plans report. */
+const SIDEBAR_WEEKLY = PICKER_PARAMS.has("sidebarweekly");
+const pickerAccounts = SIDEBAR_WEEKLY ? {
+  claude: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Main", "Max", pickerReading(23, 64)), pickerRow("work", "Work", "Max", pickerReading(59, null)),
+    pickerRow("night", "Night", "Pro", pickerReading(null, 30)),
+  ] },
+  codex: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+    pickerRow("default", "Personal", "Pro", pickerReading(22, null)), pickerRow("review", "Review", "Plus", pickerReading(77, null)),
+  ] },
+} : {
   claude: { active: PICKER_PARAMS.get("pickeractive") ?? "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
     pickerRow("default", "Main", "Max", pickerReading(8, 5)), pickerRow("work", "Work", "Max", pickerReading(59, 44)),
     pickerRow("backup", "Backup", "Pro", pickerReading(93, 70)), pickerRow("old", "Old login", "Pro", null, true),
@@ -3151,16 +3182,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
+      /* A held save has not been written yet: the decision is recorded only once it is released. */
+      await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
       const held = rounds.find((entry) => entry.id === body.reviewId);
       if (!held) return json({ error: "prototype review not found" }, 404);
+      const phase = (window as unknown as { protoSavePhase?: PrototypeDeliveryPhase }).protoSavePhase;
       if (body.retry && held.decision) {
         /* A driver may queue what the next retries answer; with nothing queued a retry lands. */
         const state = (window as unknown as { protoRetryAnswers?: PrototypeDeliveryState[] }).protoRetryAnswers?.shift() ?? "sent";
-        held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent" } };
+        held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent", ...(phase ? { phase: state === "sent" ? "delivered" as const : "delivering" as const } : {}) } };
       }
       else if (!held.decision) {
-        const state = protoSaveState[taskId] ?? "sent";
-        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };
+        const state = phase === "saved" || phase === "delivering" ? "pending" : protoSaveState[taskId] ?? "sent";
+        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
       }
       protoPublish();
     }

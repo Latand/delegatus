@@ -1,3 +1,4 @@
+import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -82,7 +83,7 @@ export class CodexForkOutcomeUnknownError extends Error {
 
 const defaultDependencies: ProviderDependencies = {
   accounts: accountManager,
-  startCodex: (home) => CodexAppServerClient.start({ home }),
+  startCodex: (home) => CodexAppServerClient.start({ home, protocolProfile: "thread-control" }),
   claudeStatus: (home) => realClaudeLoginPorts.status(home),
   verifyClaudeHost: (host) => verifyTmuxHostEvidence(host),
   cancelClaude: (host) => cleanupTmuxHostIfMatches(host),
@@ -371,6 +372,8 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     host = await CodexAppServerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       codexHome: input.target.home,
+      cleanMemory: input.profile.cleanMemory === true,
+      developerInstructions: learnedRulesForLaunchProfile(input.profile),
       fileAuthCredentials: input.target.kind === "managed",
       model: input.profile.model ?? undefined,
       effort: input.profile.effort ?? undefined,
@@ -505,6 +508,8 @@ async function publishClaudeSuccessorHost(
     host = await ClaudeStreamBrokerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       claudeProjectsDir: input.target.transcriptRoot,
+      cleanMemory: input.profile.cleanMemory === true,
+      appendSystemPrompt: learnedRulesForLaunchProfile(input.profile),
       /* The successor is a re-host like any other, so it carries the grant the
          row already holds, the same way boot adoption and a fresh spawn do
          (#1732). The durable profile's list is already bounded by

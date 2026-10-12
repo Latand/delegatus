@@ -115,6 +115,7 @@ test("phone provider credential damage shows repair and never offers sign-in", a
 function engineState(engine: "claude" | "codex", accounts: AccountOption[], active: string, over: Partial<EngineAccountsState> = {}): EngineAccountsState {
   return {
     engine,
+    hidden: [],
     accounts,
     active,
     identityVersion: 0,
@@ -132,6 +133,7 @@ function engineState(engine: "claude" | "codex", accounts: AccountOption[], acti
     cancelLogin: async () => true,
     retryLogin: async () => true,
     remove: async () => true,
+    restore: async () => true,
     cleanupOrphans: async () => true,
     copyTerminalCommand: async () => true,
     refreshLimits: async () => true,
@@ -173,7 +175,7 @@ const click = async (element: Element | null) => {
 
 const text = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 
-test("every meter on the active card fills with what remains, and the corner names its tightest window", async () => {
+test("every meter on the active card fills with what remains, and the corner names its weekly window", async () => {
   const { host } = await mount([engineState("claude", [claudeMain, claudeLab], "cl-main")]);
 
   const card = host.querySelector('[data-mobile2-account="cl-main"]')!;
@@ -193,9 +195,23 @@ test("every meter on the active card fills with what remains, and the corner nam
   expect(corner.getAttribute("data-mobile2-account-window")).toBe("Week");
   expect(text(corner)).toBe("8% leftWeek");
   expect(corner.getAttribute("aria-label")).toBe("8% left of the Week window");
-  // The number the corner shows is the tightest window's headroom, never the
+  // The number the corner shows is the weekly window's headroom, never the
   // first window's and never what was used.
   expect(mobileAccountCorner({ session: null, weekly: null, tiers: [], plan: null }, (key: string) => key)).toBeNull();
+});
+
+test("the corner names the week even when the 5-hour window is tighter, and says so when there is no week", async () => {
+  // The operator's reading: 77 % of the week left, 36 % of the 5-hour window.
+  const both = account({ id: "cl-both", label: "Both", plan: "max", limits: { freshness: "fresh", session: window5h(64, NOW + 2 * HOUR), weekly: windowWeek(23, NOW + 3 * DAY), plan: "max", capturedAt: NOW - 60, checkedAt: new Date((NOW - 60) * 1000).toISOString() } } as Partial<AccountOption> & { id: string; label: string });
+  const fiveHourOnly = account({ id: "cl-5h", label: "Five", plan: "max", limits: { freshness: "fresh", session: window5h(64, NOW + 2 * HOUR), weekly: null, plan: "max", capturedAt: NOW - 60, checkedAt: new Date((NOW - 60) * 1000).toISOString() } } as Partial<AccountOption> & { id: string; label: string });
+  const { host } = await mount([engineState("claude", [both, fiveHourOnly], "cl-both")]);
+
+  const corner = host.querySelector('[data-mobile2-account="cl-both"] [data-mobile2-account-corner]')!;
+  expect(text(corner)).toBe("77% leftWeek");
+  expect(corner.getAttribute("aria-label")).toBe("77% left of the Week window");
+  const bare = host.querySelector('[data-mobile2-account="cl-5h"] [data-mobile2-account-corner]')!;
+  expect(text(bare)).toBe("no weekly data");
+  expect(text(bare)).not.toContain("36");
 });
 
 test("the quiet row of an authenticated account switches future launches on the tap, and the receipt carries Switch back", async () => {
@@ -403,7 +419,7 @@ test("the removal summary is the first element of its engine section on the phon
   const { host } = await mount([engineState("claude", [claudeMain], "cl-main", {
     removal: {
       kind: "removed",
-      summary: { accountId: "cl-lab", label: "Lab", archive: archiveUnderHome("cl-lab"), files: 12, bytes: 14_200_000, conversations: 3, pins: 0, deliveries: 0, migrations: 0, credential: "clean" },
+      summary: { accountId: "cl-lab", label: "Lab", archive: archiveUnderHome("cl-lab"), files: 12, bytes: 14_200_000, conversations: 3, pins: 0, deliveries: 0, migrations: 0, credential: "clean", bindings: 0, hiddenHome: null },
     },
   })]);
   const section = host.querySelector('[data-mobile2-accounts-engine="claude"]')!;
@@ -412,4 +428,22 @@ test("the removal summary is the first element of its engine section on the phon
   expect(text(card)).toContain("12 files · 14.2 MB");
   const first = section.querySelector("[data-mobile2-account]")!;
   expect(card.compareDocumentPosition(first) & 4).toBe(4);
+});
+
+/* Task d7759de2: on the phone (and the setup guide's Engines step, which
+   draws this section) a hidden Main is offered back under the add row. */
+test("a hidden Main is offered back under the add row on the phone", async () => {
+  const restored: string[] = [];
+  const { host } = await mount([engineState("claude", [claudeLab], "cl-lab", {
+    hidden: [{ id: "default", label: "Main" }],
+    restore: async (id) => { restored.push(id); return true; },
+  })]);
+  const section = host.querySelector('[data-mobile2-accounts-engine="claude"]')!;
+  const offer = section.querySelector('[data-account-hidden-offer="default"]')!;
+  expect(text(offer)).toContain("Main is removed from Delegatus");
+  expect(section.querySelector('[data-mobile2-account-add="claude"]')!.compareDocumentPosition(offer) & 4).toBe(4);
+  const button = offer.querySelector('[data-account-restore="default"]') as HTMLButtonElement;
+  expect(button.className).toContain("min-h-[44px]");
+  await act(async () => button.click());
+  expect(restored).toEqual(["default"]);
 });

@@ -31,6 +31,7 @@ import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { isDismissedBy, type DismissedBy } from "@/lib/attention/dismissalTypes";
+import { completeFits } from "./reportComplete";
 
 import {
   BRIDGE_ANSWERED_REF_CAPACITY,
@@ -50,6 +51,7 @@ import {
   type BridgePendingAnswerV1,
   type BridgeResolvedAskV1,
   type BridgeReportBatch,
+  type BridgeReportCompleteV1,
   type BridgeReportInput,
   type BridgeReportLogV1,
   type BridgeReportOrigin,
@@ -167,6 +169,28 @@ export function bridgeReportBody(value: string | null | undefined): string {
   return `${bytes.subarray(0, end).toString("utf8")}${marker}`;
 }
 
+/**
+ * The uncut report the voice relays, redacted like a body; malformed input
+ * yields none. Nothing here leaves an item out: a report past its byte bound
+ * is refused at write (the binding refuses it before, asking the seat to
+ * split it) and dropped at read.
+ */
+export function bridgeReportComplete(value: unknown, write = false): BridgeReportCompleteV1 | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Partial<BridgeReportCompleteV1>;
+  if (typeof raw.summary !== "string" || !Array.isArray(raw.sections)) return undefined;
+  const line = (text: string) => hardenedRedact(text).replace(/\s+/g, " ").trim();
+  const sections = raw.sections.flatMap((section) => section && typeof section === "object" && typeof section.heading === "string" && Array.isArray(section.items)
+    ? [{ heading: line(section.heading), items: section.items.filter((item): item is string => typeof item === "string").map(line).filter(Boolean) }]
+    : []).filter((section) => section.items.length > 0);
+  const complete = { summary: line(raw.summary), sections };
+  if (!completeFits(complete)) {
+    if (write) throw new Error("BRIDGE_REPORT_COMPLETE_TOO_LARGE");
+    return undefined;
+  }
+  return complete.summary || complete.sections.length ? complete : undefined;
+}
+
 function readJsonFile(target: string): unknown | null {
   let contents: string;
   try {
@@ -237,10 +261,12 @@ function normalizeReport(value: unknown): BridgeReportV1 | null {
     class: candidate.class,
     ...(typeof candidate.key === "string" && candidate.key ? { key: candidate.key } : {}),
     body: typeof candidate.body === "string" ? candidate.body : "",
+    ...(bridgeReportComplete(candidate.complete) ? { complete: bridgeReportComplete(candidate.complete) } : {}),
     ...(origin ? { origin } : {}),
     ...(project !== undefined ? { project } : {}),
     ...(targetSeatConversationId !== undefined ? { targetSeatConversationId } : {}),
     ...(typeof candidate.correlatesDirective === "string" ? { correlatesDirective: candidate.correlatesDirective } : {}),
+    ...(typeof candidate.answersDirective === "boolean" ? { answersDirective: candidate.answersDirective } : {}),
     ...(Array.isArray(candidate.covers) ? { covers: candidate.covers.filter((id): id is string => typeof id === "string") } : {}),
     ...(typeof candidate.coversOwedAt === "string" ? { coversOwedAt: candidate.coversOwedAt } : {}),
     ...(normalizeTelegram(candidate.telegram) ? { telegram: normalizeTelegram(candidate.telegram) } : {}),
@@ -853,6 +879,8 @@ export function appendBridgeReports(
   inputs: readonly BridgeReportInput[],
 ): { appended: BridgeReportV1[]; skipped: number } {
   if (inputs.length === 0) return { appended: [], skipped: 0 };
+  /* Refused before the transaction: a complete copy past its bound is never cut. */
+  for (const input of inputs) bridgeReportComplete(input.complete, true);
   return mutateLog((file) => {
     const known = new Set<string>([...file.reports.map((report) => report.id), ...file.retired]);
     const appended: BridgeReportV1[] = [];
@@ -878,6 +906,7 @@ export function appendBridgeReports(
            hashed `id` exactly as it was before this field existed. */
         ...(isBridgeDecisionRequestClass(input.class) ? { key: input.key } : {}),
         body: bridgeReportBody(input.body),
+        ...(bridgeReportComplete(input.complete) ? { complete: bridgeReportComplete(input.complete) } : {}),
         ...(input.origin ? { origin: normalizeOrigin(input.origin) } : {}),
         ...("project" in input ? { project: typeof input.project === "string" ? input.project : null } : {}),
         ...("targetSeatConversationId" in input
@@ -888,6 +917,7 @@ export function appendBridgeReports(
           }
           : {}),
         ...(input.correlatesDirective ? { correlatesDirective: input.correlatesDirective } : {}),
+        ...(input.correlatesDirective && typeof input.answersDirective === "boolean" ? { answersDirective: input.answersDirective } : {}),
         ...(input.covers?.length ? { covers: [...new Set(input.covers.map((key) => scopedReportId(project, key)))] } : {}),
         ...(input.coversOwed ? { coversOwedAt: input.at } : {}),
         ...(input.telegram

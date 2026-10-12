@@ -72,7 +72,7 @@ test("existing managed accounts expose retry and cancel without tmux", async () 
   setManagedCodexRuntimeForTests(new ManagedCodexRuntime({
     startClient: async (home) => {
       const child = new FakeChild(); children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   }));
   const created = await POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -97,7 +97,7 @@ test("#2166: Main signs in and cancels from the route without a label or a secon
     startClient: async (home) => {
       homes.push(home);
       const child = new FakeChild(); children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   }));
   const post = (body: unknown) => POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -122,7 +122,7 @@ test("managed account creation returns an app-server challenge without the tmux 
     startClient: async (home) => {
       const child = new FakeChild();
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   }));
   const response = await POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -148,7 +148,7 @@ test("managed Codex removal cannot bypass device login with force", async () => 
     startClient: async (home) => {
       const child = new FakeChild();
       children.push(child);
-      return CodexAppServerClient.start({ home, spawn: () => child as never });
+      return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     },
   }));
   const created = await POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -336,7 +336,7 @@ test("a delayed real login blocks removal and competing login, then releases its
   const child = new FakeChild();
   setManagedCodexRuntimeForTests(new ManagedCodexRuntime({ startClient: async (home) => {
     entered(); await held;
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } }));
   const request = (action: string) => new NextRequest("http://127.0.0.1/api/accounts/codex", {
     method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action, id: account.id }),
@@ -367,7 +367,7 @@ test("cancel keeps removal fenced after the runtime marks its attempt canceled",
     if (message.method !== "account/login/cancel") { originalWrite(message); return; }
     entered(); void held.then(() => child.respond(message.id as number, { status: "canceled" }));
   };
-  const runtime = new ManagedCodexRuntime({ startClient: (home) => CodexAppServerClient.start({ home, spawn: () => child as never }) });
+  const runtime = new ManagedCodexRuntime({ startClient: (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   setManagedCodexRuntimeForTests(runtime);
   await runtime.startLogin(account);
   const cancel = POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
@@ -404,7 +404,7 @@ for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`man
   process.env.LLV_STATE_DIR = path.join(SANDBOX, `contention-create-${kind}`, "state");
   const runtime = new ManagedCodexRuntime({ startClient: async (home) => {
     const child = new FakeChild();
-    return CodexAppServerClient.start({ home, spawn: () => child as never });
+    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   setManagedCodexRuntimeForTests(runtime);
   try {
@@ -441,4 +441,57 @@ for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`orp
   } finally {
     process.env.LLV_STATE_DIR = previousState;
   }
+});
+
+/* Task d7759de2: every signed-in account goes through the same remove
+   control. Main is only forgotten, its home untouched, and comes back on request. */
+/* An earlier case in this file leaves a registry the store refuses. */
+const freshCodexRegistry = () => seedAccountRegistry("codex", { version: 1, active: "default", accounts: [], retired: [], removals: [] });
+
+test("Main is removed through DELETE with its home untouched, leaves bindings and routing, and can be shown again", async () => {
+  const { listCodexAccounts } = await import("@/lib/accounts/codex");
+  freshCodexRegistry();
+  const { accountProjectBindings, bindAccountToProject } = await import("@/lib/accounts/projectBindings");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const legacy = path.join(SANDBOX, "legacy");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, "auth.json"), "{}", { mode: 0o600 });
+  createManagedCodexAccount("After Main");
+  agentRegistry().setEngineRouting("codex", "default");
+  expect(bindAccountToProject("codex", "default", "repo-fixture-main").ok).toBe(true);
+
+  const response = await remove(deleteRequest({ id: "default" }));
+
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toMatchObject({ removed: { id: "default" }, hidden: { home: legacy }, moved: { archive: null, files: 0, bytes: 0 }, bindingsCleared: 1 });
+  expect(listCodexAccounts().map((account) => account.id)).not.toContain("default");
+  expect(fs.readFileSync(path.join(legacy, "auth.json"), "utf8")).toBe("{}");
+  expect(accountProjectBindings().filter((binding) => binding.engine === "codex" && binding.accountId === "default")).toEqual([]);
+  expect(agentRegistry().engineRouting("codex").activeAccountId).not.toBe("default");
+  expect(accountManager.resolveSpawn("codex").accountId).not.toBe("default");
+  expect((await remove(deleteRequest({ id: "default" }))).status).toBe(404);
+
+  const restored = await POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "restore", id: "default" }),
+  }));
+  expect(restored.status).toBe(200);
+  expect(listCodexAccounts().map((account) => account.id)).toContain("default");
+});
+
+test("a live session refuses removal and the answer names the conversation to open", async () => {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  freshCodexRegistry();
+  const account = createManagedCodexAccount("Busy live");
+  const begun = beginLegacySpawnFixture(agentRegistry(), { engine: "codex", cwd: "/repo", accountId: account.id });
+  if (begun.kind !== "created") throw new Error("expected a launch receipt");
+
+  const response = await remove(deleteRequest({ id: account.id }));
+
+  expect(response.status).toBe(409);
+  const body = await response.json() as { blockers: string[]; sessions: { conversationId: string | null }[]; sessionCount: number };
+  expect(body.blockers).toContain("live_sessions");
+  expect(body.sessions).toContainEqual(expect.objectContaining({ conversationId: begun.receipt.conversationId }));
+  expect(body.sessionCount).toBeGreaterThanOrEqual(1);
+  expect(fs.existsSync(account.home)).toBe(true);
+  agentRegistry().failSpawn(begun.receipt.launchId, "test finished");
 });

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -184,13 +184,6 @@ const unitLookingRealAddresses = [
   ["probe", "b.service.xn--j1amh.com"].join("@"),
 ];
 
-// Concurrent CLI tests retain their own fixtures until every child has exited.
-afterAll(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { force: true, recursive: true });
-  }
-});
-
 function crc32(input: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of input) {
@@ -212,7 +205,11 @@ function pngChunk(type: string, data: Buffer): Buffer {
 }
 
 function syntheticFineGrainedPat(): string {
-  return `${[["git", "hub"].join(""), "pat"].join("_")}_${"A".repeat(82)}`;
+  return [["git", "hub"].join(""), "pat", "A".repeat(22), "B".repeat(59)].join("_");
+}
+
+function syntheticShortGithubToken(kind: string, body = "aZ9".repeat(12)): string {
+  return [String.fromCharCode(103, 104) + kind, body].join("_");
 }
 
 function liveCapturePng(): Buffer {
@@ -1071,6 +1068,166 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   }, 15000);
 
+  test("template markup does not form a split GitHub token", () => {
+    const markup = [
+      '<span class="badge ${h.runtime === "live" ? "b-success" : "b-warning"}">',
+      '${h.runtime}</span>',
+    ].join("");
+    expect(sensitiveClasses(markup)).toEqual(new Set());
+    expect(sensitiveClasses(markup.repeat(2))).toEqual(new Set());
+  });
+
+  test("layout arithmetic does not form a split GitHub token", () => {
+    const arithmetic = [
+      'const width = Math.max(widest, owned.length ? Math.max(aspect * ring.h - ',
+      'ring.w - 2 * YX, Math.sqrt(area)) : widest);',
+    ].join("");
+    expect(sensitiveClasses(arithmetic)).toEqual(new Set());
+  });
+
+  test("split GitHub prefixes require a boundary, a delimiter and a complete base62 body", () => {
+    const token = syntheticShortGithubToken("p");
+    const split = [...token].join(" ");
+    const nonTokens = [
+      ...["ring", "_", "$", "α"].map((prefix) => prefix + split),
+      [...token.replace("_", " ")].join(" "),
+      [...syntheticShortGithubToken("p", "A".repeat(35))].join(" "),
+      [...syntheticShortGithubToken("r", "A".repeat(75))].join(" "),
+      [...syntheticFineGrainedPat().slice(0, -1)].join(" "),
+      [...syntheticShortGithubToken("p", "A".repeat(18) + "é" + "A".repeat(18))].join(" "),
+    ];
+    for (const text of nonTokens) expect(sensitiveClasses(text).has("credential")).toBe(false);
+  });
+
+  test.each(["p", "o", "u", "s", "r"])("detects synthetic GitHub %s tokens through splitting and obfuscation", (kind) => {
+    const body = kind === "r" ? "aZ9".repeat(25) + "a" : "aZ9".repeat(12);
+    const token = syntheticShortGithubToken(kind, body);
+    const split = [...token].join(" ");
+    const publications = [
+      token,
+      split,
+      token.replace(String.fromCharCode(103, 104), String.fromCharCode(103) + " " + String.fromCharCode(104)),
+      [...token].join("\u200B"),
+      [...split].map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`).join(""),
+      [...token].map((character) => JSON.stringify(character)).join(" + "),
+      `_${split}_`,
+      `__${split}__`,
+      `___${split}___`,
+      `___${split}__ tail_`,
+      `___${split}_ tail__`,
+      `____${split}____`,
+      `${"_".repeat(32)}${split}${"_".repeat(32)}`,
+      `_${split}\ncontinued_`,
+      `_${token.replace(String.fromCharCode(103, 104), String.fromCharCode(103) + " " + String.fromCharCode(104))}_`,
+      `${token[0]} <b>${token[1]}</b> ${kind} _ ${body}`,
+    ];
+    for (const text of publications) expect(sensitiveClasses(text).has("credential")).toBe(true);
+  });
+
+  test("detects synthetic split GitHub installation tokens with a longer structured body", () => {
+    const body = ["0", ["A".repeat(24), "B".repeat(24), "C".repeat(24)].join(".")].join("_");
+    const token = syntheticShortGithubToken("s", body);
+    expect(sensitiveClasses([...token].join(" ")).has("credential")).toBe(true);
+  });
+
+  test("detects synthetic fine-grained tokens under multiline and nested emphasis", () => {
+    const split = [...syntheticFineGrainedPat()].join(" ");
+    for (const text of [`_${split}\ncontinued_`, `____${split}____`, `___${split}__ tail_`, `___${split}_ tail__`]) {
+      expect(sensitiveClasses(text).has("credential")).toBe(true);
+    }
+  });
+
+  test.each(["__ tail_", "_ tail__"])("the CLI blocks nested split closures %s", async (closing) => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
+    temporaryDirectories.push(directory);
+    const publication = join(directory, "publication.md");
+    const split = [...syntheticShortGithubToken("p", "aZ9".repeat(12))].join(" ");
+    writeFileSync(publication, "___" + split + closing);
+
+    const result = await runGate([publication]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
+    expect(result.stderr.toString()).toBe("");
+  }, 15000);
+
+  test("nested emphasis cannot complete a short token with text outside its inner closure", () => {
+    const split = [...syntheticShortGithubToken("p", "aZ9".repeat(11) + "aZ")].join(" ");
+    for (const closing of ["__ a_", "_ a__"]) {
+      expect(sensitiveClasses("___" + split + closing).has("credential")).toBe(false);
+    }
+  });
+
+  test.each([1, 2, 3])("the CLI blocks split tokens with an escaped delimiter under emphasis width %s", async (width) => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
+    temporaryDirectories.push(directory);
+    const publication = join(directory, "publication.md");
+    const marker = "_".repeat(width);
+    const split = syntheticShortGithubToken("p", "aZ9".repeat(12))
+      .replace(String.fromCharCode(103, 104, 112, 95), String.fromCharCode(103, 32, 104, 32, 112, 32, 92, 95));
+    writeFileSync(publication, marker + split + marker);
+
+    const result = await runGate([publication]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
+    expect(result.stderr.toString()).toBe("");
+  }, 15000);
+
+  test.each([1, 2, 3])("the CLI blocks entity delimiters under emphasis width %d", async (width) => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
+    temporaryDirectories.push(directory);
+    const publication = join(directory, "publication.md");
+    const marker = "_".repeat(width);
+    const prefix = String.fromCharCode(103, 32, 104, 32, 112, 32);
+    for (const delimiter of ["&#95;", "&#x5f;", "&lowbar;", "&UnderBar;"]) {
+      writeFileSync(publication, marker + prefix + delimiter + "aZ9".repeat(12) + marker);
+      const result = await runGate([publication]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
+      expect(result.stderr.toString()).toBe("");
+    }
+  }, 15000);
+
+  test("escaped delimiters survive encoding without completing short bodies across emphasis", () => {
+    const prefix = String.fromCharCode(103, 32, 104, 32, 112, 32);
+    const literal = String.fromCharCode(92, 95);
+    const encode = (text: string) => Array.from(new TextEncoder().encode(text), (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("");
+    const compatibilityUnderscores = [0xfe33, 0xfe34, 0xfe4d, 0xfe4e, 0xfe4f, 0xff3f];
+    const literals = compatibilityUnderscores.flatMap((code) => [String.fromCharCode(code), `&#${code};`]);
+    for (const delimiter of [literal, "&#95;", "&#x5f;", "&lowbar;", "&UnderBar;", "&#92;&#95;", "&#92;&#92;&#95;", ...literals]) {
+      for (const width of [1, 2, 3]) {
+        const marker = "_".repeat(width);
+        const full = marker + prefix + delimiter + "aZ9".repeat(12) + marker;
+        for (const text of [full, encode(full), JSON.stringify(full), [...full].join("\u200B")]) {
+          expect(sensitiveClasses(text).has("credential")).toBe(true);
+        }
+        expect(sensitiveClasses(marker + prefix.trimEnd() + ":".repeat(8) + delimiter + "aZ9".repeat(12) + marker).has("credential")).toBe(true);
+        const short = marker + prefix + delimiter + "a Z 9 ".repeat(11) + "a Z" + marker + " a";
+        for (const text of [short, encode(short), JSON.stringify(short)]) {
+          expect(sensitiveClasses(text).has("credential")).toBe(false);
+        }
+      }
+    }
+  });
+
+  test("emphasis closing inside a split prefix keeps its complete token detectable", () => {
+    const split = [...syntheticShortGithubToken("p")].join(" ");
+    expect(sensitiveClasses("_" + split[0] + "_" + split.slice(1) + "_").has("credential")).toBe(true);
+  });
+
+  test("unclosed emphasis candidates stay bounded across many marker widths", () => {
+    const split = [...syntheticShortGithubToken("p")].join(" ");
+    const text = Array.from({ length: 512 }, (_, index) => "_".repeat(index + 1) + split).join("\n");
+    expect(sensitiveClasses(text).has("credential")).toBe(false);
+  });
+
+  test("an incomplete refresh prefix leaves a following formatted token detectable", () => {
+    const incomplete = [...syntheticShortGithubToken("r", "")].join(" ");
+    const split = [...syntheticShortGithubToken("p")].join(" ");
+    for (const prefix of [incomplete, incomplete.slice(0, -2)]) {
+      expect(sensitiveClasses(`${prefix} _${split}_`).has("credential")).toBe(true);
+    }
+  });
+
   test.concurrent("fails closed when required known-value fingerprints are unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
@@ -1106,7 +1263,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const splitKnownLabel = "fixture-<span>private</span>-project-**label**";
     const percentSlash = String.fromCharCode(37, 50, 70);
     const encodedHome = ["", "home", "fixture-person", "records"].join("/").replaceAll("/", encodeURIComponent(percentSlash));
-    const splitToken = `${String.fromCharCode(103)} ${String.fromCharCode(104)} ${String.fromCharCode(112)} _ syntheticfixturecredential123456`;
+    const splitToken = [...syntheticShortGithubToken("p")].join(" ");
     const passwordInput = ['<form><in', 'put type="password" value="synthetic-form-credential-123456"></form>'].join("");
     const encodedPasswordInput = passwordInput.replace("<", "&lt;");
     const authorizationHeader = ["Author", "ization: Bear", "er syntheticfixturecredential123456"].join("");
@@ -5270,3 +5427,13 @@ describe("mergeBoundaryReview", () => {
     expect(review.notices[0]).not.toContain(personal);
   });
 });
+
+// A final serial test runs after the concurrent CLI checks have returned.
+// Deleting hundreds of Git fixtures exceeded Bun's default five-second hook
+// timeout on hosted runners. Give cleanup a named failure and a 30-second
+// budget, inside the workflow's unchanged 130-second suite deadline.
+test.serial("releases privacy fixtures after all concurrent CLI checks", () => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}, 30_000);

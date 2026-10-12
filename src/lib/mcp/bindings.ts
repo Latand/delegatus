@@ -1,4 +1,4 @@
-import { liveOwnerRelayConversation } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -89,8 +89,8 @@ import { isLifecycleEventType } from "@/lib/lifecycle/vocabulary";
 import { recordBridgeDirectiveAnswer, recordBridgeDirectivePendingAnswer, recordManagerReport } from "@/lib/bridge/service";
 import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/lib/bridge/directive";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
-import { isBridgeReportClass, isBridgeReportOutcomeKind, type BridgeReportOutcome, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
-import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
+import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, isBridgeReportOutcomeKind, type BridgeReportCompleteV1, type BridgeReportOutcome, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
+import { bridgeReportComplete, findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { issueReportApproval, issueReportApprovalDrafts, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
@@ -1968,6 +1968,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   }
   const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
   const caller = dependencies ? attributionOf(dependencies) : null;
+  const ownerRelay = dependencies ? ownerRelayCaller(dependencies) : false;
   assertMaintenanceWrite(maintainer, args, undefined, true);
   refuseCrossProjectFromSeat("create_task", () => text(args.project) || null, args, dependencies);
   const input: CreateTaskInput = {
@@ -1978,7 +1979,15 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   let prior: BoardTask | undefined;
   let matchedFields: string[] | undefined;
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+    let outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+    // Publish the new owner task and its seat-tick eligibility atomically.
+    // Replays and matched findings retain the task's existing status.
+    if (outcome.ok && !outcome.replay && !outcome.matched && ownerRelay && !outcome.task.hold) {
+      const assigned = patchTask(outcome.tasks, outcome.task.id, { status: "assigned" }, outcome.task.createdAt,
+        { actor: "agent", ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+      if (!assigned.ok) return { state: undefined, result: assigned };
+      outcome = { ...outcome, tasks: assigned.tasks, task: assigned.task };
+    }
     if (outcome.ok && outcome.matched) {
       prior = state.tasks.find(task => task.id === outcome.task.id);
       assertMaintenanceWrite(maintainer, { note: input.note ?? null }, prior);
@@ -2444,7 +2453,7 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lessons: args.lessons, none: args.none });
+    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none });
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
@@ -3493,6 +3502,7 @@ async function bridgeReport(
   const locale = dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
   const warnings: string[] = [];
   let storedBody: string;
+  let complete: BridgeReportCompleteV1 | null = null;
   let telegramCopy: { chat: string; html: string; topicId?: number } | null = null;
   /* «Готово» (docs/design/done-section.md §2.3): the marker is the
      orchestrator's own, kept beside its row with the summary it rendered. */
@@ -3526,6 +3536,14 @@ async function bridgeReport(
         { code: "report_empty_after_scrub", retryable: false, warnings: rendered.warnings },
       );
     }
+    /* The voice relays a report whole or not at all: one past its bound is
+       refused before anything is stored, never shortened. */
+    if (rendered.tooLarge || (rendered.complete && !bridgeReportComplete(rendered.complete))) {
+      throw new McpToolRefusal(
+        `The report is longer than ${BRIDGE_REPORT_COMPLETE_MAX_BYTES} bytes as a whole, so it cannot be relayed without leaving items out. Nothing was recorded. Split it into several reports, each with its own key, or shorten the items.`,
+        { code: "report_too_large", retryable: false, warnings: rendered.warnings },
+      );
+    }
     warnings.push(...rendered.warnings);
     const language = languageMismatchWarning("report", [summary, ...Object.values(sections).flat(), hasSections ? "" : body].join("\n"), locale);
     if (language) warnings.push(language);
@@ -3535,6 +3553,8 @@ async function bridgeReport(
       if (line) outcome = { kind: outcomeKind, summary: line };
       else warnings.push("outcome was ignored: the report has no summary to show for it.");
     }
+    /* The voice relays the report whole; the body stays the display copy. */
+    complete = rendered.complete;
     if (destination) {
       telegramCopy = { chat: destination.chat, html: renderTelegram(rendered.cut, knownPullRequests(project!)), ...(destination.topicId ? { topicId: destination.topicId } : {}) };
     }
@@ -3554,7 +3574,9 @@ async function bridgeReport(
     project,
     targetSeatConversationId: targetSeat?.conversationId ?? null,
     body: storedBody,
+    complete,
     correlatesDirective: text(args.correlatesDirective) || null,
+    ...(typeof args.answersDirective === "boolean" ? { answersDirective: args.answersDirective } : {}),
     covers,
     coversOwed,
     telegram: telegramCopy,
@@ -3577,13 +3599,15 @@ async function bridgeReport(
   };
 }
 
+/* Every item reaches the renderer: the display counts what it does not show,
+   and the whole report's byte bound refuses one too large to relay whole. */
 function reportSectionsArg(value: unknown): Record<SeatSectionId, string[]> {
   const sections = {} as Record<SeatSectionId, string[]>;
   const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   for (const id of SEAT_SECTION_IDS) {
     const items = record[id];
     sections[id] = Array.isArray(items)
-      ? items.filter((item): item is string => typeof item === "string" && item.trim() !== "").slice(0, 32)
+      ? items.filter((item): item is string => typeof item === "string" && item.trim() !== "")
       : [];
   }
   return sections;
@@ -5173,7 +5197,7 @@ function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; bridgeR
 /** #2187 §4.1: whether the lane's project merges when the review passes, and
     where the lane's own merge stands when the runner took it. #2146: whether
     the project's bridge reports are on. */
-function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number } } {
+function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number | null } } {
   const merge = pipeline.merge;
   return {
     mergeOnReview: mergeOnReviewEnabled(pipeline.project),
@@ -6958,18 +6982,22 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
   // root caller's general attribution also identifies it as the voice gateway.
   const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find((candidate) => candidate.conversationId === attribution.conversationId);
-  if (!seat && !ownerRelayCaller(dependencies) && (attribution.kind !== "gateway" || !attribution.conversationId)) {
-    throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation", {
+  const owner = ownerRelayCaller(dependencies) ? ownerRelayPayload(message, attribution.conversationId!) : null;
+  if (!seat && !owner && (attribution.kind !== "gateway" || !attribution.conversationId)) {
+    throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation; continue the requested work with your tools, or explain the failure and the owner's next action", {
       code: "orchestrator_relay_refused", retryable: false,
     });
   }
   const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
+  if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId)) {
+    throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
+  }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: link ? `machine:${link.install}` : project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
-    sendPayload: seat ? orchestratorRelayPayload(message, seat) : attribution.kind === "agent" ? { text: message, origin: mcpSenderOrigin(dependencies) } : {
+    sendPayload: seat ? orchestratorRelayPayload(message, seat) : owner ?? {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
     // Separate from direct send: equal client keys on different tools are
@@ -7005,7 +7033,7 @@ function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencie
     const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
     if (seats.some((seat) => seat.conversationId === caller.conversationId)) return;
   }
-  throw new McpToolRefusal("only a designated orchestrator seat or the voice gateway may relay to an orchestrator", {
+  throw new McpToolRefusal("only a designated orchestrator seat, the voice gateway or a verified owner relay may relay to an orchestrator; continue the requested work with your tools, or explain the failure and the owner's next action", {
     code: "orchestrator_relay_refused", retryable: false,
   });
 }

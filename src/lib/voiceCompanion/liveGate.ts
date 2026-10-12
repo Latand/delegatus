@@ -3,8 +3,13 @@ import { gateSentences, retractsRequest, type OperatorInput } from "./gate";
 /** Withdrawal applies only to a confirmation already waiting. */
 const REFUSED = /\b(?:don['’]?t|do not|never)\s+(?:send|delegate|ask|tell)\b|(?:не\s+(?:надсилай|відправляй|делегуй|прос[иі]|передавай))/iu;
 const words = (rows: readonly OperatorInput[]) => rows.map(row => row.text).join(" ");
-/** Instruction text as one request reads, whatever its spacing, case or closing stop. */
-export const requestText = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "").toLowerCase();
+/** Instruction text as one request reads, whatever its spacing or closing stop. Case is kept everywhere,
+ * the opening word too: "Release: what changed?" and "release: what changed?" name two targets, so two
+ * requests. A capitalization variant or a rephrasing is named by its request handle, never by folding words. */
+export const requestText = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "");
+/** One short ask in the operator's words, counted in Unicode scalars. A longer
+ * text is a bundle or an expansion; the backend recomposes it, nothing slices it. */
+export const VOICE_ASK_MAX_CHARS = 400;
 /** A request the session already holds, whatever became of it: the turn it was raised in and its words. */
 export interface EarlierRequest { turn?: number; instruction: string }
 
@@ -15,7 +20,7 @@ export interface EarlierRequest { turn?: number; instruction: string }
  * request is new, also after the first was cancelled. Nothing here reads the operator's words for it.
  */
 export function liveProposalRefusal(instruction: string, inputs: readonly OperatorInput[], sourceTurn?: number, earlier: readonly EarlierRequest[] = [], renewed = false): "invalid_instruction" | "already_requested" | null {
-  if (!instruction.trim() || instruction.length > 2_000) return "invalid_instruction";
+  if (!instruction.trim() || [...instruction.trim()].length > VOICE_ASK_MAX_CHARS) return "invalid_instruction";
   const turn = sourceTurn ?? inputs.at(-1)?.turn;
   const repeated = turn !== undefined && earlier.some(row => row.turn !== undefined && row.turn < turn && requestText(row.instruction) === requestText(instruction));
   return repeated && !renewed ? "already_requested" : null;

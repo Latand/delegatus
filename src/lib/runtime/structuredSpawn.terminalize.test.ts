@@ -74,6 +74,68 @@ function stagedStructuredReceipt(store: AgentRegistry, attempt: string) {
 
 const AGED = () => Date.now() + STALE_STRUCTURED_SPAWN_TIMEOUT_MS + 60_000;
 
+test.each(["starting", "host-verified"] as const)("an abandoned transport-null %s receipt terminalizes without losing its replay identity", async state => {
+  const store = registry();
+  const receipt = store.beginSpawn("codex", "/repo", { title: "Legacy abandoned launch" });
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  raw.receipts[receipt.launchId].state = state;
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  expect(reopened.snapshot().receipts[receipt.launchId]?.transport).toBeNull();
+  const result = await terminalizeStaleStructuredSpawns(reopened, DEAD_RUNTIME_CLIENT, { now: AGED });
+  expect(result.terminalized).toEqual([receipt.launchId]);
+  expect(reopened.snapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", conversationId: receipt.conversationId });
+  expect(await terminalizeStaleStructuredSpawns(reopened, DEAD_RUNTIME_CLIENT, { now: AGED }))
+    .toEqual({ examined: 0, terminalized: [], recovered: [] });
+});
+
+test.each(["operation","effect","session","unavailable","young"] as const)("a transport-null launch preserves %s evidence", async evidence => {
+  const store = registry();
+  const receipt = store.beginSpawn("codex","/repo",{ title: "Preserved legacy launch" });
+  const client = { ...DEAD_RUNTIME_CLIENT,
+    operationStatus: async () => {
+      if (evidence === "unavailable") throw new RuntimeHostUnavailableError("fixture unavailable");
+      return evidence === "operation" ? { receipt: { status: "pending" } } : null;
+    },
+    effectBatch: async () => evidence === "effect" ? [{ eventSeq: 1,payload: { operationId: receipt.launchId } }] : [],
+    snapshot: async () => ({ revision: 0,sessions: evidence === "session" ? [{ conversationId: receipt.conversationId }] : [] }),
+  } as unknown as RuntimeHostClient;
+  const result = await terminalizeStaleStructuredSpawns(store,client,{ now: evidence === "young" ? Date.now : AGED });
+  expect(result.terminalized).toEqual([]);
+  expect(store.snapshot().receipts[receipt.launchId]?.state).toBe("starting");
+});
+
+test("transport-null cleanup rechecks foreground settlement after its asynchronous evidence reads", async () => {
+  const store = registry();
+  const receipt = store.beginSpawn("codex","/repo",{ title: "Foreground settlement race" });
+  const client = { ...DEAD_RUNTIME_CLIENT,operationStatus: async () => {
+    const raw = JSON.parse(fs.readFileSync(store.filename,"utf8"));
+    raw.receipts[receipt.launchId].state = "completed";
+    fs.writeFileSync(store.filename,JSON.stringify(raw));
+    return null;
+  } } as unknown as RuntimeHostClient;
+  expect((await terminalizeStaleStructuredSpawns(store,client,{ now: AGED })).terminalized).toEqual([]);
+  expect(store.snapshot().receipts[receipt.launchId]?.state).toBe("completed");
+});
+
+test("orphan starting entries converge after the grace while receipt and claim evidence stay intact", async () => {
+  const store = registry();
+  for (const name of ["orphan","receipt","claim","operation","young"]) {
+    store.upsert({ key: { engine: "codex",sessionId: `orphan-${name}` },artifactPath: `/sessions/orphan-${name}.jsonl`,cwd: "/repo",accountId: null,
+      status: "starting",host: null,claimEpoch: 0,claimOwner: name === "claim" ? "fixture-owner" : null,pendingAction: "spawn" });
+  }
+  const receipt = store.beginSpawn("codex","/repo",{ title: "Correlated starting launch" });
+  const raw = JSON.parse(fs.readFileSync(store.filename,"utf8"));
+  raw.receipts[receipt.launchId].artifactPath = "/sessions/orphan-receipt.jsonl";
+  raw.entries["codex:orphan-operation"].structuredHostOperationId = "fixture-operation";
+  raw.entries["codex:orphan-young"].updatedAt = new Date(AGED()).toISOString();
+  fs.writeFileSync(store.filename,JSON.stringify(raw));
+  await terminalizeStaleStructuredSpawns(store,null,{ now: AGED });
+  const snapshot = store.snapshot();
+  expect(snapshot.entries["codex:orphan-orphan"]).toMatchObject({ status: "dead",pendingAction: null });
+  for (const name of ["receipt","claim","operation","young"]) expect(snapshot.entries[`codex:orphan-${name}`]?.status).toBe("starting");
+});
+
 test("a runtime-host transport failure becomes actionable on the structured spawn card", async () => {
   const store = registry();
   const cwd = path.dirname(store.filename);

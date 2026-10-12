@@ -107,6 +107,7 @@ interface CurrentReleaseControllerLoaders {
   loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
   /** Optional for the same reason. */
   loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
+  loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
 }
 
@@ -381,6 +382,7 @@ export async function startCurrentReleaseControllers(
     loadAsksClassifier: () => import("@/lib/asks/controller"),
     loadLinkedBoardSync: () => import("@/lib/links/schedule"),
     loadDoneSweep: () => import("@/lib/done/sweep"),
+    loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
   },
 ): Promise<void> {
@@ -533,6 +535,16 @@ export async function startCurrentReleaseControllers(
     done?.startDoneSweep();
   } catch (error) {
     console.error("[done] sweep start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* The operator's prototype decisions answer as soon as they are saved, and
+     their messages go to the seat from here (docs/design/prototype-review-server.md).
+     The first sweep attempts every decision still owed, so a decision saved
+     while the Viewer restarted or a deploy ran goes out now. */
+  try {
+    const prototypeDelivery = await loaders.loadPrototypeDelivery?.();
+    prototypeDelivery?.startPrototypeDeliveryWorker();
+  } catch (error) {
+    console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
@@ -894,6 +906,8 @@ export async function registerViewerRuntime(): Promise<void> {
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
     activatedReleaseRevision = boundary.authority?.releaseRevision ?? null;
     const durability = await checkStateDatabasesBeforeStores(hotStateDirectory);
+    const { sweepOldLearnedRulesFiles } = await import("@/lib/memory/roleLaunch");
+    try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
     const authority = await initializeHotStateStoresAtStartup(boundary);
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
