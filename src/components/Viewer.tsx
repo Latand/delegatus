@@ -1946,10 +1946,12 @@ function ViewerApp() {
           Cards publish a place; the composer's lifetimes (dictation, attachment
           object URLs, outbox) live here and survive the card unmounting mid-call. */}
       <VoiceComposerHost files={allFiles} />
-      {/* #2519: the floating voice companion. Desktop only, and nothing is mounted
-          until the operator turns it on in the settings. It talks about the project
-          in view; a tap on Talk is the only thing that starts a conversation. */}
-      <VoiceCompanionHost project={project === OVERVIEW ? null : project} mobile={isMobile} />
+      {/* #2519: the floating voice companion; on the phone its head
+          (docs/design/phone-voice-head-build.md). Nothing is mounted until the
+          operator turns it on in the settings. It talks about the project in view,
+          on the phone the project of the screen on top, and stays mounted across
+          screens and sheets; a tap on Talk is the only thing that starts a conversation. */}
+      <VoiceCompanionHost project={dashboardProject === OVERVIEW ? null : dashboardProject} mobile={isMobile} />
       {/* Staging instances (#659) announce themselves on every device; prod
           renders nothing. Top-center, clear of both corner anchors. */}
       <StagingBadge />
