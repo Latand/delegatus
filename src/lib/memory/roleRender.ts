@@ -59,27 +59,45 @@ function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemor
 
 export interface HandedFindings {
   stageId: string;
-  severities: (string | null)[];
+  findings: { severity: string; text: string }[];
 }
 
-function handedLine(handed: HandedFindings | null): string[] {
-  if (!handed || !handed.severities.length) return [];
-  const counts = new Map<string, number>();
-  for (const severity of handed.severities) counts.set(severity ?? "unranked", (counts.get(severity ?? "unranked") ?? 0) + 1);
-  const ranked = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([severity, count]) => `${severity} ×${count}`).join(", ");
-  const n = handed.severities.length;
-  return [`This attempt was handed ${n} finding${n === 1 ? "" : "s"} from stage ${handed.stageId} (${ranked}). They make a lesson only when a rule, followed from the start, would have prevented that class of finding on other tasks too.`];
+function findingOpening(text: string): string {
+  const line = text.split(/\r?\n/, 1)[0].trim();
+  const sentence = line.match(/^.*?[.!?](?=\s|$)/u)?.[0] ?? line;
+  const points = [...sentence];
+  return points.length > 140 ? `${points.slice(0, 140).join("")}…` : sentence;
+}
+
+function fixRequest(handed: HandedFindings): string[] {
+  const findings = handed.findings.slice().sort((a, b) => a.severity.localeCompare(b.severity));
+  const n = findings.length;
+  return [
+    `Your stage report is recorded. This attempt was handed ${n} finding${n === 1 ? "" : "s"} from stage ${handed.stageId}:`,
+    ...findings.slice(0, 5).map(finding => `- ${finding.severity}: ${findingOpening(finding.text)}`),
+    ...(n > 5 ? [`- and ${n - 5} more, in your prompt`] : []),
+    "Each one reached review because the first attempt missed a check. Name each finding's class, such as an incomplete matrix of widths, themes or languages, a contract shape left unvalidated, or an edge case at a seam (a restart, an identity, stale state), and the rule an agent of your role needed before the first review to catch that class on any task.",
+    "Then do exactly one of these, once, for the class most likely to come back:",
+    "- rewrite: a rule you were given names this class and the finding happened anyway, so the rule is too narrow, unclear or easy to skip. Give its id and a text that would have caught this, keeping every condition it had. The earlier text is kept and can be restored.",
+    "- lesson: no rule you were given names this class. Write one: when it applies, and the check to run before the first review. Name the class, never this task's file, component or screen.",
+    '- none: only with the reason this class cannot come back on another task: it came from this specification alone, the finding was not a defect, or a gate every task runs now catches it (name the gate). "Existing rules cover it" is no reason: the finding shows they did not.',
+  ];
 }
 
 /** The stage-end prompt (design §2.4), as lines so a tool card shows it line by line. */
 export function lessonRequestLines(handed: HandedFindings | null): string[] {
+  const fixRound = !!handed?.findings.length;
   return [
+    ...(fixRound ? fixRequest(handed!) : [
     "Your stage report is recorded. Did this stage show that a learned rule you were given is wrong, too narrow or unclear, or teach an abstract rule that changes what an agent does on a different task? Most stages do neither; then call leave_lesson with none and one line saying why.",
-    ...handedLine(handed),
     "Otherwise do exactly one of these, once:",
     "- rewrite: the id of a rule you were given, with its better text and why. The earlier text is kept and can be restored.",
     "- lesson: one new rule, active for agents from their next start. It qualifies only when you can name a different task where it changes the agent's actions, and repeats neither your learned rules nor the project's instruction files. Improve an existing rule with rewrite.",
+    ]),
+    "A rule is a generic instruction to do a check that changes behaviour on a different task. A concrete defect, inconsistency or documentation/specification mismatch in this project is a problem to report to its designated seat.",
+    "- problem: {statement, evidence}, a short observed problem and the evidence for it. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Concrete file paths and project-specific broken facts belong here; machine rules must hold across projects.",
     "No lesson may be about a task. What happened on this task alone (a pull request, commit, lane, id, incident, or one module's quirk) belongs in your stage report; leave_lesson refuses it and stores nothing.",
+    ...(fixRound ? ["A mistake made in one file is a class when it can be made in another."] : []),
     "Every agent of a level reads all its rules: choose the narrowest true level:",
     "- role: only that role acts on it, in its own kind of work on this project; yours unless you name another. Reviewers and verifiers take no rules, so their own know-how has no memory scope.",
     "- role on every project: only that role acts on it, in any repository. Leave it under role; the curator alone widens it to role:*:<roleId> after checking other projects.",

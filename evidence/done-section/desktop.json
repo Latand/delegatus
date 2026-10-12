@@ -1,0 +1,230 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "lang": "uk",
+  "readings": [
+    {
+      "scheme": "dark",
+      "decisions": 10,
+      "done": 18,
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
+      "pinned": true,
+      "top": 50,
+      "wide": 0,
+      "overflow": false,
+      "panelWidth": 320,
+      "rows": [
+        {
+          "key": "deploy:fixture-deploy",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-publication",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "limit:codex:acct-b:session:1",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-incident",
+          "checkRight": 10,
+          "ownLine": false
+        }
+      ],
+      "groupLines": [
+        {
+          "text": "Прибрано порожній лоток, аналіз моделей і ще 1",
+          "count": 3
+        },
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
+        }
+      ],
+      "receipts": [
+        "Технічні виправлення: 10 прийнято",
+        "Лендінг #2691 · прийнято"
+      ],
+      "afterAll": 10
+    },
+    {
+      "scheme": "light",
+      "decisions": 10,
+      "done": 18,
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
+      "pinned": true,
+      "top": 50,
+      "wide": 0,
+      "overflow": false,
+      "panelWidth": 320,
+      "rows": [
+        {
+          "key": "deploy:fixture-deploy",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-publication",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "limit:codex:acct-b:session:1",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 10,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-incident",
+          "checkRight": 10,
+          "ownLine": false
+        }
+      ],
+      "groupLines": [
+        {
+          "text": "Прибрано порожній лоток, аналіз моделей і ще 1",
+          "count": 3
+        },
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
+        }
+      ],
+      "receipts": [
+        "Технічні виправлення: 10 прийнято",
+        "Лендінг #2691 · прийнято"
+      ],
+      "afterAll": 10
+    }
+  ],
+  "reports": [
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
+      "pinned": true,
+      "headingAbove": true,
+      "bandHeight": 214,
+      "logHeight": 543,
+      "logWidth": 379,
+      "bounded": true,
+      "entriesVisible": true,
+      "wide": 0,
+      "foldedHeight": 31,
+      "islandBefore": 28,
+      "islandAfter": 27
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
+      "pinned": true,
+      "headingAbove": true,
+      "bandHeight": 214,
+      "logHeight": 543,
+      "logWidth": 379,
+      "bounded": true,
+      "entriesVisible": true,
+      "wide": 0,
+      "foldedHeight": 31,
+      "islandBefore": 28,
+      "islandAfter": 27
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
+      "pinned": true,
+      "headingAbove": true,
+      "bandHeight": 230,
+      "logHeight": 579,
+      "logWidth": 379,
+      "bounded": true,
+      "entriesVisible": true,
+      "wide": 0,
+      "foldedHeight": 31,
+      "islandBefore": 28,
+      "islandAfter": 27
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
+      "pinned": true,
+      "headingAbove": true,
+      "bandHeight": 230,
+      "logHeight": 579,
+      "logWidth": 379,
+      "bounded": true,
+      "entriesVisible": true,
+      "wide": 0,
+      "foldedHeight": 31,
+      "islandBefore": 28,
+      "islandAfter": 27
+    }
+  ]
+}

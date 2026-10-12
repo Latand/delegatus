@@ -46,8 +46,8 @@
     "allWindows": {
       "line": "week 77%",
       "windows": [
-        "5h left 36% reset in 3h · 00:54",
-        "Week left 77% reset in 3d · Oct 14 21:14"
+        "5h left 36% reset in 3h · 14:44",
+        "Week left 77% reset in 3d · Oct 15 11:04"
       ]
     }
   },
@@ -98,8 +98,8 @@
     "allWindows": {
       "line": "week 77%",
       "windows": [
-        "5h left 36% reset in 3h · 00:54",
-        "Week left 77% reset in 3d · Oct 14 21:14"
+        "5h left 36% reset in 3h · 14:44",
+        "Week left 77% reset in 3d · Oct 15 11:04"
       ]
     }
   },
@@ -150,8 +150,8 @@
     "allWindows": {
       "line": "week 77%",
       "windows": [
-        "5h left 36% reset in 3h · 00:54",
-        "Week left 77% reset in 3d · Oct 14 21:14"
+        "5h left 36% reset in 3h · 14:45",
+        "Week left 77% reset in 3d · Oct 15 11:05"
       ]
     }
   },
@@ -202,8 +202,8 @@
     "allWindows": {
       "line": "week 77%",
       "windows": [
-        "5h left 36% reset in 3h · 00:54",
-        "Week left 77% reset in 3d · Oct 14 21:14"
+        "5h left 36% reset in 3h · 14:45",
+        "Week left 77% reset in 3d · Oct 15 11:05"
       ]
     }
   },
@@ -212,8 +212,8 @@
     "cards": [
       {
         "id": "default",
-        "corner": "77% left Week",
-        "inside": true
+        "corner": null,
+        "inside": null
       },
       {
         "id": "work",
@@ -227,8 +227,8 @@
       },
       {
         "id": "default",
-        "corner": "78% left Week",
-        "inside": true
+        "corner": null,
+        "inside": null
       },
       {
         "id": "review",
@@ -284,8 +284,8 @@
     "allWindows": {
       "line": "тиждень 77%",
       "windows": [
-        "5 год лишилось 36% скид через 3 год · 00:54",
-        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 21:14"
+        "5 год лишилось 36% скид через 3 год · 14:45",
+        "Тиждень лишилось 77% скид через 3 д · 15 жовт. 11:05"
       ]
     }
   },
@@ -336,8 +336,8 @@
     "allWindows": {
       "line": "тиждень 77%",
       "windows": [
-        "5 год лишилось 36% скид через 3 год · 00:54",
-        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 21:14"
+        "5 год лишилось 36% скид через 3 год · 14:45",
+        "Тиждень лишилось 77% скид через 3 д · 15 жовт. 11:05"
       ]
     }
   },
@@ -388,8 +388,8 @@
     "allWindows": {
       "line": "тиждень 77%",
       "windows": [
-        "5 год лишилось 36% скид через 3 год · 00:54",
-        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 21:14"
+        "5 год лишилось 36% скид через 3 год · 14:45",
+        "Тиждень лишилось 77% скид через 3 д · 15 жовт. 11:05"
       ]
     }
   },
@@ -440,8 +440,8 @@
     "allWindows": {
       "line": "тиждень 77%",
       "windows": [
-        "5 год лишилось 36% скид через 3 год · 00:54",
-        "Тиждень лишилось 77% скид через 3 д · 14 жовт. 21:14"
+        "5 год лишилось 36% скид через 3 год · 14:45",
+        "Тиждень лишилось 77% скид через 3 д · 15 жовт. 11:05"
       ]
     }
   },
@@ -450,8 +450,8 @@
     "cards": [
       {
         "id": "default",
-        "corner": "77% лишилось Тиждень",
-        "inside": true
+        "corner": null,
+        "inside": null
       },
       {
         "id": "work",
@@ -465,8 +465,8 @@
       },
       {
         "id": "default",
-        "corner": "78% лишилось Тиждень",
-        "inside": true
+        "corner": null,
+        "inside": null
       },
       {
         "id": "review",
