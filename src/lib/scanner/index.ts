@@ -390,19 +390,11 @@ async function listFilesInternal(
 async function questionRouteReader(entries: readonly FileEntry[]): Promise<(entry: FileEntry) => boolean> {
   if (!entries.some((entry) => entry.pendingQuestion || entry.waitingInput)) return () => false;
   try {
-    const [{ routingInputs, productionRoutingSources }, { conversationRoute }, { seatIdentityResolver }] = await Promise.all([
-      import("@/lib/attention/routeOverlay"), import("@/lib/attention/routing"), import("@/lib/bridge/seatIdentity"),
+    const [{ questionRouteReader: routeReader, productionRoutingSources }, { seatIdentityResolver }] = await Promise.all([
+      import("@/lib/attention/routeOverlay"), import("@/lib/bridge/seatIdentity"),
     ]);
     const registry = agentRegistry();
-    const now = Date.now() / 1000;
-    const inputs = routingInputs(productionRoutingSources(seatIdentityResolver((id) => registry.canonicalConversationId(id))), now);
-    return (entry) => {
-      try {
-        return conversationRoute(entry, now, inputs) !== null;
-      } catch {
-        return false;
-      }
-    };
+    return routeReader(productionRoutingSources(seatIdentityResolver((id) => registry.canonicalConversationId(id))), Date.now() / 1000);
   } catch {
     return () => false;
   }

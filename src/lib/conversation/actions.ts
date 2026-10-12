@@ -221,6 +221,7 @@ async function answerNativeQuestion(
         conversationId,
         action: "answer",
         operationId: request.operationId,
+        requestId,
         resolution: answer.resolution,
         ...(request.actor ? { actor: request.actor } : {}),
       })

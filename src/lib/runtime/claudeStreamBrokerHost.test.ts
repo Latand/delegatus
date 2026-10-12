@@ -2046,11 +2046,13 @@ describe("ClaudeStreamBrokerHost", () => {
       subtype: "can_use_tool", tool_name: "Bash", input: { command: "rm -rf $R/*.json" },
       decision_reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json", decision_reason_type: "safetyCheck",
     } });
-    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [] } } });
+    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [] }, tool_use_id: "toolu_question" } });
     await Bun.sleep(0);
     const pending = await host.health();
     expect(pending.providerRetry).toBeNull();
     expect(pending.pendingAttention).toEqual(["permission-safety", "question"]);
+    /* The question is bound to the transcript tool use it answers; a permission is not. */
+    expect(pending.pendingToolUses).toEqual([{ id: "question", toolUseId: "toolu_question" }]);
     /* The question is the transcript's to surface; only the permission is listed. */
     expect(pending.pendingPermissions).toEqual([{
       id: "permission-safety",
@@ -2064,6 +2066,9 @@ describe("ClaudeStreamBrokerHost", () => {
     child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId, result: "done" });
     await Bun.sleep(0);
     expect((await host.health()).pendingPermissions).toEqual([]);
+    child.emitJson({ type: "control_cancel_request", request_id: "question" });
+    await Bun.sleep(0);
+    expect((await host.health()).pendingToolUses).toBeUndefined();
     await host.release();
   });
 

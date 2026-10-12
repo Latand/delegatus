@@ -2,11 +2,14 @@ import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatF
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickPolicy } from "@/lib/monitor/seatTick";
 import { effectiveSeatTickSettings, readSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { loadTasksForList } from "@/lib/tasks/store";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
-import { attentionEscalationIndex, readAttentionDismissals } from "./dismissals";
+import { attentionEscalationIndex, readAttentionDismissals, type AttentionDismissalV1 } from "./dismissals";
 import type { AttentionEscalationMark } from "./routeTypes";
-import { stampAttentionRoutes, type AttentionRoutingInputs } from "./routing";
+import { conversationRoute, stampAttentionRoutes, waitingRoundIds, type AttentionRoutingInputs } from "./routing";
 
 /*
  * The production half of attention routing (docs/design/attention-auto-resolve.md):
@@ -97,4 +100,39 @@ export function overlayAttentionRoutes(
     for (const file of files) delete file.attentionRoute;
     for (const pipeline of pipelines) delete pipeline.attentionRoute;
   }
+}
+
+/** The decision rounds that wait on the operator, read from the task store
+    the board projects them from, with the same dismissals and supersession:
+    the set `/api/files` stamps with, for a reader that has no board at hand. */
+export function storedWaitingRoundIds(
+  tasks: readonly BoardTask[] = loadTasksForList(), dismissals?: ReadonlyMap<string, AttentionDismissalV1>,
+): Set<string> {
+  return waitingRoundIds(withPrototypeReviewSummaries(tasks, dismissals));
+}
+
+/**
+ * Whether someone other than the operator answers each entry's question
+ * first, for the push controller: the routing the board stamps, with the
+ * board's waiting rounds, so a wait escalated to a form that still waits
+ * pushes nothing whether or not its seat can be woken. An unreadable task
+ * store keeps no wait on a form, which leaves it with the seat or the operator.
+ */
+export function questionRouteReader(
+  sources: RoutingSources, now: number, waitingRounds: () => ReadonlySet<string> = storedWaitingRoundIds,
+): (entry: FileEntry) => boolean {
+  let rounds: ReadonlySet<string>;
+  try {
+    rounds = waitingRounds();
+  } catch {
+    rounds = new Set();
+  }
+  const inputs = routingInputs(sources, now, rounds);
+  return (entry) => {
+    try {
+      return conversationRoute(entry, now, inputs) !== null;
+    } catch {
+      return false;
+    }
+  };
 }

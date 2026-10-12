@@ -452,7 +452,7 @@ test("answer reaches the asking conversation's pending question as its chosen la
 
   expect(await answer({ requestId: "toolu_roll", answer: { answers: [2] } })).toMatchObject({ status: 200, body: { ok: true, target: worker.id } });
   expect(controls).toEqual([expect.objectContaining({
-    path: "/sessions/worker.jsonl", conversationId: worker.id, action: "answer", operationId: "op-1",
+    path: "/sessions/worker.jsonl", conversationId: worker.id, action: "answer", operationId: "op-1", requestId: "toolu_roll",
     resolution: { behavior: "allow", updatedInput: { answers: { "Roll out now?": "Tomorrow" } } },
   })]);
 

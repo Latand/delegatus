@@ -67,7 +67,8 @@ export interface StructuredControlRequest {
   reconfiguration?: Partial<AgentReconfiguration>;
   /** `permission` only (#2215): allow once or deny. */
   decision?: string;
-  /** `permission` only: the request to answer; the oldest pending one when absent. */
+  /** `permission`: the request to answer; the oldest pending one when absent.
+      `answer`: the transcript tool use of the question or plan answered. */
   requestId?: string;
   /** `answer` only: the resolution of the conversation's one pending native
       question or plan, built from the exact request the caller read
@@ -203,10 +204,11 @@ async function answerPermissionRequest(
 /**
  * Answers a structured host's pending native question or plan
  * (docs/design/attention-auto-resolve.md, acceptance 3), as the same durable
- * `answer` operation the conversation's own question card submits. The host
- * lists every open request; the ones that are not permission requests are its
- * questions and plans, and the answer goes only to a conversation holding
- * exactly one, so it cannot land on a request the caller never read.
+ * `answer` operation the conversation's own question card submits. The caller
+ * names the transcript tool use it read; the answer goes only to the host
+ * request bound to that tool use, so a question or plan the host raised after
+ * it, or in place of one it cancelled, is never answered with what the caller
+ * built for the earlier one.
  */
 async function answerNativeRequest(
   request: StructuredControlRequest,
@@ -215,16 +217,14 @@ async function answerNativeRequest(
   dependencies: { client?: RuntimeHostClient | null; operationId?: () => string; kick?: () => void },
 ): Promise<StructuredControlResult> {
   if (request.resolution === undefined) return { status: 400, body: { error: "answer needs a resolution" } };
-  const permissions = new Set((host.pendingPermissions ?? []).map((candidate) => candidate.id));
-  const open = (host.pendingAttention ?? []).filter((id) => !permissions.has(id));
-  if (open.length !== 1) {
+  if (!request.requestId) return { status: 400, body: { error: "answer names the tool use it answers" } };
+  const open = new Set(host.pendingAttention ?? []);
+  const bound = (host.pendingToolUses ?? [])
+    .find((candidate) => candidate.toolUseId === request.requestId && open.has(candidate.id));
+  if (!bound) {
     return {
       status: 409,
-      body: {
-        error: open.length
-          ? "this conversation holds more than one open question; answer it in the conversation"
-          : "no question or plan is pending on this conversation's host; it was answered or its turn ended",
-      },
+      body: { error: "that question or plan is not pending on this conversation's host; it was answered, withdrawn or replaced" },
     };
   }
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
@@ -238,7 +238,7 @@ async function answerNativeRequest(
       operationId,
       idempotencyKey: operationId,
       conversationId,
-      attentionId: open[0]!,
+      attentionId: bound.id,
       resolution: request.resolution,
     });
     (dependencies.kick ?? kickStructuredDeliveryQueue)();
