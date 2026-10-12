@@ -14,6 +14,7 @@ import { runsElsewhere } from "@/lib/links/linked";
 import type { DecidePrototypeInput } from "./types";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { canonicalProject } from "@/lib/projects/aliases";
+import { postPrototypeReviewToTelegram } from "./telegramPost";
 
 export function prototypeFailure(error: unknown): NextResponse {
   return NextResponse.json({ error: error instanceof PrototypeError ? error.message : "prototype review is unavailable" }, { status: error instanceof PrototypeError ? error.status : 503 });
@@ -91,6 +92,7 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
     const { caller, stage, taskId, seat } = publicationTarget(request,input.taskId,world);
     if (taskId === null && !input.questions?.length) throw new PrototypeError("a decision asked without a task is a form: give it 1–7 questions");
     const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId },seat);
+    void postPrototypeReviewToTelegram(round);
     return NextResponse.json({ reviewId: round.id, taskId, project: round.project, title: round.title, variants: round.variants.length,
       ...(round.questions ? { questions: round.questions.length } : {}),
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });

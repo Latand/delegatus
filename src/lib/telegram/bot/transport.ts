@@ -100,7 +100,7 @@ export function createBotApiTransport(token: string, fetchImpl: FetchLike = (inp
       if (form) for (const [key, value] of Object.entries(params)) {
         /* A File (a document) keeps its own name; a photo is named for its field. */
         if (value instanceof File) form.append(key, value, value.name);
-        else if (value instanceof Blob) form.append(key, value, `${key}.${value.type === "image/png" ? "png" : "jpg"}`);
+        else if (value instanceof Blob) form.append(key, value, `${key}.${value.type === "image/png" ? "png" : value.type === "image/webp" ? "webp" : "jpg"}`);
         else form.append(key, typeof value === "string" ? value : JSON.stringify(value));
       }
       response = await fetchImpl(`${API_ORIGIN}/bot${token}/${method}`, {
@@ -162,12 +162,12 @@ export function saveBotToken(token: string, botId: string, now: Date = new Date(
  * Reads the stored token and hands it ONLY to `use`, which builds whatever
  * needs it (a transport). The token itself is never returned.
  */
-export function withStoredBotToken<T>(use: (token: string, botId: string) => T): T | null {
+export function withStoredBotToken<T>(consume: (token: string, botId: string) => T): T | null {
   const parsed = readSafeJson(telegramBotTokenPath(), true);
   if (!parsed || typeof parsed !== "object") return null;
   const row = parsed as Partial<StoredBotTokenFile>;
   if (row.version !== 1 || !validBotToken(row.token) || typeof row.botId !== "string") return null;
-  return use(row.token, row.botId);
+  return consume(row.token, row.botId);
 }
 
 export function storedBotId(): string | null {

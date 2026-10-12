@@ -1513,11 +1513,16 @@ interface OwnStepsControls {
   readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number };
   /** Show another conversation in the components already on the page. */
   open: (conversation: string) => void;
+  /** Sends the host refused (2026-10-11): all but the newest settled
+      failures, the newest one whose arrival nobody can confirm. */
+  undelivered: (count: number) => void;
+  /** The agent working on a turn, or done with it. */
+  working: (on: boolean) => void;
 }
 
 const noop = () => undefined;
 
-function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; surface: "pane" | "orchestrator"; paneWidth: number }) {
+function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; surface: "pane" | "orchestrator" | "seat"; paneWidth: number }) {
   const phone = useIsMobile();
   const [keyboard, setKeyboard] = useState(0);
   useEffect(() => {
@@ -1546,9 +1551,10 @@ function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; su
   return (
     <div className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
       <div className="flex min-h-0 flex-1 self-center p-3" style={{ width: paneWidth ? paneWidth + 24 : "100%" }}>
-        {surface === "orchestrator" ? (
+        {surface === "orchestrator" || surface === "seat" ? (
           <div data-link-path={file.path} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-border bg-card">
-            <OrchestratorConversation file={file} projectName="delegatus" />
+            {/* The board's seat carries the host's controls in its own header. */}
+            <OrchestratorConversation file={file} projectName="delegatus" hostControls={surface !== "seat"} />
           </div>
         ) : (
           <BranchPane file={file} tasks={[]} isRoot onClose={noop} onToggleExpand={noop} />
@@ -1690,7 +1696,7 @@ function mountOwnMessageSteps(root: HTMLElement): void {
   const pane = (shown: FileEntry) => (
     <OwnMessageStepsPane
       file={shown}
-      surface={params.get("surface") === "orchestrator" ? "orchestrator" : "pane"}
+      surface={params.get("surface") === "orchestrator" || params.get("surface") === "seat" ? params.get("surface") as "orchestrator" | "seat" : "pane"}
       paneWidth={Math.max(0, Number(params.get("pane") ?? 0))}
     />
   );
@@ -1699,6 +1705,25 @@ function mountOwnMessageSteps(root: HTMLElement): void {
      and a reader hand a new file to the components they already mounted. */
   (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.open = (conversation) => {
     reactRoot.render(pane({ ...file, path: `/${conversation}.jsonl`, name: `${conversation}.jsonl`, conversationId: conversation, title: conversation }));
+  };
+  const undeliveredWords = lang === "uk"
+    ? ["Перевір, будь ласка, чому лінія пошуку стоїть другу годину.", "І ще одне: прототипи для композера потрібні сьогодні.", "Після деплою знову щось зламалося, глянь логи."]
+    : ["Please check why the search lane has been stuck for two hours.", "One more: the composer prototypes are needed today.", "Something broke again after the deploy, look at the logs."];
+  (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.undelivered = (count) => {
+    fakeHost.receipts = Array.from({ length: count }, (_, index) => {
+      const unconfirmed = index === count - 1 && count > 1;
+      return lifecycleReceipt(`undelivered-${index}`, unconfirmed ? "uncertain" : "failed", {
+        text: undeliveredWords[index % undeliveredWords.length],
+        at: new Date(Date.now() - (count - index) * 60_000).toISOString(),
+        ...(unconfirmed ? { resend: "verify-first", reason: "recipient evidence unavailable" } : { reason: "dead-host" }),
+      });
+    });
+    announceHost();
+  };
+  (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.working = (on) => {
+    fakeHost.turn = on ? "running" : "idle";
+    announceHost();
+    reactRoot.render(pane({ ...file, activity: on ? "live" : "idle" } as FileEntry));
   };
   reactRoot.render(pane(file));
 }

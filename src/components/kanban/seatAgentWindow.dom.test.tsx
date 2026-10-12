@@ -365,7 +365,8 @@ test("opening the orchestrator from the seat and closing it leaves the selected 
   expect(agentWindow(host)).toBeNull();
   expect(selected()).toBe(builder.conversationId!);
   expect(badge().join(" ")).not.toContain("You are the Orchestrator");
-  expect(badge().some((text) => text.includes("Restore search results"))).toBe(true);
+  /* The selection stays the bus's, for the voice call; no composer draws it as an eye chip (2026-10-11). */
+  expect(badge()).toEqual([]);
 
   /* Again, and out by Escape. */
   click(expandButton(host));

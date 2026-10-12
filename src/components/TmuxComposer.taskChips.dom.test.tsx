@@ -291,21 +291,22 @@ test("the sent row remembers the chips, so the history shows what the message wa
   expect(entry?.selectedContext?.tasks).toEqual([{ id: TASK_A, title: "Fix the mobile board" }]);
 });
 
-test("a selected conversation still travels beside the chips", async () => {
+test("the chips travel without the card the operator has selected (2026-10-11)", async () => {
   viewBus.reportSlice({ mode: "list", focusedPath: PATH_A, selectedPaths: [PATH_A], visiblePaths: [], camera: null });
   const host = await mountComposer();
   await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "Fix the mobile board" }); });
   await settle();
   await sendThrough(host, COMPOSING, "start this one");
 
-  expect(sent[0]!.selectedContext).toMatchObject({ state: "selected", conversationId: SELECTED_A, tasks: [{ id: TASK_A }] });
+  expect(sent[0]!.selectedContext).toMatchObject({ state: "none", tasks: [{ id: TASK_A }] });
+  expect(JSON.stringify(sent[0]!.selectedContext)).not.toContain(SELECTED_A);
 });
 
-test("a send with no chips has no tasks field and no reference lines", async () => {
+test("a send with no chips carries no reference and no reference lines", async () => {
   const host = await mountComposer();
   await sendThrough(host, COMPOSING, "plain message");
   expect(sent[0]!.text).toBe("plain message");
-  expect(sent[0]!.selectedContext).not.toHaveProperty("tasks");
+  expect(sent[0]!.selectedContext).toBeUndefined();
 });
 
 test("a conversation that is not the orchestrator seat shows no chips and sends none", async () => {
@@ -314,7 +315,7 @@ test("a conversation that is not the orchestrator seat shows no chips and sends 
   expect(chips(host)).toHaveLength(0);
   await sendThrough(host, WORKER, "hello worker");
   expect(sent[0]!.text).toBe("hello worker");
-  expect(sent[0]!.selectedContext).not.toHaveProperty("tasks");
+  expect(sent[0]!.selectedContext).toBeUndefined();
   expect(readTaskChips("atlas")).toHaveLength(1);
 });
 
