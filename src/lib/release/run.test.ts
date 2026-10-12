@@ -30,6 +30,25 @@ test("two ticks and a restart replay one durable task and pipeline payload", asy
   expect(readReleaseProject(project).live?.pipelineId).toBe("release-lane");
 });
 
+test("recovery holds a frozen cut that a later rollback removed from the six-hour chain", async () => {
+  const project = "stale-release-cut";
+  mutateReleaseProject(project, row => ({ ...row, live: {
+    key: "saved-release", cut: "revision-a", lastTag: "v1.0.0", trigger: "requested", startedAt: 14,
+    taskId: "task", pipelineId: null, request: { baseRef: "revision-a" } as never,
+  } }));
+  let creates = 0;
+  const policy = { ...ready(), now: 24 * 3_600_000,
+    deployments: [{ revision: "revision-c", at: 23 * 3_600_000 }, { revision: "revision-b", at: 16 * 3_600_000 }],
+    isAncestor: (a: string, b: string) => a === b || a === "revision-b" && b === "revision-c" };
+  const ports: ReleasePorts = { settings: () => ({ enabled: true, askBeforePublish: true, minChanges: 30, minGapHours: 12,
+    updatedAt: "2026-10-12T00:00:00Z", setBy: { kind: "gateway", project, conversationId: null, seatEpoch: null }, why: null }),
+    now: () => policy.now, observe: async (_project, frozenCut) => { expect(frozenCut).toBe("revision-a"); return { policy, repoDir: "repo", src: "seat" }; },
+    task: () => { creates++; return "task"; }, create: async () => { creates++; return "lane"; }, pipeline: () => null };
+  await productionReleaseController(ports).reconcile(project);
+  expect(creates).toBe(0);
+  expect(readReleaseProject(project).live?.pipelineId).toBeNull();
+});
+
 test("settlement occurs once, waiting for merge and retaining failed parked lanes", async () => {
   const project = "settled-release";
   mutateReleaseProject(project, row => ({ ...row, live: { key: "release-key", cut: "one", lastTag: "v1.0.0", trigger: "amount", startedAt: 0, taskId: "task", pipelineId: "lane", request: {} as never } }));

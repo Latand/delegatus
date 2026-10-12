@@ -8,6 +8,8 @@ export interface ReleaseInput {
   changes: ReleaseChange[]; deployments: ReleaseDeployment[];
   isAncestor: (a: string, b: string) => boolean | Promise<boolean>;
   settled?: { cut: string; at: number; outcome: "published" | "failed" | "declined" } | null;
+  /** Exact cut whose durable release request is being recovered. */
+  frozenCut?: string;
 }
 export interface ReleaseDecision {
   state: "due" | "not-due" | "blocked" | "in-flight";
@@ -21,10 +23,11 @@ export function classifyPaths(files: string[], subject = ""): "visible" | "inter
   return files.every(docs) ? "docs" : files.every(internal) ? "internal" : "visible";
 }
 /** Newest revision served for six hours and retained by every later success. */
-export async function releaseCut(deployments: ReleaseDeployment[], isAncestor: ReleaseInput["isAncestor"], now: number): Promise<ReleaseDeployment | null> {
+export async function releaseCut(deployments: ReleaseDeployment[], isAncestor: ReleaseInput["isAncestor"], now: number, revision?: string): Promise<ReleaseDeployment | null> {
   const sorted = [...deployments].sort((a, b) => b.at - a.at);
-  for (let i = 0; i < sorted.length; i++) {
-    const candidate = sorted[i];
+  const candidates = revision ? sorted.map((deployment, index) => ({ deployment, index })).filter(({ deployment }) => deployment.revision === revision).slice(0, 1)
+    : sorted.map((deployment, index) => ({ deployment, index }));
+  for (const { deployment: candidate, index: i } of candidates) {
     if (!Number.isFinite(candidate.at) || now - candidate.at < 6 * 3_600_000) continue;
     let retained = true;
     for (const later of sorted.slice(0, i)) if (!await isAncestor(candidate.revision, later.revision)) { retained = false; break; }
@@ -37,7 +40,7 @@ export function releaseGapStart(lastTagAt: number, settled?: ReleaseInput["settl
 }
 export async function releaseState(input: ReleaseInput): Promise<ReleaseDecision> {
   const count = input.changes.filter(c => classifyPaths(c.files, c.subject) === "visible").length;
-  const cut = await releaseCut(input.deployments, input.isAncestor, input.now);
+  const cut = await releaseCut(input.deployments, input.isAncestor, input.now, input.frozenCut);
   const answer = (state: ReleaseDecision["state"], blocker: number | null, reason: string): ReleaseDecision => ({ state, blocker, reason, cut, count });
   if (!input.enabled && !input.requested) return answer("blocked", 1, "releases-off");
   if (!input.tickEnabled) return answer("blocked", 2, "tick-off");

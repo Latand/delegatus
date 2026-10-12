@@ -51,6 +51,15 @@ test("soak picks the newest six-hour revision retained by every later deployment
   expect(await releaseCut([{ revision: "one", at: hour }], fixed, 7 * hour - 1)).toBeNull();
 });
 
+test("recovery may keep an older frozen cut while it remains six-hour-soaked and retained", async () => {
+  const input = { ...ready(), requested: true, frozenCut: "revision-a", now: 24 * hour,
+    deployments: [{ revision: "revision-c", at: 23 * hour }, { revision: "revision-a", at: hour }],
+    isAncestor: (a: string, b: string) => a === b || a === "revision-a" && b === "revision-c" };
+  const decision = await releaseState(input);
+  expect(decision.state).toBe("due");
+  expect(decision.cut?.revision).toBe("revision-a");
+});
+
 test("failure and decline cool down; a declined cut stays refused, a request bypasses cooldown", async () => {
   const input = ready(); input.settled = { cut: "one", at: input.now, outcome: "declined" };
   expect((await releaseState(input)).reason).toBe("declined-cut");

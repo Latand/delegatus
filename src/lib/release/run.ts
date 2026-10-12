@@ -44,7 +44,7 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
   row = readReleaseProject(project);
   run = row.live;
   if (!run || run.pipelineId || !run.request) return null;
-  const safety = await releaseState({ ...observed.policy, requested: true, hold: row.hold?.reason ?? null });
+  const safety = await releaseState({ ...observed.policy, requested: true, frozenCut: run.cut, hold: row.hold?.reason ?? null });
   if (safety.state !== "due") return `release: ${safety.reason}`;
   // An operator action can arrive during the ancestry reads inside the policy.
   row = readReleaseProject(project);

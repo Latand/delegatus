@@ -11,6 +11,8 @@ test("release template validates; capture and one-round visual and code reviews 
   expect(stages.find(s => s.id === "review")?.onFail).toEqual({ to: "fix", maxRounds: 1, onExhausted: "advance" });
   expect(stages.at(-1)?.prompt).toContain("needs_decision");
   expect(stages.at(-1)?.role?.roleId).toBe("deployer");
+  expect(stages.at(-1)?.prompt).toContain("push-existing permits pushing only that matching local annotated tag object without retagging");
+  expect(stages.at(-1)?.prompt).toContain("verify-remote means the remote tag already matches, so perform read-only verification and issue no push");
   expect(resolvePipelineRole({ role: { roleId: "deployer" } }, "run").error).toContain("not allowed");
 });
 test("each release asks again; standing approval is limited to the recorded release switch", () => {
