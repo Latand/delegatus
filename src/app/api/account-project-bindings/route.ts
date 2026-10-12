@@ -20,6 +20,7 @@ import {
   type BindingEngine,
 } from "@/lib/accounts/projectBindings";
 import { agentRegistry } from "@/lib/agent/registry";
+import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { headCwd } from "@/lib/agent/transcript";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -45,7 +46,10 @@ function accountsFor(engine: BindingEngine): BoundAccount[] {
 function carriers(): CarrierConversation[] {
   const snapshot = agentRegistry().readOnlySnapshot();
   return carrierConversations(
-    Object.values(snapshot.conversations).flatMap((conversation) => {
+    /* Only a busy conversation carries an account, and the archive never takes
+       one with an open turn: the archived history has nothing to add, and
+       reading it cost every request a pass over the whole history (#2761). */
+    hotRegistryRows(snapshot, "conversations").flatMap(([, conversation]) => {
       const generation = conversation.generations.at(-1);
       /* Project account bindings cover Claude and Codex. */
       if (!generation || conversation.engine === "copilot") return [];

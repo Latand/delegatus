@@ -1,4 +1,4 @@
-import { agentRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "@/lib/agent/registry";
+import { agentRegistry, conversationRegistryEntries, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "@/lib/agent/registry";
 import { flowRelayedMessageOccurrences } from "@/lib/flows/relayProvenance";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { readOrchestratorSeatFile, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -156,7 +156,8 @@ export function heldDeliveryOccurrences(
   const conversation = lookup.conversationForPath(transcriptPath);
   if (!conversation) return [];
   const occurrences: DeliveredMessageOccurrence[] = [];
-  for (const delivery of Object.values(snapshot.heldDeliveries)) {
+  /* Only this conversation's deliveries, read by index (#2761). */
+  for (const [, delivery] of conversationRegistryEntries(snapshot, "heldDeliveries", conversation.id)) {
     if (delivery.state !== "delivered" || !delivery.deliveredAt || !delivery.contentDigest) continue;
     if (lookup.canonicalConversationId(delivery.conversationId) !== conversation.id) continue;
     if (!CONTENT_DIGEST.test(delivery.contentDigest) || !Number.isFinite(Date.parse(delivery.deliveredAt))) continue;

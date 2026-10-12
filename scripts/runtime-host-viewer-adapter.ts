@@ -55,9 +55,12 @@ import {
   runtimeHostRehearsalDockerArgs,
 } from "../src/runtime-host/hostRehearsal";
 import {
+  CANDIDATE_GATE_TARGET,
   CANDIDATE_PERFORMANCE_BOUNDS,
+  candidateGateImageName,
   candidatePerformanceDetail,
   candidatePerformanceDockerArgs,
+  dockerfileHasCandidateGate,
   parseCandidatePerformanceReport,
   type CandidatePerformanceEvidence,
 } from "../src/runtime-host/candidatePerformance";
@@ -366,6 +369,19 @@ async function buildCandidate(deploymentId: string, revision: string): Promise<V
       "--label", `dev.live-log-viewer.revision=${revision}`,
       "-t", image, sourceDir,
     ]);
+    /* #2761: the performance gate's image, the candidate plus a browser, from
+       the same source and build cache; `verify-candidate` measures the board in
+       it and removes it. */
+    let dockerfile = "";
+    try { dockerfile = fs.readFileSync(path.join(sourceDir, "Dockerfile"), "utf8"); } catch { /* the build above read its own */ }
+    if (dockerfileHasCandidateGate(dockerfile)) {
+      await retryBuildNetwork([
+        "docker", "build", "--target", CANDIDATE_GATE_TARGET,
+        "--build-arg", `LLV_RUNTIME_HOME=${runtimeHome}`,
+        "--label", `dev.live-log-viewer.revision=${revision}`,
+        "-t", candidateGateImageName(image), sourceDir,
+      ]);
+    }
     await retryBuildNetwork([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: sourceDir });
     await command([process.execPath, "run", "build:mcp"], { cwd: sourceDir });
     mcpRuntime = mcpRuntimeStore.stagePreparedPackage(sourceDir, deploymentId, revision);
@@ -373,6 +389,7 @@ async function buildCandidate(deploymentId: string, revision: string): Promise<V
   } catch (error) {
     if (mcpRuntime) mcpRuntimeStore.retire(mcpRuntime);
     try { await command(["docker", "image", "rm", image]); } catch { /* image construction may have failed */ }
+    await removeCandidateGateImage(image);
     fs.rmSync(composeConfigFile(container), { force: true });
     throw error;
   } finally {
@@ -436,6 +453,7 @@ async function startCandidate(candidate: ViewerReleaseIdentity): Promise<void> {
 async function retireRelease(candidate: ViewerReleaseIdentity): Promise<void> {
   if (await containerExists(candidate.container)) await command(["docker", "container", "rm", "-f", candidate.container]);
   try { await command(["docker", "image", "rm", candidate.image]); } catch { /* another retained release may use this image */ }
+  await removeCandidateGateImage(candidate.image);
   fs.rmSync(composeConfigFile(candidate.container), { force: true });
   if (candidate.mcpRuntime) mcpRuntimeStore.retire(candidate.mcpRuntime);
 }
@@ -731,8 +749,26 @@ async function rehearseCandidateRuntimeHost(
   }
 }
 
-/** How long the in-container performance gate may take, seeding included. */
-const CANDIDATE_PERFORMANCE_TIMEOUT_MS = 300_000;
+/** How long the in-container performance gate may take: seeding, both
+    releases, the handover and eight browser views of the production build. */
+const CANDIDATE_PERFORMANCE_TIMEOUT_MS = 480_000;
+
+/** The candidate's gate image, only when it was built from the candidate's own
+    revision; anything else is no gate image at all. */
+async function candidateGateImage(candidate: ViewerReleaseIdentity): Promise<string | null> {
+  const image = candidateGateImageName(candidate.image);
+  try {
+    const revision = await command(["docker", "image", "inspect", "--format", "{{ index .Config.Labels \"dev.live-log-viewer.revision\" }}", image], { timeoutMs: PROBE_TIMEOUT_MS });
+    return revision.trim() === candidate.revision ? image : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The gate's image never outlives its candidate. */
+async function removeCandidateGateImage(image: string): Promise<void> {
+  try { await command(["docker", "image", "rm", candidateGateImageName(image)]); } catch { /* never built, or already removed */ }
+}
 
 /**
  * #2761: the candidate's registry and projection performance, measured before
@@ -742,12 +778,21 @@ const CANDIDATE_PERFORMANCE_TIMEOUT_MS = 300_000;
  * the probes ran against an empty registry. A gate that cannot run, or a
  * report that cannot be read, refuses the candidate.
  */
-async function measureCandidatePerformance(
+export async function measureCandidatePerformance(
   candidate: ViewerReleaseIdentity,
   reportPhase?: (phase: string) => void,
 ): Promise<CandidatePerformanceEvidence> {
   reportPhase?.("measuring the candidate against retained registry history");
-  const { stdout, stderr } = await commandResult(candidatePerformanceDockerArgs(candidate.image), { timeoutMs: CANDIDATE_PERFORMANCE_TIMEOUT_MS });
+  /* A revision without the gate's stage runs in its own image, where no
+     browser is found and the board is never measured: a refusal. */
+  const gateImage = await candidateGateImage(candidate) ?? candidate.image;
+  let stdout = "";
+  let stderr = "";
+  try {
+    ({ stdout, stderr } = await commandResult(candidatePerformanceDockerArgs(gateImage), { timeoutMs: CANDIDATE_PERFORMANCE_TIMEOUT_MS }));
+  } finally {
+    await removeCandidateGateImage(candidate.image);
+  }
   try {
     return parseCandidatePerformanceReport(`${stdout}\n${stderr}`);
   } catch (error) {

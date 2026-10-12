@@ -306,7 +306,17 @@ function readinessRecord(value: unknown): ViewerHealthReadiness {
   };
 }
 
-function evidence(value: unknown): ViewerHealthEvidence {
+/** What `verify-candidate` must carry beyond a passing Viewer probe: both
+    rehearsals the adapter runs inside the candidate's image. An answer without
+    them reads exactly like an adapter that skipped them, so it refuses the
+    candidate (#2761). `verify-promoted` reads the release already serving and
+    owes neither. */
+const CANDIDATE_REHEARSALS_MISSING = {
+  performance: "the candidate performance gate reported nothing; a candidate is promoted only on a measured pass",
+  runtimeHost: "the candidate runtime-host rehearsal reported nothing; a candidate is promoted only after it passes",
+} as const;
+
+function evidence(value: unknown, { candidate = false }: { candidate?: boolean } = {}): ViewerHealthEvidence {
   const item = object(value);
   const assets = Array.isArray(item.assets) ? item.assets.map((asset) => object(asset)) : [];
   if (
@@ -327,6 +337,10 @@ function evidence(value: unknown): ViewerHealthEvidence {
   } catch {
     throw new Error("deployment adapter returned invalid candidate performance evidence");
   }
+  const missing = !candidate ? null
+    : gate === undefined ? CANDIDATE_REHEARSALS_MISSING.performance
+    : item.runtimeHost === undefined ? CANDIDATE_REHEARSALS_MISSING.runtimeHost
+    : null;
   return {
     checkedAt: item.checkedAt,
     endpoint: item.endpoint,
@@ -342,8 +356,9 @@ function evidence(value: unknown): ViewerHealthEvidence {
     ...(item.runtimeHost === undefined ? {} : { runtimeHost: runtimeHostEvidence(item.runtimeHost) }),
     ...(gate === undefined ? {} : { performance: gate }),
     /* A refused performance gate refuses the candidate, whatever else passed. */
-    ok: item.ok && gate?.ok !== false,
-    ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
+    ok: item.ok && gate?.ok !== false && missing === null,
+    /* A failed probe names its own cause; a missing rehearsal is the cause only when nothing else failed. */
+    ...(item.ok && missing ? { detail: missing } : typeof item.detail === "string" ? { detail: item.detail } : {}),
   };
 }
 
@@ -692,7 +707,7 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
   }
 
   async verifyCandidate(candidate: ViewerReleaseIdentity): Promise<ViewerHealthEvidence> {
-    return evidence(await this.run("verify-candidate", { candidate }));
+    return evidence(await this.run("verify-candidate", { candidate }), { candidate: true });
   }
 
   async promote(candidate: ViewerReleaseIdentity): Promise<ViewerMcpRuntimePublicationEvidence> {

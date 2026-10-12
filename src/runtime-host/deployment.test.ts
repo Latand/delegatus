@@ -27,6 +27,7 @@ import { idleCheck, type Revision } from "@/lib/selfUpdate/types";
 
 import { CANDIDATE_PERFORMANCE_BOUNDS } from "./candidatePerformance";
 import { ViewerDeploymentCoordinator, type ViewerDeploymentAdapter } from "./deployment";
+import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
 import { viewerCandidateDockerArgs, viewerComposeServiceFromConfig } from "./candidateContainer";
 import { RuntimeHost } from "./host";
 import { RuntimeJournal } from "./journal";
@@ -897,6 +898,46 @@ test("a candidate refused by the performance gate is retired and the serving rel
     error: "candidate performance gate refused the release: grant-bearing write max 1407ms exceeds 500ms; warm projection build p95 4467ms exceeds 1000ms",
   });
   expect(status?.health.at(-1)?.performance?.breaches).toHaveLength(2);
+  expect(adapter.calls).toContain(`retire:${status?.candidate?.container}`);
+  expect(adapter.calls.filter((call) => call.startsWith("promote:") || call.startsWith("rollback:"))).toEqual([]);
+  expect(adapter.current).toEqual(serving);
+  store.close();
+});
+
+/* #2761: an adapter answer that passed its probes but carries no performance
+   report, read through the real host-command adapter, never reaches
+   promotion: the candidate is retired and the serving release kept. */
+test("a candidate verification that carries no performance report is retired and the serving release is kept", async () => {
+  const store = journal("performance-missing-candidate");
+  const adapter = new FakeDeploymentAdapter();
+  const serving = adapter.current;
+  const host = new HostCommandViewerDeploymentAdapter(async (action) => (action === "verify-candidate" ? {
+    ...healthy("http://127.0.0.1/candidate"),
+    runtimeHost: {
+      checkedAt: "2026-10-12T00:01:00.000Z",
+      runtime: "bun 1.4.0",
+      succession: { predecessorReadyMs: 1_480, successorTookOverMs: 2_140, completed: true },
+      listener: { windowMs: 15_000, polls: 30, answered: 30, abandoned: 15 },
+      socket: { polls: 30, answered: 30, abandoned: 15 },
+      ok: true,
+    },
+  } : {}));
+  adapter.verifyCandidate = async (candidate) => {
+    adapter.calls.push(`verify-candidate:${candidate.container}`);
+    return host.verifyCandidate(candidate);
+  };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+
+  const receipt = await coordinator.requestViewerDeployment({ idempotencyKey: "deploy-performance-missing" });
+  if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+  const status = await coordinator.waitForDeployment(receipt.deploymentId);
+
+  expect(status).toMatchObject({
+    phase: "failed",
+    terminal: true,
+    error: "the candidate performance gate reported nothing; a candidate is promoted only on a measured pass",
+  });
+  expect(status?.health.at(-1)?.performance).toBeUndefined();
   expect(adapter.calls).toContain(`retire:${status?.candidate?.container}`);
   expect(adapter.calls.filter((call) => call.startsWith("promote:") || call.startsWith("rollback:"))).toEqual([]);
   expect(adapter.current).toEqual(serving);

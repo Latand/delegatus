@@ -13,6 +13,7 @@ import {
   type CandidatePerformanceEvidence,
   type CandidatePerformanceMeasurements,
 } from "./candidatePerformance";
+import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
 const latency = (p95Ms: number, maxMs = p95Ms) => ({ count: 20, p50Ms: p95Ms / 2, p95Ms, maxMs });
 
@@ -43,6 +44,17 @@ function healthy(): CandidatePerformanceMeasurements {
     sqliteBusy: 0,
     runtimeTimeouts: 0,
     deliveryEvidence: { pending: 16, uncertain: 8, preserved: true },
+    browser: healthyBrowser(),
+  };
+}
+
+function healthyBrowser(): CandidateBrowserMeasurements {
+  return {
+    views: 8,
+    writes: { count: 900, p95Ms: 4, maxMs: 60, failures: 0 },
+    readyMaxMs: 4_800, filesP95Ms: 1_900, filesMaxMs: 2_600, filesErrors: 0, viewsWithoutAnswerDuringWrites: 0,
+    apiMaxMs: 3_100, apiMaxRoute: "/api/accounts", bootLagMaxMs: 450, lagP95Ms: 1, lagMaxMs: 140, inputMaxMs: 160, inputsMin: 2,
+    selectionsLost: 0, staleNotices: 0,
   };
 }
 
@@ -274,4 +286,37 @@ test("the gate runs inside the candidate image under its own Bun, with no networ
     "agent-log-viewer:candidate",
     "run", "src/runtime-host/candidatePerformanceRun.ts",
   ]);
+});
+
+/* #2761: the board as eight browser views of the candidate's own build is part
+   of the verdict. A run without it, or with the views the reviewer measured
+   over the same history (first board 18-19 s, /api/files 12-17 s, side
+   requests near 20 s), is refused, and so is a browser reading that cannot be
+   read. */
+test("the board in browser views is bounded, and a run without it is refused", () => {
+  const unmeasured = healthy();
+  unmeasured.browser = null;
+  expect(candidatePerformanceBreaches(unmeasured)).toEqual(["the board was not measured in a browser"]);
+  expect(candidatePerformanceEvidence(report(unmeasured, { ok: true, breaches: [] }))).toMatchObject({ ok: false, detail: "the board was not measured in a browser" });
+
+  const slow = healthy();
+  slow.browser = {
+    ...healthyBrowser(),
+    readyMaxMs: 18_985, filesP95Ms: 17_352, filesMaxMs: 17_352, apiMaxMs: 19_774, apiMaxRoute: "/api/accounts",
+    writes: { count: 0, p95Ms: 0, maxMs: 0, failures: 2 }, inputsMin: 1, selectionsLost: 1,
+  };
+  expect(candidatePerformanceBreaches(slow)).toEqual([
+    "browser writers: measured 0 writes, at least 50 required",
+    "2 browser writer write(s) failed",
+    "browser board drawn 18985ms exceeds 10000ms",
+    "browser /api/files p95 17352ms exceeds 5000ms",
+    "browser /api/files max 17352ms exceeds 10000ms",
+    "browser /api/accounts 19774ms exceeds 10000ms",
+    "a browser view answered 1 input(s), at least 2 required",
+    "1 browser view(s) lost their selected conversation",
+  ]);
+
+  const garbled = report(healthy(), { ok: true, breaches: [] });
+  (garbled.measurements!.browser as unknown as Record<string, unknown>).readyMaxMs = "fast";
+  expect(candidatePerformanceEvidence(garbled)).toMatchObject({ ok: false, detail: "the candidate performance report lacks or garbles browser.readyMaxMs" });
 });

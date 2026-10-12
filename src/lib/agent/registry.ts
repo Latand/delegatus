@@ -2514,6 +2514,18 @@ function conversationRows<C extends "heldDeliveries" | "deliveryOperationOwners"
   return registryRowsMatching(file, collection, "conversationId", conversationIdentities(file, id));
 }
 
+/** One conversation's delivery rows with their keys, its aliases included,
+    read through the conversation index. A per-request reader that enumerated
+    the whole collection read every archived delivery and operation owner of
+    the history on each call (#2761). */
+export function conversationRegistryEntries<C extends "heldDeliveries" | "deliveryOperationOwners">(
+  file: RegistryFile, collection: C, id: ViewerConversationId,
+): Array<[string, RegistryFile[C][string]]> {
+  const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+  return registryKeysMatching(file, collection, "conversationId", conversationIdentities(file, id))
+    .flatMap((key) => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
+}
+
 function heldDeliveryRequestDigests(
   file: RegistryFile,
   conversationId: ViewerConversationId,

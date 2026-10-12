@@ -376,7 +376,12 @@ function buildEnvironment(port: number): NodeJS.ProcessEnv {
     ...inherited,
     NODE_ENV: "production",
     HOME,
-    TMPDIR: path.join(BASE, "tmp"),
+    /* The capture root itself, so HOME, config and state all sit under the
+       children's temp root. A sibling TMPDIR left them outside it; run from a
+       stage whose temp root lies under the operator's state/scratch, an
+       unowned child (the registry-history writers) read them as the
+       operator's and was refused. */
+    TMPDIR: BASE,
     /* Claude Code's task directory follows this before TMPDIR; the caller's
        would put its own sessions' task output on the synthetic board. */
     CLAUDE_CODE_TMPDIR: path.join(BASE, "tmp"),
@@ -7518,49 +7523,30 @@ async function hydrationMain(): Promise<void> {
 /* BOARD_CAPTURE_CASE=registry-history (#2761)                                */
 /* ------------------------------------------------------------------------- */
 
-const REGISTRY_HISTORY_VIEWS = 8;
-const REGISTRY_HISTORY_WINDOW_MS = 30_000;
-/* The board's half of the candidate gate's bounds (docs/design/candidate-performance-gate.md),
-   all measured from navigation. A request's time runs from the page issuing it
-   to its last byte, so a wait for a free browser connection counts: the
-   operator waits through it too. Main-thread delay is bounded apart for the
-   boot (navigation to a drawn board) and for operation after it. */
-const REGISTRY_HISTORY_BOUNDS = {
-  readyMs: 10_000, filesP95Ms: 5_000, filesMaxMs: 10_000, apiMaxMs: 10_000,
-  bootLagMaxMs: 1_000, lagP95Ms: 50, lagMaxMs: 500, inputMs: 500,
-};
-
+/* The views, the writers and the bounds are the candidate gate's browser half
+   (src/runtime-host/candidateBrowserRun.ts, docs/design/candidate-performance-gate.md):
+   the gate runs them inside a container from the candidate image before
+   promotion; this case runs the same code against a local build and keeps
+   each view's requests and a frame of it. */
 async function registryHistoryMain(): Promise<void> {
   const { tasks, reviewers } = seedHome();
   seedState(PROJECT_NAME, tasks, reviewers);
   process.env.LLV_STATE_DIR = STATE_DIR;
   const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
+  const { browserViewPins, measureBoardInBrowser } = await import("../src/runtime-host/candidateBrowserRun");
+  const { CANDIDATE_BROWSER_BOUNDS, candidateBrowserBreaches } = await import("../src/runtime-host/candidateBrowser");
   /* The selected conversations' transcripts live in the sandboxed home, so
      each view's pin names a conversation the board can open. */
   const dataset = buildRegistryPerformanceDataset(STATE_DIR, undefined, { sessionsRoot: path.join(HOME, ".codex", "sessions") });
   SERVER_EXTRA_ENV.LLV_AGENT_REGISTRY_SQLITE = "sqlite";
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const percentile = (values: number[], fraction: number) => {
-    const sorted = [...values].sort((a, b) => a - b);
-    return sorted.length ? Math.round(sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)]!) : 0;
-  };
-  const report: {
-    commit: string;
-    dataset: { rows: number; coldRows: number; payloadBytes: number; transcripts: number };
-    bounds: typeof REGISTRY_HISTORY_BOUNDS;
-    writes: { count: number; p95Ms: number; maxMs: number };
-    views: Record<string, unknown>[];
-    failures: string[];
-  } = {
+  const report: Record<string, unknown> & { failures: string[] } = {
     commit: captureCommit(),
     dataset: { rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length },
-    bounds: REGISTRY_HISTORY_BOUNDS, writes: { count: 0, p95Ms: 0, maxMs: 0 }, views: [], failures: [],
+    bounds: CANDIDATE_BROWSER_BOUNDS, failures: [],
   };
   let server: ChildProcess | null = null;
-  let browser: Browser | null = null;
-  const writers: ChildProcess[] = [];
-  const writerStop = path.join(BASE, "history-writers-stop");
   try {
     server = startServer(port);
     await waitForServer(baseUrl, server);
@@ -7568,176 +7554,22 @@ async function registryHistoryMain(): Promise<void> {
        operator's do; the gate itself bounds the cold first projection. */
     await waitForBoard(baseUrl, false);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
-    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    const views = await Promise.all(Array.from({ length: REGISTRY_HISTORY_VIEWS }, async (_, index) => {
-      const context = await browser!.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
-      /* As seedInit, keeping EventSource: an operator's browser streams, and
-         the polled fallback holds connections the board's own requests need. */
-      await context.addInitScript(() => {
-        localStorage.clear();
-        sessionStorage.clear();
-        localStorage.setItem("llv_lang", "en");
-        localStorage.setItem("llvSound", "0");
-        localStorage.setItem("llvSchemeMode", "select");
-      });
-      /* The page's own clock from the first script: a 50 ms timer that runs
-         late by however long the main thread was busy, each sample stamped. */
-      await context.addInitScript(() => {
-        const probe = { lags: [] as Array<[number, number]> };
-        (window as unknown as { __historyProbe: typeof probe }).__historyProbe = probe;
-        let expected = performance.now() + 50;
-        const tick = () => { const now = performance.now(); probe.lags.push([now, Math.max(0, now - expected)]); expected = now + 50; setTimeout(tick, 50); };
-        setTimeout(tick, 50);
-      });
-      const page = await context.newPage();
-      const selected = dataset.conversations[(index * 7 + 3) % dataset.conversations.length]!;
-      const pinned = selected.path;
-      /* The page names the conversation it opened by its title. */
-      const title = `Synthetic conversation ${Number(/(\d+)\.jsonl$/.exec(pinned)?.[1] ?? -1)}`;
-      /* Every API request from navigation on: its whole time and the part
-         the browser held it for a free connection. */
-      const requests: { route: string; files: boolean; status: number; ms: number; queuedMs: number; firstByteMs: number; at: number }[] = [];
-      const failed: { route: string; error: string }[] = [];
-      let navigatedAt = 0;
-      /* Requests the page started and never finished: what can hold a connection. */
-      const open = new Map<object, { route: string; at: number }>();
-      page.on("request", (request) => {
-        const url = new URL(request.url());
-        if (url.pathname.startsWith("/api/")) open.set(request, { route: url.pathname, at: Date.now() - navigatedAt });
-      });
-      page.on("requestfailed", (request) => { open.delete(request); });
-      page.on("requestfinished", async (request) => {
-        open.delete(request);
-        const url = new URL(request.url());
-        if (!url.pathname.startsWith("/api/")) return;
-        const timing = request.timing();
-        const response = await request.response();
-        requests.push({
-          route: url.pathname,
-          files: url.pathname === "/api/files",
-          status: response?.status() ?? 0,
-          ms: Math.round(Math.max(0, timing.responseEnd)),
-          queuedMs: Math.round(Math.max(0, timing.requestStart)),
-          firstByteMs: Math.round(Math.max(0, timing.responseStart)),
-          at: Math.round(timing.startTime - navigatedAt),
-        });
-      });
-      page.on("requestfailed", (request) => {
-        const url = new URL(request.url());
-        if (url.pathname.startsWith("/api/")) failed.push({ route: url.pathname, error: request.failure()?.errorText ?? "failed" });
-      });
-      navigatedAt = Date.now();
-      const started = performance.now();
-      await page.goto(`${baseUrl}/#f=${encodeURIComponent(pinned)}`, { waitUntil: "domcontentloaded" });
-      const drawn = await page.waitForSelector("[data-kanban-board]", { timeout: 60_000 }).then(() => true, () => false);
-      const readyMs = drawn ? Math.round(performance.now() - started) : Number.POSITIVE_INFINITY;
-      const drawnAt = await page.evaluate(() => performance.now());
-      return { index, context, page, pinned, conversationId: selected.conversationId, title, requests, failed, open, readyMs, drawnAt, staleSeen: 0, lostSeen: 0, inputs: [] as number[] };
-    }));
     const keys = dataset.grantSubjects.filter((subject) => subject.collection === "entries"
-      && !dataset.workers.some((worker) => worker.key === subject.key));
-    for (const half of [0, 1]) {
-      const writer = spawn(CAPTURE_BUN, ["src/runtime-host/candidatePerformanceRun.ts", "--writer", "--owner", String(process.pid),
-        "--registry", dataset.filename,
-        "--keys", JSON.stringify(keys.filter((_, index) => index % 2 === half).map(({ key, servers }) => ({ key, servers }))),
-        "--stop", writerStop], { cwd: repoRoot, env: buildEnvironment(0), stdio: ["ignore", "pipe", "inherit"] });
-      writers.push(writer);
-    }
-    const written = Promise.all(writers.map((writer) => new Promise<number[]>((resolve) => {
-      let output = "";
-      writer.stdout?.on("data", (chunk) => { output += String(chunk); });
-      writer.once("exit", () => {
-        try { resolve((JSON.parse(output.trim().split("\n").at(-1) ?? "{}") as { latencies?: number[] }).latencies ?? []); } catch { resolve([]); }
-      });
-    })));
-    /* While the writers run: each view keeps its selection, never falls back
-       to the missing-conversation notice, and answers an input. */
-    const input = async (view: (typeof views)[number]) => {
-      const inputStarted = performance.now();
-      await view.page.mouse.wheel(0, 240);
-      await view.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
-      view.inputs.push(Math.round(performance.now() - inputStarted));
-    };
-    /* The page opens the pin and then names it canonically, `#c=<id>`. */
-    const holdsSelection = async (view: (typeof views)[number]) => {
-      const hash = await view.page.evaluate(() => decodeURIComponent(location.hash));
-      const named = hash.includes(`c=${view.conversationId}`) || hash.includes(`f=${view.pinned}`);
-      return named && await view.page.getByText(view.title, { exact: true }).count() > 0;
-    };
-    for (const until = performance.now() + REGISTRY_HISTORY_WINDOW_MS; performance.now() < until;) {
-      await Promise.all(views.map(async (view) => {
-        if (await view.page.locator("[data-stale-focus-notice]").count()) view.staleSeen += 1;
-        if (!await holdsSelection(view)) view.lostSeen += 1;
-      }));
-      if (views[0]!.inputs.length < 2 && performance.now() > until - REGISTRY_HISTORY_WINDOW_MS * (views[0]!.inputs.length ? 0.33 : 0.66)) {
-        await Promise.all(views.map(input));
-      }
-      await Bun.sleep(2_000);
-    }
-    fs.writeFileSync(writerStop, "1");
-    const writes = (await written).flat();
-    report.writes = { count: writes.length, p95Ms: percentile(writes, 0.95), maxMs: Math.round(Math.max(0, ...writes)) };
-    for (const view of views) {
-      const lags = await view.page.evaluate(() => (window as unknown as { __historyProbe: { lags: Array<[number, number]> } }).__historyProbe.lags);
-      const bootLags = lags.filter(([at]) => at <= view.drawnAt).map(([, lag]) => lag);
-      const operatingLags = lags.filter(([at]) => at > view.drawnAt).map(([, lag]) => lag);
-      const cards = await view.page.locator("[data-kanban-card]").count();
-      const hash = await view.page.evaluate(() => decodeURIComponent(location.hash));
-      const stillSelected = await holdsSelection(view);
-      if (await view.page.locator("[data-stale-focus-notice]").count()) view.staleSeen += 1;
-      const answered = view.requests.filter((request) => request.files && request.status >= 200 && request.status < 400);
-      const answeredDuringWrites = answered.filter((request) => request.at > view.drawnAt).length;
-      const apiTimes = view.requests.map((request) => request.ms);
-      /* A poll the page itself abandons for a newer one is the client's choice. */
-      const errors = view.requests.filter((request) => request.files && request.status >= 500).length
-        + view.failed.filter((failure) => failure.route === "/api/files" && failure.error !== "net::ERR_ABORTED").length;
-      const reading = {
-        view: view.index,
-        readyMs: view.readyMs,
-        cards,
-        selection: { stillSelected, checksLost: view.lostSeen, staleNoticeSeen: view.staleSeen, hash: hash.replace(view.conversationId, "<selected>").replace(view.pinned, "<selected>") },
-        files: {
-          answered: answered.length, errors,
-          p95Ms: percentile(answered.map((request) => request.ms), 0.95), maxMs: Math.max(0, ...answered.map((request) => request.ms)),
-          queuedMaxMs: Math.max(0, ...view.requests.filter((request) => request.files).map((request) => request.queuedMs)),
-        },
-        api: {
-          requests: view.requests.length, maxMs: Math.max(0, ...apiTimes), slowest: [...view.requests].sort((a, b) => b.ms - a.ms).slice(0, 5),
-          /* The first view's opening requests in order, to read what holds its connections. */
-          ...(view.index === 0 ? { opening: [...view.requests].sort((a, b) => a.at - b.at).slice(0, 60) } : {}),
-          unfinished: [...view.open.values()].sort((a, b) => a.at - b.at).slice(0, 10),
-        },
-        lag: {
-          bootMaxMs: Math.round(Math.max(0, ...bootLags)),
-          samples: operatingLags.length, p95Ms: percentile(operatingLags, 0.95), maxMs: Math.round(Math.max(0, ...operatingLags)),
-        },
-        inputMs: view.inputs,
-        failures: view.failed.slice(0, 5),
-      };
-      report.views.push(reading);
-      const name = `view ${view.index}`;
-      const bounds = REGISTRY_HISTORY_BOUNDS;
-      if (!Number.isFinite(reading.readyMs) || reading.readyMs > bounds.readyMs) report.failures.push(`${name} drew its board in ${reading.readyMs}ms, past ${bounds.readyMs}ms`);
-      if (!stillSelected || view.lostSeen) report.failures.push(`${name} lost its selected conversation in ${view.lostSeen} check(s)`);
-      if (view.staleSeen) report.failures.push(`${name} showed the missing-conversation notice ${view.staleSeen} time(s)`);
-      if (!answeredDuringWrites) report.failures.push(`${name} received no board answer while the writers ran`);
-      if (errors) report.failures.push(`${name} saw ${errors} failed /api/files request(s)`);
-      if (reading.files.p95Ms > bounds.filesP95Ms) report.failures.push(`${name} /api/files p95 ${reading.files.p95Ms}ms from issue`);
-      if (reading.files.maxMs > bounds.filesMaxMs) report.failures.push(`${name} /api/files max ${reading.files.maxMs}ms from issue`);
-      if (reading.api.maxMs > bounds.apiMaxMs) report.failures.push(`${name} waited ${reading.api.maxMs}ms for ${reading.api.slowest[0]?.route}`);
-      if (reading.lag.bootMaxMs > bounds.bootLagMaxMs) report.failures.push(`${name} main-thread lag ${reading.lag.bootMaxMs}ms before its board drew`);
-      if (reading.lag.p95Ms > bounds.lagP95Ms) report.failures.push(`${name} main-thread lag p95 ${reading.lag.p95Ms}ms`);
-      if (reading.lag.maxMs > bounds.lagMaxMs) report.failures.push(`${name} main-thread lag max ${reading.lag.maxMs}ms`);
-      if (view.inputs.length < 2) report.failures.push(`${name} answered ${view.inputs.length} input(s) while the writers ran`);
-      for (const inputMs of view.inputs) if (inputMs > bounds.inputMs) report.failures.push(`${name} answered a wheel in ${inputMs}ms`);
-      await view.page.screenshot({ path: path.join(OUT_DIR, `registry-history-view-${view.index}.png`) });
-      await view.context.close();
-    }
-    if (!report.writes.count) report.failures.push("the writers recorded no writes");
+      && !dataset.workers.some((worker) => worker.key === subject.key)).map(({ key, servers }) => ({ key, servers }));
+    const result = await measureBoardInBrowser({
+      baseUrl,
+      executablePath: process.env.CHROME_BIN ?? null,
+      pins: browserViewPins(dataset.conversations),
+      writers: {
+        runtime: CAPTURE_BUN, entry: "src/runtime-host/candidatePerformanceRun.ts", cwd: repoRoot, env: buildEnvironment(0),
+        registry: dataset.filename, keys, stopFile: path.join(BASE, "history-writers-stop"),
+      },
+      screenshotDir: OUT_DIR,
+    });
+    report.measurements = result.measurements;
+    report.views = result.views.map((view, index) => ({ ...view, diagnostics: result.diagnostics[index] }));
+    report.failures.push(...candidateBrowserBreaches(result.measurements));
   } finally {
-    fs.writeFileSync(writerStop, "1");
-    for (const writer of writers) if (writer.exitCode === null && writer.signalCode === null) writer.kill("SIGTERM");
-    await browser?.close();
     await stop(server);
   }
   fs.writeFileSync(path.join(OUT_DIR, "registry-history.json"), JSON.stringify(report, null, 2) + "\n");

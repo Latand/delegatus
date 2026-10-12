@@ -1,4 +1,5 @@
 import { agentRegistry, RegistryReadError, type RegistryFile } from "@/lib/agent/registry";
+import { registryRowProjection, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import type { BoardMutationV1 } from "@/lib/board/mutations";
 import { mutateBoard, patchBoard } from "@/lib/board/store";
 import { validateBoardPatchPayload } from "@/lib/board/validation";
@@ -13,6 +14,29 @@ const productionDependencies: BoardCommandDependencies = {
   patchBoard,
   mutateBoard,
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+};
+
+/* #2761: the paths of every conversation this pass reads, and nothing else.
+   It runs on board writes the page makes while it is open; enumerating the
+   conversations themselves read every archived one twice per write. Archived
+   versions are projected once and kept. */
+const CONVERSATION_PATHS: RegistryRowProjector<"conversations", {
+  id: string;
+  excluded: string[];
+  generationPaths: string[];
+  continuityPaths: string[];
+}> = {
+  id: "board-command.conversation-paths.v1",
+  collection: "conversations",
+  project: (conversation) => ({
+    id: conversation.id,
+    excluded: [
+      ...conversation.abandonedContinuityPaths,
+      ...(conversation.migration && conversation.migration.phase !== "committed" ? conversation.migration.pendingContinuityPaths : []),
+    ],
+    generationPaths: conversation.generations.map((generation) => generation.path),
+    continuityPaths: [...conversation.continuityPaths],
+  }),
 };
 
 function mutationsWithConversationAliases(
@@ -44,11 +68,9 @@ function mutationsWithConversationAliases(
 
   const excludedByConversation = new Map<string, Set<string>>();
   const excludedPaths = new Set<string>();
-  for (const conversation of Object.values(snapshot.conversations)) {
-    const excluded = new Set(conversation.abandonedContinuityPaths);
-    if (conversation.migration && conversation.migration.phase !== "committed") {
-      for (const pathname of conversation.migration.pendingContinuityPaths) excluded.add(pathname);
-    }
+  const conversations = registryRowProjection(snapshot, CONVERSATION_PATHS).map(([, conversation]) => conversation);
+  for (const conversation of conversations) {
+    const excluded = new Set(conversation.excluded);
     excludedByConversation.set(conversation.id, excluded);
     for (const pathname of excluded) excludedPaths.add(pathname);
   }
@@ -83,18 +105,18 @@ function mutationsWithConversationAliases(
 
   const pairs: Array<{ from: string; to: string }> = [];
   const pairedSources = new Set(suppliedRemapSources);
-  for (const conversation of Object.values(snapshot.conversations)) {
-    if (conversation.generations.length < 2) continue;
+  for (const conversation of conversations) {
+    if (conversation.generationPaths.length < 2) continue;
     const excludedContinuityPaths = excludedByConversation.get(conversation.id) ?? new Set<string>();
     const continuityPaths = conversation.continuityPaths.filter((pathname) => !excludedContinuityPaths.has(pathname));
     const paths = [
-      ...conversation.generations.map((generation) => generation.path),
+      ...conversation.generationPaths,
       ...continuityPaths,
     ];
     const conversationWasMentioned = paths.some((pathname) => mentionedPaths.has(pathname))
       || [...excludedContinuityPaths].some((pathname) => mentionedPaths.has(pathname));
     if (!conversationWasMentioned) continue;
-    const target = conversation.generations.at(-1)?.path;
+    const target = conversation.generationPaths.at(-1);
     if (!target) continue;
     for (const source of paths) {
       if (source === target || pairedSources.has(source)) continue;

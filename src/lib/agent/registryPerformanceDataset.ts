@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
+import { IDENTITY_WAVE_MIGRATION } from "./identityWaveMigration";
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
@@ -159,6 +160,12 @@ export function buildRegistryPerformanceDataset(
 
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
   const seededAt = Date.now();
+  /* An installation that kept this much history has long run the one-time
+     identity wave; its marker is part of the shape. Without it the first boot
+     of a production server would run the wave, which no live registry does. */
+  file.identityMigrations[IDENTITY_WAVE_MIGRATION] = {
+    completedAt: new Date(seededAt - 30 * 86_400_000).toISOString(), retitled: 0, rekeyed: 0, quarantinedRekeys: 0, edgesStamped: 0,
+  };
   /* The newest hundred launches spread over the last day, as a busy
      installation's do, so they still project board cards; the rest are older
      than a day. No launch sits near the 15-minute or 24-hour projection

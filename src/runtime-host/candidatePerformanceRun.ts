@@ -56,6 +56,8 @@ import {
   type CandidatePerformanceMeasurements,
   type ProjectionBuildSample,
 } from "./candidatePerformance";
+import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser } from "./candidateBrowserRun";
+import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
 const SCOPES = 8;
 const WARM_MS = 12_000;
@@ -151,7 +153,12 @@ function sandboxEnvironment(root: string): Record<string, string> {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     HOME: path.join(root, "home"),
     XDG_CONFIG_HOME: path.join(root, "config"),
-    TMPDIR: path.join(root, "tmp"),
+    /* The whole private root is the children's temp root, so every directory
+       above sits under it. Run from a stage whose own temp root lies under the
+       operator's state/scratch, a sibling TMPDIR left HOME, config and state
+       outside every temp root a child knows, and the child read them as the
+       operator's: its registry open was refused before it measured anything. */
+    TMPDIR: root,
     /* Claude Code's task directory follows this before TMPDIR; inherited, the
        scanner would list another session's task output. */
     CLAUDE_CODE_TMPDIR: path.join(root, "tmp"),
@@ -770,6 +777,81 @@ function sameRows(left: Map<string, string>, right: Map<string, string>): boolea
   return left.size === right.size && [...left].every(([row, identity]) => right.get(row) === identity);
 }
 
+/* ---- the board in real browser views ---- */
+
+async function freePort(): Promise<number> {
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const port = (server.address() as net.AddressInfo).port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+/**
+ * The candidate's own production build (`next start` from the image's `.next`)
+ * over the registry the release phases left, opened in eight browser views
+ * while two writers run. Without a build, a browser or the full dataset there
+ * is nothing to measure, and the verdict refuses a report without it.
+ */
+async function browserPhase(input: {
+  root: string;
+  env: Record<string, string>;
+  registry: string;
+  conversations: ReadonlyArray<{ path: string; conversationId: string }>;
+  keys: ReadonlyArray<{ key: string; servers: string[] }>;
+  children: ChildProcess[];
+  note: (line: string) => void;
+}): Promise<CandidateBrowserMeasurements | null> {
+  const executablePath = candidateBrowserExecutable();
+  if (!executablePath) { input.note("browser: no Chromium in this image or CHROME_BIN"); return null; }
+  if (!fs.existsSync(path.join(process.cwd(), ".next", "BUILD_ID"))) { input.note("browser: no production build to serve"); return null; }
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const env: Record<string, string> = {
+    ...input.env,
+    NODE_ENV: "production",
+    PORT: String(port),
+    HOSTNAME: "127.0.0.1",
+    NEXT_TELEMETRY_DISABLED: "1",
+    /* As the board driver's server: no account probes, no reaper of its own. */
+    LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
+    LLV_REAPER_ENABLED: "0",
+  };
+  delete env.LLV_FILES_RESPONSE_WORKER_LAUNCH;
+  const server = spawn(runtimeBin(), ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+    cwd: process.cwd(), env: env as NodeJS.ProcessEnv, stdio: ["ignore", "ignore", debugging() ? "inherit" : "ignore"],
+  });
+  input.children.push(server);
+  try {
+    /* Up, then its first board built, as an operator's server is when they open it. */
+    for (const until = performance.now() + 180_000; ; await Bun.sleep(500)) {
+      if (server.exitCode !== null) throw new Error(`the production server exited ${server.exitCode}`);
+      if (performance.now() > until) throw new Error("the production server never served a board");
+      try {
+        const response = await fetch(`${baseUrl}/api/files?view=summary`);
+        if (response.ok && ((await response.json()) as { files?: unknown[] }).files?.length) break;
+      } catch { /* booting */ }
+    }
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    const result = await measureBoardInBrowser({
+      baseUrl,
+      executablePath,
+      pins: browserViewPins(input.conversations),
+      writers: {
+        runtime: runtimeBin(), entry: ENTRY, cwd: process.cwd(), env: input.env as NodeJS.ProcessEnv,
+        registry: input.registry, keys: input.keys, stopFile: path.join(input.root, "browser-writers-stop"),
+      },
+    });
+    for (const view of result.diagnostics) input.note(`browser view ${view.view}: slowest ${JSON.stringify(view.slowest.slice(0, 2))}`);
+    return result.measurements;
+  } finally {
+    server.kill("SIGTERM");
+    const timer = setTimeout(() => server.kill("SIGKILL"), 10_000);
+    if (server.exitCode === null && server.signalCode === null) await new Promise((resolve) => server.once("exit", resolve));
+    clearTimeout(timer);
+  }
+}
+
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 0;
 const numbers = (value: unknown) => Array.isArray(value) ? value.filter((item): item is number => typeof item === "number" && Number.isFinite(item)) : [];
 
@@ -794,7 +876,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   const workerPids: number[] = [];
   try {
     const env = sandboxEnvironment(root);
-    for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, env.TMPDIR!, env.LLV_STATE_DIR!, path.join(root, "w")]) {
+    for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, env.CLAUDE_CODE_TMPDIR!, env.LLV_STATE_DIR!, path.join(root, "w")]) {
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     }
     /* The dataset is built here, under the sandbox's state directory and
@@ -1081,6 +1163,22 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     const incumbentActivation = activationOf(aReport, aStartedAt);
     const successorActivation = activationOf(bReport, switchedAt);
     note(`activations: release A ${JSON.stringify(aReport.activation ?? null)}, release B ${JSON.stringify(bReport.activation ?? null)}`);
+    /* The releases and their workers are done; the browser opens the board of
+       a production server over the history they left. A structural run, or
+       one under an induced fault, is a refusal already and skips it. */
+    for (const pid of workerPids) { try { process.kill(pid, "SIGCONT"); process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+    let browser: CandidateBrowserMeasurements | null = null;
+    if (scale < 1 || inducedDelayMs || induced.length) note("browser: skipped, this run is a refusal already");
+    else {
+      try {
+        browser = await browserPhase({
+          root, env, registry: dataset.filename, conversations: dataset.conversations,
+          keys: entrySubjects.map(({ key, servers }) => ({ key, servers })), children, note,
+        });
+      } catch (error) {
+        note(`browser: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     const measurements: CandidatePerformanceMeasurements = {
       dataset: { scale, rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length, seedMs: Math.round(dataset.seedMs) },
       firstBoot: {
@@ -1160,6 +1258,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       sqliteBusy: finite(aReport.busy) + finite(bReport.busy) + finite(externalOutcome.report.busy),
       runtimeTimeouts,
       deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, preserved: deliveryPreserved },
+      browser,
     };
     const breaches = candidatePerformanceBreaches(measurements);
     return {

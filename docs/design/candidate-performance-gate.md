@@ -104,6 +104,23 @@ more than nine in ten were cold, the release was unusable:
   the successor's pass runs makes that pass retry instead of leaving the row
   to on-demand hosting.
 
+- The requests a board page makes while it is open read by index or from the
+  rows the archive cannot hold. Eight browser views over the history showed
+  what the HTTP measurements had not: `/api/accounts` enumerated every
+  conversation once per completed account migration, `/api/log/provenance`
+  read every held delivery and operation owner of the history for one
+  conversation, `/api/account-project-bindings` read every conversation to
+  find the busy ones, and a board write read every conversation twice. A
+  conversation that carries a migration or an open turn is never archived, so
+  the first two read hot rows; provenance reads one conversation's deliveries
+  and owners through the conversation index; the board write reads a narrow
+  projection of each conversation's paths.
+- The one-time identity wave decides title cleanup from one pass over the
+  entries and receipts. It asked each conversation to walk both collections,
+  which over this much history held a fresh registry's first boot for more
+  than a minute. A registry that has run it, as every installation with this
+  much history has, skips it, and the synthetic dataset carries its marker.
+
 ## The gate
 
 `verify-candidate` now runs two rehearsals inside throwaway containers from
@@ -114,7 +131,19 @@ anything is switched, and the release that was serving keeps serving
 (`ViewerDeploymentCoordinator`, phase `candidate-health`). The adapter
 computes the verdict again from the measurements against the bounds the
 deploying release holds: a report whose measurements are missing, garbled or
-over a bound is refused whatever its own `ok` says.
+over a bound is refused whatever its own `ok` says. A `verify-candidate`
+answer that carries no performance report, or no runtime-host rehearsal, is
+refused too: it reads exactly like an adapter that skipped them. Only
+`verify-promoted`, which reads the release already serving, owes neither.
+
+The gate runs in the candidate's gate image: the `candidate-gate` stage of the
+`Dockerfile`, which is the runtime image plus Debian's Chromium. The deploy
+adapter builds it beside the candidate from the same source and cache and
+removes it once the gate ran or the candidate is retired. Chromium sits on the
+runtime's system stage, which no source change touches, so the browser layer
+is built once and a deploy only copies the application over it. The serving
+image carries no browser. A revision whose `Dockerfile` has no such stage runs
+the gate in its own image, finds no browser and is refused.
 
 The runner builds a synthetic registry (`registryPerformanceDataset.ts`):
 about 30,000 rows over eight working directories, the newest 2,200 terminal
@@ -147,15 +176,35 @@ caller's environment but its `PATH`:
   structured-host startup re-hosts every worker; only the engine it starts is
   synthetic. The board is asked of whichever release the target names.
 
+- **The board in a browser**: once the releases are done, the candidate's own
+  production build (`next start` over the image's `.next`) serves the history
+  they left, and eight Chromium views at 1440 × 900, each pinning its own
+  conversation, open the board while two writer processes keep writing
+  grant-bearing rows (`src/runtime-host/candidateBrowserRun.ts`). Each view
+  must draw its board, keep its selection, receive board answers while the
+  writers run and answer a wheel turn. A request's time runs from the page
+  issuing it to its last byte, so a wait for one of the browser's six
+  connections counts: the operator waits through it too.
+
 Every board answer is compared with its scope's settled answer from before
 the first write; every worker is pinged twice a second and its progress read
 back from its transcript. A successor that exits without its report, is
 killed, or never becomes ready is a failed release: the target never moves,
 release A keeps serving and keeps its workers, and the gate refuses.
 
-Run it locally with `bun scripts/verify-viewer-runtime.ts --performance`;
-`--scale 0.1` is a quick structural run and is always refused, because only
-the full dataset is a verdict.
+Every child of the gate runs with the gate's private root as its `TMPDIR`, so
+its home, configuration and state sit under its own temp root. Run from a
+stage whose temp directory lies under the operator's `state/scratch`, a
+sibling `TMPDIR` left them outside every temp root the child knew, the child
+read them as the operator's, and its registry open was refused before it
+measured anything. The board driver's server and writers get their capture
+root as `TMPDIR` for the same reason.
+
+Run it locally with `bun scripts/verify-viewer-runtime.ts --performance`
+after `bun run build`, with `CHROME_BIN` naming a Chromium; without a build or
+a browser the board is not measured and the run is refused. `--scale 0.1` is a
+quick structural run and is always refused, because only the full dataset is a
+verdict; it skips the browser, as does a run under an induced fault.
 
 ### Bounds and why
 
@@ -172,6 +221,7 @@ the full dataset is a verdict.
 | Failures | no SQLITE_BUSY, no runtime timeout, no failed write; the successor reports and exits 0; the incumbent's demotion exits 0 | A refused or timed-out write loses the work it carried, which no latency bound measures. |
 | Evidence | pending and uncertain deliveries byte-identical and hot; every MCP grant decided the same by writers and the successor | Speed bought by dropping evidence or authority is a regression the latency bounds cannot see. |
 | Stability | every measured answer of every scope carries the rows, conversations and projects of its settled answer from before the first write, and its pinned conversation; no answer is empty | Rows that appear, vanish or change project read as conversations jumping on the board. The history spans eight projects, so the board's ten-project window holds all of it whichever project a write makes the newest. |
+| Browser views | each of eight views: board drawn ≤ 10 s from navigation; `/api/files` p95 ≤ 5 s, max ≤ 10 s; any other API request ≤ 10 s; main thread ≤ 1 s before the board drew, p95 ≤ 50 ms and max ≤ 500 ms after; a wheel answered ≤ 500 ms; selection held, no missing-conversation notice, a board answer while the writers ran; ≥ 50 writes, none failed | What the operator sees is the page, not the handler. The HTTP bounds above held while the page took 15-19 s to draw: `/api/accounts` enumerated every conversation of the history once per completed account migration, through a lazy reader that stats the database twice per row, and held the server's thread for two thirds of a minute-long run ("What changed" lists the page's other whole-history reads). |
 | Sufficiency | full dataset (≥ 29,000 rows, ≥ 90 % cold); ≥ 50 writes per writer, ≥ 20 keyed reads, ≥ 8 warm builds, ≥ 64 board requests, ≥ 8 compared rounds, ≥ 2 workers, pending and uncertain deliveries present | A run that measured nothing passes nothing. |
 
 The latency numbers are the bounds the post-incident audit proposed, with the
@@ -188,16 +238,19 @@ shim through `LLV_CANDIDATE_PERFORMANCE_BIN` makes release B exit 7 without a
 report, which leaves A serving and hosting its workers, and the same output
 read through the deployment adapter refuses the candidate; `--induce
 worker-kill` kills a re-hosted worker. `deployment.test.ts` requires a refused
-candidate to be retired with the previous release still current. The full
-pass runs with `LLV_CANDIDATE_PERFORMANCE_FULL=1`. A report that passes with
-breaches, without or with garbled measurements, or under an induced fault is
-read as a refusal.
+candidate to be retired with the previous release still current, and an
+adapter answer without a performance report, read through the real
+host-command adapter, to be retired the same way. The full pass runs with
+`LLV_CANDIDATE_PERFORMANCE_FULL=1` and needs a production build and
+`CHROME_BIN`. A report that passes with breaches, without or with garbled
+measurements, without the browser views, or under an induced fault is read as
+a refusal.
 
-### What the gate does not cover
+### Rendered evidence
 
-The gate drives the board through its HTTP handler. A candidate container has
-no browser and no network, so the gate renders nothing. Rendering stays with the
-existing browser drivers (`AGENTS.md`, "Rendered evidence"): the board's case
-is `BOARD_CAPTURE_CASE=registry-history` in `scripts/capture-board-geometry.ts`,
-eight real views over the same dataset with each view's selection, request
-times from issue, main thread and input bounded while two writers run.
+The board driver's case `BOARD_CAPTURE_CASE=registry-history` in
+`scripts/capture-board-geometry.ts` runs the same browser half
+(`candidateBrowserRun.ts`, same bounds) against a local production build and
+keeps each view's requests, its opening sequence and a frame of it, for
+reading what holds a connection when a bound is breached. Run it with
+`CHROME_BIN` set after `bun run build`.

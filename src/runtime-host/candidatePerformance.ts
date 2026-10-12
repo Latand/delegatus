@@ -14,6 +14,13 @@
    same definitions. docs/design/candidate-performance-gate.md explains each
    bound and where its number comes from. */
 
+import {
+  CANDIDATE_BROWSER_BOUNDS,
+  candidateBrowserBreaches,
+  type CandidateBrowserBounds,
+  type CandidateBrowserMeasurements,
+} from "./candidateBrowser";
+
 export const CANDIDATE_PERFORMANCE_REPORT_PREFIX = "[candidate performance] report ";
 /** The candidate's own Bun inside its image; `bun` there is a host shim. */
 export const CANDIDATE_PERFORMANCE_IMAGE_BIN = "/usr/local/bin/bun-container";
@@ -39,6 +46,8 @@ export interface CandidatePerformanceBounds {
       every live worker re-hosted once it is appointed, and the longest any
       worker went without progress across the transition. */
   handover: { successorReadyMs: number; adoptionMs: number; workerProgressGapMs: number };
+  /** Eight real browser views of the candidate's own production build (`candidateBrowser.ts`). */
+  browser: CandidateBrowserBounds;
 }
 
 export const CANDIDATE_PERFORMANCE_BOUNDS: CandidatePerformanceBounds = Object.freeze({
@@ -49,6 +58,7 @@ export const CANDIDATE_PERFORMANCE_BOUNDS: CandidatePerformanceBounds = Object.f
   projectionWorker: Object.freeze({ coldMs: 8_000, warmP95Ms: 1_000, warmMaxMs: 2_000 }),
   scopeRequests: Object.freeze({ p95Ms: 5_000, maxMs: 10_000, maxQueueDepth: 8 }),
   handover: Object.freeze({ successorReadyMs: 15_000, adoptionMs: 15_000, workerProgressGapMs: 20_000 }),
+  browser: CANDIDATE_BROWSER_BOUNDS,
 });
 
 /** What a run must have measured before its numbers mean anything. */
@@ -180,6 +190,10 @@ export interface CandidatePerformanceMeasurements {
   sqliteBusy: number;
   runtimeTimeouts: number;
   deliveryEvidence: { pending: number; uncertain: number; preserved: boolean };
+  /** The board in eight real browser views of the candidate's production
+      build while two writers run; null when no browser view was measured,
+      which is a refusal. */
+  browser: CandidateBrowserMeasurements | null;
 }
 
 export interface CandidatePerformanceEvidence {
@@ -293,6 +307,8 @@ export function candidatePerformanceBreaches(
   fewer("pending deliveries held as evidence", measured.deliveryEvidence.pending, minimum.pendingDeliveries);
   fewer("uncertain deliveries held as evidence", measured.deliveryEvidence.uncertain, minimum.uncertainDeliveries);
   if (!measured.deliveryEvidence.preserved) breaches.push("pending or uncertain delivery evidence changed");
+  if (!measured.browser) breaches.push("the board was not measured in a browser");
+  else breaches.push(...candidateBrowserBreaches(measured.browser, bounds.browser));
   return breaches;
 }
 
@@ -312,6 +328,21 @@ export function candidatePerformanceDockerArgs(image: string): string[] {
     image,
     "run", CANDIDATE_PERFORMANCE_ENTRY,
   ];
+}
+
+/** The Dockerfile stage that adds a browser to the candidate's image. */
+export const CANDIDATE_GATE_TARGET = "candidate-gate";
+
+/** The gate's own image beside a candidate image: built with it, removed with it. */
+export function candidateGateImageName(image: string): string {
+  return `${image}-gate`;
+}
+
+/** Whether a revision's Dockerfile defines the gate's stage. A revision from
+    before the browser half has none; its gate then runs in the candidate's
+    own image, finds no browser and refuses. */
+export function dockerfileHasCandidateGate(dockerfile: string): boolean {
+  return new RegExp(`^FROM\\s+\\S+\\s+AS\\s+${CANDIDATE_GATE_TARGET}\\s*$`, "mi").test(dockerfile);
 }
 
 /** Read the runner's own report out of its output. */
@@ -357,6 +388,14 @@ const MEASUREMENT_SHAPE: Shape = {
   runtimeTimeouts: "n",
   deliveryEvidence: { pending: "n", uncertain: "n", preserved: "b" },
 };
+/* Present only when a browser ran; `browser: null` is read and refused. */
+const BROWSER_SHAPE: Shape = {
+  views: "n",
+  writes: { count: "n", p95Ms: "n", maxMs: "n", failures: "n" },
+  readyMaxMs: "n", filesP95Ms: "n", filesMaxMs: "n", filesErrors: "n", viewsWithoutAnswerDuringWrites: "n",
+  apiMaxMs: "n", apiMaxRoute: "s?", bootLagMaxMs: "n", lagP95Ms: "n", lagMaxMs: "n", inputMaxMs: "n", inputsMin: "n",
+  selectionsLost: "n", staleNotices: "n",
+};
 
 function shapeErrors(value: unknown, shape: Shape, at: string): string[] {
   const finite = (item: unknown) => typeof item === "number" && Number.isFinite(item) && item >= 0;
@@ -390,7 +429,11 @@ export function candidatePerformanceEvidence(value: unknown): CandidatePerforman
     ...report, breaches, ok: false, detail: report.ok || !report.detail ? detail : report.detail,
   });
   if (!report.measurements) return report.ok ? refuse("the candidate performance report passed without measurements") : report;
-  const unreadable = shapeErrors(report.measurements, MEASUREMENT_SHAPE, "");
+  const browser = (report.measurements as unknown as Record<string, unknown>).browser;
+  const unreadable = [
+    ...shapeErrors(report.measurements, MEASUREMENT_SHAPE, ""),
+    ...(browser === null ? [] : shapeErrors(browser, BROWSER_SHAPE, "browser")),
+  ];
   if (unreadable.length) {
     const named = `${unreadable.slice(0, 6).join(", ")}${unreadable.length > 6 ? ` and ${unreadable.length - 6} more` : ""}`;
     return refuse(`the candidate performance report lacks or garbles ${named}`, [...report.breaches, `unreadable measurement(s): ${named}`]);
