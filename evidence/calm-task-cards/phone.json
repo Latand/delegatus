@@ -95,7 +95,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 21:08",
+          "text": "Waiting for the account limit · retry at 22:13",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -153,6 +153,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ Oct 13, 23:33",
+          "dueState": "due",
+          "dueInk": "rgb(108, 108, 121)",
+          "danger": "rgb(198, 40, 40)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ Oct 12, 18:33 · overdue",
+          "dueState": "overdue",
+          "dueInk": "rgb(198, 40, 40)",
+          "danger": "rgb(198, 40, 40)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ],
       "sheet": {
@@ -282,7 +304,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 21:08",
+          "text": "Waiting for the account limit · retry at 22:13",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -340,6 +362,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ Oct 13, 23:33",
+          "dueState": "due",
+          "dueInk": "rgb(139, 139, 152)",
+          "danger": "rgb(240, 113, 113)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ Oct 12, 18:33 · overdue",
+          "dueState": "overdue",
+          "dueInk": "rgb(240, 113, 113)",
+          "danger": "rgb(240, 113, 113)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ]
     },
@@ -438,7 +482,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 21:08",
+          "text": "Чекає ліміту акаунта · повтор о 22:13",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -496,6 +540,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ 13 жовт., 23:33",
+          "dueState": "due",
+          "dueInk": "rgb(108, 108, 121)",
+          "danger": "rgb(198, 40, 40)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "dueState": "overdue",
+          "dueInk": "rgb(198, 40, 40)",
+          "danger": "rgb(198, 40, 40)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ],
       "sheet": {
@@ -625,7 +691,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 21:08",
+          "text": "Чекає ліміту акаунта · повтор о 22:13",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -683,6 +749,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ 13 жовт., 23:33",
+          "dueState": "due",
+          "dueInk": "rgb(139, 139, 152)",
+          "danger": "rgb(240, 113, 113)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "dueState": "overdue",
+          "dueInk": "rgb(240, 113, 113)",
+          "danger": "rgb(240, 113, 113)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ]
     }

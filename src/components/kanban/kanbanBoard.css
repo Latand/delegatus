@@ -1976,3 +1976,9 @@
 /* A closed card that has not started: its priority mark alone, at the line's end. */
 .card-state.prio-only { justify-content: flex-end; }
 .card-state.prio-only .motion-line { flex: 1; }
+/* The task's deadline and images (the old Tasks panel's two facts), quiet, under the state line. */
+.card-meta-line { display: flex; min-width: 0; padding-left: 15px; font-size: var(--text-label); line-height: 16px; color: var(--color-muted); }
+.card-meta-line.phone { padding-left: 4px; }
+.task-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; font-variant-numeric: tabular-nums; }
+.task-meta .task-due, .task-meta .task-images { white-space: nowrap; }
+.task-meta .task-due.overdue { color: var(--color-danger); font-weight: 600; }

@@ -46,6 +46,7 @@ import { launchedAt, mobileRowState, nowFragment, type MobileBoardConversation }
 import { attentionReason } from "../attention";
 import { takeRequestedLane } from "./taskLaneRequest";
 import { TaskChronology } from "@/components/kanban/TaskChronology";
+import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { taskChronology } from "@/components/kanban/taskChronologyModel";
 import { LaneAnswerRows, mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useScrolledAway, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
@@ -1136,6 +1137,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                       ?? (taskLinks?.repository && /^\d+$/.test(task.hold.ref ?? "") ? workLinkUrl(taskLinks.repository, Number(task.hold.ref), task.hold.kind as "pr" | "issue") : null)
                     : null}
                 />
+                {task && hasTaskMeta(task) ? <span className="card-meta-line phone"><TaskMeta task={task} nowMs={now * 1000} /></span> : null}
                 <TaskStepsLine summary={card.stepSummary} />
               </> : null}
               {/* Slot for the needs-you question below the motion line. */}

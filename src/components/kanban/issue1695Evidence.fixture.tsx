@@ -1982,7 +1982,11 @@ if (CALM) {
     }),
   );
   tasks.splice(0, tasks.length,
-    task("t-calm-commit", "assigned", L("Retry banner names the attempt that failed", "Банер повтору називає спробу, що не вдалася"), "", 48 * MIN, [], { createdAt: iso(80 * MIN) }),
+    task("t-calm-commit", "assigned", L("Retry banner names the attempt that failed", "Банер повтору називає спробу, що не вдалася"), "", 48 * MIN, [], {
+      createdAt: iso(80 * MIN), dueAt: iso(-26 * 60 * MIN), dueTz: "Europe/Kyiv",
+      /* The old Tasks panel's two facts: a deadline ahead and two images. */
+      attachments: ["one", "two"].map((name) => ({ id: `image-${name}`, sha256: `image-${name}`, ext: "png", mime: "image/png", bytes: 48_000, createdAt: iso(80 * MIN) })),
+    } as Partial<BoardTask>),
     task("t-calm-merge", "assigned", L("Search index swap without an empty window", "Заміна пошукового індексу без порожнього вікна"), "", 25 * MIN, [], { createdAt: iso(165 * MIN) }),
     task("t-calm-form", "assigned", L("Retry banner: keep it or drop it", "Банер повтору: лишити чи прибрати"), "", 22 * MIN, [], { createdAt: iso(50 * MIN) }),
     task("t-calm-ask", "assigned", L("Banner copy for the export screen", "Текст банера на екрані експорту"), "", 9 * MIN, [asker]),
@@ -1990,7 +1994,7 @@ if (CALM) {
     task("t-calm-wait", "assigned", L("Weekly digest email", "Щотижневий лист-дайджест"), "", 15 * MIN, [], { createdAt: iso(35 * MIN) }),
     task("t-calm-done", "done", L("Wider agent replies in the conversation", "Ширші відповіді агентів у розмові"), "", 50 * MIN, [], { createdAt: iso(215 * MIN) }),
     task("t-calm-long", "assigned", L("Screenshot catalog: one capture command", "Каталог скриншотів: одна команда зйомки"), "", 30 * MIN, [], { createdAt: iso(320 * MIN) }),
-    task("t-calm-cleared", "assigned", L("Old export presets cleanup", "Прибирання старих пресетів експорту"), "", 60 * MIN, [], { createdAt: iso(255 * MIN) }),
+    task("t-calm-cleared", "assigned", L("Old export presets cleanup", "Прибирання старих пресетів експорту"), "", 60 * MIN, [], { createdAt: iso(255 * MIN), dueAt: iso(3 * 60 * MIN), dueTz: "Europe/Kyiv" } as Partial<BoardTask>),
     /* Not started: a closed card keeps its priority mark, which is how the Inbox reads. */
     task("t-calm-inbox", "inbox", L("Audit the export retry limits", "Перевірити ліміти повторів експорту"), "", 5 * MIN, [], { priority: "high" } as Partial<BoardTask>),
   );

@@ -29918,6 +29918,42 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
     }
   };
 
+  /* The task's deadline and images on the card: the old Tasks panel's two facts, in its words. */
+  type MetaReading = { id: string; due: string | null; dueState: string | null; dueInk: string; danger: string; images: string | null; lines: number; cut: boolean };
+  const READ_META = ({ ids, phone }: { ids: string[]; phone: boolean }) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--color-danger)";
+    document.body.append(probe);
+    const danger = getComputedStyle(probe).color;
+    probe.remove();
+    return ids.map((id): MetaReading => {
+      const element = document.querySelector<HTMLElement>(phone ? `[data-phone-card="task:${id}"]` : `[data-kanban-board] .card[data-id="task:${id}"]`);
+      const meta = element?.querySelector<HTMLElement>("[data-task-meta]");
+      const due = meta?.querySelector<HTMLElement>("[data-task-due]");
+      const box = meta?.getBoundingClientRect();
+      const range = document.createRange();
+      if (meta) range.selectNodeContents(meta);
+      const rects = meta ? [...range.getClientRects()].filter((rect) => rect.width > 0.5) : [];
+      return {
+        id, due: due?.textContent ?? null, dueState: due?.getAttribute("data-task-due") ?? null, dueInk: due ? getComputedStyle(due).color : "", danger,
+        images: meta?.querySelector("[data-task-images]")?.textContent ?? null,
+        lines: new Set(rects.map((rect) => Math.round(rect.top))).size,
+        cut: Boolean(box && rects.some((rect) => rect.right > box.right + 1 || rect.left < box.left - 1)),
+      };
+    });
+  };
+  const checkMeta = (label: string, readings: MetaReading[], failures: string[], overdueWord: string) => {
+    for (const got of readings) {
+      const fail = (text: string) => failures.push(`${label} ${got.id} meta: ${text}`);
+      if (!got.due?.startsWith("⏰ ") || /\b(AM|PM)\b/.test(got.due)) fail(`deadline ${JSON.stringify(got.due)}`);
+      if (got.cut || got.lines > 2) fail(`cut or on ${got.lines} lines`);
+      if (got.id === "t-calm-commit") {
+        if (got.dueState !== "due" || got.dueInk === got.danger) fail(`a deadline ahead drawn as ${got.dueState}`);
+        if (got.images !== "📎 2") fail(`images ${JSON.stringify(got.images)}`);
+      } else if (got.dueState !== "overdue" || got.dueInk !== got.danger || !got.due?.endsWith(` · ${overdueWord}`)) fail(`an overdue deadline drawn as ${got.dueState} in ${got.dueInk}: ${JSON.stringify(got.due)}`);
+    }
+  };
+
   browserTest("the closed board at 1440 and 1000, en and uk, light and dark: one state line, «Answer» only where asked, no amber on the seat's cards; opened, the timeline and the ⋯ answers", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });
@@ -29952,7 +29988,14 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
           closed.push(...await page.evaluate(READ_CARDS, { ids: ["t-calm-done"], phone: false }));
           await show("assigned");
           checkCards(label, closed, false, failures);
+          const reading: Record<string, unknown> = { closed };
           if (await page.locator("[data-kanban-board] [data-answer-action]").count()) failures.push(`${label}: an answer button on the board`);
+          /* The task's deadline and images, as the old Tasks panel wrote them: C1's ahead with two images, C9's overdue. */
+          const metas = await page.evaluate(READ_META, { ids: ["t-calm-commit", "t-calm-cleared"], phone: false });
+          checkMeta(label, metas, failures, t("cardState.overdue"));
+          reading.meta = metas;
+          await page.locator(card("t-calm-commit")).screenshot({ path: path.join(OUT, `meta-closed-c1-${label}.png`) });
+          await page.locator(card("t-calm-cleared")).screenshot({ path: path.join(OUT, `meta-closed-c9-${label}.png`) });
           /* A closed card that has not started keeps its priority mark. */
           await show("inbox");
           const mark = await page.evaluate((selector) => document.querySelector(`${selector} .card-state .prio-mark`)?.getAttribute("data-priority") ?? null, card("t-calm-inbox"));
@@ -29960,7 +30003,6 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
           await show("assigned");
           const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
           if (sideways > 0) failures.push(`${label}: the page scrolls sideways by ${sideways}px`);
-          const reading: Record<string, unknown> = { closed };
           if (scheme === "light") {
             /* The dot's popover: the owner and how long, over no word of the line. */
             const dot = page.locator(`${card("t-calm-commit")} [data-card-state-dot]`);
@@ -30033,6 +30075,8 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
             if (!timeline.stopShown || !timeline.stopFirst) failures.push(`${label}: C8's stop is not first after the fold, with its ⋯`);
             if (timeline.times.some((text) => /\b(AM|PM)\b/i.test(text))) failures.push(`${label}: AM/PM in ${timeline.times.join(", ")}`);
             reading.timeline = timeline;
+            const openMeta = await page.evaluate(READ_META, { ids: ["t-calm-commit"], phone: false });
+            checkMeta(`${label} opened`, openMeta, failures, t("cardState.overdue"));
             /* Opened, the seat's cards still draw no amber. */
             const opened = await page.evaluate(READ_CARDS, { ids: ["t-calm-commit", "t-calm-long"], phone: false });
             for (const got of opened) if (got.needs || got.warningInk.length) failures.push(`${label} ${got.id} opened: amber on ${got.warningInk.join(", ") || "data-needs"}`);
@@ -30091,6 +30135,12 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
           closed.push(...await page.evaluate(READ_CARDS, { ids: ["t-calm-done"], phone: true }));
           await page.locator('[data-phone-kanban-tab="assigned"]').click();
           checkCards(label, closed, true, failures);
+          const metas = await page.evaluate(READ_META, { ids: ["t-calm-commit", "t-calm-cleared"], phone: true });
+          checkMeta(label, metas, failures, t("cardState.overdue"));
+          await page.locator('[data-phone-card="task:t-calm-commit"]').scrollIntoViewIfNeeded();
+          await page.locator('[data-phone-card="task:t-calm-commit"]').screenshot({ path: path.join(OUT, `meta-closed-c1-${label}.png`) });
+          await page.locator('[data-phone-card="task:t-calm-cleared"]').scrollIntoViewIfNeeded();
+          await page.locator('[data-phone-card="task:t-calm-cleared"]').screenshot({ path: path.join(OUT, `meta-closed-c9-${label}.png`) });
           const sideways = await page.evaluate(() => {
             const scroller = document.scrollingElement!;
             scroller.scrollLeft = 200;
@@ -30099,7 +30149,7 @@ describe("calm task cards: closed by default, a timeline when opened, answers in
             return moved + Math.max(0, document.documentElement.scrollWidth - 390);
           });
           if (sideways > 0) failures.push(`${label}: the page scrolls sideways by ${sideways}px`);
-          const reading: Record<string, unknown> = { closed };
+          const reading: Record<string, unknown> = { closed, meta: metas };
           if (scheme === "light") {
             /* C1's task screen: its timeline, and its stop's ⋯ opening the lane sheet with the answers. */
             await page.locator('[data-phone-card="task:t-calm-commit"]').click();

@@ -98,7 +98,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 21:08",
+          "text": "Waiting for the account limit · retry at 22:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -158,8 +158,30 @@
           "ampm": false
         }
       ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ Oct 13, 23:32",
+          "dueState": "due",
+          "dueInk": "rgb(108, 108, 121)",
+          "danger": "rgb(198, 40, 40)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ Oct 12, 18:32 · overdue",
+          "dueState": "overdue",
+          "dueInk": "rgb(198, 40, 40)",
+          "danger": "rgb(198, 40, 40)",
+          "images": null,
+          "lines": 2,
+          "cut": false
+        }
+      ],
       "popover": {
-        "text": "The orchestrator has been on it for 47m 47s",
+        "text": "The orchestrator has been on it for 47m 49s",
         "covered": false
       },
       "menus": {
@@ -226,14 +248,14 @@
         "stopShown": true,
         "stopFirst": true,
         "times": [
-          "15:38",
-          "16:33",
-          "16:48",
-          "17:08",
-          "17:38",
-          "17:58",
-          "18:28",
-          "19:58"
+          "16:42",
+          "17:37",
+          "17:52",
+          "18:12",
+          "18:42",
+          "19:02",
+          "19:32",
+          "21:02"
         ],
         "texts": [
           "Build stopped: no account has capacityDetailsno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown",
@@ -393,7 +415,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 21:08",
+          "text": "Waiting for the account limit · retry at 22:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -451,6 +473,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ Oct 13, 23:32",
+          "dueState": "due",
+          "dueInk": "rgb(108, 108, 121)",
+          "danger": "rgb(198, 40, 40)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ Oct 12, 18:32 · overdue",
+          "dueState": "overdue",
+          "dueInk": "rgb(198, 40, 40)",
+          "danger": "rgb(198, 40, 40)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ],
       "popover": {
@@ -521,14 +565,14 @@
         "stopShown": true,
         "stopFirst": true,
         "times": [
-          "15:38",
-          "16:33",
-          "16:48",
-          "17:08",
-          "17:38",
-          "17:58",
-          "18:28",
-          "19:58"
+          "16:42",
+          "17:37",
+          "17:52",
+          "18:12",
+          "18:42",
+          "19:02",
+          "19:32",
+          "21:02"
         ],
         "texts": [
           "Build stopped: no account has capacityDetailsno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown",
@@ -688,7 +732,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 21:08",
+          "text": "Waiting for the account limit · retry at 22:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -746,6 +790,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ Oct 13, 23:32",
+          "dueState": "due",
+          "dueInk": "rgb(139, 139, 152)",
+          "danger": "rgb(240, 113, 113)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ Oct 12, 18:32 · overdue",
+          "dueState": "overdue",
+          "dueInk": "rgb(240, 113, 113)",
+          "danger": "rgb(240, 113, 113)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ]
     },
@@ -847,7 +913,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Waiting for the account limit · retry at 21:08",
+          "text": "Waiting for the account limit · retry at 22:12",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -879,7 +945,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Stopped · cleared (orchestrator) · 90m ago",
+          "text": "Stopped · cleared (orchestrator) · 2h ago",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -905,6 +971,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ Oct 13, 23:32",
+          "dueState": "due",
+          "dueInk": "rgb(139, 139, 152)",
+          "danger": "rgb(240, 113, 113)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ Oct 12, 18:32 · overdue",
+          "dueState": "overdue",
+          "dueInk": "rgb(240, 113, 113)",
+          "danger": "rgb(240, 113, 113)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ]
     },
@@ -1006,7 +1094,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 21:08",
+          "text": "Чекає ліміту акаунта · повтор о 22:13",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1038,7 +1126,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Зупинилось · знято (оркестратор) · 2 год тому",
+          "text": "Зупинилось · знято (оркестратор) · 90 хв тому",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1066,8 +1154,30 @@
           "ampm": false
         }
       ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ 13 жовт., 23:33",
+          "dueState": "due",
+          "dueInk": "rgb(108, 108, 121)",
+          "danger": "rgb(198, 40, 40)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "dueState": "overdue",
+          "dueInk": "rgb(198, 40, 40)",
+          "danger": "rgb(198, 40, 40)",
+          "images": null,
+          "lines": 2,
+          "cut": false
+        }
+      ],
       "popover": {
-        "text": "Оркестратор розбирається вже 48 хв",
+        "text": "Оркестратор розбирається вже 47 хв 58 с",
         "covered": false
       },
       "menus": {
@@ -1134,14 +1244,14 @@
         "stopShown": true,
         "stopFirst": true,
         "times": [
-          "15:38",
-          "16:33",
-          "16:48",
-          "17:08",
+          "16:43",
           "17:38",
-          "17:58",
-          "18:28",
-          "19:58"
+          "17:53",
+          "18:13",
+          "18:43",
+          "19:03",
+          "19:33",
+          "21:03"
         ],
         "texts": [
           "Build: зупинилось — немає вільного акаунтаПодробиціno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown",
@@ -1291,7 +1401,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 21:08",
+          "text": "Чекає ліміту акаунта · повтор о 22:13",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1351,8 +1461,30 @@
           "ampm": false
         }
       ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ 13 жовт., 23:33",
+          "dueState": "due",
+          "dueInk": "rgb(108, 108, 121)",
+          "danger": "rgb(198, 40, 40)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "dueState": "overdue",
+          "dueInk": "rgb(198, 40, 40)",
+          "danger": "rgb(198, 40, 40)",
+          "images": null,
+          "lines": 2,
+          "cut": false
+        }
+      ],
       "popover": {
-        "text": "Оркестратор розбирається вже 47 хв 55 с",
+        "text": "Оркестратор розбирається вже 47 хв 51 с",
         "covered": false
       },
       "menus": {
@@ -1419,14 +1551,14 @@
         "stopShown": true,
         "stopFirst": true,
         "times": [
-          "15:38",
-          "16:33",
-          "16:48",
-          "17:08",
+          "16:43",
           "17:38",
-          "17:58",
-          "18:28",
-          "19:58"
+          "17:53",
+          "18:13",
+          "18:43",
+          "19:03",
+          "19:33",
+          "21:03"
         ],
         "texts": [
           "Build: зупинилось — немає вільного акаунтаПодробиціno allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown",
@@ -1576,7 +1708,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 21:08",
+          "text": "Чекає ліміту акаунта · повтор о 22:13",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1634,6 +1766,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ 13 жовт., 23:33",
+          "dueState": "due",
+          "dueInk": "rgb(139, 139, 152)",
+          "danger": "rgb(240, 113, 113)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "dueState": "overdue",
+          "dueInk": "rgb(240, 113, 113)",
+          "danger": "rgb(240, 113, 113)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ]
     },
@@ -1735,7 +1889,7 @@
           "found": true,
           "owner": "waiting",
           "subject": "lane",
-          "text": "Чекає ліміту акаунта · повтор о 21:08",
+          "text": "Чекає ліміту акаунта · повтор о 22:13",
           "lines": 1,
           "dotOffset": 0,
           "answer": null,
@@ -1793,6 +1947,28 @@
           "warningInk": [],
           "textCut": false,
           "ampm": false
+        }
+      ],
+      "meta": [
+        {
+          "id": "t-calm-commit",
+          "due": "⏰ 13 жовт., 23:33",
+          "dueState": "due",
+          "dueInk": "rgb(139, 139, 152)",
+          "danger": "rgb(240, 113, 113)",
+          "images": "📎 2",
+          "lines": 2,
+          "cut": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "due": "⏰ 12 жовт., 18:33 · прострочено",
+          "dueState": "overdue",
+          "dueInk": "rgb(240, 113, 113)",
+          "danger": "rgb(240, 113, 113)",
+          "images": null,
+          "lines": 2,
+          "cut": false
         }
       ]
     }

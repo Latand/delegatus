@@ -20,6 +20,7 @@ import { SeatActionWires } from "@/components/kanban/SeatActionWires";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
 import { cardAnswers, cardState, type CardState } from "@/components/kanban/cardState";
 import { CardStateLine } from "@/components/kanban/CardStateLine";
+import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import { requestTaskLane } from "./taskLaneRequest";
 import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
@@ -563,6 +564,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
       {state ? (
         <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} />
       ) : motion}
+      {item.kind === "task" && card.task && hasTaskMeta(card.task) ? <span className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></span> : null}
       <TaskStepsLine summary={card.stepSummary} />
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}

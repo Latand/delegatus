@@ -42,6 +42,7 @@ import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./ka
 import { cardAnswers, cardState, type CardState } from "./cardState";
 import { CardStateLine, PriorityMark } from "./CardStateLine";
 import { TaskChronology } from "./TaskChronology";
+import { hasTaskMeta, TaskMeta } from "./TaskMeta";
 import { taskChronology } from "./taskChronologyModel";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, KanbanUnstartedLaunch } from "./kanbanModel";
 import { PastAttempts, stageNames } from "./PipelineSection";
@@ -645,6 +646,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         /* A closed card that has not started keeps its priority mark, which is how the Inbox reads at a glance. */
         <div className="card-state prio-only">{motionLine(false)}<PriorityMark priority={card.priority} /></div>
       ) : motionLine(false)}
+      {/* The task's deadline and images, closed and open alike: the old Tasks panel's two facts. */}
+      {card.task && hasTaskMeta(card.task) ? <div className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></div> : null}
       {answers && state ? (
         <div className="card-answer-row">
           <button
