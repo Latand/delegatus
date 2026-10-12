@@ -2720,7 +2720,24 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     admissionReadActive.current = operationReadsActive;
   });
   const applyAdmissionAnswer = async (key: string, answer: RuntimeAdmissionLookup, current: () => boolean) => {
-    if (!current() || answer.outcome === "unknown") return answer;
+    if (!current()) return answer;
+    if (answer.outcome === "unknown") {
+      const row = admissionRows.current.find(candidate => candidate.ref.key === key);
+      if (!row) return answer;
+      let saved: RestoredComposerSubmission | null;
+      try { saved = await composerSubmissionPayloads.restore(row.ref); }
+      catch { return answer; }
+      if (!current() || !saved) return answer;
+      // A previous read may have persisted the canonical answer while this
+      // view was hidden. Reuse the normal admission path so its attempt and
+      // operation identity fences still decide whether it may be projected.
+      if (saved.receipt?.status === "delivered") {
+        answer = { outcome: "admitted", operationId: saved.receipt.operationId,
+          receipt: { ...saved.receipt, kind: "send", text: saved.submission.text } as RuntimeReceipt };
+      } else if (saved.refusal && !saved.operationId) {
+        answer = { outcome: "not-executed" };
+      } else return answer;
+    }
     if (answer.outcome === "not-executed") {
       const entry = readOutbox(cardId).find(candidate => candidate.id === key);
       const row = admissionRows.current.find(candidate => candidate.ref.key === key);
@@ -2803,7 +2820,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       && !controller.signal.aborted && admissionReadActive.current && !documentHidden();
     const result = observeRuntimeAdmission(cardId, key, runtimeDependencies.lookupRuntimeAdmission, controller.signal)
       .then(answer => current() ? applyAdmissionAnswerRef.current(key, answer, current) : { outcome: "unknown" } as const)
-      .catch(() => ({ outcome: "unknown" } as const))
+      .catch(() => current() ? applyAdmissionAnswerRef.current(key, { outcome: "unknown" }, current) : { outcome: "unknown" } as const)
       .finally(() => { if (held.get(key)?.controller === controller) held.delete(key); });
     held.set(key, { controller, result });
     return result;

@@ -12,8 +12,11 @@ Re-check and the original-key recovery action share one request, bounded to
 enters both durable payload storage and the live receipt projection; returning
 to a view also projects evidence saved while it was away. Receipt ordering,
 terminal outcomes, newer drafts and unrelated errors remain authoritative.
-An unknown answer retains the attempt and sends nothing. Authoritative
-non-execution preserves the message and permits an explicit later retry.
+When a later lookup is unknown or fails, the composer rechecks the saved
+attempt and projects its delivered receipt or non-execution proof through the
+same identity and attempt fences. An unknown answer without saved proof retains
+the attempt and sends nothing. Authoritative non-execution preserves the
+message and permits an explicit later retry.
 
 The focused lost-answer regression fails on main baseline `f2e3c3858` with
 `Expected: "delivered"; Received: "failed"`. The fixed case recovers without
@@ -28,7 +31,7 @@ each process with private HOME, XDG config, TMPDIR, CLAUDE_CODE_TMPDIR and state
 
 | Test file | Passing tests |
 | --- | ---: |
-| `src/components/TmuxComposer.admissionRecovery.dom.test.tsx` | 12 |
+| `src/components/TmuxComposer.admissionRecovery.dom.test.tsx` | 13 |
 | `src/hooks/runtimeAdmissionObservation.test.ts` | 7 |
 | `src/components/TmuxComposer.reconciliationExpiry.dom.test.tsx` | 44 |
 | `src/components/composerDeliveryReconciliation.integration.test.ts` | 3 |

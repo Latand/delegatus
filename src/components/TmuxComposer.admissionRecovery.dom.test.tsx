@@ -145,8 +145,13 @@ async function mountScenario(name: string, fault: "lost" | "outage") {
   globalThis.fetch = (async input => String(input) === "/api/tmux/targets" ? Response.json({ targets: {} }) : Response.json({}, { status: 404 })) as typeof fetch;
   sessionStorage.setItem(`llvDraft:${conversationId}`, original);
   const host = document.createElement("div"); document.body.append(host);
-  const root = createRoot(host);
+  let root = createRoot(host);
   const render = (file = fileFor(conversationId), active = true) => flushSync(() => root.render(<Harness file={file} active={active} />));
+  const remount = () => {
+    flushSync(() => root.unmount());
+    root = createRoot(host);
+    render();
+  };
   render(); await untilSendEnabled(host);
   if (name === "attachment") {
     const input = host.querySelector("textarea")!;
@@ -173,7 +178,7 @@ async function mountScenario(name: string, fault: "lost" | "outage") {
     expect(host.textContent).not.toContain(translate("uk", "composer.deliveryUnconfirmed"));
     expect(state.sends).toBe(1);
   };
-  return { state, host, root, render, conversationId, key, writeDraft, delivered,
+  return { state, host, root, render, remount, conversationId, key, writeDraft, delivered,
     publish(receipts: RuntimeReceipt[]) { flushSync(() => { state.receipts = receipts; for (const listener of state.listeners) listener(); }); },
     close() { flushSync(() => root.unmount()); host.remove(); } };
 }
@@ -323,6 +328,7 @@ test("confirmation persisted while hiding is projected into the live bubble on r
       expect(readOutbox(fixture.conversationId)[0]?.state).toBe("failed");
       expect((await composerSubmissionPayloads.restore({ conversationId: fixture.conversationId, key: fixture.key }))?.receipt?.status).toBe("delivered");
     } finally { composerSubmissionPayloads.observe = observe; }
+    fixture.state.lookup = async () => ({ outcome: "unknown" });
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
     await fixture.delivered();
@@ -348,11 +354,38 @@ test("non-execution saved while hiding retires uncertainty on return", async () 
       expect(readOutbox(fixture.conversationId)[0]?.deliveryUncertain).toBe(true);
       expect((await composerSubmissionPayloads.restore({ conversationId: fixture.conversationId, key: fixture.key }))?.refusal).not.toBeNull();
     } finally { composerSubmissionPayloads.refuse = refuse; }
+    fixture.state.lookup = async () => ({ outcome: "unknown" });
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
     await until(() => readOutbox(fixture.conversationId)[0]?.deliveryUncertain === undefined);
     expect(readOutbox(fixture.conversationId)[0]).toMatchObject({ id: fixture.key, state: "failed" });
     expect(fixture.host.textContent).not.toContain(translate("uk", "composer.deliveryUnconfirmed"));
+    expect(fixture.state.sends).toBe(1);
+  });
+});
+
+test("saved non-execution evidence restores after remount when the next lookup is unknown", async () => {
+  await scenario("attachment", async fixture => {
+    const refuse = composerSubmissionPayloads.refuse.bind(composerSubmissionPayloads);
+    let hidden = false;
+    composerSubmissionPayloads.refuse = async (ref, refusal) => {
+      const accepted = await refuse(ref, refusal);
+      if (accepted && !hidden) {
+        hidden = true;
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+      }
+      return accepted;
+    };
+    fixture.state.lookup = async () => ({ outcome: "not-executed" });
+    await until(() => hidden);
+    composerSubmissionPayloads.refuse = refuse;
+    expect(readOutbox(fixture.conversationId)[0]?.deliveryUncertain).toBe(true);
+    fixture.state.lookup = async () => ({ outcome: "unknown" });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    fixture.remount();
+    await until(() => readOutbox(fixture.conversationId)[0]?.deliveryUncertain === undefined);
+    expect(readOutbox(fixture.conversationId)[0]).toMatchObject({ id: fixture.key, state: "failed" });
     expect(fixture.state.sends).toBe(1);
   });
 });
